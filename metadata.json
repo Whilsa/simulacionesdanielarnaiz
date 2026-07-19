@@ -1,0 +1,6 @@
+{
+  "name": "EGOBEY Simulador",
+  "description": "Banco simulado creado por Daniel Arnaiz",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
