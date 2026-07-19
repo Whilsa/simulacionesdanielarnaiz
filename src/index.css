@@ -57,3 +57,10 @@
 .animate-pulse-slow {
   animation: pulse-slow 8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Override font-mono to use clean sans-serif numbers (no dot or slash inside the 0) with perfect tabular alignment */
+.font-mono {
+  font-family: var(--font-sans) !important;
+  font-variant-numeric: tabular-nums;
+}
+
