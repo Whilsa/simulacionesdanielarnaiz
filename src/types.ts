@@ -30,7 +30,7 @@ export interface Transfer {
 
 export interface SystemLog {
   id: string;
-  action: 'CREATE_USER' | 'UPDATE_USER' | 'DELETE_USER' | 'BALANCE_ADJUSTMENT' | 'RESET_SIMULATION';
+  action: 'CREATE_USER' | 'UPDATE_USER' | 'DELETE_USER' | 'BALANCE_ADJUSTMENT' | 'RESET_SIMULATION' | 'LOGIN_ATTEMPT';
   details: string;
   timestamp: string;
 }

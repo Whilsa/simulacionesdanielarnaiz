@@ -40,7 +40,7 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
   const fetchStudentData = async () => {
     try {
       // 1. Get student's updated user details (for real-time balance)
-      const usersRes = await fetch('/api/users?role=student');
+      const usersRes = await fetch('/users?role=student');
       if (!usersRes.ok) throw new Error(`HTTP error ${usersRes.status}`);
       
       const usersContentType = usersRes.headers.get('content-type');
@@ -59,7 +59,7 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
       }
 
       // 2. Get student's transfers
-      const transfersRes = await fetch(`/api/transfers?userId=${currentUser.id}`);
+      const transfersRes = await fetch(`/transfers?userId=${currentUser.id}`);
       if (transfersRes.ok) {
         const transfersContentType = transfersRes.headers.get('content-type');
         if (transfersContentType && transfersContentType.includes('application/json')) {
@@ -112,7 +112,7 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('/api/transfers', {
+      const response = await fetch('/transfers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

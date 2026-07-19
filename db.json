@@ -1,0 +1,59 @@
+{
+  "users": [
+    {
+      "id": "profesor-1",
+      "username": "pupdaniel",
+      "password": "1987",
+      "role": "teacher",
+      "name": "Profesor de Contabilidad",
+      "accountNumber": "ES000000000000000000",
+      "balance": 0
+    },
+    {
+      "id": "user-4yvc8hwgs",
+      "username": "cliente01",
+      "password": "1987",
+      "role": "student",
+      "name": "Cliente 01",
+      "accountNumber": "ES10000100028349493293",
+      "balance": 50000
+    },
+    {
+      "id": "user-1wxed2utl",
+      "username": "cliente02",
+      "password": "1987",
+      "role": "student",
+      "name": "Cliente 02",
+      "accountNumber": "ES68000100023841226572",
+      "balance": 50000
+    }
+  ],
+  "transfers": [],
+  "systemLogs": [
+    {
+      "id": "log-debug-y1a83ywu8",
+      "action": "LOGIN_ATTEMPT",
+      "details": "Intento de acceso recibido: usuario \"pupdaniel\".",
+      "timestamp": "2026-07-19T17:43:23.302Z"
+    },
+    {
+      "id": "log-0qgfgx7iy",
+      "action": "CREATE_USER",
+      "details": "Cuenta creada: Cliente 02 (cliente02) con saldo inicial de 50000 €",
+      "timestamp": "2026-07-19T17:17:03.953Z"
+    },
+    {
+      "id": "log-dy3zqlrqx",
+      "action": "CREATE_USER",
+      "details": "Cuenta creada: Cliente 01 (cliente01) con saldo inicial de 50000 €",
+      "timestamp": "2026-07-19T17:16:46.905Z"
+    },
+    {
+      "id": "log-tw475oniy",
+      "action": "RESET_SIMULATION",
+      "details": "Simulación reiniciada. ¿Se mantuvieron usuarios?: No (todas las cuentas de alumnos eliminadas)",
+      "timestamp": "2026-07-19T17:06:34.328Z"
+    }
+  ],
+  "defaultInitialBalance": 1000
+}

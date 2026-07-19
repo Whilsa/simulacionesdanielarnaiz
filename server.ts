@@ -16,6 +16,25 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 // Middleware to parse JSON
 app.use(express.json());
 
+// URL rewriting middleware to support endpoints without the '/api' prefix (bypass service worker caching)
+app.use((req, res, next) => {
+  const isApiRequest = req.url.startsWith('/api/');
+  const shouldRewrite = !isApiRequest && (
+    req.url === '/acceso' ||
+    req.url === '/entrar' ||
+    req.url === '/login' ||
+    req.url.startsWith('/users') ||
+    req.url.startsWith('/transfers') ||
+    req.url.startsWith('/logs') ||
+    req.url.startsWith('/reset-simulation')
+  );
+
+  if (shouldRewrite) {
+    req.url = '/api' + req.url;
+  }
+  next();
+});
+
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
@@ -169,6 +188,21 @@ const loginHandler = (req: express.Request, res: express.Response) => {
   
   console.log('[LOGIN] Request received. Username:', username, 'Password:', password ? '****' : 'empty');
 
+  // Log to database systemLogs for diagnostic tracking
+  try {
+    const db = readDb();
+    const newLog: SystemLog = {
+      id: generateId('log-debug'),
+      action: 'LOGIN_ATTEMPT',
+      details: `Intento de acceso recibido: usuario "${username || 'vacío'}".`,
+      timestamp: new Date().toISOString()
+    };
+    db.systemLogs.unshift(newLog);
+    writeDb(db);
+  } catch (e) {
+    console.error('Failed to write login attempt log:', e);
+  }
+
   if (!username || !password) {
     console.log('[LOGIN] Failed: Missing username or password');
     return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -193,6 +227,9 @@ app.post('/api/login', loginHandler);
 app.post('/api/auth/login', loginHandler);
 app.post('/api/acceso', loginHandler);
 app.post('/api/entrar', loginHandler);
+app.post('/acceso', loginHandler);
+app.post('/entrar', loginHandler);
+app.post('/login', loginHandler);
 
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).

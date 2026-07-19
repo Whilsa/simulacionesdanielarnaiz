@@ -59,9 +59,9 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
   const fetchData = async () => {
     try {
       const [usersRes, transfersRes, logsRes] = await Promise.all([
-        fetch('/api/users?role=teacher'),
-        fetch('/api/transfers?role=teacher'),
-        fetch('/api/logs')
+        fetch('/users?role=teacher'),
+        fetch('/transfers?role=teacher'),
+        fetch('/logs')
       ]);
 
       let usersList: User[] = [];
@@ -100,7 +100,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     }
 
     try {
-      const response = await fetch('/api/users', {
+      const response = await fetch('/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -152,7 +152,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     }
 
     try {
-      const response = await fetch(`/api/users/${selectedUser.id}/adjust-balance`, {
+      const response = await fetch(`/users/${selectedUser.id}/adjust-balance`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -188,7 +188,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     setDeleteError('');
 
     try {
-      const response = await fetch(`/api/users/${deleteTarget.id}`, {
+      const response = await fetch(`/users/${deleteTarget.id}`, {
         method: 'DELETE',
       });
 
@@ -221,7 +221,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     }
 
     try {
-      const response = await fetch('/api/reset-simulation', {
+      const response = await fetch('/reset-simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
