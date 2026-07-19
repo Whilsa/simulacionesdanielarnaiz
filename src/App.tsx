@@ -46,37 +46,13 @@ export default function App() {
     );
   }
 
-  const renderBadge = () => (
-    <div className="fixed top-3 right-3 z-[9999] pointer-events-none select-none">
-      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold text-amber-950 bg-[#EABE3F] shadow-lg border border-amber-400">
-        <span className="w-1.5 h-1.5 rounded-full bg-amber-950 animate-pulse"></span>
-        Actualización #5
-      </span>
-    </div>
-  );
-
   if (!currentUser) {
-    return (
-      <>
-        {renderBadge()}
-        <LoginForm onLoginSuccess={handleLoginSuccess} />
-      </>
-    );
+    return <LoginForm onLoginSuccess={handleLoginSuccess} />;
   }
 
   if (currentUser.role === 'teacher') {
-    return (
-      <>
-        {renderBadge()}
-        <TeacherDashboard currentUser={currentUser} onLogout={handleLogout} />
-      </>
-    );
+    return <TeacherDashboard currentUser={currentUser} onLogout={handleLogout} />;
   }
 
-  return (
-    <>
-      {renderBadge()}
-      <StudentDashboard currentUser={currentUser} onLogout={handleLogout} />
-    </>
-  );
+  return <StudentDashboard currentUser={currentUser} onLogout={handleLogout} />;
 }
