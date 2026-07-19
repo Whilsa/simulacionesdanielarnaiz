@@ -29,16 +29,28 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
 
-      const data = await response.json();
+      let data: any = {};
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response', jsonErr);
+        }
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Credenciales incorrectas');
+        throw new Error(data.error || `Error del servidor (${response.status})`);
+      }
+
+      if (!data.user) {
+        throw new Error('La respuesta del servidor no contiene datos de usuario válidos.');
       }
 
       onLoginSuccess(data.user);

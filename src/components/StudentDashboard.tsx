@@ -41,21 +41,34 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
     try {
       // 1. Get student's updated user details (for real-time balance)
       const usersRes = await fetch('/api/users?role=student');
-      const usersData = await usersRes.json();
+      if (!usersRes.ok) throw new Error(`HTTP error ${usersRes.status}`);
       
-      const me = usersData.users.find((u: User) => u.id === currentUser.id);
-      if (me) {
-        setBalance(me.balance);
-      }
+      const usersContentType = usersRes.headers.get('content-type');
+      if (usersContentType && usersContentType.includes('application/json')) {
+        const usersData = await usersRes.json();
+        if (usersData && usersData.users) {
+          const me = usersData.users.find((u: User) => u.id === currentUser.id);
+          if (me) {
+            setBalance(me.balance);
+          }
 
-      // Filter out self from classmates list
-      const classmates = usersData.users.filter((u: User) => u.id !== currentUser.id);
-      setStudentsList(classmates);
+          // Filter out self from classmates list
+          const classmates = usersData.users.filter((u: User) => u.id !== currentUser.id);
+          setStudentsList(classmates);
+        }
+      }
 
       // 2. Get student's transfers
       const transfersRes = await fetch(`/api/transfers?userId=${currentUser.id}`);
-      const transfersData = await transfersRes.json();
-      setTransfers(transfersData.transfers || []);
+      if (transfersRes.ok) {
+        const transfersContentType = transfersRes.headers.get('content-type');
+        if (transfersContentType && transfersContentType.includes('application/json')) {
+          const transfersData = await transfersRes.json();
+          if (transfersData && transfersData.transfers) {
+            setTransfers(transfersData.transfers);
+          }
+        }
+      }
     } catch (err) {
       console.error('Error polling student data:', err);
     }
@@ -110,10 +123,18 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
         }),
       });
 
-      const data = await response.json();
+      let data: any = {};
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response', jsonErr);
+        }
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Error al procesar la transferencia');
+        throw new Error(data.error || `Error al procesar la transferencia (HTTP ${response.status})`);
       }
 
       // Success
