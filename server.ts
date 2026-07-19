@@ -16,6 +16,14 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 // Middleware to parse JSON
 app.use(express.json());
 
+// Prevent any caching of API responses (crucial for real-time bank simulation across windows/devices)
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 // URL rewriting middleware to support endpoints without the '/api' prefix (bypass service worker caching)
 app.use((req, res, next) => {
   const isApiRequest = req.url.startsWith('/api/');
