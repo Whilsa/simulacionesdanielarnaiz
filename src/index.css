@@ -5,6 +5,31 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Outfit", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Oro principal (RGB 234, 190, 63 / Hex #EABE3F) */
+  --color-amber-50: #fefcf3;
+  --color-amber-100: #fcf6d4;
+  --color-amber-200: #f8eaa1;
+  --color-amber-300: #f3d96e;
+  --color-amber-400: #efcb4c;
+  --color-amber-500: #eabe3f;
+  --color-amber-600: #d3a62c;
+  --color-amber-700: #b08620;
+  --color-amber-800: #8b681c;
+  --color-amber-900: #725418;
+  --color-amber-950: #412e0b;
+
+  --color-gold-50: #fefcf3;
+  --color-gold-100: #fcf6d4;
+  --color-gold-200: #f8eaa1;
+  --color-gold-300: #f3d96e;
+  --color-gold-400: #efcb4c;
+  --color-gold-500: #eabe3f;
+  --color-gold-600: #d3a62c;
+  --color-gold-700: #b08620;
+  --color-gold-800: #8b681c;
+  --color-gold-900: #725418;
+  --color-gold-950: #412e0b;
 }
 
 /* Custom scrollbar for modern lists */

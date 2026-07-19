@@ -167,7 +167,10 @@ function generateId(prefix: string): string {
 const loginHandler = (req: express.Request, res: express.Response) => {
   const { username, password } = req.body;
   
+  console.log('[LOGIN] Request received. Username:', username, 'Password:', password ? '****' : 'empty');
+
   if (!username || !password) {
+    console.log('[LOGIN] Failed: Missing username or password');
     return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   }
 
@@ -175,8 +178,11 @@ const loginHandler = (req: express.Request, res: express.Response) => {
   const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
 
   if (!user) {
+    console.log('[LOGIN] Failed: Credentials do not match any active user');
     return res.status(401).json({ error: 'Credenciales inválidas' });
   }
+
+  console.log('[LOGIN] Success! Matched user:', user.name, 'Role:', user.role);
 
   // Exclude password from response
   const { password: _, ...userWithoutPassword } = user;

@@ -35,22 +35,23 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
         body: JSON.stringify({ username, password }),
       });
 
-      let data: any = {};
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        try {
-          data = await response.json();
-        } catch (jsonErr) {
-          console.error('Failed to parse JSON response', jsonErr);
+      let data: any = null;
+      let text = '';
+      try {
+        text = await response.text();
+        if (text) {
+          data = JSON.parse(text);
         }
+      } catch (jsonErr) {
+        console.error('Failed to parse JSON response', jsonErr);
       }
 
       if (!response.ok) {
-        throw new Error(data.error || `Error del servidor (${response.status})`);
+        throw new Error((data && data.error) || `Error del servidor (${response.status}): ${text.substring(0, 100)}`);
       }
 
-      if (!data.user) {
-        throw new Error('La respuesta del servidor no contiene datos de usuario válidos.');
+      if (!data || !data.user) {
+        throw new Error(`La respuesta del servidor no contiene datos de usuario válidos. Respuesta recibida: ${text.substring(0, 150)}`);
       }
 
       onLoginSuccess(data.user);
