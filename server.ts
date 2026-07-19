@@ -191,6 +191,8 @@ const loginHandler = (req: express.Request, res: express.Response) => {
 
 app.post('/api/login', loginHandler);
 app.post('/api/auth/login', loginHandler);
+app.post('/api/acceso', loginHandler);
+app.post('/api/entrar', loginHandler);
 
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).
