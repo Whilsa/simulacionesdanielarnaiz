@@ -64,13 +64,26 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         fetch('/api/logs')
       ]);
 
-      const usersData = await usersRes.json();
-      const transfersData = await transfersRes.json();
-      const logsData = await logsRes.json();
+      let usersList: User[] = [];
+      let transfersList: Transfer[] = [];
+      let logsList: SystemLog[] = [];
 
-      setUsers(usersData.users || []);
-      setTransfers(transfersData.transfers || []);
-      setLogs(logsData.logs || []);
+      if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
+        const usersData = await usersRes.json();
+        usersList = usersData.users || [];
+      }
+      if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
+        const transfersData = await transfersRes.json();
+        transfersList = transfersData.transfers || [];
+      }
+      if (logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
+        const logsData = await logsRes.json();
+        logsList = logsData.logs || [];
+      }
+
+      setUsers(usersList);
+      setTransfers(transfersList);
+      setLogs(logsList);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
     }
@@ -98,13 +111,20 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         }),
       });
 
-      const data = await response.json();
+      let data: any = {};
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response', jsonErr);
+        }
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Error al crear usuario');
       }
 
-      setCreateSuccess(`¡Cuenta creada para ${data.user.name}!`);
+      setCreateSuccess(`¡Cuenta creada para ${data.user?.name || ''}!`);
       setNewUserName('');
       setNewUserUsername('');
       setNewUserPassword('');
@@ -141,7 +161,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         }),
       });
 
-      const data = await response.json();
+      let data: any = {};
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response', jsonErr);
+        }
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Error al ajustar el saldo');
@@ -166,7 +193,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       });
 
       if (!response.ok) {
-        const data = await response.json();
+        let data: any = {};
+        if (response.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await response.json();
+          } catch (e) {
+            console.error(e);
+          }
+        }
         throw new Error(data.error || 'Error al eliminar usuario');
       }
 
@@ -196,7 +230,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         }),
       });
 
-      const data = await response.json();
+      let data: any = {};
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response', jsonErr);
+        }
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Error al reiniciar la simulación');

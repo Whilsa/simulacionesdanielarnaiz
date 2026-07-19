@@ -164,7 +164,7 @@ function generateId(prefix: string): string {
 // ---------------- API ENDPOINTS ----------------
 
 // Authenticate / Login
-app.post('/api/login', (req, res) => {
+const loginHandler = (req: express.Request, res: express.Response) => {
   const { username, password } = req.body;
   
   if (!username || !password) {
@@ -181,7 +181,10 @@ app.post('/api/login', (req, res) => {
   // Exclude password from response
   const { password: _, ...userWithoutPassword } = user;
   res.json({ user: userWithoutPassword });
-});
+};
+
+app.post('/api/login', loginHandler);
+app.post('/api/auth/login', loginHandler);
 
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).
