@@ -54,6 +54,9 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
 
   useEffect(() => {
     fetchData();
+    // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
+    const interval = setInterval(fetchData, 4000);
+    return () => clearInterval(interval);
   }, [activeTab]);
 
   const fetchData = async () => {
