@@ -51,7 +51,15 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
       }
 
       if (!data || !data.user) {
-        throw new Error(`La respuesta del servidor no contiene datos de usuario válidos. Respuesta recibida: ${text.substring(0, 150)}`);
+        const headersObj: Record<string, string> = {};
+        try {
+          response.headers.forEach((val, key) => {
+            headersObj[key] = val;
+          });
+        } catch (e) {
+          console.error(e);
+        }
+        throw new Error(`La respuesta del servidor (Status: ${response.status}) no contiene datos de usuario válidos. Headers: ${JSON.stringify(headersObj)}. Cuerpo recibido: "${text}"`);
       }
 
       onLoginSuccess(data.user);
