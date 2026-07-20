@@ -332,7 +332,24 @@ function formatErrorMessage(prefix: string, error: any): string {
   // Remove duplicate messages
   const uniqueMsgs = Array.from(new Set(allMsgs));
   
-  const detailedMsg = uniqueMsgs.join(' -> ');
+  let detailedMsg = uniqueMsgs.join(' -> ');
+
+  // Add diagnostics if it's a connection error (ENOENT or connect or ECONNREFUSED)
+  if (detailedMsg.includes('ENOENT') || detailedMsg.includes('connect') || detailedMsg.includes('ECONNREFUSED')) {
+    const listDir = (pathStr: string) => {
+      try {
+        if (fs.existsSync(pathStr)) {
+          return JSON.stringify(fs.readdirSync(pathStr));
+        }
+        return "not_exist";
+      } catch (e: any) {
+        return `error_${e.message}`;
+      }
+    };
+    const diag = ` | ENV: SQL_HOST="${process.env.SQL_HOST}", NODE_ENV="${process.env.NODE_ENV}" | /cloudsql: ${listDir('/cloudsql')} | /app/cloudsql: ${listDir('/app/cloudsql')}`;
+    detailedMsg += diag;
+  }
+  
   return `${prefix}: ${detailedMsg}`;
 }
 
