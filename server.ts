@@ -11,6 +11,7 @@ import { DatabaseSchema, User, Transfer, SystemLog } from './src/types.js';
 import { db } from './src/db/index.ts';
 import { users, transfers, systemLogs, config } from './src/db/schema.ts';
 import { eq, or, and, ne } from 'drizzle-orm';
+import { getFirebaseConfig, checkFirestoreStatus, saveBackupToFirestore, getLatestBackupFromFirestore } from './src/db/firebase-service.js';
 
 const app = express();
 const PORT = 3000;
@@ -744,6 +745,134 @@ app.post('/api/reset-simulation', async (req, res) => {
   } catch (error: any) {
     console.error('[RESET-SIMULATION-ERROR]', error);
     res.status(500).json({ error: formatErrorMessage('Error al reiniciar la simulación', error) });
+  }
+});
+
+// --- FIREBASE INTEGRATION ENDPOINTS ---
+
+// Get Firebase configuration status (Teacher or Student)
+app.get('/api/firebase/config', (req, res) => {
+  try {
+    const cfg = getFirebaseConfig();
+    res.json(cfg);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Check live Firestore connection status and retrieve detailed diagnostic reasons
+app.get('/api/firebase/status', async (req, res) => {
+  try {
+    const status = await checkFirestoreStatus();
+    res.json(status);
+  } catch (error: any) {
+    res.status(500).json({ success: false, reason: 'unknown_error', details: error.message });
+  }
+});
+
+// Create full backup to Firebase Firestore (Teacher only)
+app.post('/api/firebase/backup', async (req, res) => {
+  try {
+    const fullDb = await getFullDbState();
+    const result = await saveBackupToFirestore(fullDb);
+    
+    // Log the backup action
+    await db.insert(systemLogs).values({
+      id: generateId('log'),
+      action: 'BALANCE_ADJUSTMENT', // Using BALANCE_ADJUSTMENT or general audit
+      details: `Copia de seguridad en la nube (Firebase) creada con éxito. ID: ${result.id}`,
+      timestamp: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: 'Copia de seguridad guardada en Firestore de forma exitosa.', backupId: result.id, timestamp: result.timestamp });
+  } catch (error: any) {
+    console.error('[FIREBASE-BACKUP-ERROR]', error);
+    res.status(500).json({ error: formatErrorMessage('Error al realizar la copia en Firestore', error) });
+  }
+});
+
+// Restore from latest Firebase Firestore backup (Teacher only)
+app.post('/api/firebase/restore', async (req, res) => {
+  try {
+    const backup = await getLatestBackupFromFirestore();
+    if (!backup) {
+      return res.status(404).json({ error: 'No se encontró ninguna copia de seguridad guardada en tu base de datos Firestore.' });
+    }
+
+    await db.transaction(async (tx) => {
+      // Clear existing records
+      await tx.delete(transfers);
+      await tx.delete(systemLogs);
+      await tx.delete(users);
+
+      // Re-insert configuration
+      const initialBal = backup.defaultInitialBalance !== undefined ? backup.defaultInitialBalance : 1000;
+      await tx.insert(config).values({
+        key: 'defaultInitialBalance',
+        value: String(initialBal)
+      }).onConflictDoUpdate({
+        target: config.key,
+        set: { value: String(initialBal) }
+      });
+
+      // Re-insert users
+      for (const u of backup.users) {
+        // Enforce teacher credentials
+        if (u.role === 'teacher' || u.id === 'profesor-1') {
+          u.username = 'pupdaniel';
+          u.password = '1987';
+        }
+        await tx.insert(users).values({
+          id: u.id,
+          username: u.username.toLowerCase().trim(),
+          password: u.password.trim(),
+          role: u.role,
+          name: u.name,
+          accountNumber: u.accountNumber,
+          balance: Number(u.balance) || 0
+        });
+      }
+
+      // Re-insert transfers
+      for (const t of backup.transfers) {
+        await tx.insert(transfers).values({
+          id: t.id,
+          senderId: t.senderId,
+          senderName: t.senderName,
+          senderAccount: t.senderAccount,
+          receiverId: t.receiverId,
+          receiverName: t.receiverName,
+          receiverAccount: t.receiverAccount,
+          amount: Number(t.amount),
+          concept: t.concept || '',
+          timestamp: t.timestamp
+        });
+      }
+
+      // Re-insert logs
+      const logsList = Array.isArray(backup.systemLogs) ? backup.systemLogs : [];
+      for (const l of logsList) {
+        await tx.insert(systemLogs).values({
+          id: l.id,
+          action: l.action,
+          details: l.details || '',
+          timestamp: l.timestamp
+        });
+      }
+
+      // Log successful cloud restoration
+      await tx.insert(systemLogs).values({
+        id: generateId('log'),
+        action: 'RESET_SIMULATION',
+        details: 'Copia de seguridad de la nube (Firebase) restaurada con éxito.',
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    res.json({ success: true, message: 'La base de datos se ha restaurado con éxito desde la nube (Firestore).' });
+  } catch (error: any) {
+    console.error('[FIREBASE-RESTORE-ERROR]', error);
+    res.status(500).json({ error: formatErrorMessage('Error al restaurar desde Firestore', error) });
   }
 });
 

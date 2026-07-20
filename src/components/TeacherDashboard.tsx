@@ -9,7 +9,7 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database
+  Download, Upload, Database, Cloud, CloudOff, RefreshCw
 } from 'lucide-react';
 import { User, Transfer, SystemLog } from '../types.js';
 
@@ -57,6 +57,99 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
   const [showRestoreSuggestion, setShowRestoreSuggestion] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState('');
   const [backupError, setBackupError] = useState('');
+
+  // Firebase backup state
+  const [firebaseConfig, setFirebaseConfig] = useState<{ configured: boolean; projectId: string } | null>(null);
+  const [firebaseStatus, setFirebaseStatus] = useState<{ success: boolean; reason?: string; details?: string } | null>(null);
+  const [checkingFirebase, setCheckingFirebase] = useState(false);
+  const [firebaseActionLoading, setFirebaseActionLoading] = useState(false);
+  const [firebaseSuccess, setFirebaseSuccess] = useState('');
+  const [firebaseError, setFirebaseError] = useState('');
+
+  const fetchFirebaseConfig = async () => {
+    try {
+      const res = await fetch('/api/firebase/config');
+      if (res.ok) {
+        const data = await res.json();
+        setFirebaseConfig(data);
+        if (data.configured) {
+          checkFirebaseStatus();
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching Firebase config:', e);
+    }
+  };
+
+  const checkFirebaseStatus = async () => {
+    setCheckingFirebase(true);
+    try {
+      const res = await fetch('/api/firebase/status');
+      if (res.ok) {
+        const data = await res.json();
+        setFirebaseStatus(data);
+      } else {
+        setFirebaseStatus({ success: false, reason: 'server_error', details: 'No se pudo comunicar con el servidor para verificar Firestore.' });
+      }
+    } catch (e: any) {
+      setFirebaseStatus({ success: false, reason: 'network_error', details: e.message });
+    } finally {
+      setCheckingFirebase(false);
+    }
+  };
+
+  const handleFirebaseBackup = async () => {
+    setFirebaseError('');
+    setFirebaseSuccess('');
+    setFirebaseActionLoading(true);
+    try {
+      const res = await fetch('/api/firebase/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFirebaseSuccess(data.message || 'Copia de seguridad en la nube guardada con éxito.');
+        checkFirebaseStatus();
+      } else {
+        setFirebaseError(data.error || 'Error al guardar la copia de seguridad en la nube.');
+      }
+    } catch (e: any) {
+      setFirebaseError('Error de red: ' + e.message);
+    } finally {
+      setFirebaseActionLoading(false);
+    }
+  };
+
+  const handleFirebaseRestore = async () => {
+    if (!window.confirm('¿Estás seguro de que deseas restaurar la base de datos completa desde Firebase? Esto reemplazará todos los datos actuales de alumnos, transferencias e historiales.')) {
+      return;
+    }
+    setFirebaseError('');
+    setFirebaseSuccess('');
+    setFirebaseActionLoading(true);
+    try {
+      const res = await fetch('/api/firebase/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFirebaseSuccess(data.message || 'Base de datos restaurada con éxito desde Firestore.');
+        fetchData();
+      } else {
+        setFirebaseError(data.error || 'Error al restaurar la base de datos desde la nube.');
+      }
+    } catch (e: any) {
+      setFirebaseError('Error de red: ' + e.message);
+    } finally {
+      setFirebaseActionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFirebaseConfig();
+  }, []);
 
   useEffect(() => {
     fetchData();
@@ -877,6 +970,130 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                         />
                       </label>
                     </div>
+                  </div>
+                </div>
+
+                {/* FIREBASE CLOUD BACKUP SECTION */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-200/60 shadow-sm space-y-5 animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 text-slate-800">
+                      <div className="p-2.5 bg-sky-50 text-sky-600 rounded-xl">
+                        <Cloud className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold font-display text-slate-900">Copia de Seguridad en la Nube (Firebase)</h4>
+                        <p className="text-xs text-slate-500 mt-0.5">Sincroniza y salvaguarda los datos de la simulación en Google Cloud Firestore.</p>
+                      </div>
+                    </div>
+
+                    {firebaseConfig?.configured && (
+                      <button
+                        type="button"
+                        onClick={checkFirebaseStatus}
+                        disabled={checkingFirebase}
+                        className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-lg transition-all"
+                        title="Verificar conexión de nuevo"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${checkingFirebase ? 'animate-spin text-sky-600' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Config Status Info */}
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-500 font-medium">Estado del Entorno Firebase:</span>
+                      {firebaseConfig === null ? (
+                        <span className="text-slate-400 animate-pulse">Cargando...</span>
+                      ) : !firebaseConfig.configured ? (
+                        <span className="px-2 py-0.5 bg-rose-50 text-rose-700 font-semibold rounded-md flex items-center space-x-1 border border-rose-100">
+                          <CloudOff className="w-3 h-3 shrink-0" />
+                          <span>Falta Configuración</span>
+                        </span>
+                      ) : firebaseStatus?.success ? (
+                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 font-bold rounded-md flex items-center space-x-1 border border-emerald-100">
+                          <Cloud className="w-3 h-3 shrink-0 animate-pulse" />
+                          <span>Conectado y Listo</span>
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-amber-50 text-amber-700 font-bold rounded-md flex items-center space-x-1 border border-amber-100">
+                          <CloudOff className="w-3 h-3 shrink-0" />
+                          <span>Requiere Atención</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {firebaseConfig?.configured && (
+                      <div className="text-[11px] text-slate-600 space-y-1 bg-white p-3 rounded-lg border border-slate-100 font-mono">
+                        <div><span className="text-slate-400 font-semibold select-none">ID Proyecto:</span> {firebaseConfig.projectId}</div>
+                        {firebaseStatus && !firebaseStatus.success && firebaseStatus.details && (
+                          <div className="mt-2.5 pt-2 border-t border-dashed border-slate-100 text-xs text-amber-800 leading-relaxed font-sans font-medium space-y-1">
+                            <div className="flex items-start space-x-1.5 text-amber-700 font-bold mb-1">
+                              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                              <span>Base de Datos no Inicializada:</span>
+                            </div>
+                            <p className="pl-5">{firebaseStatus.details}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {firebaseSuccess && (
+                    <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-emerald-800 font-semibold">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span>{firebaseSuccess}</span>
+                    </div>
+                  )}
+
+                  {firebaseError && (
+                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3.5 rounded-r-xl flex items-start space-x-2.5 text-xs text-rose-800 font-semibold">
+                      <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div>{firebaseError}</div>
+                        {firebaseStatus && !firebaseStatus.success && (
+                          <div className="text-[11px] font-normal text-rose-700 bg-white/50 p-2 rounded border border-rose-100 mt-1.5">
+                            {firebaseStatus.details}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Cloud Backup Card */}
+                    <button
+                      type="button"
+                      disabled={!firebaseConfig?.configured || checkingFirebase || firebaseActionLoading}
+                      onClick={handleFirebaseBackup}
+                      className="p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-sky-50/50 hover:border-sky-100 text-left transition-all group cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      <span className="text-xs font-bold text-slate-700 block mb-1 group-hover:text-sky-950">Respaldar en la Nube</span>
+                      <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                        Guarda el estado actual de la clase de manera segura y duradera en Firestore para prevenir pérdidas de datos.
+                      </span>
+                      <div className="w-full py-2 px-3 bg-sky-600 hover:bg-sky-700 group-hover:bg-sky-700 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm">
+                        <Cloud className="w-3.5 h-3.5" />
+                        <span>{firebaseActionLoading ? 'Guardando...' : 'Respaldar Ahora'}</span>
+                      </div>
+                    </button>
+
+                    {/* Cloud Restore Card */}
+                    <button
+                      type="button"
+                      disabled={!firebaseConfig?.configured || checkingFirebase || firebaseActionLoading}
+                      onClick={handleFirebaseRestore}
+                      className="p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-amber-50/50 hover:border-amber-100 text-left transition-all group cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      <span className="text-xs font-bold text-slate-700 block mb-1 group-hover:text-amber-950">Restaurar de la Nube</span>
+                      <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                        Recupera la copia de seguridad más reciente de Firestore para restablecer toda la simulación al último guardado.
+                      </span>
+                      <div className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 group-hover:bg-amber-700 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm">
+                        <RefreshCw className={`w-3.5 h-3.5 ${firebaseActionLoading ? 'animate-spin' : ''}`} />
+                        <span>{firebaseActionLoading ? 'Restaurando...' : 'Restaurar Ahora'}</span>
+                      </div>
+                    </button>
                   </div>
                 </div>
 
