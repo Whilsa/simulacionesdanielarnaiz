@@ -254,6 +254,13 @@ function generateId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// Format error messages with detailed inner cause if available (helpful for DrizzleQueryError debugging)
+function formatErrorMessage(prefix: string, error: any): string {
+  const message = error?.message || String(error);
+  const causeMsg = error?.cause ? ` (Causa: ${error.cause.message || error.cause})` : '';
+  return `${prefix}: ${message}${causeMsg}`;
+}
+
 // ---------------- API ENDPOINTS ----------------
 
 // Authenticate / Login
@@ -295,7 +302,7 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
     res.json({ user: userWithoutPassword });
   } catch (error: any) {
     console.error('[LOGIN-ERROR]', error);
-    res.status(500).json({ error: 'Error en el inicio de sesión: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error en el inicio de sesión', error) });
   }
 };
 
@@ -323,7 +330,7 @@ app.get('/api/users', async (req, res) => {
     }
   } catch (error: any) {
     console.error('[GET-USERS-ERROR]', error);
-    res.status(500).json({ error: 'Error al obtener usuarios: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al obtener usuarios', error) });
   }
 });
 
@@ -365,7 +372,7 @@ app.post('/api/users', async (req, res) => {
     res.status(201).json({ user: newUser });
   } catch (error: any) {
     console.error('[CREATE-USER-ERROR]', error);
-    res.status(500).json({ error: 'Error al crear usuario: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al crear usuario', error) });
   }
 });
 
@@ -417,7 +424,7 @@ app.put('/api/users/:id', async (req, res) => {
     res.json({ user: { ...user, name: updatedName, username: newUsername, password: updatedPassword } });
   } catch (error: any) {
     console.error('[UPDATE-USER-ERROR]', error);
-    res.status(500).json({ error: 'Error al actualizar usuario: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al actualizar usuario', error) });
   }
 });
 
@@ -463,7 +470,7 @@ app.put('/api/users/:id/adjust-balance', async (req, res) => {
     res.json({ user: { ...user, balance: newBalance } });
   } catch (error: any) {
     console.error('[ADJUST-BALANCE-ERROR]', error);
-    res.status(500).json({ error: 'Error al ajustar saldo: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al ajustar saldo', error) });
   }
 });
 
@@ -495,7 +502,7 @@ app.delete('/api/users/:id', async (req, res) => {
     res.json({ success: true, message: 'Usuario eliminado exitosamente' });
   } catch (error: any) {
     console.error('[DELETE-USER-ERROR]', error);
-    res.status(500).json({ error: 'Error al eliminar usuario: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al eliminar usuario', error) });
   }
 });
 
@@ -558,7 +565,7 @@ app.post('/api/transfers', async (req, res) => {
     res.json({ success: true, transfer: result.newTransfer, senderBalance: result.newSenderBalance });
   } catch (error: any) {
     console.error('[TRANSFER-ERROR]', error);
-    res.status(500).json({ error: error.message || 'Error al completar la transferencia' });
+    res.status(500).json({ error: formatErrorMessage('Error al completar la transferencia', error) });
   }
 });
 
@@ -585,7 +592,7 @@ app.get('/api/transfers', async (req, res) => {
     }
   } catch (error: any) {
     console.error('[GET-TRANSFERS-ERROR]', error);
-    res.status(500).json({ error: 'Error al obtener transferencias: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al obtener transferencias', error) });
   }
 });
 
@@ -597,7 +604,7 @@ app.get('/api/logs', async (req, res) => {
     res.json({ logs: allLogs });
   } catch (error: any) {
     console.error('[GET-LOGS-ERROR]', error);
-    res.status(500).json({ error: 'Error al obtener registros: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al obtener registros', error) });
   }
 });
 
@@ -644,7 +651,7 @@ app.post('/api/reset-simulation', async (req, res) => {
     res.json({ success: true, message: 'La simulación se ha reiniciado correctamente' });
   } catch (error: any) {
     console.error('[RESET-SIMULATION-ERROR]', error);
-    res.status(500).json({ error: 'Error al reiniciar la simulación: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al reiniciar la simulación', error) });
   }
 });
 
@@ -656,7 +663,7 @@ app.get('/api/backup', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename=egobey_backup.json');
     res.send(JSON.stringify(fullDb, null, 2));
   } catch (error: any) {
-    res.status(500).json({ error: 'Error al generar la copia de seguridad: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al generar la copia de seguridad', error) });
   }
 });
 
@@ -745,7 +752,7 @@ app.post('/api/restore', async (req, res) => {
     res.json({ success: true, message: 'Copia de seguridad restaurada con éxito.' });
   } catch (error: any) {
     console.error('[RESTORE-ERROR]', error);
-    res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error al restaurar la copia de seguridad', error) });
   }
 });
 
@@ -837,7 +844,7 @@ app.post('/api/sync', async (req, res) => {
     }
   } catch (error: any) {
     console.error('[SYNC-ERROR]', error);
-    res.status(500).json({ error: 'Error en sincronización automática: ' + error.message });
+    res.status(500).json({ error: formatErrorMessage('Error en sincronización automática', error) });
   }
 });
 
