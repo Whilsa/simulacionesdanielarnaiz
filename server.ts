@@ -19,6 +19,36 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 // Middleware to parse JSON
 app.use(express.json());
 
+// Diagnostic endpoint to debug Cloud SQL connection errors
+app.get('/api/test-db', async (req, res) => {
+  try {
+    const userRecords = await db.select().from(users).limit(1);
+    res.json({
+      success: true,
+      count: userRecords.length,
+      env: {
+        SQL_HOST: process.env.SQL_HOST,
+        SQL_USER: process.env.SQL_USER,
+        SQL_DB_NAME: process.env.SQL_DB_NAME,
+        NODE_ENV: process.env.NODE_ENV
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      cause: error.cause ? { message: error.cause.message, code: error.cause.code, stack: error.cause.stack } : null,
+      fullError: JSON.parse(JSON.stringify(error, Object.getOwnPropertyNames(error))),
+      env: {
+        SQL_HOST: process.env.SQL_HOST,
+        SQL_USER: process.env.SQL_USER,
+        SQL_DB_NAME: process.env.SQL_DB_NAME,
+        NODE_ENV: process.env.NODE_ENV
+      }
+    });
+  }
+});
+
 // Prevent any caching of API responses (crucial for real-time bank simulation across windows/devices)
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
