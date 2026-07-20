@@ -8,7 +8,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
-  X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut
+  X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
+  Download, Upload, Database
 } from 'lucide-react';
 import { User, Transfer, SystemLog } from '../types.js';
 
@@ -52,6 +53,11 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleteError, setDeleteError] = useState('');
 
+  // Backup and restore state
+  const [showRestoreSuggestion, setShowRestoreSuggestion] = useState(false);
+  const [backupSuccess, setBackupSuccess] = useState('');
+  const [backupError, setBackupError] = useState('');
+
   useEffect(() => {
     fetchData();
     // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
@@ -87,9 +93,96 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       setUsers(usersList);
       setTransfers(transfersList);
       setLogs(logsList);
+
+      // Save a browser-side copy of the database to local storage as a safety fallback
+      if (usersList.length > 0) {
+        const hasStudents = usersList.some(u => u.role === 'student');
+        if (hasStudents) {
+          const backupObj = {
+            users: usersList,
+            transfers: transfersList,
+            systemLogs: logsList,
+            defaultInitialBalance: 1000
+          };
+          localStorage.setItem('egobey_db_backup', JSON.stringify(backupObj));
+          // If we have students on server, we don't need the restore suggestion anymore
+          setShowRestoreSuggestion(false);
+        } else {
+          // No students on server. Check if we have a non-empty backup in localStorage
+          const savedBackupStr = localStorage.getItem('egobey_db_backup');
+          if (savedBackupStr) {
+            try {
+              const savedBackup = JSON.parse(savedBackupStr);
+              if (savedBackup.users && savedBackup.users.some((u: any) => u.role === 'student')) {
+                setShowRestoreSuggestion(true);
+              }
+            } catch (e) {
+              console.error('Error parsing local db backup:', e);
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
     }
+  };
+
+  const handleRestoreFromLocalStorage = async () => {
+    const savedBackupStr = localStorage.getItem('egobey_db_backup');
+    if (!savedBackupStr) return;
+    try {
+      const response = await fetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: savedBackupStr
+      });
+      if (response.ok) {
+        setShowRestoreSuggestion(false);
+        fetchData();
+        alert('¡Sincronización completada con éxito! Todos los alumnos, saldos e historial de transferencias han sido restaurados desde tu copia local.');
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Error al restaurar los datos.');
+      }
+    } catch (err: any) {
+      alert('Error de red al restaurar los datos: ' + err.message);
+    }
+  };
+
+  const handleManualExport = () => {
+    window.location.href = '/api/backup';
+  };
+
+  const handleManualImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setBackupError('');
+    setBackupSuccess('');
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = event.target?.result as string;
+        const json = JSON.parse(content);
+        
+        const response = await fetch('/api/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(json)
+        });
+
+        if (response.ok) {
+          setBackupSuccess('Copia de seguridad importada y restaurada de forma exitosa.');
+          fetchData();
+        } else {
+          const data = await response.json();
+          setBackupError(data.error || 'Error al procesar el archivo en el servidor.');
+        }
+      } catch (err: any) {
+        setBackupError('Error al leer el archivo JSON: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -310,6 +403,34 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        {showRestoreSuggestion && (
+          <div className="bg-amber-500 text-white rounded-2xl p-5 mb-6 shadow-md border-l-4 border-amber-600 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start space-x-3">
+              <AlertTriangle className="w-6 h-6 shrink-0 text-white mt-0.5" />
+              <div>
+                <h4 className="text-base font-bold font-display">¿Se ha actualizado el servidor?</h4>
+                <p className="text-xs text-amber-50 mt-1 leading-relaxed">
+                  Hemos detectado que el servidor no tiene cuentas de alumnos registradas, pero tienes una copia de seguridad guardada en la memoria de este navegador. ¿Deseas restaurarla ahora mismo para no perder ningún dato de la práctica?
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3 shrink-0">
+              <button
+                onClick={handleRestoreFromLocalStorage}
+                className="bg-white hover:bg-slate-100 text-amber-700 hover:text-amber-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow cursor-pointer"
+              >
+                Sincronizar y Recuperar Alumnos
+              </button>
+              <button
+                onClick={() => setShowRestoreSuggestion(false)}
+                className="text-white hover:bg-amber-600/50 text-xs font-medium px-3 py-2 rounded-xl transition-all cursor-pointer"
+              >
+                Descartar
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* Welcome Section */}
         <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -403,8 +524,8 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <RotateCcw className="w-4 h-4" />
-            <span>Reiniciar Ciclo</span>
+            <Database className="w-4 h-4" />
+            <span>Copia y Reinicio</span>
           </button>
         </div>
 
@@ -648,6 +769,73 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                 exit={{ opacity: 0, y: -10 }}
                 className="max-w-xl mx-auto py-4 space-y-6"
               >
+                {/* BACKUP & RESTORE SECTION */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-200/60 shadow-sm space-y-5 animate-fade-in">
+                  <div className="flex items-center space-x-3 text-slate-800">
+                    <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
+                      <Database className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold font-display text-slate-900">Copias de Seguridad y Salvaguarda</h4>
+                      <p className="text-xs text-slate-500 mt-0.5">Descarga o restaura los datos del simulador en un solo archivo offline.</p>
+                    </div>
+                  </div>
+
+                  {backupSuccess && (
+                    <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-emerald-800 font-semibold">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span>{backupSuccess}</span>
+                    </div>
+                  )}
+
+                  {backupError && (
+                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-rose-800 font-semibold">
+                      <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                      <span>{backupError}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Export Card */}
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex flex-col justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-700 block mb-1">Exportar Copia</span>
+                        <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                          Descarga un archivo JSON con todos los alumnos, contraseñas, saldos e historial de transferencias actuales.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleManualExport}
+                        className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Descargar JSON</span>
+                      </button>
+                    </div>
+
+                    {/* Import Card */}
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex flex-col justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-700 block mb-1">Importar Copia</span>
+                        <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                          Sube un archivo JSON de copia de seguridad previamente descargado para restaurar el estado completo de la clase.
+                        </span>
+                      </div>
+                      <label className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer text-center">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Subir Copia JSON</span>
+                        <input
+                          type="file"
+                          accept=".json"
+                          onChange={handleManualImport}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl">
                   <div className="flex space-x-3">
                     <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />

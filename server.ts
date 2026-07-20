@@ -516,6 +516,67 @@ app.post('/api/reset-simulation', (req, res) => {
   res.json({ success: true, message: 'La simulación se ha reiniciado correctamente' });
 });
 
+// Download full backup (Teacher only)
+app.get('/api/backup', (req, res) => {
+  try {
+    const db = readDb();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=egobey_backup.json');
+    res.send(JSON.stringify(db, null, 2));
+  } catch (error: any) {
+    res.status(500).json({ error: 'Error al generar la copia de seguridad: ' + error.message });
+  }
+});
+
+// Restore full backup (Teacher only)
+app.post('/api/restore', (req, res) => {
+  try {
+    const backup = req.body;
+    if (!backup || typeof backup !== 'object') {
+      return res.status(400).json({ error: 'Formato de copia de seguridad inválido.' });
+    }
+    
+    // Structure validation
+    if (!Array.isArray(backup.users) || !Array.isArray(backup.transfers) || !Array.isArray(backup.systemLogs)) {
+      return res.status(400).json({ error: 'La copia de seguridad no contiene la estructura requerida (users, transfers, systemLogs).' });
+    }
+
+    // Ensure there is a teacher, and preserve credentials
+    let teacher = backup.users.find((u: any) => u.role === 'teacher' || u.id === 'profesor-1');
+    if (!teacher) {
+      backup.users.unshift({
+        id: 'profesor-1',
+        username: 'pupdaniel',
+        password: '1987',
+        role: 'teacher',
+        name: 'Profesor de Contabilidad',
+        accountNumber: 'ES000000000000000000',
+        balance: 0
+      });
+    } else {
+      teacher.username = 'pupdaniel';
+      teacher.password = '1987';
+    }
+
+    writeDb(backup);
+
+    // Append restoration log
+    const db = readDb();
+    const newLog: SystemLog = {
+      id: generateId('log'),
+      action: 'RESET_SIMULATION', // Using compatible system action
+      details: 'Copia de seguridad restaurada de forma exitosa por el profesor.',
+      timestamp: new Date().toISOString()
+    };
+    db.systemLogs.unshift(newLog);
+    writeDb(db);
+
+    res.json({ success: true, message: 'Copia de seguridad restaurada con éxito.' });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + error.message });
+  }
+});
+
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
 
 async function startServer() {
