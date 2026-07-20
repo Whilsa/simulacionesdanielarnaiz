@@ -21,11 +21,29 @@ app.use(express.json());
 
 // Diagnostic endpoint to debug Cloud SQL connection errors
 app.get('/api/test-db', async (req, res) => {
+  const getDirContents = (pathStr: string) => {
+    try {
+      if (fs.existsSync(pathStr)) {
+        return fs.readdirSync(pathStr);
+      }
+      return `Directory ${pathStr} does not exist`;
+    } catch (e: any) {
+      return `Error reading ${pathStr}: ${e.message}`;
+    }
+  };
+
+  const cloudsqlContents = getDirContents('/cloudsql');
+  const appCloudsqlContents = getDirContents('/app/cloudsql');
+
   try {
     const userRecords = await db.select().from(users).limit(1);
     res.json({
       success: true,
       count: userRecords.length,
+      directories: {
+        '/cloudsql': cloudsqlContents,
+        '/app/cloudsql': appCloudsqlContents
+      },
       env: {
         SQL_HOST: process.env.SQL_HOST,
         SQL_USER: process.env.SQL_USER,
@@ -39,6 +57,10 @@ app.get('/api/test-db', async (req, res) => {
       error: error.message,
       cause: error.cause ? { message: error.cause.message, code: error.cause.code, stack: error.cause.stack } : null,
       fullError: JSON.parse(JSON.stringify(error, Object.getOwnPropertyNames(error))),
+      directories: {
+        '/cloudsql': cloudsqlContents,
+        '/app/cloudsql': appCloudsqlContents
+      },
       env: {
         SQL_HOST: process.env.SQL_HOST,
         SQL_USER: process.env.SQL_USER,
@@ -287,8 +309,31 @@ function generateId(prefix: string): string {
 // Format error messages with detailed inner cause if available (helpful for DrizzleQueryError debugging)
 function formatErrorMessage(prefix: string, error: any): string {
   const message = error?.message || String(error);
-  const causeMsg = error?.cause ? ` (Causa: ${error.cause.message || error.cause})` : '';
-  return `${prefix}: ${message}${causeMsg}`;
+  
+  // Recursively extract all inner error messages from any AggregateError
+  const extractInnerMessages = (err: any): string[] => {
+    if (!err) return [];
+    let msgs: string[] = [];
+    if (err.message) {
+      msgs.push(err.message);
+    }
+    if (Array.isArray(err.errors)) {
+      for (const subErr of err.errors) {
+        msgs = msgs.concat(extractInnerMessages(subErr));
+      }
+    }
+    if (err.cause) {
+      msgs = msgs.concat(extractInnerMessages(err.cause));
+    }
+    return msgs;
+  };
+
+  const allMsgs = extractInnerMessages(error);
+  // Remove duplicate messages
+  const uniqueMsgs = Array.from(new Set(allMsgs));
+  
+  const detailedMsg = uniqueMsgs.join(' -> ');
+  return `${prefix}: ${detailedMsg}`;
 }
 
 // ---------------- API ENDPOINTS ----------------
