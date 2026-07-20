@@ -8,11 +8,12 @@ const { Pool } = pkg;
 // Function to create a new connection pool.
 export const createPool = () => {
   let host = process.env.SQL_HOST;
-  const isCloudRun = !fs.existsSync('/app/cloudsql');
+  const isCloudRun = process.env.NODE_ENV === 'production' || !fs.existsSync('/app/cloudsql');
+  const defaultConnectionName = 'neat-artwork-t6rpq:europe-west2:ai-studio-6dc1df12';
 
   console.log(`[DB-POOL] Initial host from env: "${host}", isCloudRun: ${isCloudRun}`);
 
-  // Fallback: If host is undefined or empty, try to auto-discover it
+  // 1. If SQL_HOST is not provided, try to auto-discover it
   if (!host) {
     console.log(`[DB-POOL] SQL_HOST is empty. Attempting auto-discovery...`);
     
@@ -20,12 +21,9 @@ export const createPool = () => {
       try {
         if (fs.existsSync(baseDir)) {
           const files = fs.readdirSync(baseDir);
-          // Look for a directory or file that contains ':' (standard Cloud SQL connection name format)
           const connectionDir = files.find(f => f.includes(':'));
           if (connectionDir) {
-            const resolvedPath = `${baseDir}/${connectionDir}`;
-            console.log(`[DB-POOL] Auto-discovered connection socket path in ${baseDir}: "${resolvedPath}"`);
-            return resolvedPath;
+            return `${baseDir}/${connectionDir}`;
           }
         }
       } catch (e: any) {
@@ -34,7 +32,6 @@ export const createPool = () => {
       return null;
     };
 
-    // Try /cloudsql first if on Cloud Run, otherwise try /app/cloudsql first
     let discovered = isCloudRun ? findSocketInDir('/cloudsql') : findSocketInDir('/app/cloudsql');
     if (!discovered) {
       discovered = isCloudRun ? findSocketInDir('/app/cloudsql') : findSocketInDir('/cloudsql');
@@ -42,45 +39,45 @@ export const createPool = () => {
 
     if (discovered) {
       host = discovered;
+      console.log(`[DB-POOL] Auto-discovered host: "${host}"`);
     }
   }
 
-  // Format host path appropriately based on environment
-  if (host) {
-    if (isCloudRun) {
-      // On Cloud Run (production), force using native /cloudsql/ socket path
-      if (host.startsWith('/app/cloudsql/')) {
-        host = host.replace('/app/cloudsql/', '/cloudsql/');
-      } else if (!host.startsWith('/cloudsql/') && host.includes(':')) {
-        host = `/cloudsql/${host}`;
+  // 2. If host is still empty, use the hardcoded fallback
+  if (!host) {
+    console.log(`[DB-POOL] No host found. Using hardcoded fallback connection: "${defaultConnectionName}"`);
+    host = defaultConnectionName;
+  }
+
+  // 3. Format host to be a proper absolute socket path depending on the environment
+  if (isCloudRun) {
+    // For Cloud Run, must use native /cloudsql/ socket directory
+    if (host.startsWith('/app/cloudsql/')) {
+      host = host.replace('/app/cloudsql/', '/cloudsql/');
+    } else if (!host.startsWith('/cloudsql/')) {
+      // If it is just the connection name, or something else
+      const cleanName = host.includes('/') ? host.split('/').pop() : host;
+      host = `/cloudsql/${cleanName}`;
+    }
+  } else {
+    // For local workspace development, use /app/cloudsql/ if possible, fallback to /cloudsql/
+    if (host.startsWith('/cloudsql/')) {
+      const workspacePath = host.replace('/cloudsql/', '/app/cloudsql/');
+      if (fs.existsSync(workspacePath)) {
+        host = workspacePath;
       }
-    } else {
-      // In development workspace, use /app/cloudsql/ or fallback to /cloudsql/
-      if (host.startsWith('/cloudsql/')) {
-        const workspacePath = host.replace('/cloudsql/', '/app/cloudsql/');
-        if (fs.existsSync(workspacePath)) {
-          host = workspacePath;
-        }
-      } else if (host.startsWith('/app/cloudsql/')) {
-        const nativeCloudRunPath = host.replace('/app/cloudsql/', '/cloudsql/');
-        if (!fs.existsSync(host) && fs.existsSync(nativeCloudRunPath)) {
-          host = nativeCloudRunPath;
-        }
-      } else if (host.includes(':')) {
-        const workspacePath = `/app/cloudsql/${host}`;
-        const nativeCloudRunPath = `/cloudsql/${host}`;
-        if (fs.existsSync(workspacePath)) {
-          host = workspacePath;
-        } else if (fs.existsSync(nativeCloudRunPath)) {
-          host = nativeCloudRunPath;
-        } else {
-          host = workspacePath;
-        }
+    } else if (!host.startsWith('/app/cloudsql/')) {
+      const cleanName = host.includes('/') ? host.split('/').pop() : host;
+      const workspacePath = `/app/cloudsql/${cleanName}`;
+      if (fs.existsSync(workspacePath)) {
+        host = workspacePath;
+      } else {
+        host = `/cloudsql/${cleanName}`;
       }
     }
   }
 
-  console.log(`[DB-POOL] Resolved host for connection: "${host}"`);
+  console.log(`[DB-POOL] Final resolved host for node-postgres connection: "${host}"`);
 
   return new Pool({
     host: host,
