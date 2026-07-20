@@ -45,6 +45,7 @@ app.get('/api/test-db', async (req, res) => {
         '/cloudsql': cloudsqlContents,
         '/app/cloudsql': appCloudsqlContents
       },
+      envKeys: Object.keys(process.env),
       env: {
         SQL_HOST: process.env.SQL_HOST,
         SQL_USER: process.env.SQL_USER,
@@ -58,6 +59,7 @@ app.get('/api/test-db', async (req, res) => {
       error: error.message,
       cause: error.cause ? { message: error.cause.message, code: error.cause.code, stack: error.cause.stack } : null,
       fullError: JSON.parse(JSON.stringify(error, Object.getOwnPropertyNames(error))),
+      envKeys: Object.keys(process.env),
       directories: {
         '/cloudsql': cloudsqlContents,
         '/app/cloudsql': appCloudsqlContents

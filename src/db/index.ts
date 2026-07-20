@@ -8,6 +8,9 @@ const { Pool } = pkg;
 // Function to create a new connection pool.
 export const createPool = () => {
   let host = process.env.SQL_HOST;
+  if (host === 'undefined' || host === 'null') {
+    host = undefined;
+  }
   const isCloudRun = process.env.NODE_ENV === 'production' || !fs.existsSync('/app/cloudsql');
   const defaultConnectionName = 'neat-artwork-t6rpq:europe-west2:ai-studio-6dc1df12';
 
