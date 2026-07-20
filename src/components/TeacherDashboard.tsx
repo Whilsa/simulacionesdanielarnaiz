@@ -67,6 +67,51 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
 
   const fetchData = async () => {
     try {
+      // 1. Get the local storage backup (if any) to check against server state
+      let localBackup: any = null;
+      const savedBackupStr = localStorage.getItem('egobey_db_backup');
+      if (savedBackupStr) {
+        try {
+          localBackup = JSON.parse(savedBackupStr);
+        } catch (e) {
+          console.error('Error parsing local backup for sync:', e);
+        }
+      }
+
+      // 2. Perform bi-directional automatic synchronization with the server
+      const syncResponse = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(localBackup || { users: [], transfers: [], systemLogs: [] })
+      });
+
+      if (syncResponse.ok) {
+        const syncData = await syncResponse.json();
+        if (syncData.success && syncData.db) {
+          const db = syncData.db;
+          setUsers(db.users || []);
+          setTransfers(db.transfers || []);
+          setLogs(db.systemLogs || []);
+
+          // Save the most authoritative state back to local storage
+          const hasStudents = db.users?.some((u: any) => u.role === 'student');
+          if (hasStudents) {
+            const updatedBackup = {
+              users: db.users,
+              transfers: db.transfers,
+              systemLogs: db.systemLogs,
+              defaultInitialBalance: db.defaultInitialBalance || 1000,
+              version: db.version,
+              lastUpdated: db.lastUpdated
+            };
+            localStorage.setItem('egobey_db_backup', JSON.stringify(updatedBackup));
+            setShowRestoreSuggestion(false);
+          }
+          return; // Skip normal fetching since sync has returned the absolute authoritative state!
+        }
+      }
+
+      // Fallback: If sync endpoint fails or is slow, perform normal individual fetches
       const [usersRes, transfersRes, logsRes] = await Promise.all([
         fetch('/users?role=teacher'),
         fetch('/transfers?role=teacher'),
@@ -109,7 +154,6 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
           setShowRestoreSuggestion(false);
         } else {
           // No students on server. Check if we have a non-empty backup in localStorage
-          const savedBackupStr = localStorage.getItem('egobey_db_backup');
           if (savedBackupStr) {
             try {
               const savedBackup = JSON.parse(savedBackupStr);

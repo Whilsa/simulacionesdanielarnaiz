@@ -119,21 +119,37 @@ function readDb(): DatabaseSchema {
           timestamp: new Date().toISOString()
         }
       ],
-      defaultInitialBalance: 1000
+      defaultInitialBalance: 1000,
+      version: 1,
+      lastUpdated: new Date().toISOString()
     };
-    fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf-8');
+    const tempFile = DB_FILE + '.tmp';
+    fs.writeFileSync(tempFile, JSON.stringify(defaultDb, null, 2), 'utf-8');
+    fs.renameSync(tempFile, DB_FILE);
     return defaultDb;
   }
 
   try {
     const data = fs.readFileSync(DB_FILE, 'utf-8');
     const db = JSON.parse(data) as DatabaseSchema;
+    
+    // Ensure version exists
+    if (!db.version) {
+      db.version = 1;
+    }
+    if (!db.lastUpdated) {
+      db.lastUpdated = new Date().toISOString();
+    }
+
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
       if (teacher.username !== 'pupdaniel' || teacher.password !== '1987') {
         teacher.username = 'pupdaniel';
         teacher.password = '1987';
-        fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+        db.lastUpdated = new Date().toISOString();
+        const tempFile = DB_FILE + '.tmp';
+        fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), 'utf-8');
+        fs.renameSync(tempFile, DB_FILE);
       }
     } else {
       db.users.unshift({
@@ -145,7 +161,10 @@ function readDb(): DatabaseSchema {
         accountNumber: 'ES000000000000000000',
         balance: 0
       });
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+      db.lastUpdated = new Date().toISOString();
+      const tempFile = DB_FILE + '.tmp';
+      fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), 'utf-8');
+      fs.renameSync(tempFile, DB_FILE);
     }
     return db;
   } catch (error) {
@@ -164,14 +183,22 @@ function readDb(): DatabaseSchema {
       ],
       transfers: [],
       systemLogs: [],
-      defaultInitialBalance: 1000
+      defaultInitialBalance: 1000,
+      version: 1,
+      lastUpdated: new Date().toISOString()
     };
     return defaultDb;
   }
 }
 
 function writeDb(db: DatabaseSchema) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  // Automatically increment the database version and update the timestamp on every single write
+  db.version = (db.version || 0) + 1;
+  db.lastUpdated = new Date().toISOString();
+  
+  const tempFile = DB_FILE + '.tmp';
+  fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), 'utf-8');
+  fs.renameSync(tempFile, DB_FILE);
 }
 
 // Generate unique account number
@@ -574,6 +601,77 @@ app.post('/api/restore', (req, res) => {
     res.json({ success: true, message: 'Copia de seguridad restaurada con éxito.' });
   } catch (error: any) {
     res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + error.message });
+  }
+});
+
+// Automatic bi-directional synchronization endpoint
+app.post('/api/sync', (req, res) => {
+  try {
+    const clientDb = req.body;
+    const serverDb = readDb();
+
+    if (!clientDb || typeof clientDb !== 'object' || !Array.isArray(clientDb.users) || !Array.isArray(clientDb.transfers)) {
+      return res.json({ success: false, reason: 'formato_invalido', db: serverDb });
+    }
+
+    const serverVersion = serverDb.version || 1;
+    const clientVersion = clientDb.version || 0;
+
+    const serverStudentsCount = serverDb.users.filter(u => u.role === 'student').length;
+    const clientStudentsCount = clientDb.users.filter((u: any) => u.role === 'student').length;
+
+    const serverTransfersCount = serverDb.transfers.length;
+    const clientTransfersCount = clientDb.transfers.length;
+
+    // Check if either is the default seed state
+    // Default seed has exactly 3 students (Ana, Carlos, Beatriz) and exactly 2 seed transfers
+    const serverIsDefaultSeed = serverStudentsCount <= 3 && serverTransfersCount <= 2;
+    const clientIsDefaultSeed = clientStudentsCount <= 3 && clientTransfersCount <= 2;
+
+    // The client database is considered "better" or "newer" to restore if:
+    // 1. Server is currently in the default seed state, but client has actual student accounts beyond seed or more data.
+    // 2. Client has a strictly higher version and client is NOT in seed state.
+    // 3. Client has more students (meaning someone created students that the server lost on reset).
+    const shouldOverwriteServer = 
+      (serverIsDefaultSeed && !clientIsDefaultSeed) || 
+      (clientVersion > serverVersion && !clientIsDefaultSeed) ||
+      (clientStudentsCount > serverStudentsCount && !clientIsDefaultSeed);
+
+    if (shouldOverwriteServer) {
+      // Ensure teacher account credentials "pupdaniel" / "1987" are maintained
+      let teacher = clientDb.users.find((u: any) => u.role === 'teacher' || u.id === 'profesor-1');
+      if (!teacher) {
+        clientDb.users.unshift({
+          id: 'profesor-1',
+          username: 'pupdaniel',
+          password: '1987',
+          role: 'teacher',
+          name: 'Profesor de Contabilidad',
+          accountNumber: 'ES000000000000000000',
+          balance: 0
+        });
+      } else {
+        teacher.username = 'pupdaniel';
+        teacher.password = '1987';
+      }
+
+      // Always progress version
+      const targetVersion = Math.max(clientVersion, serverVersion + 1);
+      clientDb.version = targetVersion;
+      clientDb.lastUpdated = new Date().toISOString();
+
+      // Write client database to server
+      writeDb(clientDb);
+
+      console.log(`[SYNC-AUTO] Server database recovered from client backup. Version promoted to: ${targetVersion}`);
+      return res.json({ success: true, updated: true, version: targetVersion, db: clientDb });
+    } else {
+      // Server is newer or equal. Return server's DB so client can pull the newer state.
+      return res.json({ success: true, updated: false, version: serverVersion, db: serverDb });
+    }
+  } catch (error: any) {
+    console.error('[SYNC-ERROR]', error);
+    res.status(500).json({ error: 'Error en sincronización automática: ' + error.message });
   }
 });
 
