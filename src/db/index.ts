@@ -49,31 +49,21 @@ export const createPool = () => {
     host = defaultConnectionName;
   }
 
-  // 3. Format host to be a proper absolute socket path depending on the environment
-  if (isCloudRun) {
-    // For Cloud Run, must use native /cloudsql/ socket directory
-    if (host.startsWith('/app/cloudsql/')) {
-      host = host.replace('/app/cloudsql/', '/cloudsql/');
-    } else if (!host.startsWith('/cloudsql/')) {
-      // If it is just the connection name, or something else
-      const cleanName = host.includes('/') ? host.split('/').pop() : host;
-      host = `/cloudsql/${cleanName}`;
-    }
+  // 3. Format host to be a proper absolute socket path depending on what exists on disk
+  const cleanName = host.includes('/') ? host.split('/').pop() : host;
+  const appPath = `/app/cloudsql/${cleanName}`;
+  const nativePath = `/cloudsql/${cleanName}`;
+
+  if (fs.existsSync(appPath)) {
+    host = appPath;
+  } else if (fs.existsSync(nativePath)) {
+    host = nativePath;
   } else {
-    // For local workspace development, use /app/cloudsql/ if possible, fallback to /cloudsql/
-    if (host.startsWith('/cloudsql/')) {
-      const workspacePath = host.replace('/cloudsql/', '/app/cloudsql/');
-      if (fs.existsSync(workspacePath)) {
-        host = workspacePath;
-      }
-    } else if (!host.startsWith('/app/cloudsql/')) {
-      const cleanName = host.includes('/') ? host.split('/').pop() : host;
-      const workspacePath = `/app/cloudsql/${cleanName}`;
-      if (fs.existsSync(workspacePath)) {
-        host = workspacePath;
-      } else {
-        host = `/cloudsql/${cleanName}`;
-      }
+    // Fallback: if neither exists yet, default to the directory that exists
+    if (fs.existsSync('/app/cloudsql')) {
+      host = appPath;
+    } else {
+      host = nativePath;
     }
   }
 

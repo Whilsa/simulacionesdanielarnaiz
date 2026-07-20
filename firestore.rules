@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global safety net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Standard high-security helper definitions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Checks if the user is a teacher by fetching their document
+    function isTeacher() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    // ---------------- VALIDATION BLUEPRINTS ----------------
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'username', 'password', 'role', 'name', 'accountNumber', 'balance']) &&
+        data.keys().size() == 7 &&
+        data.id is string && data.id.size() <= 128 &&
+        data.username is string && data.username.size() >= 2 && data.username.size() <= 32 &&
+        data.password is string && data.password.size() >= 3 && data.password.size() <= 128 &&
+        data.role is string && (data.role == 'teacher' || data.role == 'student') &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
+        data.accountNumber is string && data.accountNumber.size() == 20 &&
+        data.balance is number;
+    }
+
+    function isValidTransfer(data) {
+      return data.keys().hasAll(['id', 'senderId', 'senderName', 'senderAccount', 'receiverId', 'receiverName', 'receiverAccount', 'amount', 'concept', 'timestamp']) &&
+        data.keys().size() == 10 &&
+        data.id is string && data.id.size() <= 128 &&
+        data.senderId is string && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() <= 100 &&
+        data.senderAccount is string && data.senderAccount.size() == 20 &&
+        data.receiverId is string && data.receiverId.size() <= 128 &&
+        data.receiverName is string && data.receiverName.size() <= 100 &&
+        data.receiverAccount is string && data.receiverAccount.size() == 20 &&
+        data.amount is number && data.amount > 0 &&
+        data.concept is string && data.concept.size() <= 200 &&
+        data.timestamp is string;
+    }
+
+    function isValidSystemLog(data) {
+      return data.keys().hasAll(['id', 'action', 'details', 'timestamp']) &&
+        data.keys().size() == 4 &&
+        data.id is string && data.id.size() <= 128 &&
+        data.action is string && data.action.size() <= 100 &&
+        data.details is string && data.details.size() <= 1000 &&
+        data.timestamp is string;
+    }
+
+    function isValidConfig(data) {
+      return data.keys().hasAll(['key', 'value']) &&
+        data.keys().size() == 2 &&
+        data.key is string && data.key.size() <= 100 &&
+        data.value is string && data.value.size() <= 1000;
+    }
+
+    // ---------------- COLLECTIONS ----------------
+
+    // 1. Users Collection
+    match /users/{userId} {
+      // Allow read to authenticated users. Personal profile reads only, unless user is a teacher.
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isTeacher());
+      allow list: if isSignedIn() && isTeacher(); // Only teachers can list all users
+
+      // Create: Users can register themselves or teachers can create them
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(request.resource.data) && (
+        request.auth.uid == userId || isTeacher()
+      );
+
+      // Update: Users can update their own data (excluding role & balance which require isTeacher())
+      allow update: if isSignedIn() && isValidId(userId) && isValidUser(request.resource.data) && (
+        isTeacher() || (
+          request.auth.uid == userId &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.balance == resource.data.balance
+        )
+      );
+
+      // Delete: Only teachers can delete users
+      allow delete: if isSignedIn() && isValidId(userId) && isTeacher();
+    }
+
+    // 2. Transfers Collection
+    match /transfers/{transferId} {
+      // Allow reads to users involved in the transfer or teachers
+      allow get: if isSignedIn() && isValidId(transferId) && (
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid ||
+        isTeacher()
+      );
+      // Queries must be restricted to user's transfers unless teacher
+      allow list: if isSignedIn() && (
+        isTeacher() ||
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid
+      );
+
+      // Create: Any signed-in user can make a transfer where they are the sender, or a teacher can
+      allow create: if isSignedIn() && isValidId(transferId) && isValidTransfer(request.resource.data) && (
+        request.resource.data.senderId == request.auth.uid || isTeacher()
+      );
+
+      // Transfers are immutable - no updates or deletions allowed
+      allow update, delete: if false;
+    }
+
+    // 3. System Logs Collection
+    match /system_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isTeacher();
+      allow list: if isSignedIn() && isTeacher();
+      allow create: if isSignedIn() && isValidId(logId) && isValidSystemLog(request.resource.data);
+      allow update, delete: if false; // System logs are immutable
+    }
+
+    // 4. Config Collection
+    match /config/{configKey} {
+      allow read: if isSignedIn(); // Any authenticated user can read configurations
+      allow write: if isSignedIn() && isValidId(configKey) && isTeacher() && isValidConfig(request.resource.data);
+    }
+  }
+}
