@@ -20,7 +20,9 @@ export async function findBackupFile(accessToken: string): Promise<DriveFileMeta
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Google Drive API error (find): ${res.statusText} - ${errText}`);
+      const err = new Error(`Google Drive API error (find): ${res.statusText} - ${errText}`);
+      (err as any).status = res.status;
+      throw err;
     }
 
     const data = await res.json();
@@ -28,8 +30,12 @@ export async function findBackupFile(accessToken: string): Promise<DriveFileMeta
       return data.files[0] as DriveFileMetadata;
     }
     return null;
-  } catch (error) {
-    console.error('Error finding backup file on Google Drive:', error);
+  } catch (error: any) {
+    if (error.status === 401 || error.message?.includes('401') || error.message?.toLowerCase().includes('unauthenticated')) {
+      console.warn('[Google Drive] Token is expired or unauthenticated (401).');
+    } else {
+      console.error('Error finding backup file on Google Drive:', error);
+    }
     throw error;
   }
 }
@@ -56,7 +62,9 @@ export async function createBackupFile(accessToken: string, dbData: any): Promis
 
     if (!metadataRes.ok) {
       const errText = await metadataRes.text();
-      throw new Error(`Google Drive API error (create metadata): ${metadataRes.statusText} - ${errText}`);
+      const err = new Error(`Google Drive API error (create metadata): ${metadataRes.statusText} - ${errText}`);
+      (err as any).status = metadataRes.status;
+      throw err;
     }
 
     const fileMeta = await metadataRes.json() as DriveFileMetadata;
@@ -78,8 +86,12 @@ export async function createBackupFile(accessToken: string, dbData: any): Promis
     }
 
     return { ...fileMeta, modifiedTime: new Date().toISOString() };
-  } catch (error) {
-    console.error('Error creating backup file on Google Drive:', error);
+  } catch (error: any) {
+    if (error.status === 401 || error.message?.includes('401') || error.message?.toLowerCase().includes('unauthenticated')) {
+      console.warn('[Google Drive] Token is expired or unauthenticated (401) during create.');
+    } else {
+      console.error('Error creating backup file on Google Drive:', error);
+    }
     throw error;
   }
 }
@@ -102,10 +114,16 @@ export async function updateBackupFileContent(accessToken: string, fileId: strin
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Google Drive API error (upload media): ${res.statusText} - ${errText}`);
+      const err = new Error(`Google Drive API error (upload media): ${res.statusText} - ${errText}`);
+      (err as any).status = res.status;
+      throw err;
     }
-  } catch (error) {
-    console.error('Error uploading backup file content to Google Drive:', error);
+  } catch (error: any) {
+    if (error.status === 401 || error.message?.includes('401') || error.message?.toLowerCase().includes('unauthenticated')) {
+      console.warn('[Google Drive] Token is expired or unauthenticated (401) during upload.');
+    } else {
+      console.error('Error uploading backup file content to Google Drive:', error);
+    }
     throw error;
   }
 }
@@ -125,12 +143,18 @@ export async function downloadBackupFile(accessToken: string, fileId: string): P
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Google Drive API error (download): ${res.statusText} - ${errText}`);
+      const err = new Error(`Google Drive API error (download): ${res.statusText} - ${errText}`);
+      (err as any).status = res.status;
+      throw err;
     }
 
     return await res.json();
-  } catch (error) {
-    console.error('Error downloading backup file from Google Drive:', error);
+  } catch (error: any) {
+    if (error.status === 401 || error.message?.includes('401') || error.message?.toLowerCase().includes('unauthenticated')) {
+      console.warn('[Google Drive] Token is expired or unauthenticated (401) during download.');
+    } else {
+      console.error('Error downloading backup file from Google Drive:', error);
+    }
     throw error;
   }
 }
