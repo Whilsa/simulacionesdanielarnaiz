@@ -12,6 +12,9 @@ import {
   Download, Upload, Database, Cloud, CloudOff, RefreshCw
 } from 'lucide-react';
 import { User, Transfer, SystemLog } from '../types.js';
+import { initGoogleAuth, googleSignIn, googleLogout } from '../db/google-auth.js';
+import { exportToGoogleSheets, backupToGoogleDrive, listDriveBackups, downloadDriveBackup, DriveBackupFile } from '../db/google-workspace.js';
+import { User as FirebaseUser } from 'firebase/auth';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -65,6 +68,17 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
   const [firebaseActionLoading, setFirebaseActionLoading] = useState(false);
   const [firebaseSuccess, setFirebaseSuccess] = useState('');
   const [firebaseError, setFirebaseError] = useState('');
+
+  // Google Workspace states
+  const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
+  const [isGoogleLoggingIn, setIsGoogleLoggingIn] = useState(false);
+  const [driveBackups, setDriveBackups] = useState<DriveBackupFile[]>([]);
+  const [loadingDriveBackups, setLoadingDriveBackups] = useState(false);
+  const [exportingToSheets, setExportingToSheets] = useState(false);
+  const [exportingToDrive, setExportingToDrive] = useState(false);
+  const [restoringFromDrive, setRestoringFromDrive] = useState<string | null>(null);
+  const [workspaceSuccess, setWorkspaceSuccess] = useState('');
+  const [workspaceError, setWorkspaceError] = useState('');
 
   const fetchFirebaseConfig = async () => {
     try {
@@ -157,6 +171,190 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     const interval = setInterval(fetchData, 4000);
     return () => clearInterval(interval);
   }, [activeTab]);
+
+  const [spreadsheetUrl, setSpreadsheetUrl] = useState('');
+
+  // Initialize Google Auth listener
+  useEffect(() => {
+    const unsubscribe = initGoogleAuth(
+      (user, token) => {
+        setGoogleUser(user);
+        // Automatically fetch backups if authenticated
+        fetchDriveBackups(token);
+      },
+      () => {
+        setGoogleUser(null);
+        setDriveBackups([]);
+      }
+    );
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  const fetchDriveBackups = async (token: string) => {
+    setLoadingDriveBackups(true);
+    try {
+      const files = await listDriveBackups(token);
+      setDriveBackups(files);
+    } catch (err: any) {
+      console.error('Error fetching drive backups:', err);
+    } finally {
+      setLoadingDriveBackups(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setIsGoogleLoggingIn(true);
+    setWorkspaceError('');
+    setWorkspaceSuccess('');
+    setSpreadsheetUrl('');
+    try {
+      const res = await googleSignIn();
+      if (res) {
+        setGoogleUser(res.user);
+        await fetchDriveBackups(res.accessToken);
+        setWorkspaceSuccess('¡Conectado con Google con éxito!');
+      }
+    } catch (err: any) {
+      setWorkspaceError(err.message || 'Error al conectar con Google.');
+    } finally {
+      setIsGoogleLoggingIn(false);
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    try {
+      await googleLogout();
+      setGoogleUser(null);
+      setDriveBackups([]);
+      setWorkspaceSuccess('');
+      setWorkspaceError('');
+      setSpreadsheetUrl('');
+    } catch (err: any) {
+      setWorkspaceError('Error al cerrar sesión: ' + err.message);
+    }
+  };
+
+  const handleExportToSheets = async () => {
+    setWorkspaceError('');
+    setWorkspaceSuccess('');
+    setSpreadsheetUrl('');
+    setExportingToSheets(true);
+    try {
+      const res = await fetch('/api/sync', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ users: [], transfers: [], systemLogs: [] }) 
+      });
+      let currentDb = { users, transfers, systemLogs: logs, defaultInitialBalance: 1000 };
+      if (res.ok) {
+        const syncData = await res.json();
+        if (syncData.success && syncData.db) {
+          currentDb = syncData.db;
+        }
+      }
+
+      const loginRes = await googleSignIn();
+      const token = loginRes?.accessToken;
+      if (!token) {
+        throw new Error('Debe iniciar sesión en Google primero o renovar la sesión.');
+      }
+
+      const { spreadsheetUrl: url } = await exportToGoogleSheets(token, currentDb);
+      setSpreadsheetUrl(url);
+      setWorkspaceSuccess('Copia de seguridad en Sheets creada con éxito.');
+    } catch (err: any) {
+      setWorkspaceError(err.message || 'Error al exportar a Google Sheets.');
+    } finally {
+      setExportingToSheets(false);
+    }
+  };
+
+  const handleExportToDrive = async () => {
+    setWorkspaceError('');
+    setWorkspaceSuccess('');
+    setSpreadsheetUrl('');
+    setExportingToDrive(true);
+    try {
+      const res = await fetch('/api/sync', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ users: [], transfers: [], systemLogs: [] }) 
+      });
+      let currentDb = { users, transfers, systemLogs: logs, defaultInitialBalance: 1000 };
+      if (res.ok) {
+        const syncData = await res.json();
+        if (syncData.success && syncData.db) {
+          currentDb = syncData.db;
+        }
+      }
+
+      const loginRes = await googleSignIn();
+      const token = loginRes?.accessToken;
+      if (!token) {
+        throw new Error('Debe iniciar sesión en Google primero o renovar la sesión.');
+      }
+
+      const { fileName } = await backupToGoogleDrive(token, currentDb);
+      setWorkspaceSuccess(`Copia de seguridad guardada en Google Drive como: ${fileName}`);
+      await fetchDriveBackups(token);
+    } catch (err: any) {
+      setWorkspaceError(err.message || 'Error al subir copia de seguridad a Google Drive.');
+    } finally {
+      setExportingToDrive(false);
+    }
+  };
+
+  const handleListDriveBackups = async () => {
+    const loginRes = await googleSignIn();
+    const token = loginRes?.accessToken;
+    if (!token) {
+      setWorkspaceError('Inicie sesión en Google para ver sus archivos.');
+      return;
+    }
+    await fetchDriveBackups(token);
+  };
+
+  const handleRestoreFromDrive = async (fileId: string, name: string) => {
+    if (!window.confirm(`¿Estás completamente seguro de que deseas restaurar la simulación bancaria utilizando el archivo "${name}" de Google Drive? Se sobrescribirá todo el estado contable actual de la clase.`)) {
+      return;
+    }
+
+    setWorkspaceError('');
+    setWorkspaceSuccess('');
+    setSpreadsheetUrl('');
+    setRestoringFromDrive(fileId);
+
+    try {
+      const loginRes = await googleSignIn();
+      const token = loginRes?.accessToken;
+      if (!token) {
+        throw new Error('Debe iniciar sesión en Google primero o renovar la sesión.');
+      }
+
+      const downloadedDb = await downloadDriveBackup(token, fileId);
+
+      // Restore it to our server database using `/api/restore`
+      const restoreRes = await fetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(downloadedDb),
+      });
+
+      const restoreData = await restoreRes.json();
+      if (!restoreRes.ok || !restoreData.success) {
+        throw new Error(restoreData.error || 'Error al restaurar los datos en el servidor.');
+      }
+
+      setWorkspaceSuccess(`La base de datos se ha restaurado con éxito desde Google Drive (${name}).`);
+      fetchData();
+    } catch (err: any) {
+      setWorkspaceError(err.message || 'Error al restaurar desde Google Drive.');
+    } finally {
+      setRestoringFromDrive(null);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -523,6 +721,9 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
             </div>
             
             <div className="flex items-center space-x-4">
+              <span className="bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg text-xs font-mono text-amber-400">
+                Act. v2.4
+              </span>
               <div className="hidden md:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
                 <p className="text-xs text-slate-400">Docente Principal</p>
@@ -1095,6 +1296,189 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                       </div>
                     </button>
                   </div>
+                </div>
+
+                {/* GOOGLE WORKSPACE SYNC SECTION */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-200/60 shadow-sm space-y-5 animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 text-slate-800">
+                      <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+                        <Database className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold font-display text-slate-900">Sincronización con Google Workspace</h4>
+                        <p className="text-xs text-slate-500 mt-0.5">Sincroniza y respalda tus datos con Google Sheets y Google Drive.</p>
+                      </div>
+                    </div>
+
+                    {googleUser && (
+                      <button
+                        type="button"
+                        onClick={handleGoogleLogout}
+                        className="text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1 cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Desconectar</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {!googleUser ? (
+                    <div className="p-6 border border-dashed border-slate-200 rounded-xl flex flex-col items-center text-center space-y-4">
+                      <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                        Conéctate con tu cuenta de Google para exportar listados de alumnos directamente a Google Sheets y gestionar copias de seguridad en Google Drive.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleGoogleLogin}
+                        disabled={isGoogleLoggingIn}
+                        className="gsi-material-button hover:shadow-md transition-all active:scale-95 duration-150 cursor-pointer text-center"
+                      >
+                        <div className="gsi-material-button-state"></div>
+                        <div className="gsi-material-button-content-wrapper">
+                          <div className="gsi-material-button-icon">
+                            <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style={{ display: 'block' }}>
+                              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                              <path fill="none" d="M0 0h48v48H0z"></path>
+                            </svg>
+                          </div>
+                          <span className="gsi-material-button-contents text-slate-700 font-semibold">{isGoogleLoggingIn ? 'Conectando...' : 'Conectar con Google'}</span>
+                        </div>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex items-center space-x-3 p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs">
+                        {googleUser.photoURL && (
+                          <img
+                            src={googleUser.photoURL}
+                            alt={googleUser.displayName || ''}
+                            className="w-8 h-8 rounded-full border border-slate-200"
+                            referrerPolicy="no-referrer"
+                          />
+                        )}
+                        <div>
+                          <p className="font-bold text-slate-800">{googleUser.displayName || 'Usuario de Google'}</p>
+                          <p className="text-slate-400">{googleUser.email}</p>
+                        </div>
+                      </div>
+
+                      {workspaceSuccess && (
+                        <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-emerald-800 font-semibold">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <div className="flex-1">
+                            <span>{workspaceSuccess}</span>
+                            {spreadsheetUrl && (
+                              <a
+                                href={spreadsheetUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline text-emerald-800 font-bold flex items-center space-x-1 mt-1.5"
+                              >
+                                <span>Abrir Google Sheets creado ↗</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {workspaceError && (
+                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-rose-800 font-semibold">
+                          <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                          <span>{workspaceError}</span>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-emerald-50/30 transition-all flex flex-col justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-slate-700 block mb-1">Exportar a Google Sheets</span>
+                            <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                              Crea una hoja de cálculo con pestañas dedicadas para Alumnos, Transferencias e historial de Logs del simulador.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={exportingToSheets}
+                            onClick={handleExportToSheets}
+                            className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>{exportingToSheets ? 'Exportando...' : 'Exportar a Sheets'}</span>
+                          </button>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/30 transition-all flex flex-col justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-slate-700 block mb-1">Copia en Google Drive</span>
+                            <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
+                              Sube una copia completa de seguridad del estado del banco como un archivo JSON cifrado directamente en tu Google Drive.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={exportingToDrive}
+                            onClick={handleExportToDrive}
+                            className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                          >
+                            <Cloud className="w-3.5 h-3.5" />
+                            <span>{exportingToDrive ? 'Guardando...' : 'Subir a Drive'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-100 pt-4 space-y-3">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                          <span>Copias de seguridad en Google Drive</span>
+                          <button
+                            type="button"
+                            onClick={handleListDriveBackups}
+                            disabled={loadingDriveBackups}
+                            className="text-indigo-600 hover:text-indigo-700 flex items-center space-x-1 cursor-pointer"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${loadingDriveBackups ? 'animate-spin' : ''}`} />
+                            <span>Actualizar lista</span>
+                          </button>
+                        </div>
+
+                        {loadingDriveBackups ? (
+                          <div className="py-6 text-center text-xs text-slate-400 animate-pulse">
+                            Buscando copias de seguridad en Google Drive...
+                          </div>
+                        ) : driveBackups.length === 0 ? (
+                          <div className="py-4 text-center text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg">
+                            No se encontraron archivos de copia de seguridad de Egobey en Google Drive. ¡Prueba a crear uno primero!
+                          </div>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-lg divide-y divide-slate-100 bg-white">
+                            {driveBackups.map((backup) => (
+                              <div key={backup.id} className="flex items-center justify-between p-3 text-xs hover:bg-slate-50 transition-all">
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-slate-800 truncate">{backup.name}</p>
+                                  <p className="text-[10px] text-slate-400 font-mono">
+                                    {new Date(backup.createdTime).toLocaleString('es-ES')}
+                                    {backup.size && ` • ${(Number(backup.size) / 1024).toFixed(1)} KB`}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={!!restoringFromDrive}
+                                  onClick={() => handleRestoreFromDrive(backup.id, backup.name)}
+                                  className="px-2.5 py-1 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-100 rounded-md font-medium text-[11px] transition-all flex items-center space-x-1 shrink-0 disabled:opacity-50 cursor-pointer"
+                                >
+                                  <RefreshCw className={`w-3 h-3 ${restoringFromDrive === backup.id ? 'animate-spin' : ''}`} />
+                                  <span>{restoringFromDrive === backup.id ? 'Restaurando...' : 'Restaurar'}</span>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl">
