@@ -327,7 +327,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         setBackupSuccess('¡Conectado a Google Drive correctamente!');
       }
     } catch (err: any) {
-      setBackupError('Error al conectar con Google: ' + err.message);
+      let errMsg = err.message || String(err);
+      const isUnauthorizedDomain = err.code === 'auth/unauthorized-domain' || 
+                                   errMsg.includes('auth/unauthorized-domain') || 
+                                   errMsg.includes('unauthorized-domain');
+      if (isUnauthorizedDomain) {
+        errMsg = 'Este dominio no está autorizado en Firebase. Bajo el capó, la conexión segura con Google Drive se realiza mediante el sistema de autenticación de Firebase. Para solucionarlo: 1) Ve a la consola de Firebase (console.firebase.google.com), 2) Selecciona tu proyecto, 3) Entra en Authentication -> pestaña "Settings" -> sección "Authorized domains" (Dominios autorizados), 4) Haz clic en "Add domain" y añade el dominio completo de tu servidor en Render (ej. banco-escolar.onrender.com) sin el https://. ¡Con esto el botón funcionará al instante!';
+      }
+      setBackupError('Error al conectar con Google: ' + errMsg);
     }
   };
 
