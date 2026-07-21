@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database
+  Download, Upload, Database, Cloud, RefreshCw
 } from 'lucide-react';
 import { User, Transfer, SystemLog } from '../types.js';
+import { initAuth, googleSignIn, logout as googleLogout } from '../lib/firebaseAuth.js';
+import { findBackupFile, createBackupFile, updateBackupFileContent, downloadBackupFile, DriveFileMetadata } from '../lib/driveService.js';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -58,12 +60,43 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
   const [backupSuccess, setBackupSuccess] = useState('');
   const [backupError, setBackupError] = useState('');
 
+  // Google Drive state
+  const [googleUser, setGoogleUser] = useState<any>(null);
+  const [googleToken, setGoogleToken] = useState<string | null>(null);
+  const [driveFile, setDriveFile] = useState<DriveFileMetadata | null>(null);
+  const [isCheckingDrive, setIsCheckingDrive] = useState(false);
+  const [isSavingDrive, setIsSavingDrive] = useState(false);
+  const [isRestoringDrive, setIsRestoringDrive] = useState(false);
+  const [autoDriveSync, setAutoDriveSync] = useState(() => {
+    const saved = localStorage.getItem('bes_auto_drive_sync');
+    return saved === null ? true : saved === 'true';
+  });
+
+  const lastDbStringRef = useRef<string>('');
+  const isSeedRef = useRef<boolean>(false);
+
   useEffect(() => {
     fetchData();
     // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
     const interval = setInterval(fetchData, 4000);
     return () => clearInterval(interval);
-  }, [activeTab]);
+  }, [activeTab, googleToken]);
+
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setGoogleUser(user);
+        setGoogleToken(token);
+        checkGoogleDriveBackup(token, isSeedRef.current);
+      },
+      () => {
+        setGoogleUser(null);
+        setGoogleToken(null);
+        setDriveFile(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -76,10 +109,13 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       let usersList: User[] = [];
       let transfersList: Transfer[] = [];
       let logsList: SystemLog[] = [];
+      let isSeed = false;
 
       if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
         const usersData = await usersRes.json();
         usersList = usersData.users || [];
+        isSeed = usersData.isSeed || false;
+        isSeedRef.current = isSeed;
       }
       if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
         const transfersData = await transfersRes.json();
@@ -97,14 +133,32 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       // Save a browser-side copy of the database to local storage as a safety fallback
       if (usersList.length > 0) {
         const hasStudents = usersList.some(u => u.role === 'student');
+        
+        const backupObj = {
+          users: usersList,
+          transfers: transfersList,
+          systemLogs: logsList,
+          defaultInitialBalance: 1000
+        };
+        const dbStr = JSON.stringify(backupObj);
+
+        // --- GOOGLE DRIVE AUTO-SYNC ---
+        if (googleToken && autoDriveSync && lastDbStringRef.current && lastDbStringRef.current !== dbStr) {
+          console.log('[Drive Auto-Sync] Changes detected, auto-saving to Google Drive...');
+          triggerAutoDriveBackup(backupObj);
+        }
+
+        // --- GOOGLE DRIVE AUTO-RESTORE ON RESTART DETECTED ---
+        if (isSeed && googleToken && !isRestoringDrive && !isSavingDrive && !isCheckingDrive) {
+          console.log('[Drive Auto-Restore] Server restart detected (seed state)! Checking backup...');
+          checkGoogleDriveBackup(googleToken, true);
+        }
+
+        lastDbStringRef.current = dbStr;
+        // ------------------------------
+
         if (hasStudents) {
-          const backupObj = {
-            users: usersList,
-            transfers: transfersList,
-            systemLogs: logsList,
-            defaultInitialBalance: 1000
-          };
-          localStorage.setItem('egobey_db_backup', JSON.stringify(backupObj));
+          localStorage.setItem('egobey_db_backup', dbStr);
           // If we have students on server, we don't need the restore suggestion anymore
           setShowRestoreSuggestion(false);
         } else {
@@ -146,6 +200,187 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       }
     } catch (err: any) {
       alert('Error de red al restaurar los datos: ' + err.message);
+    }
+  };
+
+  const performAutoRestore = async (token: string, fileId: string, fileName: string, fileModifiedTime: string) => {
+    if (isRestoringDrive) return;
+    setIsRestoringDrive(true);
+    setBackupError('');
+    setBackupSuccess('');
+    try {
+      console.log('[Drive Auto-Restore] Downloading backup from Google Drive...');
+      const dbContent = await downloadBackupFile(token, fileId);
+      
+      console.log('[Drive Auto-Restore] Restoring backup to the server...');
+      const response = await fetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dbContent)
+      });
+
+      if (response.ok) {
+        console.log('[Drive Auto-Restore] Success! Database restored automatically.');
+        setBackupSuccess(`¡Se ha detectado un reinicio del servidor y se han restaurado tus datos automáticamente desde Google Drive! (Copia del ${new Date(fileModifiedTime).toLocaleString('es-ES')})`);
+        fetchData();
+        setShowRestoreSuggestion(false);
+      } else {
+        const data = await response.json();
+        console.error('[Drive Auto-Restore] Server failed to restore backup:', data.error);
+        setBackupError('No se pudo restaurar la copia de seguridad de Drive automáticamente.');
+      }
+    } catch (err: any) {
+      console.error('[Drive Auto-Restore] Error during auto-restore:', err);
+      setBackupError('Error al restaurar automáticamente: ' + err.message);
+    } finally {
+      setIsRestoringDrive(false);
+    }
+  };
+
+  const checkGoogleDriveBackup = async (token: string, isSeedActive: boolean = false) => {
+    if (isCheckingDrive) return;
+    setIsCheckingDrive(true);
+    try {
+      const file = await findBackupFile(token);
+      setDriveFile(file);
+      
+      if (file && isSeedActive && !isRestoringDrive) {
+        await performAutoRestore(token, file.id, file.name, file.modifiedTime);
+      }
+    } catch (e) {
+      console.error('Error checking Google Drive backup:', e);
+    } finally {
+      setIsCheckingDrive(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setBackupError('');
+    setBackupSuccess('');
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setGoogleUser(result.user);
+        setGoogleToken(result.accessToken);
+        localStorage.setItem('bes_drive_connected', 'true');
+        await checkGoogleDriveBackup(result.accessToken);
+        setBackupSuccess('¡Conectado a Google Drive correctamente!');
+      }
+    } catch (err: any) {
+      setBackupError('Error al conectar con Google: ' + err.message);
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    try {
+      await googleLogout();
+      setGoogleUser(null);
+      setGoogleToken(null);
+      setDriveFile(null);
+      localStorage.removeItem('bes_drive_connected');
+      setBackupSuccess('Desconectado de Google Drive.');
+    } catch (err: any) {
+      setBackupError('Error al desconectar: ' + err.message);
+    }
+  };
+
+  const handleSaveToDrive = async () => {
+    if (!googleToken) return;
+
+    setIsSavingDrive(true);
+    setBackupError('');
+    setBackupSuccess('');
+
+    try {
+      const dbRes = await fetch('/api/backup');
+      if (!dbRes.ok) {
+        throw new Error('No se pudo obtener el estado actual del servidor.');
+      }
+      const dbContent = await dbRes.json();
+
+      let updatedFile: DriveFileMetadata;
+      if (driveFile) {
+        await updateBackupFileContent(googleToken, driveFile.id, dbContent);
+        const refreshed = await findBackupFile(googleToken);
+        updatedFile = refreshed || { ...driveFile, modifiedTime: new Date().toISOString() };
+      } else {
+        updatedFile = await createBackupFile(googleToken, dbContent);
+      }
+
+      setDriveFile(updatedFile);
+      setBackupSuccess('¡Copia de seguridad guardada en Google Drive correctamente!');
+    } catch (err: any) {
+      setBackupError('Error al guardar en Google Drive: ' + err.message);
+    } finally {
+      setIsSavingDrive(false);
+    }
+  };
+
+  const handleRestoreFromDrive = async () => {
+    if (!googleToken || !driveFile) return;
+
+    const confirmed = window.confirm(
+      `¿Estás seguro de que deseas restaurar todos los alumnos, saldos e historial desde tu Google Drive? Esto reemplazará los datos actuales del servidor con la copia del ${new Date(driveFile.modifiedTime).toLocaleString('es-ES')}.`
+    );
+    if (!confirmed) return;
+
+    setIsRestoringDrive(true);
+    setBackupError('');
+    setBackupSuccess('');
+
+    try {
+      const dbContent = await downloadBackupFile(googleToken, driveFile.id);
+      const response = await fetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dbContent)
+      });
+
+      if (response.ok) {
+        setBackupSuccess('¡Copia de seguridad restaurada con éxito desde Google Drive!');
+        fetchData();
+        setShowRestoreSuggestion(false);
+      } else {
+        const data = await response.json();
+        setBackupError(data.error || 'Error al restaurar los datos.');
+      }
+    } catch (err: any) {
+      setBackupError('Error al descargar o restaurar: ' + err.message);
+    } finally {
+      setIsRestoringDrive(false);
+    }
+  };
+
+  const toggleAutoDriveSync = (enabled: boolean) => {
+    setAutoDriveSync(enabled);
+    localStorage.setItem('bes_auto_drive_sync', String(enabled));
+    if (enabled && googleToken && users.length > 0) {
+      const dbObj = {
+        users,
+        transfers,
+        systemLogs: logs,
+        defaultInitialBalance: 1000
+      };
+      triggerAutoDriveBackup(dbObj);
+    }
+  };
+
+  const triggerAutoDriveBackup = async (dbObj: any) => {
+    if (!googleToken) return;
+    try {
+      let targetFile = driveFile;
+      if (!targetFile) {
+        targetFile = await findBackupFile(googleToken);
+      }
+      if (targetFile) {
+        await updateBackupFileContent(googleToken, targetFile.id, dbObj);
+        setDriveFile({ ...targetFile, modifiedTime: new Date().toISOString() });
+      } else {
+        const newFile = await createBackupFile(googleToken, dbObj);
+        setDriveFile(newFile);
+      }
+    } catch (err) {
+      console.error('[Drive Auto-Sync] Failed to auto-save to Google Drive:', err);
     }
   };
 
@@ -777,23 +1012,144 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                     </div>
                     <div>
                       <h4 className="text-sm font-bold font-display text-slate-900">Copias de Seguridad y Salvaguarda</h4>
-                      <p className="text-xs text-slate-500 mt-0.5">Descarga o restaura los datos del simulador en un solo archivo offline.</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Guarda los datos del simulador en Google Drive o descárgalos localmente.</p>
                     </div>
                   </div>
 
                   {backupSuccess && (
-                    <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-emerald-800 font-semibold">
+                    <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-emerald-800 font-semibold animate-fade-in">
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                       <span>{backupSuccess}</span>
                     </div>
                   )}
 
                   {backupError && (
-                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-rose-800 font-semibold">
+                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3.5 rounded-r-xl flex items-center space-x-2.5 text-xs text-rose-800 font-semibold animate-fade-in">
                       <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
                       <span>{backupError}</span>
                     </div>
                   )}
+
+                  {/* Google Drive Integration Block */}
+                  <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2.5">
+                        <div className={`p-2 rounded-xl ${googleToken ? 'bg-emerald-50 text-emerald-600 animate-pulse' : 'bg-slate-100 text-slate-500'}`}>
+                          <Cloud className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-800 block">Copia en Google Drive (Evita reinicios)</span>
+                          <span className="text-[10px] text-slate-400 block">Guarda y recupera tus datos directamente desde tu nube de Google.</span>
+                        </div>
+                      </div>
+
+                      {googleUser && (
+                        <button
+                          type="button"
+                          onClick={handleGoogleLogout}
+                          className="text-[10px] text-rose-500 hover:text-rose-700 font-semibold cursor-pointer"
+                        >
+                          Desconectar
+                        </button>
+                      )}
+                    </div>
+
+                    {!googleUser ? (
+                      <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-xs flex flex-col items-center text-center space-y-3">
+                        <p className="text-xs text-slate-500 max-w-sm">
+                          Conecta tu cuenta de Google Drive para crear copias automáticas en la nube. Tus saldos y transacciones no se perderán cuando el servidor se apague.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleGoogleSignIn}
+                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-2 cursor-pointer shadow-sm"
+                        >
+                          <Cloud className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Conectar Google Drive</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-xs space-y-3.5">
+                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-2.5">
+                          <div className="pr-4">
+                            <p className="font-semibold text-slate-800">
+                              Conectado como <span className="text-amber-600">{googleUser.email}</span>
+                            </p>
+                            {isCheckingDrive ? (
+                              <p className="text-[10px] text-slate-400 flex items-center space-x-1 mt-0.5">
+                                <RefreshCw className="w-3 h-3 animate-spin text-amber-500" />
+                                <span>Buscando copia de seguridad...</span>
+                              </p>
+                            ) : driveFile ? (
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                Copia en Drive encontrada: <span className="font-mono text-slate-600 font-semibold">banco_escolar_db.json</span> (Último cambio: {new Date(driveFile.modifiedTime).toLocaleString('es-ES')})
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-amber-600 font-medium mt-0.5">
+                                No se ha encontrado ninguna copia previa en tu Drive. ¡Crea una ahora!
+                              </p>
+                            )}
+                          </div>
+                          
+                          {driveFile && (
+                            <button
+                              type="button"
+                              onClick={() => checkGoogleDriveBackup(googleToken!)}
+                              className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-colors cursor-pointer shrink-0"
+                              title="Refrescar estado de Drive"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Actions Row */}
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={isSavingDrive}
+                            onClick={handleSaveToDrive}
+                            className="flex-1 min-w-[130px] py-2.5 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer"
+                          >
+                            <Cloud className="w-3.5 h-3.5" />
+                            <span>{isSavingDrive ? 'Guardando...' : (driveFile ? 'Guardar en Drive' : 'Crear Copia en Drive')}</span>
+                          </button>
+
+                          {driveFile && (
+                            <button
+                              type="button"
+                              disabled={isRestoringDrive}
+                              onClick={handleRestoreFromDrive}
+                              className="flex-1 min-w-[130px] py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>{isRestoringDrive ? 'Restaurando...' : 'Restaurar desde Drive'}</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Auto Sync Toggle */}
+                        <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-1.5">
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-700 block">Guardado Automático (Auto-Sincronización)</span>
+                            <span className="text-[9px] text-slate-400 block max-w-xs">
+                              Sube silenciosamente los saldos y transferencias a Google Drive cada vez que haya movimientos en clase.
+                            </span>
+                          </div>
+                          
+                          <label className="relative inline-flex items-center cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={autoDriveSync}
+                              onChange={(e) => toggleAutoDriveSync(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* Export Card */}

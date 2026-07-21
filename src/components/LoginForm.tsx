@@ -72,6 +72,14 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden font-sans">
+      {/* Update number badge in the top right corner */}
+      <div id="update-version-badge" className="absolute top-4 right-4 z-20">
+        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold text-slate-500 bg-white/80 backdrop-blur-xs border border-slate-200/60 rounded-xl shadow-xs">
+          <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+          Actualización v1.1.2
+        </span>
+      </div>
+
       {/* Decorative ambient blobs */}
       <div className="absolute top-0 -left-4 w-96 h-96 bg-amber-100 rounded-full filter blur-3xl opacity-30 -z-10 animate-pulse-slow"></div>
       <div className="absolute bottom-0 right-0 w-96 h-96 bg-emerald-100 rounded-full filter blur-3xl opacity-30 -z-10 animate-pulse-slow" style={{ animationDelay: '4s' }}></div>

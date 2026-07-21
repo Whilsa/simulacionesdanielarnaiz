@@ -40,4 +40,5 @@ export interface DatabaseSchema {
   transfers: Transfer[];
   systemLogs: SystemLog[];
   defaultInitialBalance: number;
+  isSeed?: boolean;
 }

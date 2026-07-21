@@ -9,6 +9,8 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { DatabaseSchema, User, Transfer, SystemLog } from './src/types.js';
 
+const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
+
 const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
@@ -119,7 +121,8 @@ function readDb(): DatabaseSchema {
           timestamp: new Date().toISOString()
         }
       ],
-      defaultInitialBalance: 1000
+      defaultInitialBalance: 1000,
+      isSeed: true
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf-8');
     return defaultDb;
@@ -164,13 +167,15 @@ function readDb(): DatabaseSchema {
       ],
       transfers: [],
       systemLogs: [],
-      defaultInitialBalance: 1000
+      defaultInitialBalance: 1000,
+      isSeed: true
     };
     return defaultDb;
   }
 }
 
 function writeDb(db: DatabaseSchema) {
+  db.isSeed = false;
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
 }
 
@@ -247,7 +252,7 @@ app.get('/api/users', (req, res) => {
   const db = readDb();
 
   if (role === 'teacher') {
-    res.json({ users: db.users });
+    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false });
   } else {
     // Only return students and filter out password/admin details
     const publicStudents = db.users
