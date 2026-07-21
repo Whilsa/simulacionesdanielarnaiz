@@ -170,9 +170,6 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
             </div>
             
             <div className="flex items-center space-x-4">
-              <span className="bg-white/10 border border-white/10 px-2.5 py-1 rounded-lg text-xs font-mono text-amber-200">
-                Act. v2.4
-              </span>
               <div className="hidden sm:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
                 <p className="text-xs text-amber-200">Cliente de Simulación</p>

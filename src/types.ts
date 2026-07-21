@@ -40,6 +40,4 @@ export interface DatabaseSchema {
   transfers: Transfer[];
   systemLogs: SystemLog[];
   defaultInitialBalance: number;
-  version?: number;
-  lastUpdated?: string;
 }

@@ -72,11 +72,6 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden font-sans">
-      {/* Update number in the top right */}
-      <div className="absolute top-4 right-4 text-xs font-mono text-slate-400 bg-slate-100/80 backdrop-blur-sm px-2.5 py-1 rounded-lg border border-slate-200 shadow-sm z-20">
-        Act. v2.4
-      </div>
-
       {/* Decorative ambient blobs */}
       <div className="absolute top-0 -left-4 w-96 h-96 bg-amber-100 rounded-full filter blur-3xl opacity-30 -z-10 animate-pulse-slow"></div>
       <div className="absolute bottom-0 right-0 w-96 h-96 bg-emerald-100 rounded-full filter blur-3xl opacity-30 -z-10 animate-pulse-slow" style={{ animationDelay: '4s' }}></div>
