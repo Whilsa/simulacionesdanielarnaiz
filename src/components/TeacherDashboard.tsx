@@ -100,6 +100,23 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (googleToken) {
+      console.log('[Drive Auto-Sync] Registering Google Drive token on server...');
+      fetch('/api/set-drive-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: googleToken, fileId: driveFile?.id || null })
+      }).catch(err => console.error('Error sending token to server:', err));
+    } else {
+      fetch('/api/set-drive-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: null })
+      }).catch(err => console.error('Error clearing token on server:', err));
+    }
+  }, [googleToken, driveFile?.id]);
+
   const fetchData = async () => {
     try {
       const [usersRes, transfersRes, logsRes] = await Promise.all([
@@ -167,12 +184,12 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         lastDbStringRef.current = dbStr;
         // ------------------------------
 
-        if (hasStudents) {
+        if (hasStudents && !isSeed) {
           localStorage.setItem('egobey_db_backup', dbStr);
           // If we have students on server, we don't need the restore suggestion anymore
           setShowRestoreSuggestion(false);
-        } else {
-          // No students on server. Check if we have a non-empty backup in localStorage
+        } else if (isSeed) {
+          // No students on server or in seed state. Check if we have a non-empty backup in localStorage
           const savedBackupStr = localStorage.getItem('egobey_db_backup');
           if (savedBackupStr) {
             try {

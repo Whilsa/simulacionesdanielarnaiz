@@ -174,9 +174,105 @@ function readDb(): DatabaseSchema {
   }
 }
 
+let currentDriveToken: string | null = null;
+let googleFileId: string | null = null;
+
+async function backupToGoogleDriveAsync(db: DatabaseSchema) {
+  if (!currentDriveToken) return;
+  const token = currentDriveToken;
+  try {
+    console.log('[Server Drive Auto-Sync] Attempting to back up to Google Drive...');
+    
+    // 1. If we don't have the file ID, find it
+    if (!googleFileId) {
+      const query = encodeURIComponent("name = 'banco_escolar_db.json' and trashed = false");
+      const findUrl = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime)&pageSize=1`;
+      
+      const findRes = await fetch(findUrl, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (findRes.ok) {
+        const findData: any = await findRes.json();
+        if (findData.files && findData.files.length > 0) {
+          googleFileId = findData.files[0].id;
+          console.log('[Server Drive Auto-Sync] Found existing backup file ID:', googleFileId);
+        }
+      } else {
+        const errText = await findRes.text();
+        console.error('[Server Drive Auto-Sync] Error finding file:', errText);
+        if (findRes.status === 401) {
+          currentDriveToken = null;
+          return;
+        }
+      }
+    }
+    
+    // 2. If still no file ID, create a new file
+    if (!googleFileId) {
+      console.log('[Server Drive Auto-Sync] No existing file found. Creating new file...');
+      const createMetaUrl = 'https://www.googleapis.com/drive/v3/files';
+      const createRes = await fetch(createMetaUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: 'banco_escolar_db.json',
+          mimeType: 'application/json'
+        })
+      });
+      
+      if (createRes.ok) {
+        const createData: any = await createRes.json();
+        googleFileId = createData.id;
+        console.log('[Server Drive Auto-Sync] Created new backup file with ID:', googleFileId);
+      } else {
+        const errText = await createRes.text();
+        console.error('[Server Drive Auto-Sync] Error creating file metadata:', errText);
+        if (createRes.status === 401) {
+          currentDriveToken = null;
+          return;
+        }
+      }
+    }
+    
+    // 3. Upload content
+    if (googleFileId) {
+      const uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${googleFileId}?uploadType=media`;
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(db, null, 2)
+      });
+      
+      if (uploadRes.ok) {
+        console.log('[Server Drive Auto-Sync] Google Drive backup successfully updated!');
+      } else {
+        const errText = await uploadRes.text();
+        console.error('[Server Drive Auto-Sync] Error uploading content:', errText);
+        if (uploadRes.status === 401) {
+          currentDriveToken = null;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Server Drive Auto-Sync] Failed to perform server-side Google Drive backup:', error);
+  }
+}
+
 function writeDb(db: DatabaseSchema) {
   db.isSeed = false;
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  if (currentDriveToken) {
+    backupToGoogleDriveAsync(db).catch(err => {
+      console.error('[Server Drive Auto-Sync Error]', err);
+    });
+  }
 }
 
 // Generate unique account number
@@ -194,6 +290,24 @@ function generateId(prefix: string): string {
 }
 
 // ---------------- API ENDPOINTS ----------------
+
+// Google Drive Token Registration
+app.post('/api/set-drive-token', (req, res) => {
+  const { token, fileId } = req.body;
+  if (token) {
+    currentDriveToken = token;
+    console.log('[Server Drive Token] Google Drive token registered on server.');
+    if (fileId) {
+      googleFileId = fileId;
+    }
+    res.json({ success: true });
+  } else {
+    currentDriveToken = null;
+    googleFileId = null;
+    console.log('[Server Drive Token] Google Drive token cleared on server.');
+    res.json({ success: true, message: 'Token cleared' });
+  }
+});
 
 // Authenticate / Login
 const loginHandler = (req: express.Request, res: express.Response) => {

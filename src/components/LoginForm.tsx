@@ -76,7 +76,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
       <div id="update-version-badge" className="absolute top-4 right-4 z-20">
         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold text-slate-500 bg-white/80 backdrop-blur-xs border border-slate-200/60 rounded-xl shadow-xs">
           <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-          Actualización v1.1.2
+          Actualización v1.1.3
         </span>
       </div>
 
