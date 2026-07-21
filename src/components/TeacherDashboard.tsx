@@ -74,6 +74,8 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
 
   const lastDbStringRef = useRef<string>('');
   const isSeedRef = useRef<boolean>(false);
+  const [currentInstanceId, setCurrentInstanceId] = useState<string>('');
+  const hasRestoredForInstanceRef = useRef<string>('');
 
   useEffect(() => {
     fetchData();
@@ -87,7 +89,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       (user, token) => {
         setGoogleUser(user);
         setGoogleToken(token);
-        checkGoogleDriveBackup(token, isSeedRef.current);
+        // Let fetchData or manual actions handle checkGoogleDriveBackup to avoid race conditions!
       },
       () => {
         setGoogleUser(null);
@@ -110,12 +112,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       let transfersList: Transfer[] = [];
       let logsList: SystemLog[] = [];
       let isSeed = false;
+      let instanceId = '';
 
       if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
         const usersData = await usersRes.json();
         usersList = usersData.users || [];
         isSeed = usersData.isSeed || false;
         isSeedRef.current = isSeed;
+        instanceId = usersData.instanceId || '';
       }
       if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
         const transfersData = await transfersRes.json();
@@ -129,6 +133,9 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       setUsers(usersList);
       setTransfers(transfersList);
       setLogs(logsList);
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
 
       // Save a browser-side copy of the database to local storage as a safety fallback
       if (usersList.length > 0) {
@@ -143,14 +150,17 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         const dbStr = JSON.stringify(backupObj);
 
         // --- GOOGLE DRIVE AUTO-SYNC ---
-        if (googleToken && autoDriveSync && lastDbStringRef.current && lastDbStringRef.current !== dbStr) {
+        // Crucial check: never auto-sync/overwrite if the server is in 'seed' (empty/recreated) state!
+        if (!isSeed && googleToken && autoDriveSync && lastDbStringRef.current && lastDbStringRef.current !== dbStr) {
           console.log('[Drive Auto-Sync] Changes detected, auto-saving to Google Drive...');
           triggerAutoDriveBackup(backupObj);
         }
 
         // --- GOOGLE DRIVE AUTO-RESTORE ON RESTART DETECTED ---
-        if (isSeed && googleToken && !isRestoringDrive && !isSavingDrive && !isCheckingDrive) {
-          console.log('[Drive Auto-Restore] Server restart detected (seed state)! Checking backup...');
+        // Try exactly once per server instance to avoid infinite loops and race conditions
+        if (isSeed && googleToken && !isRestoringDrive && !isSavingDrive && hasRestoredForInstanceRef.current !== instanceId) {
+          console.log('[Drive Auto-Restore] Server restart detected (seed state)! Checking backup for instance:', instanceId);
+          hasRestoredForInstanceRef.current = instanceId;
           checkGoogleDriveBackup(googleToken, true);
         }
 
