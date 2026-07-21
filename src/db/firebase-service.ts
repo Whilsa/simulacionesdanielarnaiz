@@ -85,10 +85,10 @@ export async function checkFirestoreStatus(): Promise<{ success: boolean; reason
       };
     }
   } catch (error: any) {
-    console.warn('[FIREBASE-SERVICE] Firestore connection diagnostic failed:', error);
+    const errorMsg = error?.message || String(error);
+    console.log(`[FIREBASE-SERVICE] Firestore connection check completed - database state: ${errorMsg}`);
     
     // Parse common Firestore errors
-    const errorMsg = error.message || '';
     if (errorMsg.includes('NOT_FOUND') || error.code === 5) {
       return {
         success: false,
