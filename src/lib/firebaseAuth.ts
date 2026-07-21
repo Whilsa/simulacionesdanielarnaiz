@@ -9,6 +9,10 @@ export const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 // Request Workspace scope for Google Drive file access
 provider.addScope('https://www.googleapis.com/auth/drive.file');
+// Force consent prompt so the user has the chance to check/authorize Google Drive permission
+provider.setCustomParameters({
+  prompt: 'consent'
+});
 
 // Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;

@@ -298,8 +298,17 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       if (file && isSeedActive && !isRestoringDrive) {
         await performAutoRestore(token, file.id, file.name, file.modifiedTime);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error checking Google Drive backup:', e);
+      let errMsg = e.message || String(e);
+      if (
+        errMsg.toLowerCase().includes('insufficient') ||
+        errMsg.toLowerCase().includes('permission') ||
+        errMsg.toLowerCase().includes('scope') ||
+        errMsg.toLowerCase().includes('403')
+      ) {
+        setBackupError('No se pudo comprobar tu Google Drive por falta de permisos. Cierra sesión e inicia sesión de nuevo asegurándote de marcar la casilla de permisos de Google Drive.');
+      }
     } finally {
       setIsCheckingDrive(false);
     }
@@ -361,7 +370,16 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       setDriveFile(updatedFile);
       setBackupSuccess('¡Copia de seguridad guardada en Google Drive correctamente!');
     } catch (err: any) {
-      setBackupError('Error al guardar en Google Drive: ' + err.message);
+      let errMsg = err.message || String(err);
+      if (
+        errMsg.toLowerCase().includes('insufficient') ||
+        errMsg.toLowerCase().includes('permission') ||
+        errMsg.toLowerCase().includes('scope') ||
+        errMsg.toLowerCase().includes('403')
+      ) {
+        errMsg += ' (Sugerencia: Para otorgar acceso, desconecta tu cuenta de Google Drive con el botón "Cerrar sesión de Drive" de abajo y vuelve a iniciar sesión, asegurándote de marcar la casilla "Ver, editar, crear y eliminar solo los archivos de Google Drive que abras o crees con esta aplicación" en la pantalla de autorización de Google para que la aplicación pueda guardar la copia de seguridad correctamente).';
+      }
+      setBackupError('Error al guardar en Google Drive: ' + errMsg);
     } finally {
       setIsSavingDrive(false);
     }
