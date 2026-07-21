@@ -338,8 +338,14 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       const isUnauthorizedDomain = err.code === 'auth/unauthorized-domain' || 
                                    errMsg.includes('auth/unauthorized-domain') || 
                                    errMsg.includes('unauthorized-domain');
+      const isOperationNotAllowed = err.code === 'auth/operation-not-allowed' ||
+                                    errMsg.includes('auth/operation-not-allowed') ||
+                                    errMsg.includes('operation-not-allowed');
+
       if (isUnauthorizedDomain) {
         errMsg = 'Este dominio no está autorizado en Firebase. Bajo el capó, la conexión segura con Google Drive se realiza mediante el sistema de autenticación de Firebase. Para solucionarlo: 1) Ve a la consola de Firebase (console.firebase.google.com), 2) Selecciona tu proyecto, 3) Entra en Authentication -> pestaña "Settings" -> sección "Authorized domains" (Dominios autorizados), 4) Haz clic en "Add domain" y añade el dominio completo de tu servidor en Render (ej. banco-escolar.onrender.com) sin el https://. ¡Con esto el botón funcionará al instante!';
+      } else if (isOperationNotAllowed) {
+        errMsg = 'El método de inicio de sesión con Google no está habilitado en tu nuevo proyecto de Firebase ("simulacion-7e02c"). Para solucionarlo: 1) Entra en la consola de Firebase (console.firebase.google.com), 2) Selecciona tu proyecto "simulacion-7e02c", 3) Ve a "Authentication" en el menú lateral izquierdo, 4) Haz clic en la pestaña "Sign-in method" (Método de inicio de sesión), 5) Haz clic en el botón "Add new provider" (Añadir nuevo proveedor), 6) Selecciona "Google" de la lista, 7) Activa el interruptor para habilitarlo, selecciona tu dirección de correo como correo de asistencia técnica del proyecto y haz clic en "Guardar". ¡Una vez que lo guardes, el botón de Google Drive funcionará a la perfección!';
       }
       setBackupError('Error al conectar con Google: ' + errMsg);
     }
