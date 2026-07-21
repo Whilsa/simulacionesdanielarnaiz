@@ -132,6 +132,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       let isSeed = false;
       let instanceId = '';
       let hasDriveToken = false;
+      let serverGoogleFileId = '';
 
       if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
         const usersData = await usersRes.json();
@@ -140,6 +141,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         isSeedRef.current = isSeed;
         instanceId = usersData.instanceId || '';
         hasDriveToken = usersData.hasDriveToken || false;
+        serverGoogleFileId = usersData.googleFileId || '';
       }
       if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
         const transfersData = await transfersRes.json();
@@ -155,6 +157,15 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       setLogs(logsList);
       if (instanceId) {
         setCurrentInstanceId(instanceId);
+      }
+
+      // Synchronize client driveFile state with server fileId if they don't match
+      if (serverGoogleFileId && (!driveFile || driveFile.id !== serverGoogleFileId)) {
+        setDriveFile({
+          id: serverGoogleFileId,
+          name: 'banco_escolar_db.json',
+          modifiedTime: new Date().toISOString()
+        });
       }
 
       // Check if server lacks the registered Google token and we have one available

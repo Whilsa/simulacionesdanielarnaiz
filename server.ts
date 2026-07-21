@@ -177,6 +177,10 @@ function readDb(): DatabaseSchema {
 let currentDriveToken: string | null = null;
 let googleFileId: string | null = null;
 
+function writeDbLocalOnly(db: DatabaseSchema) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+}
+
 async function backupToGoogleDriveAsync(db: DatabaseSchema) {
   if (!currentDriveToken) return;
   const token = currentDriveToken;
@@ -197,6 +201,15 @@ async function backupToGoogleDriveAsync(db: DatabaseSchema) {
         if (findData.files && findData.files.length > 0) {
           googleFileId = findData.files[0].id;
           console.log('[Server Drive Auto-Sync] Found existing backup file ID:', googleFileId);
+          
+          const newLog: SystemLog = {
+            id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+            action: 'RESET_SIMULATION', // Compatible action to render correctly
+            details: `[Google Drive] Vinculado con archivo de copia existente (ID: ${googleFileId}).`,
+            timestamp: new Date().toISOString()
+          };
+          db.systemLogs.unshift(newLog);
+          writeDbLocalOnly(db);
         }
       } else {
         const errText = await findRes.text();
@@ -228,9 +241,28 @@ async function backupToGoogleDriveAsync(db: DatabaseSchema) {
         const createData: any = await createRes.json();
         googleFileId = createData.id;
         console.log('[Server Drive Auto-Sync] Created new backup file with ID:', googleFileId);
+        
+        const newLog: SystemLog = {
+          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+          action: 'RESET_SIMULATION',
+          details: `[Google Drive] Creado nuevo archivo de base de datos 'banco_escolar_db.json' en tu Google Drive (ID: ${googleFileId}).`,
+          timestamp: new Date().toISOString()
+        };
+        db.systemLogs.unshift(newLog);
+        writeDbLocalOnly(db);
       } else {
         const errText = await createRes.text();
         console.error('[Server Drive Auto-Sync] Error creating file metadata:', errText);
+        
+        const newLog: SystemLog = {
+          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+          action: 'RESET_SIMULATION',
+          details: `[Google Drive Error] No se pudo crear el archivo en Drive: ${errText.substring(0, 120)}`,
+          timestamp: new Date().toISOString()
+        };
+        db.systemLogs.unshift(newLog);
+        writeDbLocalOnly(db);
+
         if (createRes.status === 401) {
           currentDriveToken = null;
           return;
@@ -252,16 +284,45 @@ async function backupToGoogleDriveAsync(db: DatabaseSchema) {
       
       if (uploadRes.ok) {
         console.log('[Server Drive Auto-Sync] Google Drive backup successfully updated!');
+        
+        const newLog: SystemLog = {
+          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+          action: 'RESET_SIMULATION',
+          details: `[Google Drive] Sincronización automática de base de datos completada con éxito.`,
+          timestamp: new Date().toISOString()
+        };
+        db.systemLogs.unshift(newLog);
+        writeDbLocalOnly(db);
       } else {
         const errText = await uploadRes.text();
         console.error('[Server Drive Auto-Sync] Error uploading content:', errText);
+        
+        const newLog: SystemLog = {
+          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+          action: 'RESET_SIMULATION',
+          details: `[Google Drive Error] Error al subir copia de seguridad: ${errText.substring(0, 120)}`,
+          timestamp: new Date().toISOString()
+        };
+        db.systemLogs.unshift(newLog);
+        writeDbLocalOnly(db);
+
         if (uploadRes.status === 401) {
           currentDriveToken = null;
         }
       }
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Server Drive Auto-Sync] Failed to perform server-side Google Drive backup:', error);
+    try {
+      const newLog: SystemLog = {
+        id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
+        action: 'RESET_SIMULATION',
+        details: `[Google Drive Error] Error de red: ${error.message || error}`,
+        timestamp: new Date().toISOString()
+      };
+      db.systemLogs.unshift(newLog);
+      writeDbLocalOnly(db);
+    } catch (e) {}
   }
 }
 
@@ -366,7 +427,7 @@ app.get('/api/users', (req, res) => {
   const db = readDb();
 
   if (role === 'teacher') {
-    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, hasDriveToken: !!currentDriveToken });
+    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, hasDriveToken: !!currentDriveToken, googleFileId });
   } else {
     // Only return students and filter out password/admin details
     const publicStudents = db.users
