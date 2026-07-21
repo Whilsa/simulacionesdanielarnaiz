@@ -89,7 +89,8 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       (user, token) => {
         setGoogleUser(user);
         setGoogleToken(token);
-        // Let fetchData or manual actions handle checkGoogleDriveBackup to avoid race conditions!
+        // Load Google Drive backup file metadata on startup/auth state change to sync fileId
+        checkGoogleDriveBackup(token, false);
       },
       () => {
         setGoogleUser(null);
@@ -130,6 +131,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       let logsList: SystemLog[] = [];
       let isSeed = false;
       let instanceId = '';
+      let hasDriveToken = false;
 
       if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
         const usersData = await usersRes.json();
@@ -137,6 +139,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
         isSeed = usersData.isSeed || false;
         isSeedRef.current = isSeed;
         instanceId = usersData.instanceId || '';
+        hasDriveToken = usersData.hasDriveToken || false;
       }
       if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
         const transfersData = await transfersRes.json();
@@ -152,6 +155,16 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       setLogs(logsList);
       if (instanceId) {
         setCurrentInstanceId(instanceId);
+      }
+
+      // Check if server lacks the registered Google token and we have one available
+      if (googleToken && !hasDriveToken) {
+        console.log('[Drive Auto-Sync] Server is missing Google Drive token. Re-registering token...');
+        fetch('/api/set-drive-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: googleToken, fileId: driveFile?.id || null })
+        }).catch(err => console.error('[Drive Auto-Sync] Error re-registering token on server:', err));
       }
 
       // Save a browser-side copy of the database to local storage as a safety fallback

@@ -366,7 +366,7 @@ app.get('/api/users', (req, res) => {
   const db = readDb();
 
   if (role === 'teacher') {
-    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false });
+    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, hasDriveToken: !!currentDriveToken });
   } else {
     // Only return students and filter out password/admin details
     const publicStudents = db.users
