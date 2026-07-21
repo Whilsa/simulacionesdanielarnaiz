@@ -1,21 +1,11 @@
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyAVNGoSMpxYof9pOG-PyEfz8P0ULHfmq90",
-  authDomain: "simulacion-7e02c.firebaseapp.com",
-  projectId: "simulacion-7e02c",
-  storageBucket: "simulacion-7e02c.firebasestorage.app",
-  messagingSenderId: "390234935099",
-  appId: "1:390234935099:web:aff1d8c3140a0e67c5f11e",
-  measurementId: "G-2L7RRMJ2J1"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+{
+  "projectId": "simulacion-7e02c",
+  "appId": "1:390234935099:web:aff1d8c3140a0e67c5f11e",
+  "apiKey": "AIzaSyAVNGoSMpxYof9pOG-PyEfz8P0ULHfmq90",
+  "authDomain": "simulacion-7e02c.firebaseapp.com",
+  "storageBucket": "simulacion-7e02c.firebasestorage.app",
+  "messagingSenderId": "390234935099",
+  "measurementId": "G-2L7RRMJ2J1",
+  "oAuthClientId": "",
+  "recaptchaSiteKey": ""
+}
