@@ -18,16 +18,31 @@ const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
 // Supabase PostgreSQL Pool Initialization
-const dbUrl = process.env.DATABASE_URL;
 let dbPool: pg.Pool | null = null;
 
-if (dbUrl) {
+function initPgPool(url: string) {
+  if (dbPool) {
+    try {
+      dbPool.end();
+    } catch (e) {}
+  }
+
+  const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
+  dbPool = new Pool({
+    connectionString: url,
+    ssl: isLocal ? false : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000,
+    max: 10
+  });
+
+  process.env.DATABASE_URL = url;
+  console.log('[Supabase DB] PostgreSQL pool configured with DATABASE_URL.');
+}
+
+if (process.env.DATABASE_URL) {
   try {
-    dbPool = new Pool({
-      connectionString: dbUrl,
-      ssl: dbUrl.includes('localhost') ? false : { rejectUnauthorized: false },
-    });
-    console.log('[Supabase DB] PostgreSQL pool configured with DATABASE_URL.');
+    initPgPool(process.env.DATABASE_URL);
   } catch (err) {
     console.error('[Supabase DB] Error creating PG pool:', err);
   }
@@ -35,34 +50,52 @@ if (dbUrl) {
   console.log('[Supabase DB] DATABASE_URL environment variable is not defined.');
 }
 
-// Create tables "cuentas" and "movimientos" if they do not exist
-async function initSupabaseTables() {
-  if (!dbPool) return;
+function maskDbUrl(url: string | undefined): string {
+  if (!url) return '';
   try {
-    const client = await dbPool.connect();
-    try {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS cuentas (
-          id VARCHAR(255) PRIMARY KEY,
-          alumno VARCHAR(255) NOT NULL,
-          saldo NUMERIC(12, 2) NOT NULL DEFAULT 0
-        );
+    const parsed = new URL(url);
+    if (parsed.password) {
+      parsed.password = '••••••••';
+    }
+    return parsed.toString();
+  } catch (e) {
+    return url.replace(/:([^:@]+)@/, ':••••••••@');
+  }
+}
 
-        CREATE TABLE IF NOT EXISTS movimientos (
-          id VARCHAR(255) PRIMARY KEY,
-          cuenta_id VARCHAR(255) NOT NULL,
-          tipo VARCHAR(50) NOT NULL,
-          importe NUMERIC(12, 2) NOT NULL DEFAULT 0,
-          fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          concepto TEXT
-        );
-      `);
-      console.log('[Supabase DB] Tables "cuentas" and "movimientos" verified/created successfully.');
-    } finally {
+// Create tables "cuentas" and "movimientos" if they do not exist
+async function initSupabaseTables(): Promise<{ success: boolean; message?: string; error?: string }> {
+  if (!dbPool) {
+    return { success: false, error: 'DATABASE_URL no está configurada' };
+  }
+  let client;
+  try {
+    client = await dbPool.connect();
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS cuentas (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno VARCHAR(255) NOT NULL,
+        saldo NUMERIC(12, 2) NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS movimientos (
+        id VARCHAR(255) PRIMARY KEY,
+        cuenta_id VARCHAR(255) NOT NULL,
+        tipo VARCHAR(50) NOT NULL,
+        importe NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        concepto TEXT
+      );
+    `);
+    console.log('[Supabase DB] Tables "cuentas" and "movimientos" verified/created successfully.');
+    return { success: true, message: 'Tablas "cuentas" y "movimientos" creadas o verificadas con éxito.' };
+  } catch (error: any) {
+    console.error('[Supabase DB] Error initializing tables in Supabase:', error);
+    return { success: false, error: error.message || String(error) };
+  } finally {
+    if (client) {
       client.release();
     }
-  } catch (error) {
-    console.error('[Supabase DB] Error initializing tables in Supabase:', error);
   }
 }
 
@@ -307,7 +340,11 @@ function generateId(prefix: string): string {
 // Supabase Status Endpoint
 app.get('/api/supabase-status', async (req, res) => {
   if (!dbPool) {
-    return res.json({ connected: false, message: 'DATABASE_URL no está configurada' });
+    return res.json({ 
+      connected: false, 
+      message: 'DATABASE_URL no está configurada',
+      dbUrlMasked: ''
+    });
   }
   try {
     const client = await dbPool.connect();
@@ -317,13 +354,102 @@ app.get('/api/supabase-status', async (req, res) => {
       res.json({
         connected: true,
         cuentasCount: Number(resCuentas.rows[0].count),
-        movimientosCount: Number(resMov.rows[0].count)
+        movimientosCount: Number(resMov.rows[0].count),
+        dbUrlMasked: maskDbUrl(process.env.DATABASE_URL)
       });
     } finally {
       client.release();
     }
   } catch (e: any) {
-    res.json({ connected: false, error: e.message || String(e) });
+    res.json({ 
+      connected: false, 
+      error: e.message || String(e),
+      dbUrlMasked: maskDbUrl(process.env.DATABASE_URL)
+    });
+  }
+});
+
+// Supabase Connect / Reconfigure Endpoint
+app.post('/api/supabase-connect', async (req, res) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    return res.status(400).json({ success: false, error: 'Proporciona una URL válida (DATABASE_URL)' });
+  }
+
+  const cleanUrl = url.trim();
+  try {
+    initPgPool(cleanUrl);
+    const tableInit = await initSupabaseTables();
+    if (!tableInit.success) {
+      return res.status(500).json({ success: false, error: tableInit.error });
+    }
+
+    const currentDb = readDb();
+    await syncAllToSupabase(currentDb);
+
+    // Verify record counts
+    let cuentasCount = 0;
+    let movimientosCount = 0;
+    if (dbPool) {
+      const client = await dbPool.connect();
+      try {
+        const cRes = await client.query('SELECT COUNT(*) FROM cuentas');
+        const mRes = await client.query('SELECT COUNT(*) FROM movimientos');
+        cuentasCount = Number(cRes.rows[0].count);
+        movimientosCount = Number(mRes.rows[0].count);
+      } finally {
+        client.release();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: '¡Conectado a Supabase correctamente! Tablas "cuentas" y "movimientos" listas y datos sincronizados.',
+      cuentasCount,
+      movimientosCount,
+      dbUrlMasked: maskDbUrl(cleanUrl)
+    });
+  } catch (e: any) {
+    console.error('[Supabase Connect Error]', e);
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+// Supabase Manual Sync Endpoint
+app.post('/api/supabase-sync', async (req, res) => {
+  if (!dbPool) {
+    return res.status(400).json({ success: false, error: 'DATABASE_URL no está configurada' });
+  }
+  try {
+    const tableInit = await initSupabaseTables();
+    if (!tableInit.success) {
+      return res.status(500).json({ success: false, error: tableInit.error });
+    }
+
+    const currentDb = readDb();
+    await syncAllToSupabase(currentDb);
+
+    let cuentasCount = 0;
+    let movimientosCount = 0;
+    const client = await dbPool.connect();
+    try {
+      const cRes = await client.query('SELECT COUNT(*) FROM cuentas');
+      const mRes = await client.query('SELECT COUNT(*) FROM movimientos');
+      cuentasCount = Number(cRes.rows[0].count);
+      movimientosCount = Number(mRes.rows[0].count);
+    } finally {
+      client.release();
+    }
+
+    res.json({
+      success: true,
+      message: 'Sincronización manual completada con éxito.',
+      cuentasCount,
+      movimientosCount
+    });
+  } catch (e: any) {
+    console.error('[Supabase Sync Error]', e);
+    res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
 

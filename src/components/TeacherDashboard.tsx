@@ -63,9 +63,60 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
     connected: boolean;
     cuentasCount?: number;
     movimientosCount?: number;
+    dbUrlMasked?: string;
     message?: string;
     error?: string;
   } | null>(null);
+
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState('');
+  const [isConnectingSupabase, setIsConnectingSupabase] = useState(false);
+  const [supabaseMsg, setSupabaseMsg] = useState('');
+  const [supabaseErr, setSupabaseErr] = useState('');
+
+  const handleConnectSupabase = async () => {
+    if (!supabaseUrlInput.trim()) return;
+    setIsConnectingSupabase(true);
+    setSupabaseMsg('');
+    setSupabaseErr('');
+    try {
+      const res = await fetch('/api/supabase-connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: supabaseUrlInput.trim() })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseMsg(data.message || 'Conectado a Supabase correctamente.');
+        fetchData();
+      } else {
+        setSupabaseErr(data.error || 'Error al conectar con Supabase.');
+      }
+    } catch (e: any) {
+      setSupabaseErr('Error de red: ' + (e.message || String(e)));
+    } finally {
+      setIsConnectingSupabase(false);
+    }
+  };
+
+  const handleSyncSupabase = async () => {
+    setIsConnectingSupabase(true);
+    setSupabaseMsg('');
+    setSupabaseErr('');
+    try {
+      const res = await fetch('/api/supabase-sync', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseMsg(data.message || 'Sincronización completada.');
+        fetchData();
+      } else {
+        setSupabaseErr(data.error || 'Error en la sincronización.');
+      }
+    } catch (e: any) {
+      setSupabaseErr('Error de red: ' + (e.message || String(e)));
+    } finally {
+      setIsConnectingSupabase(false);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -813,7 +864,7 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
 
                   {/* Supabase Database Connection Block */}
                   <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center space-x-2.5">
                         <div className={`p-2 rounded-xl ${supabaseStatus?.connected ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
                           <Database className="w-5 h-5" />
@@ -822,39 +873,96 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
                           <span className="text-xs font-bold text-slate-800 block">Base de Datos PostgreSQL (Supabase)</span>
                           <span className="text-[10px] text-slate-500 block">
                             {supabaseStatus?.connected 
-                              ? 'Conectado correctamente mediante DATABASE_URL' 
-                              : 'Conectando con Supabase...'}
+                              ? `Conectado: ${supabaseStatus.dbUrlMasked || 'DATABASE_URL'}`
+                              : 'Ingresa tu DATABASE_URL de Supabase para conectar y crear las tablas.'}
                           </span>
                         </div>
                       </div>
 
                       {supabaseStatus?.connected ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-100/80 rounded-lg">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                          Conectado
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-100/80 rounded-lg">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            Conectado
+                          </span>
+                          <button
+                            type="button"
+                            disabled={isConnectingSupabase}
+                            onClick={handleSyncSupabase}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-1 cursor-pointer shadow-xs disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingSupabase ? 'animate-spin' : ''}`} />
+                            <span>Sincronizar Tablas</span>
+                          </button>
+                        </div>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-amber-700 bg-amber-100/80 rounded-lg">
                           <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                          {supabaseStatus?.message || 'DATABASE_URL no detectada'}
+                          Sin conexión
                         </span>
                       )}
                     </div>
 
-                    <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-xs space-y-2">
-                      <p className="text-xs font-semibold text-slate-700">Tablas automáticas en Supabase:</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
-                          <span className="font-mono text-slate-700 font-bold">cuentas</span>
-                          <span className="text-slate-500 font-mono text-[11px]">
-                            {supabaseStatus?.cuentasCount !== undefined ? `${supabaseStatus.cuentasCount} registros` : 'id, alumno, saldo'}
-                          </span>
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
-                          <span className="font-mono text-slate-700 font-bold">movimientos</span>
-                          <span className="text-slate-500 font-mono text-[11px]">
-                            {supabaseStatus?.movimientosCount !== undefined ? `${supabaseStatus.movimientosCount} registros` : 'id, cuenta_id, tipo, importe, fecha, concepto'}
-                          </span>
+                    {/* Messages */}
+                    {supabaseMsg && (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200/80 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{supabaseMsg}</span>
+                      </div>
+                    )}
+
+                    {(supabaseErr || (supabaseStatus && !supabaseStatus.connected && supabaseStatus.error)) && (
+                      <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-xl text-xs text-rose-800 font-medium flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{supabaseErr || supabaseStatus?.error || 'No se pudo establecer conexión con Supabase.'}</span>
+                      </div>
+                    )}
+
+                    {/* Connection Form */}
+                    <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-xs space-y-3">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        {supabaseStatus?.connected ? 'Actualizar URL de conexión (DATABASE_URL):' : 'URL de conexión PostgreSQL / Supabase (DATABASE_URL):'}
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="text"
+                          value={supabaseUrlInput}
+                          onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                          placeholder="postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres"
+                          className="flex-1 px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                        />
+                        <button
+                          type="button"
+                          disabled={isConnectingSupabase || !supabaseUrlInput.trim()}
+                          onClick={handleConnectSupabase}
+                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
+                        >
+                          <Database className="w-3.5 h-3.5 text-amber-400" />
+                          <span>{isConnectingSupabase ? 'Conectando...' : 'Conectar y Crear Tablas'}</span>
+                        </button>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <p className="text-xs font-semibold text-slate-700 mb-2">Tablas automáticas en Supabase:</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
+                            <div>
+                              <span className="font-mono text-slate-700 font-bold block">cuentas</span>
+                              <span className="text-[10px] text-slate-400">id, alumno, saldo</span>
+                            </div>
+                            <span className="text-slate-600 font-mono text-[11px] font-bold">
+                              {supabaseStatus?.cuentasCount !== undefined ? `${supabaseStatus.cuentasCount} registros` : '-'}
+                            </span>
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
+                            <div>
+                              <span className="font-mono text-slate-700 font-bold block">movimientos</span>
+                              <span className="text-[10px] text-slate-400">id, cuenta_id, tipo, importe, fecha, concepto</span>
+                            </div>
+                            <span className="text-slate-600 font-mono text-[11px] font-bold">
+                              {supabaseStatus?.movimientosCount !== undefined ? `${supabaseStatus.movimientosCount} registros` : '-'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
