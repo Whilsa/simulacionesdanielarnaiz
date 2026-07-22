@@ -18,6 +18,7 @@ const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
 // Supabase PostgreSQL Pool Initialization
+const DEFAULT_SUPABASE_URL = 'postgresql://postgres.qgjcytrtambfgnalpztk:802.11ABGDRAF@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
 let dbPool: pg.Pool | null = null;
 
 function initPgPool(url: string) {
@@ -37,17 +38,14 @@ function initPgPool(url: string) {
   });
 
   process.env.DATABASE_URL = url;
-  console.log('[Supabase DB] PostgreSQL pool configured with DATABASE_URL.');
+  console.log('[Supabase DB] PostgreSQL pool configured automatically with DATABASE_URL.');
 }
 
-if (process.env.DATABASE_URL) {
-  try {
-    initPgPool(process.env.DATABASE_URL);
-  } catch (err) {
-    console.error('[Supabase DB] Error creating PG pool:', err);
-  }
-} else {
-  console.log('[Supabase DB] DATABASE_URL environment variable is not defined.');
+const initialDbUrl = process.env.DATABASE_URL || DEFAULT_SUPABASE_URL;
+try {
+  initPgPool(initialDbUrl);
+} catch (err) {
+  console.error('[Supabase DB] Error creating PG pool:', err);
 }
 
 function maskDbUrl(url: string | undefined): string {
