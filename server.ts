@@ -46,10 +46,10 @@ function initPgPool(url: string) {
   process.env.DATABASE_URL = url;
   console.log('[Supabase DB] PostgreSQL pool configured automatically with DATABASE_URL.');
 
-  // Trigger table initialization & sync asynchronously
+  // Trigger table initialization & restore from Supabase asynchronously
   initSupabaseTables().then(res => {
     if (res.success) {
-      syncAllToSupabase(readDb()).catch(e => console.error('[Supabase Auto Sync Error]', e));
+      restoreFromSupabase().catch(e => console.error('[Supabase Auto Restore Error]', e));
     }
   }).catch(e => console.error('[Supabase Table Init Error]', e));
 }
@@ -162,6 +162,98 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
+  }
+}
+
+// Restore data from Supabase into application state (Supabase as source of truth)
+async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredMovements: number }> {
+  if (!dbPool) return { restoredUsers: 0, restoredMovements: 0 };
+  try {
+    const client = await dbPool.connect();
+    try {
+      const resCuentas = await client.query('SELECT id, alumno, saldo FROM cuentas');
+      
+      // If Supabase has NO records, seed Supabase with current db.json state
+      if (resCuentas.rows.length === 0) {
+        console.log('[Supabase Sync] Supabase "cuentas" table is empty. Seeding Supabase with local data...');
+        const currentDb = readDb();
+        await syncAllToSupabase(currentDb);
+        return { restoredUsers: 0, restoredMovements: 0 };
+      }
+
+      console.log(`[Supabase Restore] Found ${resCuentas.rows.length} accounts in Supabase. Restoring to application database...`);
+      const resMov = await client.query('SELECT id, cuenta_id, tipo, importe, fecha, concepto FROM movimientos ORDER BY fecha DESC');
+
+      const db = readDb();
+
+      // Synchronize students and balances from Supabase "cuentas"
+      for (const row of resCuentas.rows) {
+        const rowId = String(row.id);
+        const rowAlumno = String(row.alumno);
+        const rowSaldo = Number(row.saldo);
+
+        let user = db.users.find(u => u.id === rowId || u.name.toLowerCase() === rowAlumno.toLowerCase());
+        if (user) {
+          user.balance = rowSaldo;
+          user.name = rowAlumno;
+        } else {
+          // Add student if missing locally
+          const newUser: User = {
+            id: rowId,
+            username: rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
+            password: '123',
+            role: 'student',
+            name: rowAlumno,
+            accountNumber: generateIBAN(),
+            balance: rowSaldo
+          };
+          db.users.push(newUser);
+        }
+      }
+
+      // Reconstruct db.transfers from "movimientos"
+      const outMovs = resMov.rows.filter(r => r.tipo === 'TRANSFER_OUT');
+      const inMovs = resMov.rows.filter(r => r.tipo === 'TRANSFER_IN');
+
+      const restoredTransfers: Transfer[] = [];
+
+      for (const outRow of outMovs) {
+        const txId = String(outRow.id).replace(/-out$/, '');
+        const sender = db.users.find(u => u.id === outRow.cuenta_id);
+        const matchingIn = inMovs.find(inRow => 
+          String(inRow.id) === txId + '-in' || 
+          (inRow.concepto === outRow.concepto && Number(inRow.importe) === Number(outRow.importe) && Math.abs(new Date(inRow.fecha).getTime() - new Date(outRow.fecha).getTime()) < 5000)
+        );
+        const receiver = matchingIn ? db.users.find(u => u.id === matchingIn.cuenta_id) : undefined;
+
+        restoredTransfers.push({
+          id: txId,
+          senderId: sender ? sender.id : outRow.cuenta_id,
+          senderName: sender ? sender.name : (outRow.cuenta_id || 'Alumno'),
+          senderAccount: sender ? sender.accountNumber : 'ES000000000000000000',
+          receiverId: receiver ? receiver.id : (matchingIn ? matchingIn.cuenta_id : 'desconocido'),
+          receiverName: receiver ? receiver.name : 'Destinatario',
+          receiverAccount: receiver ? receiver.accountNumber : 'ES000000000000000000',
+          amount: Number(outRow.importe),
+          concept: outRow.concepto || 'Transferencia',
+          timestamp: new Date(outRow.fecha).toISOString()
+        });
+      }
+
+      if (restoredTransfers.length > 0) {
+        db.transfers = restoredTransfers;
+      }
+
+      db.isSeed = false;
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts and ${restoredTransfers.length} transfers from Supabase!`);
+      return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('[Supabase Restore Error]', e);
+    return { restoredUsers: 0, restoredMovements: 0 };
   }
 }
 
@@ -395,8 +487,7 @@ app.post('/api/supabase-connect', async (req, res) => {
       return res.status(500).json({ success: false, error: tableInit.error });
     }
 
-    const currentDb = readDb();
-    await syncAllToSupabase(currentDb);
+    const restoreRes = await restoreFromSupabase();
 
     // Verify record counts
     let cuentasCount = 0;
@@ -415,7 +506,7 @@ app.post('/api/supabase-connect', async (req, res) => {
 
     res.json({
       success: true,
-      message: '¡Conectado a Supabase correctamente! Tablas "cuentas" y "movimientos" listas y datos sincronizados.',
+      message: '¡Conectado a Supabase correctamente! Datos cargados y sincronizados desde la base de datos.',
       cuentasCount,
       movimientosCount,
       dbUrlMasked: maskDbUrl(cleanUrl)
@@ -437,8 +528,7 @@ app.post('/api/supabase-sync', async (req, res) => {
       return res.status(500).json({ success: false, error: tableInit.error });
     }
 
-    const currentDb = readDb();
-    await syncAllToSupabase(currentDb);
+    const restoreRes = await restoreFromSupabase();
 
     let cuentasCount = 0;
     let movimientosCount = 0;
@@ -454,7 +544,7 @@ app.post('/api/supabase-sync', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Sincronización manual completada con éxito.',
+      message: 'Sincronización y restauración con Supabase completada con éxito.',
       cuentasCount,
       movimientosCount
     });
@@ -857,7 +947,7 @@ app.post('/api/restore', (req, res) => {
 async function startServer() {
   // Create Supabase tables "cuentas" and "movimientos" if they do not exist
   await initSupabaseTables();
-  syncAllToSupabase(readDb()).catch(e => console.error('[Supabase Startup Sync Error]', e));
+  await restoreFromSupabase().catch(e => console.error('[Supabase Startup Restore Error]', e));
 
   // Vite integration for development
   if (process.env.NODE_ENV !== 'production') {
