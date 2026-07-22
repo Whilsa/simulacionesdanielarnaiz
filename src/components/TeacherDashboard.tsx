@@ -153,6 +153,9 @@ export default function TeacherDashboard({ currentUser, onLogout }: TeacherDashb
       if (supabaseRes && supabaseRes.ok) {
         const sbData = await supabaseRes.json();
         setSupabaseStatus(sbData);
+        if (sbData.dbUrlMasked && !supabaseUrlInput) {
+          setSupabaseUrlInput(sbData.dbUrlMasked);
+        }
       }
 
       setUsers(usersList);

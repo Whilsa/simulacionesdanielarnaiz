@@ -17,6 +17,9 @@ const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
+// Bypass self-signed TLS/SSL certificate checks for Supabase pooler connections
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 // Supabase PostgreSQL Pool Initialization
 const DEFAULT_SUPABASE_URL = 'postgresql://postgres.qgjcytrtambfgnalpztk:802.11ABGDRAF@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
 let dbPool: pg.Pool | null = null;
@@ -31,7 +34,10 @@ function initPgPool(url: string) {
   const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
   dbPool = new Pool({
     connectionString: url,
-    ssl: isLocal ? false : { rejectUnauthorized: false },
+    ssl: isLocal ? false : {
+      rejectUnauthorized: false,
+      checkServerIdentity: () => undefined
+    },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 10
@@ -39,6 +45,13 @@ function initPgPool(url: string) {
 
   process.env.DATABASE_URL = url;
   console.log('[Supabase DB] PostgreSQL pool configured automatically with DATABASE_URL.');
+
+  // Trigger table initialization & sync asynchronously
+  initSupabaseTables().then(res => {
+    if (res.success) {
+      syncAllToSupabase(readDb()).catch(e => console.error('[Supabase Auto Sync Error]', e));
+    }
+  }).catch(e => console.error('[Supabase Table Init Error]', e));
 }
 
 const initialDbUrl = process.env.DATABASE_URL || DEFAULT_SUPABASE_URL;
