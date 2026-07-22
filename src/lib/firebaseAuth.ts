@@ -45,6 +45,15 @@ export const initAuth = (
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
+    const provider = new GoogleAuthProvider();
+    // Request full Google Drive scopes for backup file management
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    provider.addScope('https://www.googleapis.com/auth/drive');
+    // Force account selection and scope consent screen
+    provider.setCustomParameters({
+      prompt: 'select_account consent'
+    });
+
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
