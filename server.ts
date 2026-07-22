@@ -7,13 +7,119 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
+import pg from 'pg';
 import { DatabaseSchema, User, Transfer, SystemLog } from './src/types.js';
 
+const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
 
 const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
+
+// Supabase PostgreSQL Pool Initialization
+const dbUrl = process.env.DATABASE_URL;
+let dbPool: pg.Pool | null = null;
+
+if (dbUrl) {
+  try {
+    dbPool = new Pool({
+      connectionString: dbUrl,
+      ssl: dbUrl.includes('localhost') ? false : { rejectUnauthorized: false },
+    });
+    console.log('[Supabase DB] PostgreSQL pool configured with DATABASE_URL.');
+  } catch (err) {
+    console.error('[Supabase DB] Error creating PG pool:', err);
+  }
+} else {
+  console.log('[Supabase DB] DATABASE_URL environment variable is not defined.');
+}
+
+// Create tables "cuentas" and "movimientos" if they do not exist
+async function initSupabaseTables() {
+  if (!dbPool) return;
+  try {
+    const client = await dbPool.connect();
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS cuentas (
+          id VARCHAR(255) PRIMARY KEY,
+          alumno VARCHAR(255) NOT NULL,
+          saldo NUMERIC(12, 2) NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS movimientos (
+          id VARCHAR(255) PRIMARY KEY,
+          cuenta_id VARCHAR(255) NOT NULL,
+          tipo VARCHAR(50) NOT NULL,
+          importe NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          concepto TEXT
+        );
+      `);
+      console.log('[Supabase DB] Tables "cuentas" and "movimientos" verified/created successfully.');
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('[Supabase DB] Error initializing tables in Supabase:', error);
+  }
+}
+
+// Sync helper functions for Supabase
+async function syncAccountToSupabase(id: string, alumno: string, saldo: number) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO cuentas (id, alumno, saldo)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET alumno = EXCLUDED.alumno, saldo = EXCLUDED.saldo`,
+      [id, alumno, saldo]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing account to Supabase:', e);
+  }
+}
+
+async function deleteAccountFromSupabase(id: string) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query('DELETE FROM cuentas WHERE id = $1', [id]);
+  } catch (e) {
+    console.error('[Supabase DB] Error deleting account from Supabase:', e);
+  }
+}
+
+async function syncMovimientoToSupabase(id: string, cuentaId: string, tipo: string, importe: number, fecha: string, concepto: string) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING`,
+      [id, cuentaId, tipo, importe, new Date(fecha), concepto]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing movement to Supabase:', e);
+  }
+}
+
+async function syncAllToSupabase(db: DatabaseSchema) {
+  if (!dbPool) return;
+  try {
+    for (const user of db.users) {
+      if (user.role === 'student') {
+        await syncAccountToSupabase(user.id, user.name, user.balance);
+      }
+    }
+    for (const tx of db.transfers) {
+      await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept);
+      await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept);
+    }
+  } catch (e) {
+    console.error('[Supabase DB] Error in full Supabase sync:', e);
+  }
+}
 
 // Middleware to parse JSON
 app.use(express.json());
@@ -174,166 +280,12 @@ function readDb(): DatabaseSchema {
   }
 }
 
-let currentDriveToken: string | null = null;
-let googleFileId: string | null = null;
-
-function writeDbLocalOnly(db: DatabaseSchema) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-}
-
-async function backupToGoogleDriveAsync(db: DatabaseSchema) {
-  if (!currentDriveToken) return;
-  const token = currentDriveToken;
-  try {
-    console.log('[Server Drive Auto-Sync] Attempting to back up to Google Drive...');
-    
-    // 1. If we don't have the file ID, find it
-    if (!googleFileId) {
-      const query = encodeURIComponent("name = 'banco_escolar_db.json' and trashed = false");
-      const findUrl = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime)&pageSize=1`;
-      
-      const findRes = await fetch(findUrl, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (findRes.ok) {
-        const findData: any = await findRes.json();
-        if (findData.files && findData.files.length > 0) {
-          googleFileId = findData.files[0].id;
-          console.log('[Server Drive Auto-Sync] Found existing backup file ID:', googleFileId);
-          
-          const newLog: SystemLog = {
-            id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-            action: 'RESET_SIMULATION', // Compatible action to render correctly
-            details: `[Google Drive] Vinculado con archivo de copia existente (ID: ${googleFileId}).`,
-            timestamp: new Date().toISOString()
-          };
-          db.systemLogs.unshift(newLog);
-          writeDbLocalOnly(db);
-        }
-      } else {
-        const errText = await findRes.text();
-        console.error('[Server Drive Auto-Sync] Error finding file:', errText);
-        if (findRes.status === 401) {
-          currentDriveToken = null;
-          return;
-        }
-      }
-    }
-    
-    // 2. If still no file ID, create a new file
-    if (!googleFileId) {
-      console.log('[Server Drive Auto-Sync] No existing file found. Creating new file...');
-      const createMetaUrl = 'https://www.googleapis.com/drive/v3/files';
-      const createRes = await fetch(createMetaUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: 'banco_escolar_db.json',
-          mimeType: 'application/json'
-        })
-      });
-      
-      if (createRes.ok) {
-        const createData: any = await createRes.json();
-        googleFileId = createData.id;
-        console.log('[Server Drive Auto-Sync] Created new backup file with ID:', googleFileId);
-        
-        const newLog: SystemLog = {
-          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-          action: 'RESET_SIMULATION',
-          details: `[Google Drive] Creado nuevo archivo de base de datos 'banco_escolar_db.json' en tu Google Drive (ID: ${googleFileId}).`,
-          timestamp: new Date().toISOString()
-        };
-        db.systemLogs.unshift(newLog);
-        writeDbLocalOnly(db);
-      } else {
-        const errText = await createRes.text();
-        console.error('[Server Drive Auto-Sync] Error creating file metadata:', errText);
-        
-        const newLog: SystemLog = {
-          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-          action: 'RESET_SIMULATION',
-          details: `[Google Drive Error] No se pudo crear el archivo en Drive: ${errText.substring(0, 120)}`,
-          timestamp: new Date().toISOString()
-        };
-        db.systemLogs.unshift(newLog);
-        writeDbLocalOnly(db);
-
-        if (createRes.status === 401) {
-          currentDriveToken = null;
-          return;
-        }
-      }
-    }
-    
-    // 3. Upload content
-    if (googleFileId) {
-      const uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${googleFileId}?uploadType=media`;
-      const uploadRes = await fetch(uploadUrl, {
-        method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(db, null, 2)
-      });
-      
-      if (uploadRes.ok) {
-        console.log('[Server Drive Auto-Sync] Google Drive backup successfully updated!');
-        
-        const newLog: SystemLog = {
-          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-          action: 'RESET_SIMULATION',
-          details: `[Google Drive] Sincronización automática de base de datos completada con éxito.`,
-          timestamp: new Date().toISOString()
-        };
-        db.systemLogs.unshift(newLog);
-        writeDbLocalOnly(db);
-      } else {
-        const errText = await uploadRes.text();
-        console.error('[Server Drive Auto-Sync] Error uploading content:', errText);
-        
-        const newLog: SystemLog = {
-          id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-          action: 'RESET_SIMULATION',
-          details: `[Google Drive Error] Error al subir copia de seguridad: ${errText.substring(0, 120)}`,
-          timestamp: new Date().toISOString()
-        };
-        db.systemLogs.unshift(newLog);
-        writeDbLocalOnly(db);
-
-        if (uploadRes.status === 401) {
-          currentDriveToken = null;
-        }
-      }
-    }
-  } catch (error: any) {
-    console.error('[Server Drive Auto-Sync] Failed to perform server-side Google Drive backup:', error);
-    try {
-      const newLog: SystemLog = {
-        id: 'log-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now(),
-        action: 'RESET_SIMULATION',
-        details: `[Google Drive Error] Error de red: ${error.message || error}`,
-        timestamp: new Date().toISOString()
-      };
-      db.systemLogs.unshift(newLog);
-      writeDbLocalOnly(db);
-    } catch (e) {}
-  }
-}
-
 function writeDb(db: DatabaseSchema) {
   db.isSeed = false;
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  if (currentDriveToken) {
-    backupToGoogleDriveAsync(db).catch(err => {
-      console.error('[Server Drive Auto-Sync Error]', err);
-    });
-  }
+  syncAllToSupabase(db).catch(err => {
+    console.error('[Supabase Sync Error]', err);
+  });
 }
 
 // Generate unique account number
@@ -352,21 +304,26 @@ function generateId(prefix: string): string {
 
 // ---------------- API ENDPOINTS ----------------
 
-// Google Drive Token Registration
-app.post('/api/set-drive-token', (req, res) => {
-  const { token, fileId } = req.body;
-  if (token) {
-    currentDriveToken = token;
-    console.log('[Server Drive Token] Google Drive token registered on server.');
-    if (fileId) {
-      googleFileId = fileId;
+// Supabase Status Endpoint
+app.get('/api/supabase-status', async (req, res) => {
+  if (!dbPool) {
+    return res.json({ connected: false, message: 'DATABASE_URL no está configurada' });
+  }
+  try {
+    const client = await dbPool.connect();
+    try {
+      const resCuentas = await client.query('SELECT COUNT(*) FROM cuentas');
+      const resMov = await client.query('SELECT COUNT(*) FROM movimientos');
+      res.json({
+        connected: true,
+        cuentasCount: Number(resCuentas.rows[0].count),
+        movimientosCount: Number(resMov.rows[0].count)
+      });
+    } finally {
+      client.release();
     }
-    res.json({ success: true });
-  } else {
-    currentDriveToken = null;
-    googleFileId = null;
-    console.log('[Server Drive Token] Google Drive token cleared on server.');
-    res.json({ success: true, message: 'Token cleared' });
+  } catch (e: any) {
+    res.json({ connected: false, error: e.message || String(e) });
   }
 });
 
@@ -427,7 +384,7 @@ app.get('/api/users', (req, res) => {
   const db = readDb();
 
   if (role === 'teacher') {
-    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, hasDriveToken: !!currentDriveToken, googleFileId });
+    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, supabaseConnected: !!dbPool });
   } else {
     // Only return students and filter out password/admin details
     const publicStudents = db.users
@@ -569,6 +526,7 @@ app.delete('/api/users/:id', (req, res) => {
   }
 
   db.users = db.users.filter(u => u.id !== id);
+  deleteAccountFromSupabase(id).catch(e => console.error(e));
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -760,6 +718,10 @@ app.post('/api/restore', (req, res) => {
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
 
 async function startServer() {
+  // Create Supabase tables "cuentas" and "movimientos" if they do not exist
+  await initSupabaseTables();
+  syncAllToSupabase(readDb()).catch(e => console.error('[Supabase Startup Sync Error]', e));
+
   // Vite integration for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

@@ -7,12 +7,6 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
 const provider = new GoogleAuthProvider();
-// Request Workspace scope for Google Drive file access
-provider.addScope('https://www.googleapis.com/auth/drive.file');
-// Force consent prompt so the user has the chance to check/authorize Google Drive permission
-provider.setCustomParameters({
-  prompt: 'consent'
-});
 
 // Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;
@@ -46,13 +40,6 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
   try {
     isSigningIn = true;
     const provider = new GoogleAuthProvider();
-    // Request full Google Drive scopes for backup file management
-    provider.addScope('https://www.googleapis.com/auth/drive.file');
-    provider.addScope('https://www.googleapis.com/auth/drive');
-    // Force account selection and scope consent screen
-    provider.setCustomParameters({
-      prompt: 'select_account consent'
-    });
 
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
