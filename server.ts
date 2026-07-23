@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
@@ -1325,6 +1325,16 @@ app.post('/api/transfers', (req, res) => {
   }
 
   const db = readDb();
+
+  // Process automatic payments for sender first
+  processStudentAutomaticPayments(db, senderId);
+  const senderStatus = getStudentPaymentStatus(db, senderId);
+  if (senderStatus.isBlocked) {
+    return res.status(400).json({
+      error: `Operación denegada: Tu cuenta tiene pagos vencidos impagados por un total de ${senderStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+    });
+  }
+
   const senderIndex = db.users.findIndex(u => u.id === senderId);
   const receiverIndex = db.users.findIndex(u => u.id === receiverId);
 
@@ -1346,6 +1356,11 @@ app.post('/api/transfers', (req, res) => {
   // Deduct from sender and add to receiver
   sender.balance = Number((sender.balance - transferAmount).toFixed(2));
   receiver.balance = Number((receiver.balance + transferAmount).toFixed(2));
+
+  // Process automatic payments for receiver in case incoming funds settle overdue debt
+  if (receiver.role === 'student') {
+    processStudentAutomaticPayments(db, receiver.id);
+  }
 
   const newTransfer: Transfer = {
     id: generateId('tx'),
@@ -1648,6 +1663,15 @@ app.post('/api/properties/buy-rent', (req, res) => {
   const student = db.users.find(u => u.id === studentId);
   if (!student) {
     return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  // Check for automatic payments and overdue debt blocking
+  processStudentAutomaticPayments(db, studentId);
+  const studentStatus = getStudentPaymentStatus(db, studentId);
+  if (studentStatus.isBlocked) {
+    return res.status(400).json({
+      error: `Operación de compra/alquiler bloqueada: Tienes vencimientos impagados pendientes por un total de ${studentStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+    });
   }
 
   const vendorName = property.ownerName && property.ownerName !== 'Profesor de Contabilidad' 
@@ -2134,25 +2158,132 @@ function calculateFrenchAmortization(
   return { monthlyPayment, schedule };
 }
 
-function processLoanPayments(db: DatabaseSchema) {
-  if (!db.loans) return;
+function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: string) {
   const now = new Date();
   let modified = false;
 
-  for (const loan of db.loans) {
-    if (loan.status !== 'active') continue;
-    const student = db.users.find(u => u.id === loan.studentId);
-    if (!student) continue;
+  const students = targetStudentId 
+    ? db.users.filter(u => u.id === targetStudentId && u.role === 'student')
+    : db.users.filter(u => u.role === 'student');
 
-    for (const row of loan.schedule) {
-      if (row.paid) continue;
-      const rowDueDate = new Date(row.dueDate);
-      if (rowDueDate <= now) {
-        if (student.balance >= row.payment) {
-          student.balance = Number((student.balance - row.payment).toFixed(2));
+  for (const student of students) {
+    interface PendingItem {
+      id: string;
+      sourceType: 'obligation' | 'loan';
+      dueDate: Date;
+      principal: number;
+      penaltyInterest: number;
+      totalRequired: number;
+      concept: string;
+      obligationRef?: PaymentObligation;
+      loanRef?: BankLoan;
+      loanRowIndex?: number;
+    }
+
+    const pendingItems: PendingItem[] = [];
+
+    // 1. Obligations
+    if (db.paymentObligations) {
+      for (const ob of db.paymentObligations) {
+        if (ob.studentId === student.id && (ob.status === 'pendiente' || ob.status === 'vencido')) {
+          const dDate = new Date(ob.dueDate);
+          if (dDate <= now) {
+            const principal = ob.amount;
+            const penalty = Number((principal * 0.05).toFixed(2));
+            const totalRequired = Number((principal + penalty).toFixed(2));
+            const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota / Alquiler';
+
+            pendingItems.push({
+              id: ob.id,
+              sourceType: 'obligation',
+              dueDate: dDate,
+              principal,
+              penaltyInterest: penalty,
+              totalRequired,
+              concept: `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`,
+              obligationRef: ob
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Loans
+    if (db.loans) {
+      for (const loan of db.loans) {
+        if (loan.studentId === student.id && loan.status === 'active') {
+          loan.schedule.forEach((row, idx) => {
+            if (!row.paid) {
+              const dDate = new Date(row.dueDate);
+              if (dDate <= now) {
+                const principal = row.payment;
+                const penalty = Number((principal * 0.05).toFixed(2));
+                const totalRequired = Number((principal + penalty).toFixed(2));
+
+                pendingItems.push({
+                  id: `${loan.id}-row-${row.period}`,
+                  sourceType: 'loan',
+                  dueDate: dDate,
+                  principal,
+                  penaltyInterest: penalty,
+                  totalRequired,
+                  concept: `Cuota de préstamo hipotecario (${row.period}/${loan.termMonths}): Ref. ${loan.id}`,
+                  loanRef: loan,
+                  loanRowIndex: idx
+                });
+              }
+            }
+          });
+        }
+      }
+    }
+
+    // Sort items chronologically
+    pendingItems.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+
+    for (const item of pendingItems) {
+      if (student.balance >= item.totalRequired) {
+        student.balance = Number((student.balance - item.totalRequired).toFixed(2));
+        modified = true;
+
+        if (item.sourceType === 'obligation' && item.obligationRef) {
+          const ob = item.obligationRef;
+          ob.status = 'pagado';
+          ob.paidDate = new Date().toISOString();
+          ob.penaltyInterest = 0;
+          ob.totalOverdueAmount = 0;
+
+          const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
+          if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+            acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+            syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+          }
+
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'corp-tenedor-efectos',
+            receiverName: 'Tenedor de Efectos Comerciales S.A.',
+            receiverAccount: 'ES210001000299887755',
+            amount: item.totalRequired,
+            concept: item.penaltyInterest > 0
+              ? `${item.concept} (inc. 5% interés demora: +${item.penaltyInterest} €)`
+              : item.concept,
+            timestamp: new Date().toISOString()
+          };
+          db.transfers.unshift(newTransfer);
+
+          syncObligationToSupabase(ob).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+          const loan = item.loanRef;
+          const row = loan.schedule[item.loanRowIndex];
           row.paid = true;
           row.paidDate = new Date().toISOString();
-          modified = true;
+          row.isOverdue = false;
+          row.penaltyInterest = 0;
 
           const newTransfer: Transfer = {
             id: generateId('tx'),
@@ -2162,23 +2293,37 @@ function processLoanPayments(db: DatabaseSchema) {
             receiverId: 'corp-banco-central',
             receiverName: 'Banco Central Hipotecario S.A.',
             receiverAccount: 'ES210001000299887700',
-            amount: row.payment,
-            concept: `Cuota de préstamo hipotecario (${row.period}/${loan.termMonths}): Ref. ${loan.id}`,
+            amount: item.totalRequired,
+            concept: item.penaltyInterest > 0
+              ? `${item.concept} (inc. 5% interés demora: +${item.penaltyInterest} €)`
+              : item.concept,
             timestamp: new Date().toISOString()
           };
           db.transfers.unshift(newTransfer);
 
-          syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-          syncLoanToSupabase(loan).catch(e => console.error(e));
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', row.payment, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
-        }
-      }
-    }
+          if (loan.schedule.every(r => r.paid)) {
+            loan.status = 'paid_off';
+          }
 
-    if (loan.schedule.every(r => r.paid)) {
-      loan.status = 'paid_off';
-      modified = true;
-      syncLoanToSupabase(loan).catch(e => console.error(e));
+          syncLoanToSupabase(loan).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+        }
+
+        syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+      } else {
+        // Insufficient balance -> mark overdue with 5% default interest
+        if (item.sourceType === 'obligation' && item.obligationRef) {
+          item.obligationRef.status = 'vencido';
+          item.obligationRef.penaltyInterest = item.penaltyInterest;
+          item.obligationRef.totalOverdueAmount = item.totalRequired;
+          modified = true;
+        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+          item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
+          item.loanRef.schedule[item.loanRowIndex].penaltyInterest = item.penaltyInterest;
+          modified = true;
+        }
+        break;
+      }
     }
   }
 
@@ -2187,11 +2332,134 @@ function processLoanPayments(db: DatabaseSchema) {
   }
 }
 
+function processLoanPayments(db: DatabaseSchema) {
+  processStudentAutomaticPayments(db);
+}
+
+function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
+  const student = db.users.find(u => u.id === studentId);
+  const currentBalance = student ? student.balance : 0;
+  const now = new Date();
+  const thirtyDaysLater = new Date(now.getTime() + 30 * 86400 * 1000);
+
+  const overdueItems: UpcomingPaymentItem[] = [];
+  const upcoming30DaysItems: UpcomingPaymentItem[] = [];
+
+  // 1. Obligations
+  if (db.paymentObligations) {
+    for (const ob of db.paymentObligations) {
+      if (ob.studentId === studentId && ob.status !== 'pagado') {
+        const dDate = new Date(ob.dueDate);
+        const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota / Alquiler';
+        const principal = ob.amount;
+        const penalty = Number((principal * 0.05).toFixed(2));
+        const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+
+        const item: UpcomingPaymentItem = {
+          id: ob.id,
+          sourceType: 'obligation',
+          type: ob.type,
+          title: ob.propertyTitle,
+          concept: `Domiciliación ${instrumentName}`,
+          dueDate: ob.dueDate,
+          principalAmount: principal,
+          penaltyInterest: penalty,
+          totalAmount: Number((principal + penalty).toFixed(2)),
+          isOverdue: dDate <= now,
+          daysRemaining: daysRem,
+          installmentInfo: ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : undefined
+        };
+
+        if (dDate <= now) {
+          overdueItems.push(item);
+        } else if (dDate <= thirtyDaysLater) {
+          upcoming30DaysItems.push(item);
+        }
+      }
+    }
+  }
+
+  // 2. Loans
+  if (db.loans) {
+    for (const loan of db.loans) {
+      if (loan.studentId === studentId && loan.status === 'active') {
+        for (const row of loan.schedule) {
+          if (!row.paid) {
+            const dDate = new Date(row.dueDate);
+            const principal = row.payment;
+            const penalty = Number((principal * 0.05).toFixed(2));
+            const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+
+            const item: UpcomingPaymentItem = {
+              id: `${loan.id}-row-${row.period}`,
+              sourceType: 'loan',
+              type: 'cuota_prestamo',
+              title: `Préstamo Hipotecario (Ref: ${loan.id})`,
+              concept: `Cuota mensual de amortización ${row.period}/${loan.termMonths}`,
+              dueDate: row.dueDate,
+              principalAmount: principal,
+              penaltyInterest: penalty,
+              totalAmount: Number((principal + penalty).toFixed(2)),
+              isOverdue: dDate <= now,
+              daysRemaining: daysRem,
+              installmentInfo: `Cuota ${row.period}/${loan.termMonths}`,
+              loanId: loan.id
+            };
+
+            if (dDate <= now) {
+              overdueItems.push(item);
+            } else if (dDate <= thirtyDaysLater) {
+              upcoming30DaysItems.push(item);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  upcoming30DaysItems.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  overdueItems.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+  const totalOverdueAmount = overdueItems.reduce((sum, item) => sum + item.totalAmount, 0);
+  const totalUpcoming30DaysAmount = upcoming30DaysItems.reduce((sum, item) => sum + item.principalAmount, 0);
+  const projected30DaysTotal = totalOverdueAmount + totalUpcoming30DaysAmount;
+  const isBlocked = overdueItems.length > 0;
+  const insufficientProjectedBalance = currentBalance < projected30DaysTotal;
+
+  return {
+    isBlocked,
+    totalOverdueAmount: Number(totalOverdueAmount.toFixed(2)),
+    totalUpcoming30DaysAmount: Number(totalUpcoming30DaysAmount.toFixed(2)),
+    overdueItems,
+    upcoming30DaysItems,
+    projected30DaysTotal: Number(projected30DaysTotal.toFixed(2)),
+    currentBalance,
+    insufficientProjectedBalance
+  };
+}
+
+// GET upcoming payments for student
+app.get('/api/student/upcoming-payments', (req, res) => {
+  const { studentId } = req.query;
+  if (!studentId || typeof studentId !== 'string') {
+    return res.status(400).json({ error: 'studentId es requerido' });
+  }
+
+  const db = readDb();
+  processStudentAutomaticPayments(db, studentId);
+  const status = getStudentPaymentStatus(db, studentId);
+
+  res.json({
+    success: true,
+    ...status
+  });
+});
+
 // GET all loans or student's loans
 app.get('/api/loans', (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  processLoanPayments(db);
+  processStudentAutomaticPayments(db, studentId ? String(studentId) : undefined);
 
   let loans = db.loans || [];
   if (studentId) {

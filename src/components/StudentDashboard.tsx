@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { User, Transfer } from '../types.js';
 import StudentLoanSection from './StudentLoanSection.js';
+import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
 
 interface StudentDashboardProps {
   currentUser: User;
@@ -270,6 +271,11 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           </div>
 
         </div>
+
+        {/* Upcoming 30-Day Automatic Payments Section */}
+        <UpcomingPaymentsSection 
+          currentUser={currentUser} 
+        />
 
         {/* Bank Loans Section */}
         <StudentLoanSection 

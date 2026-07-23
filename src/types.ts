@@ -106,6 +106,8 @@ export interface PaymentObligation {
   paidDate?: string;
   installmentNumber?: number;
   totalInstallments?: number;
+  penaltyInterest?: number;
+  totalOverdueAmount?: number;
 }
 
 export interface LoanCollateral {
@@ -126,6 +128,24 @@ export interface AmortizationRow {
   pendingBalance: number; // total pendiente de amortizar
   paid: boolean;
   paidDate?: string;
+  isOverdue?: boolean;
+  penaltyInterest?: number;
+}
+
+export interface UpcomingPaymentItem {
+  id: string;
+  sourceType: 'obligation' | 'loan';
+  type: 'pagare' | 'letra_cambio' | 'cuota_alquiler' | 'cuota_compra' | 'cuota_prestamo';
+  title: string;
+  concept: string;
+  dueDate: string;
+  principalAmount: number;
+  penaltyInterest: number;
+  totalAmount: number;
+  isOverdue: boolean;
+  daysRemaining: number;
+  installmentInfo?: string;
+  loanId?: string;
 }
 
 export type LoanStatus = 
