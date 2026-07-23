@@ -74,39 +74,36 @@
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
-  /* Hide elements explicitly marked for hiding during print */
+  /* Hide non-printable elements explicitly */
   .print\:hidden,
   .no-print {
     display: none !important;
   }
 
-  /* When printing a document modal, hide all main app layouts outside the modal backdrop */
-  body:has(.printable-document-modal) #root > div > *:not(:has(.printable-document-modal)),
-  body:has(.printable-document-modal) #root > div > div > *:not(:has(.printable-document-modal)),
-  body:has(.printable-document-modal) header,
-  body:has(.printable-document-modal) nav,
-  body:has(.printable-document-modal) main > *:not(:has(.printable-document-modal)),
-  body:has(.printable-document-modal) section > *:not(:has(.printable-document-modal)) {
+  /* Hide main application root when modal print is active */
+  body > #root {
     display: none !important;
   }
 
-  /* Reset outer layout wrappers so they don't clip height or fixed-position the modal */
-  #root,
-  #root > div,
-  main,
-  section,
-  .printable-modal-backdrop {
+  /* Outer portal container for printable document modal */
+  body > .printable-modal-backdrop {
     display: block !important;
     position: static !important;
     inset: auto !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
     height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
     background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
     box-shadow: none !important;
     border: none !important;
     backdrop-filter: none !important;
@@ -125,6 +122,7 @@
     box-shadow: none !important;
     border: none !important;
     background: #ffffff !important;
+    color: #000000 !important;
     overflow: visible !important;
     border-radius: 0 !important;
   }

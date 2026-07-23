@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator
@@ -162,8 +163,8 @@ ${scheduleText}
     setTimeout(() => setCopied(false), 2500);
   };
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 z-50 overflow-y-auto print:static print:p-0 print:bg-white print:block">
+  return createPortal(
+    <div className="printable-modal-backdrop fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 z-50 overflow-y-auto print:static print:p-0 print:bg-white print:block">
       {/* Container - A4 Paper Sheet Styling */}
       <div className="printable-document-modal bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-300 flex flex-col max-h-[92vh] overflow-hidden print:max-h-none print:shadow-none print:border-none print:w-full print:rounded-none">
         
@@ -278,7 +279,7 @@ ${scheduleText}
                 <div className="border border-slate-300 rounded-xl overflow-hidden">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider">
+                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider print:bg-slate-900 print:text-white">
                         <th className="p-3">Concepto y Descripción del Inmueble</th>
                         <th className="p-3 text-center">Superficie</th>
                         <th className="p-3 text-right">Base Imponible</th>
@@ -335,16 +336,16 @@ ${scheduleText}
 
                 {/* Total Summary Footer */}
                 <div className="flex justify-end pt-2">
-                  <div className="w-full sm:w-72 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono">
-                    <div className="flex justify-between text-xs text-slate-300">
+                  <div className="w-full sm:w-72 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
                       <span>Base Imponible:</span>
                       <span>{basePrice.toLocaleString('es-ES')} €</span>
                     </div>
-                    <div className="flex justify-between text-xs text-slate-300">
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
                       <span>21.00% IVA Soportado:</span>
                       <span>+{ivaAmount.toLocaleString('es-ES')} €</span>
                     </div>
-                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400">
+                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
                       <span>TOTAL A PAGAR:</span>
                       <span>{totalPrice.toLocaleString('es-ES')} €</span>
                     </div>
@@ -604,6 +605,7 @@ ${scheduleText}
 
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
