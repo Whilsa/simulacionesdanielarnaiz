@@ -2340,7 +2340,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   const student = db.users.find(u => u.id === studentId);
   const currentBalance = student ? student.balance : 0;
   const now = new Date();
-  const thirtyDaysLater = new Date(now.getTime() + 30 * 86400 * 1000);
+  const thirtyFiveDaysLater = new Date(now.getTime() + 35 * 86400 * 1000);
 
   const overdueItems: UpcomingPaymentItem[] = [];
   const upcoming30DaysItems: UpcomingPaymentItem[] = [];
@@ -2372,7 +2372,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
 
         if (dDate <= now) {
           overdueItems.push(item);
-        } else if (dDate <= thirtyDaysLater) {
+        } else if (dDate <= thirtyFiveDaysLater) {
           upcoming30DaysItems.push(item);
         }
       }
@@ -2408,7 +2408,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
 
             if (dDate <= now) {
               overdueItems.push(item);
-            } else if (dDate <= thirtyDaysLater) {
+            } else if (dDate <= thirtyFiveDaysLater) {
               upcoming30DaysItems.push(item);
             }
           }

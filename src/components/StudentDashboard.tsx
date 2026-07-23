@@ -33,6 +33,17 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
   const [transferSuccess, setTransferSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Payment Status Summary State
+  const [paymentStatus, setPaymentStatus] = useState<{
+    isBlocked: boolean;
+    totalOverdueAmount: number;
+    totalUpcoming30DaysAmount: number;
+    upcomingCount: number;
+    overdueCount: number;
+    insufficientProjectedBalance: boolean;
+    projected30DaysTotal: number;
+  } | null>(null);
+
   useEffect(() => {
     fetchStudentData();
     // Poll balance and transactions every 4 seconds to allow interactive double-entry real-time feedback in the classroom!
@@ -70,6 +81,23 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           if (transfersData && transfersData.transfers) {
             setTransfers(transfersData.transfers);
           }
+        }
+      }
+
+      // 3. Get student's upcoming automatic payments status
+      const paymentsRes = await fetch(`/api/student/upcoming-payments?studentId=${currentUser.id}`);
+      if (paymentsRes.ok) {
+        const pData = await paymentsRes.json();
+        if (pData.success) {
+          setPaymentStatus({
+            isBlocked: pData.isBlocked,
+            totalOverdueAmount: pData.totalOverdueAmount,
+            totalUpcoming30DaysAmount: pData.totalUpcoming30DaysAmount,
+            upcomingCount: pData.upcoming30DaysItems ? pData.upcoming30DaysItems.length : 0,
+            overdueCount: pData.overdueItems ? pData.overdueItems.length : 0,
+            insufficientProjectedBalance: pData.insufficientProjectedBalance,
+            projected30DaysTotal: pData.projected30DaysTotal
+          });
         }
       }
     } catch (err) {
@@ -201,10 +229,61 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
         {/* Welcome Banner */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold font-display text-slate-900">Hola, {currentUser.name}</h1>
-          <p className="text-sm text-slate-500">Usa este portal bancario ficticio para tus ejercicios de contabilidad y transacciones de clase.</p>
+        <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold font-display text-slate-900">Hola, {currentUser.name}</h1>
+            <p className="text-sm text-slate-500">Usa este portal bancario ficticio para tus ejercicios de contabilidad y transacciones de clase.</p>
+          </div>
         </div>
+
+        {/* PROMINENT TOP AUTOMATIC PAYMENTS NOTIFICATION BANNER */}
+        {paymentStatus && paymentStatus.isBlocked && (
+          <div className="mb-8 bg-rose-600 text-white p-5 rounded-2xl shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-2 border-rose-700 animate-in fade-in">
+            <div className="flex items-start space-x-3">
+              <div className="p-2 bg-white/20 rounded-xl shrink-0">
+                <AlertCircle className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <span>⛔ Salidas de Dinero Bloqueadas por Mora</span>
+                  <span className="text-xs bg-white text-rose-900 px-2.5 py-0.5 rounded-full font-mono font-extrabold">
+                    5% Int. Demora
+                  </span>
+                </h3>
+                <p className="text-xs text-rose-100 mt-1 leading-relaxed">
+                  Tienes <strong>{paymentStatus.totalOverdueAmount.toLocaleString('es-ES')} €</strong> en vencimientos impagados acumulados. Tu cuenta no permite saldo negativo. Las transferencias y compras manuales están bloqueadas.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {paymentStatus && !paymentStatus.isBlocked && paymentStatus.upcomingCount > 0 && (
+          <div className="mb-8 bg-gradient-to-r from-amber-50 to-amber-100/80 border-2 border-amber-300/80 p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-amber-950">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-xs shrink-0">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="font-extrabold text-sm">🔔 Aviso de Pagos Automáticos Programados (Próximos 30 días)</span>
+                  <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full uppercase">
+                    {paymentStatus.upcomingCount} {paymentStatus.upcomingCount === 1 ? 'cargo' : 'cargos'}
+                  </span>
+                </div>
+                <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+                  Se realizarán cobros automáticos domiciliados en tu cuenta bancaria por un total de <strong>{paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €</strong> en los próximos 30 días. {paymentStatus.insufficientProjectedBalance ? '⚠️ Revisa tu saldo para evitar recargos del 5% de mora.' : '✅ Cuentas con saldo suficiente para cubrirlos.'}
+                </p>
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="text-xs text-amber-800 font-medium block">Total Compromisos 30d:</span>
+              <span className="text-lg font-black font-mono text-amber-950 bg-amber-200/80 px-3 py-1 rounded-xl border border-amber-300">
+                {paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Top Cards: Balance & Account Details */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -306,6 +385,18 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded-r-lg text-xs font-semibold text-emerald-700 flex items-center space-x-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>{transferSuccess}</span>
+                </div>
+              )}
+
+              {paymentStatus && paymentStatus.totalUpcoming30DaysAmount > 0 && (
+                <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-amber-900 text-[11px] font-medium space-y-0.5">
+                  <span className="font-bold flex items-center gap-1 text-amber-950">
+                    <Clock className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Aviso de Cobros Domiciliados a 30 días:</span>
+                  </span>
+                  <p>
+                    Tienes <strong>{paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
+                  </p>
                 </div>
               )}
 

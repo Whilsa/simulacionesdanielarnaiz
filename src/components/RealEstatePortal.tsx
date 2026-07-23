@@ -686,9 +686,16 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   <p className="font-semibold text-indigo-950">
                     • Total a desembolsar hoy: { ((selectedPropertyForModal.price * 2) + (selectedPropertyForModal.price * 1.21)).toLocaleString('es-ES') } €
                   </p>
-                  <p className="text-[10px] text-indigo-700">
-                    • Los 11 meses restantes quedarán domiciliados mensualmente en tu cuenta bancaria.
+                  <p className="text-[11px] text-indigo-800 font-bold mt-1 bg-indigo-100/80 p-2 rounded-xl border border-indigo-200">
+                    🔔 Aviso de Pagos Automáticos: Los 11 meses restantes ({ (selectedPropertyForModal.price * 1.21).toLocaleString('es-ES') } €/mes) se programarán automáticamente como cargos domiciliados en tu cuenta bancaria a 30 días vista.
                   </p>
+                </div>
+              )}
+
+              {/* Deferred Payment Warning */}
+              {selectedPropertyForModal.operation === 'compra' && useDeferredPayment && (
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-medium">
+                  🔔 <strong>Aviso de Pagos Automáticos Programados:</strong> Al aplazar el pago, los vencimientos mensuales ({ ((selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig?.minDownPaymentPercent || 20)) / 100) / (selectedPropertyForModal.deferredPaymentConfig?.installmentsCount || 12)).toLocaleString('es-ES') } €/mes) se domiciliarán automáticamente en tu cuenta. Recibirás avisos en tu panel para mantener fondos suficientes antes del vencimiento.
                 </div>
               )}
             </div>
