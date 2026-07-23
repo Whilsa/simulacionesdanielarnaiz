@@ -14,9 +14,10 @@ import { User, Transfer } from '../types.js';
 interface StudentDashboardProps {
   currentUser: User;
   onLogout: () => void;
+  onBackToHub?: () => void;
 }
 
-export default function StudentDashboard({ currentUser, onLogout }: StudentDashboardProps) {
+export default function StudentDashboard({ currentUser, onLogout, onBackToHub }: StudentDashboardProps) {
   const [balance, setBalance] = useState(currentUser.balance);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [studentsList, setStudentsList] = useState<User[]>([]);
@@ -160,12 +161,21 @@ export default function StudentDashboard({ currentUser, onLogout }: StudentDashb
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
+              {onBackToHub && (
+                <button
+                  onClick={onBackToHub}
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-xl text-white transition cursor-pointer border border-white/10"
+                  title="Volver al Menú Principal"
+                >
+                  <ArrowDownLeft className="w-4 h-4 transform rotate-45" />
+                </button>
+              )}
               <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center border border-white/10">
                 <Landmark className="w-6 h-6 text-white animate-pulse" />
               </div>
               <div>
                 <span className="font-display font-bold text-lg tracking-tight block">EGOBEY Simulador</span>
-                <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Portal del Alumno</span>
+                <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Banco Simulado • Alumno</span>
               </div>
             </div>
             

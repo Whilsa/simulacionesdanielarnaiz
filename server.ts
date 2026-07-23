@@ -8,7 +8,8 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig } from './src/types.js';
+import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
@@ -96,6 +97,64 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         importe NUMERIC(12, 2) NOT NULL DEFAULT 0,
         fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         concepto TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS inmuebles (
+        id VARCHAR(255) PRIMARY KEY,
+        titulo TEXT NOT NULL,
+        tipo VARCHAR(50) NOT NULL,
+        operacion VARCHAR(50) NOT NULL,
+        superficie_m2 NUMERIC(10, 2) NOT NULL,
+        precio NUMERIC(12, 2) NOT NULL,
+        precio_m2 NUMERIC(10, 2) NOT NULL,
+        porcentaje_suelo NUMERIC(5, 2) NOT NULL,
+        comunidad TEXT,
+        municipio TEXT,
+        direccion TEXT,
+        imagen_url TEXT,
+        estado VARCHAR(50) NOT NULL DEFAULT 'available',
+        propietario_id VARCHAR(255),
+        propietario_nombre TEXT,
+        config_pago_aplazado JSONB,
+        fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS adquisiciones (
+        id VARCHAR(255) PRIMARY KEY,
+        inmueble_id VARCHAR(255) NOT NULL,
+        inmueble_titulo TEXT NOT NULL,
+        inmueble_tipo VARCHAR(50) NOT NULL,
+        operacion VARCHAR(50) NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        superficie_m2 NUMERIC(10, 2) NOT NULL,
+        ubicacion TEXT,
+        imagen_url TEXT,
+        porcentaje_suelo NUMERIC(5, 2) NOT NULL,
+        precio_base NUMERIC(12, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        precio_total NUMERIC(12, 2) NOT NULL,
+        fecha_compra TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        metodo_pago VARCHAR(50) NOT NULL,
+        alquiler_mensual NUMERIC(12, 2),
+        proximo_pago_alquiler TIMESTAMPTZ,
+        entrada_pagada NUMERIC(12, 2),
+        saldo_pendiente NUMERIC(12, 2)
+      );
+
+      CREATE TABLE IF NOT EXISTS obligaciones_pago (
+        id VARCHAR(255) PRIMARY KEY,
+        adquisicion_id VARCHAR(255) NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        inmueble_titulo TEXT NOT NULL,
+        tipo VARCHAR(50) NOT NULL,
+        importe NUMERIC(12, 2) NOT NULL,
+        fecha_vencimiento TIMESTAMPTZ NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'pendiente',
+        fecha_pago TIMESTAMPTZ,
+        numero_cuota INT,
+        total_cuotas INT
       );
     `);
     console.log('[Supabase DB] Tables "cuentas" and "movimientos" verified/created successfully.');
@@ -278,6 +337,9 @@ app.use((req, res, next) => {
     req.url.startsWith('/users') ||
     req.url.startsWith('/transfers') ||
     req.url.startsWith('/logs') ||
+    req.url.startsWith('/properties') ||
+    req.url.startsWith('/company') ||
+    req.url.startsWith('/obligations') ||
     req.url.startsWith('/reset-simulation')
   );
 
@@ -286,6 +348,132 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+function getDefaultSeedProperties(): PropertyListing[] {
+  return [
+    {
+      id: 'inm-1',
+      title: 'Nave Industrial Diáfana en Polígono Industrial',
+      type: 'nave_industrial',
+      operation: 'compra',
+      surfaceM2: 850,
+      price: 765000,
+      pricePerM2: 900,
+      ivaRate: 0.21,
+      landPercentage: 65,
+      locationScope: 'municipio',
+      community: 'Comunidad de Madrid',
+      municipality: 'Getafe',
+      address: 'Polígono Industrial Los Olivos, Nº 14, Getafe',
+      imageUrl: PROPERTY_IMAGES.nave_industrial[0],
+      status: 'available',
+      ownerId: 'profesor-1',
+      ownerName: 'Profesor de Contabilidad',
+      deferredPaymentConfig: {
+        allowed: true,
+        minDownPaymentPercent: 20,
+        installmentsCount: 12,
+        instrument: 'pagare',
+        interestRatePercent: 0
+      },
+      createdTimestamp: new Date().toISOString()
+    },
+    {
+      id: 'inm-2',
+      title: 'Local Comercial Esquina de Gran Afluencia',
+      type: 'local_comercial',
+      operation: 'alquiler',
+      surfaceM2: 180,
+      price: 2400,
+      pricePerM2: 13.33,
+      ivaRate: 0.21,
+      landPercentage: 60,
+      locationScope: 'municipio',
+      community: 'Cataluña',
+      municipality: 'Barcelona',
+      address: 'Calle Comercio, Nº 42, Barcelona',
+      imageUrl: PROPERTY_IMAGES.local_comercial[0],
+      status: 'available',
+      ownerId: 'profesor-1',
+      ownerName: 'Profesor de Contabilidad',
+      createdTimestamp: new Date().toISOString()
+    },
+    {
+      id: 'inm-3',
+      title: 'Almacén Logístico con Muelles de Carga',
+      type: 'almacen',
+      operation: 'compra',
+      surfaceM2: 1200,
+      price: 840000,
+      pricePerM2: 700,
+      ivaRate: 0.21,
+      landPercentage: 70,
+      locationScope: 'municipio',
+      community: 'Comunitat Valenciana',
+      municipality: 'Paterna',
+      address: 'Avenida del Euro, Nº 8, Paterna',
+      imageUrl: PROPERTY_IMAGES.almacen[0],
+      status: 'available',
+      ownerId: 'profesor-1',
+      ownerName: 'Profesor de Contabilidad',
+      deferredPaymentConfig: {
+        allowed: true,
+        minDownPaymentPercent: 25,
+        installmentsCount: 12,
+        instrument: 'letra_cambio',
+        interestRatePercent: 0
+      },
+      createdTimestamp: new Date().toISOString()
+    },
+    {
+      id: 'inm-4',
+      title: 'Nave Industrial Acondicionada',
+      type: 'nave_industrial',
+      operation: 'alquiler',
+      surfaceM2: 600,
+      price: 3200,
+      pricePerM2: 5.33,
+      ivaRate: 0.21,
+      landPercentage: 58,
+      locationScope: 'municipio',
+      community: 'Andalucía',
+      municipality: 'Sevilla',
+      address: 'Polígono Empresarial Norte, Nº 22, Sevilla',
+      imageUrl: PROPERTY_IMAGES.nave_industrial[1],
+      status: 'available',
+      ownerId: 'profesor-1',
+      ownerName: 'Profesor de Contabilidad',
+      createdTimestamp: new Date().toISOString()
+    },
+    {
+      id: 'inm-5',
+      title: 'Local Comercial Reformado',
+      type: 'local_comercial',
+      operation: 'compra',
+      surfaceM2: 140,
+      price: 392000,
+      pricePerM2: 2800,
+      ivaRate: 0.21,
+      landPercentage: 68,
+      locationScope: 'municipio',
+      community: 'País Vasco',
+      municipality: 'Bilbao',
+      address: 'Calle del Carmen, Nº 5, Bilbao',
+      imageUrl: PROPERTY_IMAGES.local_comercial[1],
+      status: 'available',
+      ownerId: 'profesor-1',
+      ownerName: 'Profesor de Contabilidad',
+      deferredPaymentConfig: {
+        allowed: true,
+        minDownPaymentPercent: 30,
+        installmentsCount: 6,
+        instrument: 'pagare',
+        interestRatePercent: 0
+      },
+      createdTimestamp: new Date().toISOString()
+    }
+  ];
+}
 
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
@@ -363,6 +551,9 @@ function readDb(): DatabaseSchema {
           timestamp: new Date().toISOString()
         }
       ],
+      properties: getDefaultSeedProperties(),
+      acquisitions: [],
+      paymentObligations: [],
       defaultInitialBalance: 1000,
       isSeed: true
     };
@@ -373,6 +564,13 @@ function readDb(): DatabaseSchema {
   try {
     const data = fs.readFileSync(DB_FILE, 'utf-8');
     const db = JSON.parse(data) as DatabaseSchema;
+
+    if (!db.properties || db.properties.length === 0) {
+      db.properties = getDefaultSeedProperties();
+    }
+    if (!db.acquisitions) db.acquisitions = [];
+    if (!db.paymentObligations) db.paymentObligations = [];
+
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
       if (teacher.username !== 'pupdaniel' || teacher.password !== '1987') {
@@ -409,6 +607,9 @@ function readDb(): DatabaseSchema {
       ],
       transfers: [],
       systemLogs: [],
+      properties: getDefaultSeedProperties(),
+      acquisitions: [],
+      paymentObligations: [],
       defaultInitialBalance: 1000,
       isSeed: true
     };
@@ -940,6 +1141,547 @@ app.post('/api/restore', (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + error.message });
   }
+});
+
+// ================= REAL ESTATE & COMPANY PORTAL API ENDPOINTS =================
+
+// Get all property listings
+app.get('/api/properties', (req, res) => {
+  const db = readDb();
+  res.json({ properties: db.properties || [] });
+});
+
+// Publish single property or batch/group of properties (Teacher only)
+app.post('/api/properties', (req, res) => {
+  const { mode, property, batch } = req.body;
+  const db = readDb();
+
+  if (mode === 'single' && property) {
+    const newProperty: PropertyListing = {
+      id: generateId('inm'),
+      title: property.title || 'Inmueble Comercial',
+      type: property.type || 'local_comercial',
+      operation: property.operation || 'compra',
+      surfaceM2: Number(property.surfaceM2) || 150,
+      price: Number(property.price) || 200000,
+      pricePerM2: Number((Number(property.price) / Number(property.surfaceM2)).toFixed(2)),
+      ivaRate: 0.21,
+      landPercentage: Number(property.landPercentage) || generateLandPercentage(),
+      locationScope: property.locationScope || 'municipio',
+      community: property.community || 'Comunidad de Madrid',
+      municipality: property.municipality || 'Madrid',
+      address: property.address || `Calle Principal, Nº 12, ${property.municipality || 'Madrid'}`,
+      imageUrl: property.imageUrl || getRandomElement(PROPERTY_IMAGES[property.type as PropertyType] || PROPERTY_IMAGES.local_comercial),
+      status: 'available',
+      ownerId: property.ownerId || 'profesor-1',
+      ownerName: property.ownerName || 'Profesor de Contabilidad',
+      deferredPaymentConfig: property.deferredPaymentConfig,
+      createdTimestamp: new Date().toISOString()
+    };
+
+    db.properties.unshift(newProperty);
+    writeDb(db);
+    return res.status(201).json({ success: true, message: 'Anuncio publicado exitosamente.', properties: [newProperty] });
+  }
+
+  if (mode === 'batch' && batch) {
+    const count = Math.min(20, Math.max(1, Number(batch.count) || 3));
+    const createdProperties: PropertyListing[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const type: PropertyType = batch.type || getRandomElement(['nave_industrial', 'almacen', 'local_comercial']);
+      const operation: OperationType = batch.operation || getRandomElement(['compra', 'alquiler']);
+      const surfaceMin = Number(batch.surfaceMin) || 100;
+      const surfaceMax = Number(batch.surfaceMax) || 300;
+      const surfaceM2 = getRandomInt(surfaceMin, surfaceMax);
+
+      const location = generateLocation(
+        batch.locationScope || 'espana',
+        batch.community,
+        batch.municipality
+      );
+
+      let price: number;
+      let pricePerM2: number;
+
+      if (batch.priceMode === 'manual' && batch.manualPrice) {
+        price = Number(batch.manualPrice);
+        pricePerM2 = Number((price / surfaceM2).toFixed(2));
+      } else {
+        const calculated = calculateRealisticPrice(type, operation, surfaceM2, location.priceMultiplier);
+        price = calculated.basePrice;
+        pricePerM2 = calculated.pricePerM2;
+      }
+
+      const landPercentage = batch.manualLandPercentage ? Number(batch.manualLandPercentage) : generateLandPercentage();
+
+      const typeLabels: Record<PropertyType, string> = {
+        nave_industrial: 'Nave Industrial',
+        almacen: 'Almacén Logístico',
+        local_comercial: 'Local Comercial'
+      };
+
+      const title = `${typeLabels[type]} ${i + 1} de ${surfaceM2} m² en ${location.municipality}`;
+      const imageUrl = getRandomElement(PROPERTY_IMAGES[type]);
+
+      const newProp: PropertyListing = {
+        id: generateId('inm'),
+        title,
+        type,
+        operation,
+        surfaceM2,
+        price,
+        pricePerM2,
+        ivaRate: 0.21,
+        landPercentage,
+        locationScope: batch.locationScope || 'espana',
+        community: location.community,
+        municipality: location.municipality,
+        address: location.address,
+        imageUrl,
+        status: 'available',
+        ownerId: batch.ownerId || 'profesor-1',
+        ownerName: batch.ownerName || 'Profesor de Contabilidad',
+        deferredPaymentConfig: operation === 'compra' && batch.deferredPaymentConfig?.allowed ? batch.deferredPaymentConfig : undefined,
+        createdTimestamp: new Date().toISOString()
+      };
+
+      db.properties.unshift(newProp);
+      createdProperties.push(newProp);
+    }
+
+    writeDb(db);
+    return res.status(201).json({ success: true, message: `Se han publicado ${createdProperties.length} anuncios correctamente.`, properties: createdProperties });
+  }
+
+  return res.status(400).json({ error: 'Configuración de publicación no válida.' });
+});
+
+// Delete property listing (Teacher only)
+app.delete('/api/properties/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  
+  const index = db.properties.findIndex(p => p.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Anuncio de inmueble no encontrado' });
+  }
+
+  db.properties.splice(index, 1);
+  writeDb(db);
+  res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
+});
+
+// Buy or Rent Property (Student Action)
+app.post('/api/properties/buy-rent', (req, res) => {
+  const { propertyId, studentId, useDeferredPayment } = req.body;
+  const db = readDb();
+
+  const property = db.properties.find(p => p.id === propertyId);
+  if (!property) {
+    return res.status(404).json({ error: 'Inmueble no encontrado' });
+  }
+  if (property.status !== 'available') {
+    return res.status(400).json({ error: 'Este inmueble ya no se encuentra disponible' });
+  }
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  const basePrice = property.price;
+  const ivaAmount = Number((basePrice * property.ivaRate).toFixed(2));
+  const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+
+  // --- CASE 1: RENT (ALQUILER) ---
+  if (property.operation === 'alquiler') {
+    // Alquiler mensual + 21% IVA. Fianza inicial de 2 meses.
+    const monthlyRentBase = basePrice;
+    const monthlyIva = Number((monthlyRentBase * 0.21).toFixed(2));
+    const monthlyRentTotal = Number((monthlyRentBase + monthlyIva).toFixed(2));
+
+    const depositAmount = monthlyRentBase * 2; // Fianza
+    const initialPaymentTotal = Number((depositAmount + monthlyRentTotal).toFixed(2));
+
+    if (student.balance < initialPaymentTotal) {
+      return res.status(400).json({
+        error: `Saldo insuficiente. Se requieren ${initialPaymentTotal.toLocaleString('es-ES')} € (Fianza de 2 meses: ${depositAmount.toLocaleString('es-ES')} € + 1er Mes con IVA: ${monthlyRentTotal.toLocaleString('es-ES')} €)`
+      });
+    }
+
+    // Deduct initial rent + deposit from student
+    student.balance = Number((student.balance - initialPaymentTotal).toFixed(2));
+
+    // Record transfer
+    const newTransfer: Transfer = {
+      id: generateId('tx'),
+      senderId: student.id,
+      senderName: student.name,
+      senderAccount: student.accountNumber,
+      receiverId: property.ownerId || 'profesor-1',
+      receiverName: property.ownerName || 'Propietario Inmueble',
+      receiverAccount: 'ES000000000000000000',
+      amount: initialPaymentTotal,
+      concept: `Alquiler e IVA (Fianza 2m + 1er mes): ${property.title}`,
+      timestamp: new Date().toISOString()
+    };
+    db.transfers.unshift(newTransfer);
+
+    // Create Acquisition record
+    const acquisitionId = generateId('acq');
+    const nextDueDate = new Date();
+    nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+
+    const acquisition: PropertyAcquisition = {
+      id: acquisitionId,
+      propertyId: property.id,
+      propertyTitle: property.title,
+      propertyType: property.type,
+      operation: 'alquiler',
+      studentId: student.id,
+      studentName: student.name,
+      surfaceM2: property.surfaceM2,
+      location: `${property.address}, ${property.municipality}`,
+      imageUrl: property.imageUrl,
+      landPercentage: property.landPercentage,
+      basePrice: monthlyRentBase,
+      ivaAmount: monthlyIva,
+      totalPrice: monthlyRentTotal,
+      purchaseDate: new Date().toISOString(),
+      paymentMethod: 'contado',
+      monthlyRent: monthlyRentTotal,
+      nextRentDueDate: nextDueDate.toISOString()
+    };
+    db.acquisitions.unshift(acquisition);
+
+    // Schedule 11 remaining auto-domiciled monthly obligations
+    for (let i = 1; i <= 11; i++) {
+      const dueDate = new Date();
+      dueDate.setMonth(dueDate.getMonth() + i);
+
+      const ob: PaymentObligation = {
+        id: generateId('obl'),
+        acquisitionId,
+        studentId: student.id,
+        studentName: student.name,
+        propertyTitle: property.title,
+        type: 'cuota_alquiler',
+        amount: monthlyRentTotal,
+        dueDate: dueDate.toISOString(),
+        status: 'pendiente',
+        installmentNumber: i + 1,
+        totalInstallments: 12
+      };
+      db.paymentObligations.push(ob);
+    }
+
+    property.status = 'rented';
+    writeDb(db);
+
+    return res.json({
+      success: true,
+      message: `¡Contrato de alquiler formalizado con éxito! Se han deducido ${initialPaymentTotal.toLocaleString('es-ES')} € de fianza y primer mes de alquiler (IVA incl.).`,
+      acquisition,
+      updatedBalance: student.balance
+    });
+  }
+
+  // --- CASE 2: PURCHASE (COMPRA) ---
+  if (property.operation === 'compra') {
+    const isDeferred = useDeferredPayment && property.deferredPaymentConfig?.allowed;
+
+    if (!isDeferred) {
+      // CASH PURCHASE (AL CONTADO)
+      if (student.balance < totalPrice) {
+        return res.status(400).json({
+          error: `Saldo insuficiente para la compra al contado. Se requieren ${totalPrice.toLocaleString('es-ES')} € (Precio Base: ${basePrice.toLocaleString('es-ES')} € + IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+        });
+      }
+
+      // Deduct full amount
+      student.balance = Number((student.balance - totalPrice).toFixed(2));
+
+      // Record transfer
+      const newTransfer: Transfer = {
+        id: generateId('tx'),
+        senderId: student.id,
+        senderName: student.name,
+        senderAccount: student.accountNumber,
+        receiverId: property.ownerId || 'profesor-1',
+        receiverName: property.ownerName || 'Vendedor Inmueble',
+        receiverAccount: 'ES000000000000000000',
+        amount: totalPrice,
+        concept: `Compra al contado + IVA 21%: ${property.title}`,
+        timestamp: new Date().toISOString()
+      };
+      db.transfers.unshift(newTransfer);
+
+      // Create Acquisition record
+      const acquisition: PropertyAcquisition = {
+        id: generateId('acq'),
+        propertyId: property.id,
+        propertyTitle: property.title,
+        propertyType: property.type,
+        operation: 'compra',
+        studentId: student.id,
+        studentName: student.name,
+        surfaceM2: property.surfaceM2,
+        location: `${property.address}, ${property.municipality}`,
+        imageUrl: property.imageUrl,
+        landPercentage: property.landPercentage,
+        basePrice,
+        ivaAmount,
+        totalPrice,
+        purchaseDate: new Date().toISOString(),
+        paymentMethod: 'contado',
+        downPaymentPaid: totalPrice,
+        pendingBalance: 0
+      };
+      db.acquisitions.unshift(acquisition);
+
+      property.status = 'sold';
+      writeDb(db);
+
+      return res.json({
+        success: true,
+        message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${totalPrice.toLocaleString('es-ES')} € (IVA 21% incl.).`,
+        acquisition,
+        updatedBalance: student.balance
+      });
+    } else {
+      // DEFERRED PAYMENT (PAGO APLAZADO CON PAGARÉ / LETRA DE CAMBIO / CUOTAS)
+      const config = property.deferredPaymentConfig!;
+      const downPaymentPercent = config.minDownPaymentPercent || 20;
+      const downPaymentBase = (basePrice * downPaymentPercent) / 100;
+      // In Spain real estate tax law, total IVA is payable at the time of deed / purchase, plus the down payment %
+      const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+
+      if (student.balance < initialCashRequired) {
+        return res.status(400).json({
+          error: `Saldo insuficiente para la entrada inicial y liquidación de IVA. Se requieren ${initialCashRequired.toLocaleString('es-ES')} € (Entrada ${downPaymentPercent}%: ${downPaymentBase.toLocaleString('es-ES')} € + IVA Total 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+        });
+      }
+
+      const pendingBaseBalance = Number((basePrice - downPaymentBase).toFixed(2));
+      const count = config.installmentsCount || 12;
+      const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
+
+      // Deduct initial cash payment
+      student.balance = Number((student.balance - initialCashRequired).toFixed(2));
+
+      // Instrument type display name
+      const instrumentLabel = config.instrument === 'pagare'
+        ? 'Pagaré'
+        : config.instrument === 'letra_cambio'
+        ? 'Letra de Cambio'
+        : 'Cuota Aplazada';
+
+      // Record transfer for initial down payment & tax
+      const newTransfer: Transfer = {
+        id: generateId('tx'),
+        senderId: student.id,
+        senderName: student.name,
+        senderAccount: student.accountNumber,
+        receiverId: property.ownerId || 'profesor-1',
+        receiverName: property.ownerName || 'Vendedor Inmueble',
+        receiverAccount: 'ES000000000000000000',
+        amount: initialCashRequired,
+        concept: `Entrada (${downPaymentPercent}%) + Total IVA 21%: ${property.title}`,
+        timestamp: new Date().toISOString()
+      };
+      db.transfers.unshift(newTransfer);
+
+      // Create Acquisition record
+      const acquisitionId = generateId('acq');
+      const acquisition: PropertyAcquisition = {
+        id: acquisitionId,
+        propertyId: property.id,
+        propertyTitle: property.title,
+        propertyType: property.type,
+        operation: 'compra',
+        studentId: student.id,
+        studentName: student.name,
+        surfaceM2: property.surfaceM2,
+        location: `${property.address}, ${property.municipality}`,
+        imageUrl: property.imageUrl,
+        landPercentage: property.landPercentage,
+        basePrice,
+        ivaAmount,
+        totalPrice,
+        purchaseDate: new Date().toISOString(),
+        paymentMethod: config.instrument === 'pagare' ? 'aplazado_pagare' : config.instrument === 'letra_cambio' ? 'aplazado_letra' : 'aplazado_cuotas',
+        downPaymentPaid: initialCashRequired,
+        pendingBalance: pendingBaseBalance
+      };
+      db.acquisitions.unshift(acquisition);
+
+      // Generate deferred payment obligations (Pagarés / Letras de cambio)
+      for (let i = 1; i <= count; i++) {
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + (i * 30));
+
+        const ob: PaymentObligation = {
+          id: generateId('obl'),
+          acquisitionId,
+          studentId: student.id,
+          studentName: student.name,
+          propertyTitle: property.title,
+          type: config.instrument === 'pagare' ? 'pagare' : config.instrument === 'letra_cambio' ? 'letra_cambio' : 'cuota_compra',
+          amount: installmentAmount,
+          dueDate: dueDate.toISOString(),
+          status: 'pendiente',
+          installmentNumber: i,
+          totalInstallments: count
+        };
+        db.paymentObligations.push(ob);
+      }
+
+      property.status = 'sold';
+      writeDb(db);
+
+      return res.json({
+        success: true,
+        message: `¡Compra aplazada formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido ${count} ${instrumentLabel}s de ${installmentAmount.toLocaleString('es-ES')} €/mes.`,
+        acquisition,
+        updatedBalance: student.balance
+      });
+    }
+  }
+
+  return res.status(400).json({ error: 'Operación no válida.' });
+});
+
+// Get Company Financial & Property Assets (Mi Empresa Dashboard)
+app.get('/api/company/:studentId', (req, res) => {
+  const { studentId } = req.params;
+  const db = readDb();
+
+  const user = db.users.find(u => u.id === studentId);
+  if (!user) {
+    return res.status(404).json({ error: 'Usuario / Empresa no encontrada' });
+  }
+
+  const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
+  const obligations = db.paymentObligations.filter(o => o.studentId === studentId);
+
+  const ownedProperties = acquisitions.filter(a => a.operation === 'compra');
+  const rentedProperties = acquisitions.filter(a => a.operation === 'alquiler');
+
+  let totalRealEstateAssetsValue = 0;
+  let totalLandValue = 0;
+  let totalBuildingValue = 0;
+
+  for (const prop of ownedProperties) {
+    const base = prop.basePrice;
+    const landPart = (base * prop.landPercentage) / 100;
+    const buildingPart = base - landPart;
+
+    totalRealEstateAssetsValue += base;
+    totalLandValue += landPart;
+    totalBuildingValue += buildingPart;
+  }
+
+  const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2)); // 2% amortización contable oficial de construcción en España
+
+  const pendingObligations = obligations.filter(o => o.status === 'pendiente');
+  const totalPendingObligations = Number(pendingObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
+
+  const totalMonthlyRentCommitments = Number(rentedProperties.reduce((acc, r) => acc + (r.monthlyRent || 0), 0).toFixed(2));
+
+  res.json({
+    company: {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      accountNumber: user.accountNumber,
+      balance: user.balance,
+      role: user.role
+    },
+    summary: {
+      bankBalance: user.balance,
+      ownedPropertiesCount: ownedProperties.length,
+      rentedPropertiesCount: rentedProperties.length,
+      totalRealEstateAssetsValue: Number(totalRealEstateAssetsValue.toFixed(2)),
+      totalLandValue: Number(totalLandValue.toFixed(2)),
+      totalBuildingValue: Number(totalBuildingValue.toFixed(2)),
+      annualBuildingDepreciation,
+      totalPendingObligations,
+      totalMonthlyRentCommitments
+    },
+    acquisitions,
+    obligations
+  });
+});
+
+// Pay due obligation (Promissory note / Bill of exchange / Rent installment)
+app.post('/api/obligations/pay', (req, res) => {
+  const { obligationId, studentId } = req.body;
+  const db = readDb();
+
+  const obligation = db.paymentObligations.find(o => o.id === obligationId && o.studentId === studentId);
+  if (!obligation) {
+    return res.status(404).json({ error: 'Obligación de pago no encontrada' });
+  }
+
+  if (obligation.status === 'pagado') {
+    return res.status(400).json({ error: 'Esta obligación ya ha sido abonada anteriormente' });
+  }
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  if (student.balance < obligation.amount) {
+    return res.status(400).json({
+      error: `Saldo insuficiente para atender el vencimiento. Saldo actual: ${student.balance.toLocaleString('es-ES')} €, Vencimiento: ${obligation.amount.toLocaleString('es-ES')} €`
+    });
+  }
+
+  // Deduct from bank balance
+  student.balance = Number((student.balance - obligation.amount).toFixed(2));
+
+  // Instrument type name
+  const instrumentName = obligation.type === 'pagare'
+    ? 'Pagaré'
+    : obligation.type === 'letra_cambio'
+    ? 'Letra de Cambio'
+    : 'Cuota / Alquiler';
+
+  // Create Transfer record
+  const newTransfer: Transfer = {
+    id: generateId('tx'),
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'profesor-1',
+    receiverName: 'Acreedor Inmobiliario',
+    receiverAccount: 'ES000000000000000000',
+    amount: obligation.amount,
+    concept: `Atención a vencimiento de ${instrumentName} (${obligation.installmentNumber || 1}/${obligation.totalInstallments || 1}): ${obligation.propertyTitle}`,
+    timestamp: new Date().toISOString()
+  };
+  db.transfers.unshift(newTransfer);
+
+  // Mark obligation as paid
+  obligation.status = 'pagado';
+  obligation.paidDate = new Date().toISOString();
+
+  // Update acquisition pending balance if applicable
+  const acq = db.acquisitions.find(a => a.id === obligation.acquisitionId);
+  if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+    acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - obligation.amount).toFixed(2)));
+  }
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    message: `¡Atención al vencimiento completada con éxito! Se han abonado ${obligation.amount.toLocaleString('es-ES')} € correspondiente al ${instrumentName}.`,
+    updatedBalance: student.balance,
+    paidObligation: obligation
+  });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
