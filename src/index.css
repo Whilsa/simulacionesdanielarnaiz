@@ -64,3 +64,64 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Print optimization styles */
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Hide all elements in body by default */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Make only the document modal container and its contents visible */
+  .printable-document-modal,
+  .printable-document-modal * {
+    visibility: visible !important;
+  }
+
+  /* Position the modal properly on the printed page */
+  .printable-document-modal {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 20px !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+    border-radius: 0 !important;
+  }
+
+  /* Force hide UI elements explicitly */
+  .print\:hidden,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Page break rules for tables */
+  table {
+    page-break-inside: auto;
+  }
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+}
+

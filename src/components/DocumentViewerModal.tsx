@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { 
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
-  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt
+  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator
 } from 'lucide-react';
 import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation } from '../types.js';
 
@@ -82,7 +82,50 @@ Forma de Pago: Domiciliación bancaria / Pagaré / Contado
 ================================================`;
     } else if (data.type === 'loan_statement') {
       const loan = data.loan;
-      const row = data.loanInstallment;
+      const row = data.loanInstallment || (data.installmentPeriod && loan?.schedule ? loan.schedule.find(s => s.period === data.installmentPeriod) : undefined);
+      const principal = loan?.approvedAmount || loan?.offeredAmount || 0;
+      const annualRate = (loan?.annualInterestRate || 4.50);
+
+      // Get or compute amortization schedule
+      const schedule: AmortizationRow[] = (loan?.schedule && loan.schedule.length > 0)
+        ? loan.schedule
+        : (() => {
+            const term = loan?.termMonths || 36;
+            const monthlyRate = (annualRate / 100) / 12;
+            const payment = monthlyRate > 0 && principal > 0
+              ? Number((principal * (monthlyRate * Math.pow(1 + monthlyRate, term)) / (Math.pow(1 + monthlyRate, term) - 1)).toFixed(2))
+              : 0;
+
+            let balance = principal;
+            let totalAmortized = 0;
+            const rows: AmortizationRow[] = [];
+            const startDate = new Date(loan?.createdAt || Date.now());
+
+            for (let i = 1; i <= term; i++) {
+              const dueDate = new Date(startDate);
+              dueDate.setMonth(dueDate.getMonth() + i);
+              const interest = Number((balance * monthlyRate).toFixed(2));
+              const pCap = Number((payment - interest).toFixed(2));
+              balance = Math.max(0, Number((balance - pCap).toFixed(2)));
+              totalAmortized = Number((totalAmortized + pCap).toFixed(2));
+
+              rows.push({
+                period: i,
+                dueDate: dueDate.toISOString(),
+                payment,
+                interest,
+                principal: pCap,
+                totalAmortized,
+                pendingBalance: balance,
+                paid: false
+              });
+            }
+            return rows;
+          })();
+
+      const scheduleText = schedule.map(s => 
+        `Mes ${s.period} [${new Date(s.dueDate).toLocaleDateString('es-ES')}]: Cuota: ${s.payment} € | Capital: ${s.principal} € | Interés: ${s.interest} € | Cap. Pendiente: ${s.pendingBalance} €`
+      ).join('\n');
 
       textContent = `================================================
 BANCO CENTRAL HIPOTECARIO S.A.
@@ -95,10 +138,10 @@ ${loan?.studentName || 'Estudiante'}
 IBAN de Cuenta: ${loan?.studentAccount || 'ES21...'}
 
 CONDICIONES FINANCIERAS:
-Capital Concedido: ${(loan?.approvedAmount || loan?.offeredAmount || 0).toLocaleString('es-ES')} €
-Tipo de Interés: EURIBOR (3.50%) + Diferencial (1.00%) = 4.50% TIN
+Capital Concedido: ${principal.toLocaleString('es-ES')} €
+Tipo de Interés: EURIBOR (3.50%) + Diferencial (1.00%) = ${annualRate.toFixed(2)}% TIN
 Plazo: ${loan?.termMonths || 36} Meses
-Comisión Apertura (0.10%): ${((loan?.approvedAmount || loan?.offeredAmount || 0) * 0.001).toLocaleString('es-ES')} €
+Comisión Apertura (0.10%): ${(principal * 0.001).toLocaleString('es-ES')} €
 
 ${row ? `
 LIQUIDACIÓN DE CUOTA Nº ${row.period}:
@@ -108,6 +151,9 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
 - TOTAL CUOTA: ${row.payment.toLocaleString('es-ES')} €
 - Capital Pendiente tras Cuota: ${row.pendingBalance.toLocaleString('es-ES')} €
 ` : ''}
+------------------------------------------------
+CUADRO COMPLETO DE AMORTIZACIÓN (${schedule.length} MESES):
+${scheduleText}
 ================================================`;
     }
 
@@ -117,9 +163,9 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 z-50 overflow-y-auto">
+    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 z-50 overflow-y-auto print:static print:p-0 print:bg-white print:block">
       {/* Container - A4 Paper Sheet Styling */}
-      <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-300 flex flex-col max-h-[92vh] overflow-hidden print:max-h-none print:shadow-none print:border-none print:w-full">
+      <div className="printable-document-modal bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-300 flex flex-col max-h-[92vh] overflow-hidden print:max-h-none print:shadow-none print:border-none print:w-full print:rounded-none">
         
         {/* NON-PRINTABLE TOP CONTROL BAR */}
         <div className="bg-slate-900 text-white p-4 flex items-center justify-between print:hidden shrink-0">
@@ -324,6 +370,43 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
             const netDisbursed = Number((principal - openingFee).toFixed(2));
             const annualRate = (loan?.annualInterestRate || 4.50);
 
+            // Get or calculate complete amortization schedule
+            const schedule: AmortizationRow[] = (loan?.schedule && loan.schedule.length > 0)
+              ? loan.schedule
+              : (() => {
+                  const term = loan?.termMonths || 36;
+                  const monthlyRate = (annualRate / 100) / 12;
+                  const payment = monthlyRate > 0 && principal > 0
+                    ? Number((principal * (monthlyRate * Math.pow(1 + monthlyRate, term)) / (Math.pow(1 + monthlyRate, term) - 1)).toFixed(2))
+                    : 0;
+
+                  let balance = principal;
+                  let totalAmortized = 0;
+                  const rows: AmortizationRow[] = [];
+                  const startDate = new Date(loan?.createdAt || Date.now());
+
+                  for (let i = 1; i <= term; i++) {
+                    const dueDate = new Date(startDate);
+                    dueDate.setMonth(dueDate.getMonth() + i);
+                    const interest = Number((balance * monthlyRate).toFixed(2));
+                    const pCap = Number((payment - interest).toFixed(2));
+                    balance = Math.max(0, Number((balance - pCap).toFixed(2)));
+                    totalAmortized = Number((totalAmortized + pCap).toFixed(2));
+
+                    rows.push({
+                      period: i,
+                      dueDate: dueDate.toISOString(),
+                      payment,
+                      interest,
+                      principal: pCap,
+                      totalAmortized,
+                      pendingBalance: balance,
+                      paid: false
+                    });
+                  }
+                  return rows;
+                })();
+
             return (
               <div className="space-y-8">
                 
@@ -446,6 +529,69 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
                     </div>
                   </div>
                 )}
+
+                {/* CUADRO COMPLETO DE AMORTIZACIÓN DEL PRÉSTAMO (SISTEMA FRANCÉS) */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between border-b-2 border-slate-900 pb-2">
+                    <div className="flex items-center space-x-2">
+                      <Calculator className="w-4 h-4 text-emerald-800 shrink-0" />
+                      <h3 className="font-extrabold text-slate-900 uppercase text-xs tracking-wider">
+                        CUADRO COMPLETO DE AMORTIZACIÓN (SISTEMA FRANCÉS)
+                      </h3>
+                    </div>
+                    <span className="text-[10px] text-slate-600 font-mono font-semibold">
+                      {schedule.length} Meses | Cuota Constante: {schedule[0]?.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €/mes
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto border border-slate-300 rounded-xl">
+                    <table className="w-full text-left text-[11px] border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300 uppercase text-[10px]">
+                          <th className="py-2 px-2 text-center w-10">N.º</th>
+                          <th className="py-2 px-2.5">Vencimiento</th>
+                          <th className="py-2 px-2.5 text-right">Cuota Total</th>
+                          <th className="py-2 px-2.5 text-right">Capital</th>
+                          <th className="py-2 px-2.5 text-right">Intereses</th>
+                          <th className="py-2 px-2.5 text-right">Total Amort.</th>
+                          <th className="py-2 px-2.5 text-right">Cap. Pendiente</th>
+                          <th className="py-2 px-2 text-center w-20">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 font-mono text-slate-800 text-[10.5px]">
+                        {schedule.map((sRow) => (
+                          <tr key={sRow.period} className={sRow.period % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'}>
+                            <td className="py-1.5 px-2 text-center font-bold text-slate-600">{sRow.period}</td>
+                            <td className="py-1.5 px-2.5 font-sans">{new Date(sRow.dueDate).toLocaleDateString('es-ES')}</td>
+                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2.5 text-right text-emerald-800 font-medium">{sRow.principal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2.5 text-right text-amber-800">{sRow.interest.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2.5 text-right text-slate-600">{sRow.totalAmortized.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.pendingBalance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2 text-center font-sans text-[9.5px]">
+                              {sRow.paid ? (
+                                <span className="inline-block px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold">PAGADO</span>
+                              ) : sRow.isOverdue ? (
+                                <span className="inline-block px-1.5 py-0.5 bg-rose-100 text-rose-800 rounded font-bold">VENCIDO</span>
+                              ) : (
+                                <span className="inline-block px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">PENDIENTE</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-100 text-slate-900 font-bold border-t-2 border-slate-400 font-mono text-xs">
+                          <td colSpan={2} className="py-2 px-2.5 font-sans">TOTALES PÓLIZA:</td>
+                          <td className="py-2 px-2.5 text-right">{schedule.reduce((acc, r) => acc + r.payment, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                          <td className="py-2 px-2.5 text-right text-emerald-800">{schedule.reduce((acc, r) => acc + r.principal, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                          <td className="py-2 px-2.5 text-right text-amber-800">{schedule.reduce((acc, r) => acc + r.interest, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                          <td colSpan={3} className="py-2 px-2.5 text-right font-sans text-[10px] text-slate-500">Amortización Francés</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
 
                 {/* Legal Footnote */}
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
