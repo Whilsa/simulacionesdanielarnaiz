@@ -108,6 +108,58 @@ export interface PaymentObligation {
   totalInstallments?: number;
 }
 
+export interface LoanCollateral {
+  type: 'property' | 'private_residence';
+  propertyId?: string;
+  propertyTitle?: string;
+  surfaceM2: number;
+  appraisalValue: number;
+}
+
+export interface AmortizationRow {
+  period: number;
+  dueDate: string;
+  payment: number; // cuota a pagar
+  interest: number; // interés
+  principal: number; // cuota amortizada
+  totalAmortized: number; // total amortizado
+  pendingBalance: number; // total pendiente de amortizar
+  paid: boolean;
+  paidDate?: string;
+}
+
+export type LoanStatus = 
+  | 'offered'          // Auto-generated 80% LTV offer waiting for student accept
+  | 'pending_teacher'  // 2nd+ loan waiting teacher approval
+  | 'teacher_offered'  // Teacher set conditions, waiting student accept
+  | 'active'           // Accepted & disbursed, monthly payments active
+  | 'rejected'         // Student rejected offer
+  | 'denied_teacher'   // Teacher rejected request
+  | 'paid_off';        // Fully repaid
+
+export interface BankLoan {
+  id: string;
+  studentId: string;
+  studentName: string;
+  studentAccount: string;
+  requestedAmount: number;
+  offeredAmount: number;
+  approvedAmount?: number;
+  termMonths: number;
+  annualInterestRate: number; // Euribor + 1%
+  euriborRate: number; // e.g. 3.50
+  spread: number; // e.g. 1.00
+  openingFee: number; // 0.1% (1 por mil)
+  monthlyPayment: number;
+  collateral: LoanCollateral;
+  status: LoanStatus;
+  requiresTeacherApproval: boolean;
+  teacherNotes?: string;
+  createdAt: string;
+  acceptedAt?: string;
+  schedule: AmortizationRow[];
+}
+
 export interface DatabaseSchema {
   users: User[];
   transfers: Transfer[];
@@ -115,6 +167,7 @@ export interface DatabaseSchema {
   properties: PropertyListing[];
   acquisitions: PropertyAcquisition[];
   paymentObligations: PaymentObligation[];
+  loans: BankLoan[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }

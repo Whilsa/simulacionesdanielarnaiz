@@ -12,6 +12,7 @@ import {
   Download, Upload, Database, RefreshCw
 } from 'lucide-react';
 import { User, Transfer, SystemLog } from '../types.js';
+import TeacherLoanManagement from './TeacherLoanManagement.js';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -20,7 +21,7 @@ interface TeacherDashboardProps {
 }
 
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'students' | 'transfers' | 'logs' | 'reset'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'transfers' | 'loans' | 'logs' | 'reset'>('students');
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
@@ -586,6 +587,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             <span>Libro Diario de Transferencias</span>
           </button>
           <button 
+            onClick={() => setActiveTab('loans')}
+            className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
+              activeTab === 'loans' 
+                ? 'border-amber-600 text-amber-600 bg-amber-50/20' 
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Landmark className="w-4 h-4" />
+            <span>Préstamos Hipotecarios</span>
+          </button>
+          <button 
             onClick={() => setActiveTab('logs')}
             className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
               activeTab === 'logs' 
@@ -837,6 +849,18 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     ))}
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {/* LOANS MANAGEMENT TAB */}
+            {activeTab === 'loans' && (
+              <motion.div
+                key="loans-panel"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <TeacherLoanManagement />
               </motion.div>
             )}
 

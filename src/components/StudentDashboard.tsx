@@ -10,6 +10,7 @@ import {
   Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle
 } from 'lucide-react';
 import { User, Transfer } from '../types.js';
+import StudentLoanSection from './StudentLoanSection.js';
 
 interface StudentDashboardProps {
   currentUser: User;
@@ -269,6 +270,12 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           </div>
 
         </div>
+
+        {/* Bank Loans Section */}
+        <StudentLoanSection 
+          currentUser={currentUser} 
+          onBalanceUpdated={(newBal) => setBalance(newBal)} 
+        />
 
         {/* Bottom grid: Make Transfer & Transactions List */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">

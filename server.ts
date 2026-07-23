@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
@@ -165,8 +165,35 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         numero_cuota INT,
         total_cuotas INT
       );
+
+      CREATE TABLE IF NOT EXISTS prestamos (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        alumno_cuenta VARCHAR(255),
+        importe_solicitado NUMERIC(12, 2) NOT NULL,
+        importe_ofrecido NUMERIC(12, 2) NOT NULL,
+        importe_concedido NUMERIC(12, 2),
+        plazo_meses INT NOT NULL,
+        tipo_interes NUMERIC(5, 2) NOT NULL,
+        euribor NUMERIC(5, 2) NOT NULL,
+        diferencial NUMERIC(5, 2) NOT NULL,
+        comision_apertura NUMERIC(12, 2) NOT NULL,
+        cuota_mensual NUMERIC(12, 2) NOT NULL,
+        garantia_tipo VARCHAR(50) NOT NULL,
+        garantia_inmueble_id VARCHAR(255),
+        garantia_inmueble_titulo TEXT,
+        garantia_superficie_m2 NUMERIC(10, 2),
+        garantia_valor_tasacion NUMERIC(12, 2) NOT NULL,
+        estado VARCHAR(50) NOT NULL,
+        requiere_profesor BOOLEAN NOT NULL DEFAULT FALSE,
+        notas_profesor TEXT,
+        fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        fecha_aceptacion TIMESTAMPTZ,
+        tabla_amortizacion JSONB
+      );
     `);
-    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago" verified/created.');
+    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago", "prestamos" verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
@@ -326,6 +353,60 @@ async function syncObligationToSupabase(ob: PaymentObligation) {
   }
 }
 
+async function syncLoanToSupabase(loan: BankLoan) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO prestamos (
+        id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
+        plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual,
+        garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion,
+        estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      ON CONFLICT (id) DO UPDATE SET
+        importe_ofrecido = EXCLUDED.importe_ofrecido,
+        importe_concedido = EXCLUDED.importe_concedido,
+        plazo_meses = EXCLUDED.plazo_meses,
+        tipo_interes = EXCLUDED.tipo_interes,
+        comision_apertura = EXCLUDED.comision_apertura,
+        cuota_mensual = EXCLUDED.cuota_mensual,
+        estado = EXCLUDED.estado,
+        notas_profesor = EXCLUDED.notas_profesor,
+        fecha_aceptacion = EXCLUDED.fecha_aceptacion,
+        tabla_amortizacion = EXCLUDED.tabla_amortizacion`,
+      [
+        loan.id,
+        loan.studentId,
+        loan.studentName,
+        loan.studentAccount,
+        loan.requestedAmount,
+        loan.offeredAmount,
+        loan.approvedAmount || null,
+        loan.termMonths,
+        loan.annualInterestRate,
+        loan.euriborRate,
+        loan.spread,
+        loan.openingFee,
+        loan.monthlyPayment,
+        loan.collateral.type,
+        loan.collateral.propertyId || null,
+        loan.collateral.propertyTitle || null,
+        loan.collateral.surfaceM2 || null,
+        loan.collateral.appraisalValue,
+        loan.status,
+        loan.requiresTeacherApproval,
+        loan.teacherNotes || null,
+        new Date(loan.createdAt),
+        loan.acceptedAt ? new Date(loan.acceptedAt) : null,
+        JSON.stringify(loan.schedule)
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing loan to Supabase:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
@@ -351,6 +432,11 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     if (db.paymentObligations) {
       for (const ob of db.paymentObligations) {
         await syncObligationToSupabase(ob);
+      }
+    }
+    if (db.loans) {
+      for (const loan of db.loans) {
+        await syncLoanToSupabase(loan);
       }
     }
   } catch (e) {
@@ -379,6 +465,12 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       const resInm = await client.query('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC');
       const resAcq = await client.query('SELECT * FROM adquisiciones ORDER BY fecha_compra DESC');
       const resObl = await client.query('SELECT * FROM obligaciones_pago ORDER BY fecha_vencimiento ASC');
+      let resLoans: any = { rows: [] };
+      try {
+        resLoans = await client.query('SELECT * FROM prestamos ORDER BY fecha_creacion DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Prestamos table select warning:', e);
+      }
 
       const db = readDb();
 
@@ -509,9 +601,41 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }));
       }
 
+      // Reconstruct db.loans from Supabase "prestamos"
+      if (resLoans.rows.length > 0) {
+        db.loans = resLoans.rows.map(row => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          studentAccount: String(row.alumno_cuenta || ''),
+          requestedAmount: Number(row.importe_solicitado),
+          offeredAmount: Number(row.importe_ofrecido),
+          approvedAmount: row.importe_concedido ? Number(row.importe_concedido) : undefined,
+          termMonths: Number(row.plazo_meses),
+          annualInterestRate: Number(row.tipo_interes),
+          euriborRate: Number(row.euribor || 3.50),
+          spread: Number(row.diferencial || 1.00),
+          openingFee: Number(row.comision_apertura),
+          monthlyPayment: Number(row.cuota_mensual),
+          collateral: {
+            type: String(row.garantia_tipo) as ('property' | 'private_residence'),
+            propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
+            propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
+            surfaceM2: Number(row.garantia_superficie_m2 || 0),
+            appraisalValue: Number(row.garantia_valor_tasacion)
+          },
+          status: String(row.estado) as any,
+          requiresTeacherApproval: Boolean(row.requiere_profesor),
+          teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
+          schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
+        }));
+      }
+
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, and ${db.paymentObligations.length} obligations from Supabase!`);
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, and ${resLoans.rows.length} loans from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
     } finally {
       client.release();
@@ -760,6 +884,7 @@ function readDb(): DatabaseSchema {
       properties: getDefaultSeedProperties(),
       acquisitions: [],
       paymentObligations: [],
+      loans: [],
       defaultInitialBalance: 1000,
       isSeed: true
     };
@@ -776,6 +901,7 @@ function readDb(): DatabaseSchema {
     }
     if (!db.acquisitions) db.acquisitions = [];
     if (!db.paymentObligations) db.paymentObligations = [];
+    if (!db.loans) db.loans = [];
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
@@ -816,6 +942,7 @@ function readDb(): DatabaseSchema {
       properties: getDefaultSeedProperties(),
       acquisitions: [],
       paymentObligations: [],
+      loans: [],
       defaultInitialBalance: 1000,
       isSeed: true
     };
@@ -1954,6 +2081,372 @@ app.post('/api/obligations/pay', (req, res) => {
     message: `¡Atención al vencimiento completada con éxito! Se han abonado ${obligation.amount.toLocaleString('es-ES')} € correspondiente al ${instrumentName}.`,
     updatedBalance: student.balance,
     paidObligation: obligation
+  });
+});
+
+// ---------------- LOAN MANAGEMENT SYSTEM ----------------
+
+function calculateFrenchAmortization(
+  principal: number,
+  annualInterestRatePercent: number,
+  termMonths: number,
+  startDateISO: string = new Date().toISOString()
+): { monthlyPayment: number; schedule: AmortizationRow[] } {
+  const r = (annualInterestRatePercent / 100) / 12;
+  let monthlyPayment = 0;
+  if (r > 0) {
+    monthlyPayment = principal * (r * Math.pow(1 + r, termMonths)) / (Math.pow(1 + r, termMonths) - 1);
+  } else {
+    monthlyPayment = principal / termMonths;
+  }
+  monthlyPayment = Number(monthlyPayment.toFixed(2));
+
+  let pendingBalance = principal;
+  let totalAmortized = 0;
+  const schedule: AmortizationRow[] = [];
+  const baseDate = new Date(startDateISO);
+
+  for (let k = 1; k <= termMonths; k++) {
+    const dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0);
+    const interest = Number((pendingBalance * r).toFixed(2));
+    let principalPart = Number((monthlyPayment - interest).toFixed(2));
+
+    if (k === termMonths) {
+      principalPart = Number(pendingBalance.toFixed(2));
+      monthlyPayment = Number((principalPart + interest).toFixed(2));
+    }
+
+    pendingBalance = Math.max(0, Number((pendingBalance - principalPart).toFixed(2)));
+    totalAmortized = Number((totalAmortized + principalPart).toFixed(2));
+
+    schedule.push({
+      period: k,
+      dueDate: dueDate.toISOString(),
+      payment: monthlyPayment,
+      interest,
+      principal: principalPart,
+      totalAmortized,
+      pendingBalance,
+      paid: false
+    });
+  }
+
+  return { monthlyPayment, schedule };
+}
+
+function processLoanPayments(db: DatabaseSchema) {
+  if (!db.loans) return;
+  const now = new Date();
+  let modified = false;
+
+  for (const loan of db.loans) {
+    if (loan.status !== 'active') continue;
+    const student = db.users.find(u => u.id === loan.studentId);
+    if (!student) continue;
+
+    for (const row of loan.schedule) {
+      if (row.paid) continue;
+      const rowDueDate = new Date(row.dueDate);
+      if (rowDueDate <= now) {
+        if (student.balance >= row.payment) {
+          student.balance = Number((student.balance - row.payment).toFixed(2));
+          row.paid = true;
+          row.paidDate = new Date().toISOString();
+          modified = true;
+
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'corp-banco-central',
+            receiverName: 'Banco Central Hipotecario S.A.',
+            receiverAccount: 'ES210001000299887700',
+            amount: row.payment,
+            concept: `Cuota de préstamo hipotecario (${row.period}/${loan.termMonths}): Ref. ${loan.id}`,
+            timestamp: new Date().toISOString()
+          };
+          db.transfers.unshift(newTransfer);
+
+          syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+          syncLoanToSupabase(loan).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', row.payment, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+        }
+      }
+    }
+
+    if (loan.schedule.every(r => r.paid)) {
+      loan.status = 'paid_off';
+      modified = true;
+      syncLoanToSupabase(loan).catch(e => console.error(e));
+    }
+  }
+
+  if (modified) {
+    writeDb(db);
+  }
+}
+
+// GET all loans or student's loans
+app.get('/api/loans', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  processLoanPayments(db);
+
+  let loans = db.loans || [];
+  if (studentId) {
+    loans = loans.filter(l => l.studentId === studentId);
+  }
+
+  res.json({ success: true, loans });
+});
+
+// Student requests a loan
+app.post('/api/loans/request', (req, res) => {
+  const { studentId, requestedAmount, termMonths, collateralType, propertyId, surfaceM2, appraisalValue } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  const reqAmt = Number(requestedAmount);
+  const termM = Number(termMonths);
+  const apprVal = Number(appraisalValue);
+
+  if (!reqAmt || reqAmt <= 0) {
+    return res.status(400).json({ error: 'Debes indicar un importe solicitado válido' });
+  }
+  if (!termM || termM <= 0) {
+    return res.status(400).json({ error: 'Debes indicar un plazo de devolución válido' });
+  }
+  if (!apprVal || apprVal <= 0) {
+    return res.status(400).json({ error: 'Debes indicar un valor de tasación válido para la garantía' });
+  }
+
+  let collateralPropertyTitle: string | undefined;
+  if (collateralType === 'property') {
+    const acq = db.acquisitions.find(a => a.id === propertyId || a.propertyId === propertyId);
+    if (!acq) {
+      return res.status(400).json({ error: 'No se encontró el inmueble seleccionado como garantía' });
+    }
+    collateralPropertyTitle = acq.propertyTitle;
+  }
+
+  const euriborRate = 3.50;
+  const spread = 1.00;
+  const annualInterestRate = euriborRate + spread;
+
+  const maxLtvAmount = Number((0.80 * apprVal).toFixed(2));
+  const offeredAmount = Math.min(reqAmt, maxLtvAmount);
+
+  const existingLoans = (db.loans || []).filter(l => l.studentId === studentId && ['active', 'offered', 'teacher_offered', 'pending_teacher'].includes(l.status));
+  const hasAutoApprovedLoan = existingLoans.length > 0;
+
+  let requiresTeacherApproval = false;
+  let status: LoanStatus = 'offered';
+
+  if (hasAutoApprovedLoan) {
+    requiresTeacherApproval = true;
+    status = 'pending_teacher';
+  } else {
+    status = 'offered';
+  }
+
+  const openingFee = Number((0.001 * offeredAmount).toFixed(2));
+  const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
+
+  const newLoan: BankLoan = {
+    id: generateId('prestamo'),
+    studentId: student.id,
+    studentName: student.name,
+    studentAccount: student.accountNumber,
+    requestedAmount: reqAmt,
+    offeredAmount,
+    termMonths: termM,
+    annualInterestRate,
+    euriborRate,
+    spread,
+    openingFee,
+    monthlyPayment,
+    collateral: {
+      type: collateralType as ('property' | 'private_residence'),
+      propertyId,
+      propertyTitle: collateralPropertyTitle,
+      surfaceM2: Number(surfaceM2 || 0),
+      appraisalValue: apprVal
+    },
+    status,
+    requiresTeacherApproval,
+    createdAt: new Date().toISOString(),
+    schedule
+  };
+
+  if (!db.loans) db.loans = [];
+  db.loans.unshift(newLoan);
+  writeDb(db);
+
+  syncLoanToSupabase(newLoan).catch(e => console.error(e));
+
+  let responseMessage = '';
+  if (status === 'offered') {
+    if (offeredAmount < reqAmt) {
+      responseMessage = `El banco ha concedido automáticamente una oferta por ${offeredAmount.toLocaleString('es-ES')} € (máximo 80% del valor de tasación de la garantía de ${apprVal.toLocaleString('es-ES')} €). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
+    } else {
+      responseMessage = `¡Tu solicitud de préstamo por ${offeredAmount.toLocaleString('es-ES')} € ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
+    }
+  } else {
+    responseMessage = `Solicitud registrada. Al disponer ya de un préstamo previo concedido, esta segunda solicitud requiere la revisión y aprobación manual del Profesor.`;
+  }
+
+  res.status(201).json({
+    success: true,
+    message: responseMessage,
+    loan: newLoan
+  });
+});
+
+// Student accepts loan offer
+app.post('/api/loans/:id/accept', (req, res) => {
+  const { id } = req.params;
+  const { studentId } = req.body;
+  const db = readDb();
+
+  const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+  if (!loan) {
+    return res.status(404).json({ error: 'Préstamo no encontrado' });
+  }
+
+  if (loan.status !== 'offered' && loan.status !== 'teacher_offered') {
+    return res.status(400).json({ error: 'Este préstamo no se encuentra pendiente de aceptación' });
+  }
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  if (student.balance < loan.openingFee) {
+    return res.status(400).json({
+      error: `Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${loan.openingFee.toLocaleString('es-ES')} €). Saldo disponible actual: ${student.balance.toLocaleString('es-ES')} €.`
+    });
+  }
+
+  student.balance = Number((student.balance - loan.openingFee).toFixed(2));
+  student.balance = Number((student.balance + loan.offeredAmount).toFixed(2));
+
+  loan.approvedAmount = loan.offeredAmount;
+  loan.status = 'active';
+  loan.acceptedAt = new Date().toISOString();
+
+  const feeTransfer: Transfer = {
+    id: generateId('tx'),
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'corp-banco-central',
+    receiverName: 'Banco Central Hipotecario S.A. - Comisión Apertura (1‰)',
+    receiverAccount: 'ES210001000299887700',
+    amount: loan.openingFee,
+    concept: `Comisión de apertura de préstamo hipotecario (1‰): Ref. ${loan.id}`,
+    timestamp: new Date().toISOString()
+  };
+
+  const loanDisbursementTransfer: Transfer = {
+    id: generateId('tx'),
+    senderId: 'corp-banco-central',
+    senderName: 'Banco Central Hipotecario S.A.',
+    senderAccount: 'ES210001000299887700',
+    receiverId: student.id,
+    receiverName: student.name,
+    receiverAccount: student.accountNumber,
+    amount: loan.offeredAmount,
+    concept: `Concesión e ingreso de préstamo hipotecario: Ref. ${loan.id}`,
+    timestamp: new Date().toISOString()
+  };
+
+  db.transfers.unshift(feeTransfer);
+  db.transfers.unshift(loanDisbursementTransfer);
+
+  processLoanPayments(db);
+
+  writeDb(db);
+
+  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+  syncLoanToSupabase(loan).catch(e => console.error(e));
+  syncMovimientoToSupabase(feeTransfer.id + '-out', student.id, 'TRANSFER_OUT', loan.openingFee, feeTransfer.timestamp, feeTransfer.concept).catch(e => console.error(e));
+  syncMovimientoToSupabase(loanDisbursementTransfer.id + '-in', student.id, 'TRANSFER_IN', loan.offeredAmount, loanDisbursementTransfer.timestamp, loanDisbursementTransfer.concept).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `¡Préstamo de ${loan.offeredAmount.toLocaleString('es-ES')} € formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${loan.openingFee.toLocaleString('es-ES')} € de comisión de apertura (1‰).`,
+    updatedBalance: student.balance,
+    loan
+  });
+});
+
+// Student rejects loan offer
+app.post('/api/loans/:id/reject', (req, res) => {
+  const { id } = req.params;
+  const { studentId } = req.body;
+  const db = readDb();
+
+  const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+  if (!loan) {
+    return res.status(404).json({ error: 'Préstamo no encontrado' });
+  }
+
+  loan.status = 'rejected';
+  writeDb(db);
+
+  syncLoanToSupabase(loan).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: 'Oferta de préstamo rechazada correctamente.',
+    loan
+  });
+});
+
+// Teacher reviews / modifies / approves loan request
+app.post('/api/teacher/loans/:id/review', (req, res) => {
+  const { id } = req.params;
+  const { action, offeredAmount, annualInterestRate, termMonths, teacherNotes } = req.body;
+  const db = readDb();
+
+  const loan = (db.loans || []).find(l => l.id === id);
+  if (!loan) {
+    return res.status(404).json({ error: 'Préstamo no encontrado' });
+  }
+
+  if (action === 'deny') {
+    loan.status = 'denied_teacher';
+    loan.teacherNotes = teacherNotes || 'Solicitud denegada por el Profesor.';
+  } else {
+    const finalAmount = offeredAmount ? Number(offeredAmount) : loan.offeredAmount;
+    const finalRate = annualInterestRate ? Number(annualInterestRate) : loan.annualInterestRate;
+    const finalTerm = termMonths ? Number(termMonths) : loan.termMonths;
+
+    loan.offeredAmount = finalAmount;
+    loan.annualInterestRate = finalRate;
+    loan.termMonths = finalTerm;
+    loan.openingFee = Number((0.001 * finalAmount).toFixed(2));
+    loan.teacherNotes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
+
+    const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
+    loan.monthlyPayment = monthlyPayment;
+    loan.schedule = schedule;
+    loan.status = 'teacher_offered';
+  }
+
+  writeDb(db);
+  syncLoanToSupabase(loan).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: action === 'deny' ? 'Préstamo denegado.' : 'Préstamo aprobado con condiciones notificadas al alumno.',
+    loan
   });
 });
 
