@@ -6,10 +6,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building2, Landmark, Calculator, AlertCircle, CheckCircle2, Clock, 
-  ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X
+  ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X, Receipt
 } from 'lucide-react';
 import { User, BankLoan, PropertyAcquisition } from '../types.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
+import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 
 interface StudentLoanSectionProps {
   currentUser: User;
@@ -21,6 +22,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
   const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLoanForTable, setSelectedLoanForTable] = useState<BankLoan | null>(null);
+  const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
 
   // Form State
   const [showRequestModal, setShowRequestModal] = useState(false);
@@ -310,13 +312,20 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     </p>
                   </div>
 
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-2">
                     <button
                       onClick={() => setSelectedLoanForTable(loan)}
                       className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1.5 cursor-pointer"
                     >
                       <FileText className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Ver Tabla de Amortización</span>
+                      <span>Tabla de Amortización</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveDocumentModal({ type: 'loan_statement', loan })}
+                      className="bg-amber-900 hover:bg-amber-800 text-white px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Receipt className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Ver Documento Bancario</span>
                     </button>
                   </div>
                 </div>
@@ -595,6 +604,14 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
         <LoanAmortizationTable
           loan={selectedLoanForTable}
           onClose={() => setSelectedLoanForTable(null)}
+        />
+      )}
+
+      {/* BANK DOCUMENT VIEWER MODAL */}
+      {activeDocumentModal && (
+        <DocumentViewerModal
+          data={activeDocumentModal}
+          onClose={() => setActiveDocumentModal(null)}
         />
       )}
 

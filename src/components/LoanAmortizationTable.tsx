@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { X, Calendar, CheckCircle2, Clock, Calculator } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Calendar, CheckCircle2, Clock, Calculator, Receipt } from 'lucide-react';
 import { BankLoan, AmortizationRow } from '../types.js';
+import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 
 interface LoanAmortizationTableProps {
   loan: BankLoan;
@@ -14,6 +15,7 @@ interface LoanAmortizationTableProps {
 
 export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizationTableProps) {
   const schedule: AmortizationRow[] = loan.schedule || [];
+  const [docModal, setDocModal] = useState<DocumentViewerData | null>(null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
@@ -30,12 +32,21 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
               Préstamo Hipotecario #{loan.id} • Ref. {loan.studentName}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setDocModal({ type: 'loan_statement', loan })}
+              className="px-3 py-1.5 bg-amber-950/60 hover:bg-amber-950 text-white rounded-xl text-xs font-bold border border-amber-500/40 transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
+            >
+              <Receipt className="w-3.5 h-3.5 text-amber-300" />
+              <span>Ver Póliza Bancaria</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Loan Key Parameters Summary */}
@@ -78,7 +89,8 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                 <th className="py-2.5 px-3 text-right">Capital Amortizado</th>
                 <th className="py-2.5 px-3 text-right">Total Amortizado</th>
                 <th className="py-2.5 px-3 text-right">Capital Pendiente</th>
-                <th className="py-2.5 px-3 text-center rounded-r-lg">Estado</th>
+                <th className="py-2.5 px-3 text-center">Estado</th>
+                <th className="py-2.5 px-3 text-right rounded-r-lg">Recibo</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-mono">
@@ -132,6 +144,16 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                         </span>
                       )}
                     </td>
+                    <td className="py-2.5 px-3 text-right font-sans">
+                      <button
+                        onClick={() => setDocModal({ type: 'loan_statement', loan, installmentPeriod: row.period })}
+                        className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg text-[10px] font-bold border border-amber-200 transition inline-flex items-center gap-1 cursor-pointer"
+                        title="Ver Recibo Oficial de la Cuota"
+                      >
+                        <Receipt className="w-3 h-3 text-amber-700" />
+                        <span>Recibo</span>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -153,6 +175,13 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
         </div>
 
       </div>
+
+      {docModal && (
+        <DocumentViewerModal
+          data={docModal}
+          onClose={() => setDocModal(null)}
+        />
+      )}
     </div>
   );
 }
