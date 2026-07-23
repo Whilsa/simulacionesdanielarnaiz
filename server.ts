@@ -75,7 +75,16 @@ function maskDbUrl(url: string | undefined): string {
   }
 }
 
-// Create tables "cuentas" and "movimientos" if they do not exist
+// Realistic corporate real estate vendors & financial creditors
+export const REALISTIC_CORPORATE_SELLERS = [
+  { id: 'corp-1', name: 'Inmobiliaria Polígonos de España S.A.', account: 'ES210001000299887711' },
+  { id: 'corp-2', name: 'Patrimonio Empresarial e Industrial S.L.', account: 'ES210001000299887722' },
+  { id: 'corp-3', name: 'Fondo de Arrendamientos Comerciales S.A.', account: 'ES210001000299887733' },
+  { id: 'corp-4', name: 'Corporación Logística Castellana S.L.', account: 'ES210001000299887744' },
+  { id: 'corp-5', name: 'Promotora de Espacios Comerciales S.A.', account: 'ES210001000299887755' },
+];
+
+// Create tables "cuentas", "movimientos", "inmuebles", "adquisiciones", and "obligaciones_pago" if they do not exist
 async function initSupabaseTables(): Promise<{ success: boolean; message?: string; error?: string }> {
   if (!dbPool) {
     return { success: false, error: 'DATABASE_URL no está configurada' };
@@ -157,8 +166,8 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         total_cuotas INT
       );
     `);
-    console.log('[Supabase DB] Tables "cuentas" and "movimientos" verified/created successfully.');
-    return { success: true, message: 'Tablas "cuentas" y "movimientos" creadas o verificadas con éxito.' };
+    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago" verified/created.');
+    return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
     return { success: false, error: error.message || String(error) };
@@ -207,6 +216,116 @@ async function syncMovimientoToSupabase(id: string, cuentaId: string, tipo: stri
   }
 }
 
+async function syncPropertyToSupabase(prop: PropertyListing) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO inmuebles (id, titulo, tipo, operacion, superficie_m2, precio, precio_m2, porcentaje_suelo, comunidad, municipio, direccion, imagen_url, estado, propietario_id, propietario_nombre, config_pago_aplazado)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       ON CONFLICT (id) DO UPDATE SET 
+         estado = EXCLUDED.estado, 
+         propietario_id = EXCLUDED.propietario_id, 
+         propietario_nombre = EXCLUDED.propietario_nombre, 
+         precio = EXCLUDED.precio`,
+      [
+        prop.id,
+        prop.title,
+        prop.type,
+        prop.operation,
+        prop.surfaceM2,
+        prop.price,
+        prop.pricePerM2,
+        prop.landPercentage,
+        prop.community,
+        prop.municipality,
+        prop.address,
+        prop.imageUrl,
+        prop.status,
+        prop.ownerId || 'corp-1',
+        prop.ownerName || 'Inmobiliaria Polígonos de España S.A.',
+        prop.deferredPaymentConfig ? JSON.stringify(prop.deferredPaymentConfig) : null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing property to Supabase:', e);
+  }
+}
+
+async function deletePropertyFromSupabase(id: string) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query('DELETE FROM inmuebles WHERE id = $1', [id]);
+  } catch (e) {
+    console.error('[Supabase DB] Error deleting property from Supabase:', e);
+  }
+}
+
+async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, alquiler_mensual, proximo_pago_alquiler, entrada_pagada, saldo_pendiente)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       ON CONFLICT (id) DO UPDATE SET 
+         saldo_pendiente = EXCLUDED.saldo_pendiente,
+         proximo_pago_alquiler = EXCLUDED.proximo_pago_alquiler`,
+      [
+        acq.id,
+        acq.propertyId,
+        acq.propertyTitle,
+        acq.propertyType,
+        acq.operation,
+        acq.studentId,
+        acq.studentName,
+        acq.surfaceM2,
+        acq.location,
+        acq.imageUrl,
+        acq.landPercentage,
+        acq.basePrice,
+        acq.ivaAmount,
+        acq.totalPrice,
+        new Date(acq.purchaseDate),
+        acq.paymentMethod,
+        acq.monthlyRent || null,
+        acq.nextRentDueDate ? new Date(acq.nextRentDueDate) : null,
+        acq.downPaymentPaid || null,
+        acq.pendingBalance !== undefined ? acq.pendingBalance : null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing acquisition to Supabase:', e);
+  }
+}
+
+async function syncObligationToSupabase(ob: PaymentObligation) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (id) DO UPDATE SET 
+         estado = EXCLUDED.estado, 
+         fecha_pago = EXCLUDED.fecha_pago`,
+      [
+        ob.id,
+        ob.acquisitionId,
+        ob.studentId,
+        ob.studentName,
+        ob.propertyTitle,
+        ob.type,
+        ob.amount,
+        new Date(ob.dueDate),
+        ob.status,
+        ob.paidDate ? new Date(ob.paidDate) : null,
+        ob.installmentNumber || 1,
+        ob.totalInstallments || 1
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing obligation to Supabase:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
@@ -218,6 +337,21 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     for (const tx of db.transfers) {
       await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept);
       await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept);
+    }
+    if (db.properties) {
+      for (const prop of db.properties) {
+        await syncPropertyToSupabase(prop);
+      }
+    }
+    if (db.acquisitions) {
+      for (const acq of db.acquisitions) {
+        await syncAcquisitionToSupabase(acq);
+      }
+    }
+    if (db.paymentObligations) {
+      for (const ob of db.paymentObligations) {
+        await syncObligationToSupabase(ob);
+      }
     }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
@@ -242,6 +376,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       console.log(`[Supabase Restore] Found ${resCuentas.rows.length} accounts in Supabase. Restoring to application database...`);
       const resMov = await client.query('SELECT id, cuenta_id, tipo, importe, fecha, concepto FROM movimientos ORDER BY fecha DESC');
+      const resInm = await client.query('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC');
+      const resAcq = await client.query('SELECT * FROM adquisiciones ORDER BY fecha_compra DESC');
+      const resObl = await client.query('SELECT * FROM obligaciones_pago ORDER BY fecha_vencimiento ASC');
 
       const db = readDb();
 
@@ -290,9 +427,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           senderId: sender ? sender.id : outRow.cuenta_id,
           senderName: sender ? sender.name : (outRow.cuenta_id || 'Alumno'),
           senderAccount: sender ? sender.accountNumber : 'ES000000000000000000',
-          receiverId: receiver ? receiver.id : (matchingIn ? matchingIn.cuenta_id : 'desconocido'),
-          receiverName: receiver ? receiver.name : 'Destinatario',
-          receiverAccount: receiver ? receiver.accountNumber : 'ES000000000000000000',
+          receiverId: receiver ? receiver.id : (matchingIn ? matchingIn.cuenta_id : 'corp-1'),
+          receiverName: receiver ? receiver.name : 'Inmobiliaria / Entidad Mercantil',
+          receiverAccount: receiver ? receiver.accountNumber : 'ES210001000299887711',
           amount: Number(outRow.importe),
           concept: outRow.concepto || 'Transferencia',
           timestamp: new Date(outRow.fecha).toISOString()
@@ -303,9 +440,78 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         db.transfers = restoredTransfers;
       }
 
+      // Reconstruct db.properties from Supabase "inmuebles"
+      if (resInm.rows.length > 0) {
+        db.properties = resInm.rows.map(row => ({
+          id: String(row.id),
+          title: String(row.titulo),
+          type: String(row.tipo) as PropertyType,
+          operation: String(row.operacion) as OperationType,
+          surfaceM2: Number(row.superficie_m2),
+          price: Number(row.precio),
+          pricePerM2: Number(row.precio_m2),
+          ivaRate: 0.21,
+          landPercentage: Number(row.porcentaje_suelo),
+          locationScope: 'municipio',
+          community: row.comunidad || 'Comunidad de Madrid',
+          municipality: row.municipio || 'Madrid',
+          address: row.direccion || 'Calle Principal, Nº 1',
+          imageUrl: row.imagen_url || PROPERTY_IMAGES.local_comercial[0],
+          status: row.estado as ('available' | 'sold' | 'rented'),
+          ownerId: row.propietario_id || 'corp-1',
+          ownerName: row.propietario_nombre || 'Inmobiliaria Polígonos de España S.A.',
+          deferredPaymentConfig: row.config_pago_aplazado ? (typeof row.config_pago_aplazado === 'string' ? JSON.parse(row.config_pago_aplazado) : row.config_pago_aplazado) : undefined,
+          createdTimestamp: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.acquisitions from Supabase "adquisiciones"
+      if (resAcq.rows.length > 0) {
+        db.acquisitions = resAcq.rows.map(row => ({
+          id: String(row.id),
+          propertyId: String(row.inmueble_id),
+          propertyTitle: String(row.inmueble_titulo),
+          propertyType: String(row.inmueble_tipo) as PropertyType,
+          operation: String(row.operacion) as OperationType,
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          surfaceM2: Number(row.superficie_m2),
+          location: String(row.ubicacion),
+          imageUrl: String(row.imagen_url),
+          landPercentage: Number(row.porcentaje_suelo),
+          basePrice: Number(row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          totalPrice: Number(row.precio_total),
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          paymentMethod: String(row.metodo_pago) as any,
+          monthlyRent: row.alquiler_mensual ? Number(row.alquiler_mensual) : undefined,
+          nextRentDueDate: row.proximo_pago_alquiler ? new Date(row.proximo_pago_alquiler).toISOString() : undefined,
+          downPaymentPaid: row.entrada_pagada ? Number(row.entrada_pagada) : undefined,
+          pendingBalance: row.saldo_pendiente ? Number(row.saldo_pendiente) : undefined
+        }));
+      }
+
+      // Reconstruct db.paymentObligations from Supabase "obligaciones_pago"
+      if (resObl.rows.length > 0) {
+        db.paymentObligations = resObl.rows.map(row => ({
+          id: String(row.id),
+          acquisitionId: String(row.adquisicion_id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          propertyTitle: String(row.inmueble_titulo),
+          type: String(row.tipo) as any,
+          amount: Number(row.importe),
+          dueDate: new Date(row.fecha_vencimiento).toISOString(),
+          status: String(row.estado) as ('pendiente' | 'pagado'),
+          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+          installmentNumber: Number(row.numero_cuota || 1),
+          totalInstallments: Number(row.total_cuotas || 1)
+        }));
+      }
+
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts and ${restoredTransfers.length} transfers from Supabase!`);
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, and ${db.paymentObligations.length} obligations from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
     } finally {
       client.release();
@@ -367,8 +573,8 @@ function getDefaultSeedProperties(): PropertyListing[] {
       address: 'Polígono Industrial Los Olivos, Nº 14, Getafe',
       imageUrl: PROPERTY_IMAGES.nave_industrial[0],
       status: 'available',
-      ownerId: 'profesor-1',
-      ownerName: 'Profesor de Contabilidad',
+      ownerId: REALISTIC_CORPORATE_SELLERS[0].id,
+      ownerName: REALISTIC_CORPORATE_SELLERS[0].name,
       deferredPaymentConfig: {
         allowed: true,
         minDownPaymentPercent: 20,
@@ -394,8 +600,8 @@ function getDefaultSeedProperties(): PropertyListing[] {
       address: 'Calle Comercio, Nº 42, Barcelona',
       imageUrl: PROPERTY_IMAGES.local_comercial[0],
       status: 'available',
-      ownerId: 'profesor-1',
-      ownerName: 'Profesor de Contabilidad',
+      ownerId: REALISTIC_CORPORATE_SELLERS[2].id,
+      ownerName: REALISTIC_CORPORATE_SELLERS[2].name,
       createdTimestamp: new Date().toISOString()
     },
     {
@@ -414,8 +620,8 @@ function getDefaultSeedProperties(): PropertyListing[] {
       address: 'Avenida del Euro, Nº 8, Paterna',
       imageUrl: PROPERTY_IMAGES.almacen[0],
       status: 'available',
-      ownerId: 'profesor-1',
-      ownerName: 'Profesor de Contabilidad',
+      ownerId: REALISTIC_CORPORATE_SELLERS[3].id,
+      ownerName: REALISTIC_CORPORATE_SELLERS[3].name,
       deferredPaymentConfig: {
         allowed: true,
         minDownPaymentPercent: 25,
@@ -441,8 +647,8 @@ function getDefaultSeedProperties(): PropertyListing[] {
       address: 'Polígono Empresarial Norte, Nº 22, Sevilla',
       imageUrl: PROPERTY_IMAGES.nave_industrial[1],
       status: 'available',
-      ownerId: 'profesor-1',
-      ownerName: 'Profesor de Contabilidad',
+      ownerId: REALISTIC_CORPORATE_SELLERS[1].id,
+      ownerName: REALISTIC_CORPORATE_SELLERS[1].name,
       createdTimestamp: new Date().toISOString()
     },
     {
@@ -461,8 +667,8 @@ function getDefaultSeedProperties(): PropertyListing[] {
       address: 'Calle del Carmen, Nº 5, Bilbao',
       imageUrl: PROPERTY_IMAGES.local_comercial[1],
       status: 'available',
-      ownerId: 'profesor-1',
-      ownerName: 'Profesor de Contabilidad',
+      ownerId: REALISTIC_CORPORATE_SELLERS[4].id,
+      ownerName: REALISTIC_CORPORATE_SELLERS[4].name,
       deferredPaymentConfig: {
         allowed: true,
         minDownPaymentPercent: 30,
@@ -848,6 +1054,9 @@ app.post('/api/users', (req, res) => {
   };
 
   db.users.push(newUser);
+  if (newUser.role === 'student') {
+    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance).catch(e => console.error(e));
+  }
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -885,6 +1094,10 @@ app.put('/api/users/:id', (req, res) => {
 
   if (name) user.name = name.trim();
   if (password) user.password = password.trim();
+
+  if (user.role === 'student') {
+    syncAccountToSupabase(user.id, user.name, user.balance).catch(e => console.error(e));
+  }
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -924,6 +1137,10 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
     user.balance = Math.max(0, user.balance - changeValue);
   } else if (actionType === 'set') {
     user.balance = Math.max(0, changeValue);
+  }
+
+  if (user.role === 'student') {
+    syncAccountToSupabase(user.id, user.name, user.balance).catch(e => console.error(e));
   }
 
   const newLog: SystemLog = {
@@ -1018,6 +1235,12 @@ app.post('/api/transfers', (req, res) => {
 
   db.transfers.unshift(newTransfer);
   writeDb(db);
+
+  // Sync balances and transfer movements to Supabase PostgreSQL
+  if (sender.role === 'student') syncAccountToSupabase(sender.id, sender.name, sender.balance).catch(e => console.error(e));
+  if (receiver.role === 'student') syncAccountToSupabase(receiver.id, receiver.name, receiver.balance).catch(e => console.error(e));
+  syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+  syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
 
   res.json({ success: true, transfer: newTransfer, senderBalance: sender.balance });
 });
@@ -1157,6 +1380,10 @@ app.post('/api/properties', (req, res) => {
   const db = readDb();
 
   if (mode === 'single' && property) {
+    const ownerName = property.ownerName && property.ownerName !== 'Profesor de Contabilidad' 
+      ? property.ownerName 
+      : REALISTIC_CORPORATE_SELLERS[0].name;
+
     const newProperty: PropertyListing = {
       id: generateId('inm'),
       title: property.title || 'Inmueble Comercial',
@@ -1173,14 +1400,16 @@ app.post('/api/properties', (req, res) => {
       address: property.address || `Calle Principal, Nº 12, ${property.municipality || 'Madrid'}`,
       imageUrl: property.imageUrl || getRandomElement(PROPERTY_IMAGES[property.type as PropertyType] || PROPERTY_IMAGES.local_comercial),
       status: 'available',
-      ownerId: property.ownerId || 'profesor-1',
-      ownerName: property.ownerName || 'Profesor de Contabilidad',
+      ownerId: property.ownerId || REALISTIC_CORPORATE_SELLERS[0].id,
+      ownerName,
       deferredPaymentConfig: property.deferredPaymentConfig,
       createdTimestamp: new Date().toISOString()
     };
 
     db.properties.unshift(newProperty);
     writeDb(db);
+    syncPropertyToSupabase(newProperty).catch(e => console.error(e));
+
     return res.status(201).json({ success: true, message: 'Anuncio publicado exitosamente.', properties: [newProperty] });
   }
 
@@ -1223,6 +1452,7 @@ app.post('/api/properties', (req, res) => {
 
       const title = `${typeLabels[type]} ${i + 1} de ${surfaceM2} m² en ${location.municipality}`;
       const imageUrl = getRandomElement(PROPERTY_IMAGES[type]);
+      const randomVendor = REALISTIC_CORPORATE_SELLERS[i % REALISTIC_CORPORATE_SELLERS.length];
 
       const newProp: PropertyListing = {
         id: generateId('inm'),
@@ -1240,14 +1470,15 @@ app.post('/api/properties', (req, res) => {
         address: location.address,
         imageUrl,
         status: 'available',
-        ownerId: batch.ownerId || 'profesor-1',
-        ownerName: batch.ownerName || 'Profesor de Contabilidad',
+        ownerId: randomVendor.id,
+        ownerName: randomVendor.name,
         deferredPaymentConfig: operation === 'compra' && batch.deferredPaymentConfig?.allowed ? batch.deferredPaymentConfig : undefined,
         createdTimestamp: new Date().toISOString()
       };
 
       db.properties.unshift(newProp);
       createdProperties.push(newProp);
+      syncPropertyToSupabase(newProp).catch(e => console.error(e));
     }
 
     writeDb(db);
@@ -1269,6 +1500,8 @@ app.delete('/api/properties/:id', (req, res) => {
 
   db.properties.splice(index, 1);
   writeDb(db);
+  deletePropertyFromSupabase(id).catch(e => console.error(e));
+
   res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
 });
 
@@ -1289,6 +1522,12 @@ app.post('/api/properties/buy-rent', (req, res) => {
   if (!student) {
     return res.status(404).json({ error: 'Estudiante no encontrado' });
   }
+
+  const vendorName = property.ownerName && property.ownerName !== 'Profesor de Contabilidad' 
+    ? property.ownerName 
+    : 'Inmobiliaria Polígonos de España S.A.';
+  const vendorId = property.ownerId && property.ownerId !== 'profesor-1' ? property.ownerId : 'corp-1';
+  const vendorAccount = 'ES210001000299887711';
 
   const basePrice = property.price;
   const ivaAmount = Number((basePrice * property.ivaRate).toFixed(2));
@@ -1313,15 +1552,15 @@ app.post('/api/properties/buy-rent', (req, res) => {
     // Deduct initial rent + deposit from student
     student.balance = Number((student.balance - initialPaymentTotal).toFixed(2));
 
-    // Record transfer
+    // Record transfer to realistic corporate vendor
     const newTransfer: Transfer = {
       id: generateId('tx'),
       senderId: student.id,
       senderName: student.name,
       senderAccount: student.accountNumber,
-      receiverId: property.ownerId || 'profesor-1',
-      receiverName: property.ownerName || 'Propietario Inmueble',
-      receiverAccount: 'ES000000000000000000',
+      receiverId: vendorId,
+      receiverName: vendorName,
+      receiverAccount: vendorAccount,
       amount: initialPaymentTotal,
       concept: `Alquiler e IVA (Fianza 2m + 1er mes): ${property.title}`,
       timestamp: new Date().toISOString()
@@ -1356,6 +1595,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
     db.acquisitions.unshift(acquisition);
 
     // Schedule 11 remaining auto-domiciled monthly obligations
+    const generatedObligations: PaymentObligation[] = [];
     for (let i = 1; i <= 11; i++) {
       const dueDate = new Date();
       dueDate.setMonth(dueDate.getMonth() + i);
@@ -1374,10 +1614,20 @@ app.post('/api/properties/buy-rent', (req, res) => {
         totalInstallments: 12
       };
       db.paymentObligations.push(ob);
+      generatedObligations.push(ob);
     }
 
     property.status = 'rented';
     writeDb(db);
+
+    // Sync all new data to Supabase
+    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+    syncPropertyToSupabase(property).catch(e => console.error(e));
+    syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
+    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialPaymentTotal, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+    for (const ob of generatedObligations) {
+      syncObligationToSupabase(ob).catch(e => console.error(e));
+    }
 
     return res.json({
       success: true,
@@ -1402,15 +1652,15 @@ app.post('/api/properties/buy-rent', (req, res) => {
       // Deduct full amount
       student.balance = Number((student.balance - totalPrice).toFixed(2));
 
-      // Record transfer
+      // Record transfer to realistic corporate vendor
       const newTransfer: Transfer = {
         id: generateId('tx'),
         senderId: student.id,
         senderName: student.name,
         senderAccount: student.accountNumber,
-        receiverId: property.ownerId || 'profesor-1',
-        receiverName: property.ownerName || 'Vendedor Inmueble',
-        receiverAccount: 'ES000000000000000000',
+        receiverId: vendorId,
+        receiverName: vendorName,
+        receiverAccount: vendorAccount,
         amount: totalPrice,
         concept: `Compra al contado + IVA 21%: ${property.title}`,
         timestamp: new Date().toISOString()
@@ -1443,6 +1693,12 @@ app.post('/api/properties/buy-rent', (req, res) => {
       property.status = 'sold';
       writeDb(db);
 
+      // Sync all new data to Supabase
+      syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+      syncPropertyToSupabase(property).catch(e => console.error(e));
+      syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
+      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+
       return res.json({
         success: true,
         message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${totalPrice.toLocaleString('es-ES')} € (IVA 21% incl.).`,
@@ -1454,7 +1710,6 @@ app.post('/api/properties/buy-rent', (req, res) => {
       const config = property.deferredPaymentConfig!;
       const downPaymentPercent = config.minDownPaymentPercent || 20;
       const downPaymentBase = (basePrice * downPaymentPercent) / 100;
-      // In Spain real estate tax law, total IVA is payable at the time of deed / purchase, plus the down payment %
       const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
 
       if (student.balance < initialCashRequired) {
@@ -1470,7 +1725,6 @@ app.post('/api/properties/buy-rent', (req, res) => {
       // Deduct initial cash payment
       student.balance = Number((student.balance - initialCashRequired).toFixed(2));
 
-      // Instrument type display name
       const instrumentLabel = config.instrument === 'pagare'
         ? 'Pagaré'
         : config.instrument === 'letra_cambio'
@@ -1483,9 +1737,9 @@ app.post('/api/properties/buy-rent', (req, res) => {
         senderId: student.id,
         senderName: student.name,
         senderAccount: student.accountNumber,
-        receiverId: property.ownerId || 'profesor-1',
-        receiverName: property.ownerName || 'Vendedor Inmueble',
-        receiverAccount: 'ES000000000000000000',
+        receiverId: vendorId,
+        receiverName: vendorName,
+        receiverAccount: vendorAccount,
         amount: initialCashRequired,
         concept: `Entrada (${downPaymentPercent}%) + Total IVA 21%: ${property.title}`,
         timestamp: new Date().toISOString()
@@ -1516,7 +1770,8 @@ app.post('/api/properties/buy-rent', (req, res) => {
       };
       db.acquisitions.unshift(acquisition);
 
-      // Generate deferred payment obligations (Pagarés / Letras de cambio)
+      // Generate deferred payment obligations
+      const generatedObligations: PaymentObligation[] = [];
       for (let i = 1; i <= count; i++) {
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + (i * 30));
@@ -1535,10 +1790,20 @@ app.post('/api/properties/buy-rent', (req, res) => {
           totalInstallments: count
         };
         db.paymentObligations.push(ob);
+        generatedObligations.push(ob);
       }
 
       property.status = 'sold';
       writeDb(db);
+
+      // Sync all new data to Supabase
+      syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+      syncPropertyToSupabase(property).catch(e => console.error(e));
+      syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
+      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+      for (const ob of generatedObligations) {
+        syncObligationToSupabase(ob).catch(e => console.error(e));
+      }
 
       return res.json({
         success: true,
@@ -1655,9 +1920,9 @@ app.post('/api/obligations/pay', (req, res) => {
     senderId: student.id,
     senderName: student.name,
     senderAccount: student.accountNumber,
-    receiverId: 'profesor-1',
-    receiverName: 'Acreedor Inmobiliario',
-    receiverAccount: 'ES000000000000000000',
+    receiverId: 'corp-tenedor-efectos',
+    receiverName: 'Tenedor de Efectos Comerciales S.A.',
+    receiverAccount: 'ES210001000299887755',
     amount: obligation.amount,
     concept: `Atención a vencimiento de ${instrumentName} (${obligation.installmentNumber || 1}/${obligation.totalInstallments || 1}): ${obligation.propertyTitle}`,
     timestamp: new Date().toISOString()
@@ -1675,6 +1940,14 @@ app.post('/api/obligations/pay', (req, res) => {
   }
 
   writeDb(db);
+
+  // Sync to Supabase
+  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+  syncObligationToSupabase(obligation).catch(e => console.error(e));
+  syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', obligation.amount, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+  if (acq) {
+    syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+  }
 
   res.json({
     success: true,
