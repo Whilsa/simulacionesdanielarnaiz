@@ -21,6 +21,7 @@ export interface DocumentViewerData {
   // Loan statement fields
   loan?: BankLoan;
   loanInstallment?: AmortizationRow;
+  installmentPeriod?: number;
 }
 
 interface DocumentViewerModalProps {
@@ -304,33 +305,6 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
                   </div>
                 </div>
 
-                {/* PEDAGOGICAL / ACCOUNTING LEDGER GUIDE BOX */}
-                <div className="p-4 bg-amber-50 rounded-xl border border-amber-300/80 text-amber-950 space-y-2 print:border-slate-400">
-                  <div className="flex items-center space-x-1.5 font-bold text-xs">
-                    <Info className="w-4 h-4 text-amber-700 shrink-0" />
-                    <span>Guía de Asiento Contable Ficticio (Para ejercicios del Alumno):</span>
-                  </div>
-
-                  {!isRent ? (
-                    <div className="font-mono text-[11px] bg-white p-3 rounded-lg border border-amber-200 text-slate-800 space-y-1">
-                      <p className="font-bold text-amber-900">Debe (Cuentas de Activo y Gastos):</p>
-                      <p>• (210) Terrenos y Bienes Naturales: {landValue.toLocaleString('es-ES')} €</p>
-                      <p>• (211) Construcciones: {buildingValue.toLocaleString('es-ES')} €</p>
-                      <p>• (472) Hacienda Pública IVA Soportado: {ivaAmount.toLocaleString('es-ES')} €</p>
-                      <p className="font-bold text-amber-900 mt-2">Haber (Cuentas de Pasivo / Tesorería):</p>
-                      <p>• (572) Bancos e Instituciones de Crédito (o Proveedores de Inmovilizado): {totalPrice.toLocaleString('es-ES')} €</p>
-                    </div>
-                  ) : (
-                    <div className="font-mono text-[11px] bg-white p-3 rounded-lg border border-amber-200 text-slate-800 space-y-1">
-                      <p className="font-bold text-amber-900">Debe:</p>
-                      <p>• (621) Arrendamientos y Cánones: {basePrice.toLocaleString('es-ES')} €</p>
-                      <p>• (472) Hacienda Pública IVA Soportado: {ivaAmount.toLocaleString('es-ES')} €</p>
-                      <p className="font-bold text-amber-900 mt-2">Haber:</p>
-                      <p>• (572) Bancos c/c / (410) Acreedores por servicios: {totalPrice.toLocaleString('es-ES')} €</p>
-                    </div>
-                  )}
-                </div>
-
                 {/* Footer stamp signature text */}
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
                   Documento emitido electrónicamente en la plataforma educativa de Contabilidad Comercial e Inmobiliaria. Válido a efectos de justificación contable simulada.
@@ -344,7 +318,7 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
           {/* DOCUMENT TYPE 2: BANK LOAN STATEMENT / CONTRACT */}
           {data.type === 'loan_statement' && (() => {
             const loan = data.loan;
-            const row = data.loanInstallment;
+            const row = data.loanInstallment || (data.installmentPeriod && loan?.schedule ? loan.schedule.find(s => s.period === data.installmentPeriod) : undefined);
             const principal = loan?.approvedAmount || loan?.offeredAmount || 0;
             const openingFee = Number((principal * 0.001).toFixed(2));
             const netDisbursed = Number((principal - openingFee).toFixed(2));
@@ -472,31 +446,6 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
                     </div>
                   </div>
                 )}
-
-                {/* PEDAGOGICAL / ACCOUNTING LEDGER GUIDE BOX FOR LOANS */}
-                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-300/80 text-emerald-950 space-y-2">
-                  <div className="flex items-center space-x-1.5 font-bold text-xs">
-                    <Info className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <span>Guía de Asiento Contable del Préstamo Hipotecario (Para el Estudiante):</span>
-                  </div>
-
-                  <div className="font-mono text-[11px] bg-white p-3 rounded-lg border border-emerald-200 text-slate-800 space-y-2">
-                    <div>
-                      <p className="font-bold text-emerald-900">1. Asiento de Concesión del Préstamo (Cobro Inicial):</p>
-                      <p>• Debe: (572) Bancos c/c: {netDisbursed.toLocaleString('es-ES')} €</p>
-                      <p>• Debe: (669) Otros Gastos Financieros (Comisión de Apertura): {openingFee.toLocaleString('es-ES')} €</p>
-                      <p>• Haber: (520) Deudas a corto plazo con entidades de crédito: [Cuotas vencimiento &lt; 1 año] €</p>
-                      <p>• Haber: (170) Deudas a largo plazo con entidades de crédito: [Cuotas resto plazos] €</p>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-200">
-                      <p className="font-bold text-emerald-900">2. Asiento de Pago de Cuota Mensual Domiciliada:</p>
-                      <p>• Debe: (520) Deudas a corto plazo con entidades de crédito (Capital): {row ? row.principal.toLocaleString('es-ES') : '[Cuota Capital]'} €</p>
-                      <p>• Debe: (662) Intereses de deudas (Gasto financiero): {row ? row.interest.toLocaleString('es-ES') : '[Intereses Periodo]'} €</p>
-                      <p>• Haber: (572) Bancos c/c: {row ? row.payment.toLocaleString('es-ES') : '[Cuota Total]'} €</p>
-                    </div>
-                  </div>
-                </div>
 
                 {/* Legal Footnote */}
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
