@@ -11,6 +11,7 @@ import {
   CheckCircle2, ArrowLeft, Euro, MapPin, SlidersHorizontal, Sparkles, 
   AlertCircle, ShieldCheck, FileText, ChevronRight, Layers, RefreshCw
 } from 'lucide-react';
+import Footer from './Footer.js';
 
 interface RealEstatePortalProps {
   currentUser: User;
@@ -554,6 +555,8 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
           </div>
         )}
       </main>
+
+      <Footer />
 
       {/* MODAL: ACQUIRE / RENT PROPERTY FOR STUDENT */}
       {selectedPropertyForModal && (

@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Landmark, Lock, User as UserIcon, AlertCircle, ArrowRight } from 'lucide-react';
 import { User } from '../types.js';
+import Footer from './Footer.js';
 
 interface LoginFormProps {
   onLoginSuccess: (user: User) => void;
@@ -96,11 +97,11 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
           </motion.div>
         </div>
         
-        <h2 className="mt-6 text-center text-3xl font-bold font-display tracking-tight text-slate-900">
-          EGOBEY <span className="text-amber-500">Simulador</span>
+        <h2 className="mt-6 text-center text-2xl sm:text-3xl font-bold font-display tracking-tight text-slate-900">
+          Simulador de <span className="text-amber-500">Daniel Arnaiz Boluda</span>
         </h2>
         <p className="mt-2 text-center text-sm text-slate-500 font-sans">
-          Banco simulado creado por Daniel Arnaiz
+          Simulador de negocios para contabilidad
         </p>
       </div>
 
@@ -187,6 +188,8 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
         </motion.div>
       </div>
+
+      <Footer />
     </div>
   );
 }

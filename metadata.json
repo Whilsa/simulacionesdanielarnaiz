@@ -1,6 +1,6 @@
 {
-  "name": "EGOBEY Simulador",
-  "description": "Banco simulado creado por Daniel Arnaiz",
+  "name": "Simulador de Daniel Arnaiz Boluda",
+  "description": "Simulador de negocios para contabilidad creado por Daniel Arnaiz Boluda",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

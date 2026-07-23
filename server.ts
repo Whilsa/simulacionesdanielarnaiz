@@ -1980,6 +1980,7 @@ app.get('/api/company/:studentId', (req, res) => {
 
   const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
   const obligations = db.paymentObligations.filter(o => o.studentId === studentId);
+  const loans = (db.loans || []).filter(l => l.studentId === studentId && l.status === 'active');
 
   const ownedProperties = acquisitions.filter(a => a.operation === 'compra');
   const rentedProperties = acquisitions.filter(a => a.operation === 'alquiler');
@@ -2000,8 +2001,27 @@ app.get('/api/company/:studentId', (req, res) => {
 
   const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2)); // 2% amortización contable oficial de construcción en España
 
+  // 1. Payment Obligations (Pagarés, letras de cambio, cuotas alquiler/compra)
   const pendingObligations = obligations.filter(o => o.status === 'pendiente');
-  const totalPendingObligations = Number(pendingObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
+  const totalObligationsPendingAmount = Number(pendingObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
+
+  // 2. Bank Loans (Préstamos hipotecarios activos)
+  let totalLoansPendingAmount = 0;
+  let totalLoansPendingPrincipal = 0;
+
+  for (const loan of loans) {
+    const unpaidRows = (loan.schedule || []).filter(r => !r.paid);
+    const pendingPaymentsSum = unpaidRows.reduce((acc, r) => acc + r.payment, 0);
+    const pendingPrincipalSum = unpaidRows.reduce((acc, r) => acc + r.principal, 0);
+    totalLoansPendingAmount += pendingPaymentsSum;
+    totalLoansPendingPrincipal += pendingPrincipalSum;
+  }
+
+  totalLoansPendingAmount = Number(totalLoansPendingAmount.toFixed(2));
+  totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
+
+  // 3. Total Combined Pending Debt
+  const totalPendingObligations = Number((totalObligationsPendingAmount + totalLoansPendingAmount).toFixed(2));
 
   const totalMonthlyRentCommitments = Number(rentedProperties.reduce((acc, r) => acc + (r.monthlyRent || 0), 0).toFixed(2));
 
@@ -2022,11 +2042,16 @@ app.get('/api/company/:studentId', (req, res) => {
       totalLandValue: Number(totalLandValue.toFixed(2)),
       totalBuildingValue: Number(totalBuildingValue.toFixed(2)),
       annualBuildingDepreciation,
+      totalObligationsPendingAmount,
+      totalLoansPendingAmount,
+      totalLoansPendingPrincipal,
       totalPendingObligations,
-      totalMonthlyRentCommitments
+      totalMonthlyRentCommitments,
+      activeLoansCount: loans.length
     },
     acquisitions,
-    obligations
+    obligations,
+    loans
   });
 });
 

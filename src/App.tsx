@@ -70,7 +70,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center font-sans">
         <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-slate-500 text-sm font-semibold">Iniciando Simulador Egobey...</p>
+        <p className="text-slate-500 text-sm font-semibold">Iniciando Simulador de Daniel Arnaiz Boluda...</p>
       </div>
     );
   }

@@ -12,6 +12,7 @@ import {
 import { User, Transfer } from '../types.js';
 import StudentLoanSection from './StudentLoanSection.js';
 import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
+import Footer from './Footer.js';
 
 interface StudentDashboardProps {
   currentUser: User;
@@ -204,7 +205,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 <Landmark className="w-6 h-6 text-white animate-pulse" />
               </div>
               <div>
-                <span className="font-display font-bold text-lg tracking-tight block">EGOBEY Simulador</span>
+                <span className="font-display font-bold text-lg tracking-tight block">Simulador de Daniel Arnaiz Boluda</span>
                 <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Banco Simulado • Alumno</span>
               </div>
             </div>
@@ -544,6 +545,8 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
         </div>
 
       </main>
+
+      <Footer />
     </div>
   );
 }

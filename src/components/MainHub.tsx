@@ -6,6 +6,7 @@
 import React from 'react';
 import { User } from '../types.js';
 import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight } from 'lucide-react';
+import Footer from './Footer.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -28,14 +29,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold tracking-tight text-white">Egobey Simulador</h1>
+                <h1 className="text-lg font-bold tracking-tight text-white">Simulador de Daniel Arnaiz Boluda</h1>
                 <span className={`text-[10px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded-full ${
                   isTeacher ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}>
                   {isTeacher ? 'Profesor / Admin' : 'Empresa Alumno'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-medium">Gestión Financiera e Inmobiliaria Integral</p>
+              <p className="text-xs text-slate-400 font-medium">Simulador de negocios para contabilidad</p>
             </div>
           </div>
 
@@ -207,9 +208,11 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
               <p className="text-xs text-slate-600">Cualquier alquiler, compra de inmueble o pago de pagaré reflejará el cargo directamente en la cuenta bancaria.</p>
             </div>
           </div>
-          <div className="text-xs text-slate-500 font-mono">v1.2.1 • Egobey Academic</div>
+          <div className="text-xs text-slate-500 font-mono">v1.2.1 • Academic</div>
         </div>
       </main>
+
+      <Footer />
     </div>
   );
 }
