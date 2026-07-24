@@ -113,6 +113,7 @@ export default function App() {
       <CompanyDashboard
         currentUser={currentUser}
         onBackToHub={() => setActiveModule('hub')}
+        onGoToBank={() => setActiveModule('bank')}
         onUserBalanceUpdated={handleUserBalanceUpdated}
       />
     );

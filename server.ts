@@ -2001,9 +2001,10 @@ app.get('/api/company/:studentId', (req, res) => {
 
   const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2)); // 2% amortización contable oficial de construcción en España
 
-  // 1. Payment Obligations (Pagarés, letras de cambio, cuotas alquiler/compra)
-  const pendingObligations = obligations.filter(o => o.status === 'pendiente');
-  const totalObligationsPendingAmount = Number(pendingObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
+  // 1. Payment Obligations (Pagarés, letras de cambio y cuotas de compra aplazada)
+  // Las cuotas de alquiler de meses posteriores son compromisos de gasto corriente, no deudas financieras acumulatitvas.
+  const pendingDebtObligations = obligations.filter(o => o.status === 'pendiente' && o.type !== 'cuota_alquiler');
+  const totalObligationsPendingAmount = Number(pendingDebtObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
 
   // 2. Bank Loans (Préstamos hipotecarios activos)
   let totalLoansPendingAmount = 0;

@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building2, Landmark, Calculator, AlertCircle, CheckCircle2, Clock, 
-  ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X, Receipt
+  ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X, Receipt, XCircle
 } from 'lucide-react';
 import { User, BankLoan, PropertyAcquisition } from '../types.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -259,12 +259,15 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
             const isPendingTeacher = loan.status === 'pending_teacher';
             const isActive = loan.status === 'active';
             const isPaidOff = loan.status === 'paid_off';
+            const isRejected = loan.status === 'rejected' || loan.status === 'denied_teacher';
 
             return (
               <div 
                 key={loan.id}
                 className={`border rounded-2xl p-5 transition-all ${
-                  isOffered 
+                  isRejected
+                    ? 'bg-red-50/40 border-red-200/90 shadow-2xs'
+                    : isOffered 
                     ? 'bg-amber-50/50 border-amber-300 shadow-sm' 
                     : isPendingTeacher 
                     ? 'bg-slate-50 border-slate-300' 
@@ -295,6 +298,12 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                         <span className="bg-sky-100 text-sky-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <Clock className="w-3 h-3 mr-1" />
                           En Revisión por el Profesor
+                        </span>
+                      )}
+                      {isRejected && (
+                        <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center border border-red-200">
+                          <XCircle className="w-3 h-3 mr-1 text-red-600" />
+                          {loan.status === 'denied_teacher' ? 'Rechazada por el Profesor' : 'Rechazada'}
                         </span>
                       )}
                       {isPaidOff && (
@@ -364,6 +373,20 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     </p>
                     <p className="text-sky-700 mt-0.5">
                       Al tener ya concedido un primer préstamo, esta operación requiere autorización manual desde el panel del docente.
+                    </p>
+                  </div>
+                )}
+
+                {isRejected && (
+                  <div className="bg-red-50 border border-red-200 text-red-800 rounded-xl p-3 mb-4 text-xs">
+                    <p className="font-bold flex items-center gap-1.5 text-red-900">
+                      <XCircle className="w-4 h-4 text-red-600" />
+                      <span>Solicitud de Préstamo Rechazada</span>
+                    </p>
+                    <p className="text-red-700 mt-0.5">
+                      {loan.rejectionReason || (loan.status === 'denied_teacher' 
+                        ? 'Operación denegada por el docente tras la evaluación de riesgos del alumno.' 
+                        : 'La oferta de préstamo fue denegada o rechazada.')}
                     </p>
                   </div>
                 )}
