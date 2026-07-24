@@ -8,7 +8,7 @@ import {
   Wrench, Building2, ShieldAlert, CheckCircle2, AlertCircle, ArrowLeft, 
   Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight, Info
 } from 'lucide-react';
-import { User, MachineryItem, MachineryOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
+import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
 import Footer from './Footer.js';
 
 interface MachineryPortalProps {
@@ -26,7 +26,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
 
   // Selected purchase configuration
   const [selectedMachinery, setSelectedMachinery] = useState<MachineryItem | null>(null);
-  const [selectedOption, setSelectedOption] = useState<MachineryOption | null>(null);
+  const [selectedOption, setSelectedOption] = useState<MachineryLineOption | null>(null);
   const [selectedNaveId, setSelectedNaveId] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'contado' | 'aplazado_pagares'>('contado');
 
@@ -71,7 +71,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   // Filter industrial naves owned or rented by student
   const industrialNaves = studentAcquisitions.filter(a => a.propertyType === 'nave_industrial');
 
-  const handleOpenBuyModal = (machinery: MachineryItem, option: MachineryOption) => {
+  const handleOpenBuyModal = (machinery: MachineryItem, option: MachineryLineOption) => {
     setErrorMsg('');
     setSuccessMsg('');
     setSelectedMachinery(machinery);

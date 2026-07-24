@@ -2596,6 +2596,11 @@ app.post('/api/obligations/pay', (req, res) => {
     acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - obligation.amount).toFixed(2)));
   }
 
+  const machAcq = (db.machineryAcquisitions || []).find(m => m.id === obligation.acquisitionId);
+  if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
+    machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - obligation.amount).toFixed(2)));
+  }
+
   writeDb(db);
 
   // Sync to Supabase
@@ -2604,6 +2609,9 @@ app.post('/api/obligations/pay', (req, res) => {
   syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', obligation.amount, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
   if (acq) {
     syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+  }
+  if (machAcq) {
+    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
   }
 
   res.json({
@@ -2763,6 +2771,12 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
           if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
             acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
             syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+          }
+
+          const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
+          if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
+            machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
+            syncMachineryToSupabase(machAcq).catch(e => console.error(e));
           }
 
           const newTransfer: Transfer = {

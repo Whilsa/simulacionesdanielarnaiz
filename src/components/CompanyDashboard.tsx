@@ -547,13 +547,22 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                             </div>
                           </div>
 
-                          <div className="mt-4 pt-2 text-[11px] text-slate-400 border-t border-slate-100 flex justify-between items-center">
-                            <span>Adquirido: {new Date(mac.purchaseDate).toLocaleDateString('es-ES')}</span>
-                            {isAssembly && (
-                              <span className="font-semibold text-amber-700">
-                                Fin montaje: {new Date(mac.assemblyFinishDate).toLocaleDateString('es-ES')}
-                              </span>
-                            )}
+                          <div className="mt-4 pt-3 text-[11px] text-slate-400 border-t border-slate-100 flex justify-between items-center">
+                            <div>
+                              <span>Adquirido: {new Date(mac.purchaseDate).toLocaleDateString('es-ES')}</span>
+                              {isAssembly && (
+                                <span className="font-semibold text-amber-700 block mt-0.5">
+                                  Fin montaje: {new Date(mac.assemblyFinishDate).toLocaleDateString('es-ES')}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => setActiveDocumentModal({ type: 'machinery_invoice', machineryAcquisition: mac })}
+                              className="px-3.5 py-1.5 bg-amber-900 hover:bg-amber-800 text-amber-100 font-bold rounded-xl text-xs transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <Receipt className="w-3.5 h-3.5 text-amber-300" />
+                              <span>Ver Factura</span>
+                            </button>
                           </div>
                         </div>
                       );
@@ -715,12 +724,12 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                   </td>
                                   <td className="p-3.5 text-right space-x-2">
                                     <button
-                                      onClick={() => setActiveDocumentModal({ type: 'property_invoice', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-[11px] transition border border-slate-200 inline-flex items-center gap-1"
-                                      title="Ver Factura Correspondiente"
+                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-[11px] transition border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                      title="Ver Extracto de Pago"
                                     >
-                                      <Receipt className="w-3.5 h-3.5 text-amber-600" />
-                                      <span>Factura</span>
+                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                      <span>Extracto</span>
                                     </button>
                                     {isPending && (
                                       <button
@@ -1006,11 +1015,12 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                   </td>
                                   <td className="p-3 text-right space-x-1.5">
                                     <button
-                                      onClick={() => setActiveDocumentModal({ type: 'property_invoice', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1"
+                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                      title="Ver Extracto de Pago"
                                     >
-                                      <Receipt className="w-3 h-3 text-amber-600" />
-                                      <span>Factura</span>
+                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                      <span>Extracto</span>
                                     </button>
                                     {!isPaid && (
                                       <button
@@ -1095,11 +1105,12 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                   </td>
                                   <td className="p-3 text-right space-x-1.5">
                                     <button
-                                      onClick={() => setActiveDocumentModal({ type: 'property_invoice', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1"
+                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                      title="Ver Extracto de Pago"
                                     >
-                                      <Receipt className="w-3 h-3 text-indigo-600" />
-                                      <span>Factura</span>
+                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                      <span>Extracto</span>
                                     </button>
                                     {!isPaid && (
                                       <button
@@ -1274,11 +1285,12 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                     </td>
                                     <td className="p-3 text-right space-x-2">
                                       <button
-                                        onClick={() => setActiveDocumentModal({ type: 'property_invoice', obligation: ob })}
+                                        onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
                                         className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] transition border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                        title="Ver Extracto de Pago"
                                       >
-                                        <Receipt className="w-3.5 h-3.5 text-amber-600" />
-                                        <span>Factura</span>
+                                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                        <span>Extracto</span>
                                       </button>
                                       {!isPaid && (
                                         <button

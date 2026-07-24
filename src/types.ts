@@ -3,16 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type UserRole = 'teacher' | 'student';
-
 export interface User {
   id: string;
-  username: string;
-  password: string;
-  role: UserRole;
   name: string;
+  username?: string;
+  password?: string;
+  role: 'student' | 'teacher';
   accountNumber: string;
   balance: number;
+  initialBalance?: number;
 }
 
 export interface Transfer {
@@ -30,51 +29,57 @@ export interface Transfer {
 
 export interface SystemLog {
   id: string;
-  action: 'CREATE_USER' | 'UPDATE_USER' | 'DELETE_USER' | 'BALANCE_ADJUSTMENT' | 'RESET_SIMULATION' | 'LOGIN_ATTEMPT';
-  details: string;
   timestamp: string;
+  action: string;
+  details: string;
+  studentId?: string;
+  studentName?: string;
 }
 
-export type PropertyType = 'nave_industrial' | 'almacen' | 'local_comercial';
-export type OperationType = 'compra' | 'alquiler';
-export type PaymentInstrument = 'pagare' | 'letra_cambio' | 'cuotas_mensuales';
-export type LocationScope = 'espana' | 'comunidad' | 'municipio';
+export type PropertyType = 'nave_industrial' | 'local_comercial' | 'oficina' | 'suelo_industrial' | 'almacen' | string;
+export type OperationType = 'compra' | 'alquiler' | string;
+export type LocationScope = string;
 
 export interface DeferredPaymentConfig {
-  allowed: boolean;
-  minDownPaymentPercent: number; // e.g. 20%
-  installmentsCount: number; // e.g. 12 months
-  instrument: PaymentInstrument;
-  interestRatePercent: number; // e.g. 0% or 3%
+  downPaymentPercentage?: number;
+  installmentsCount?: number;
+  interestRate?: number;
+  [key: string]: any;
 }
 
 export interface PropertyListing {
   id: string;
   title: string;
-  type: PropertyType;
-  operation: OperationType;
-  surfaceM2: number;
-  price: number; // Base price before IVA
-  pricePerM2: number;
-  ivaRate: number; // e.g. 0.21 (21%)
-  landPercentage: number; // 55 to 75
-  locationScope: LocationScope;
-  community: string;
-  municipality: string;
-  address: string;
-  imageUrl: string;
-  status: 'available' | 'sold' | 'rented';
-  ownerId: string;
-  ownerName: string;
+  type?: PropertyType;
+  surfaceM2?: number;
+  location?: string;
+  imageUrl?: string;
+  landPercentage?: number;
+  buildingPercentage?: number;
+  buyPrice?: number;
+  rentPriceMonthly?: number;
+  description?: string;
+  isAvailable?: boolean;
+  operation?: OperationType;
+  ownerName?: string;
+  ownerId?: string;
+  status?: string;
+  price?: number;
+  pricePerM2?: number;
+  community?: any;
+  ivaRate?: number;
+  address?: string;
+  municipality?: string;
   deferredPaymentConfig?: DeferredPaymentConfig;
-  createdTimestamp: string;
+  [key: string]: any;
 }
 
 export interface PropertyAcquisition {
   id: string;
   propertyId: string;
   propertyTitle: string;
-  propertyType: PropertyType;
+  type?: PropertyType;
+  propertyType?: PropertyType;
   operation: OperationType;
   studentId: string;
   studentName: string;
@@ -86,11 +91,14 @@ export interface PropertyAcquisition {
   ivaAmount: number;
   totalPrice: number;
   purchaseDate: string;
-  paymentMethod: 'contado' | 'aplazado_pagare' | 'aplazado_letra' | 'aplazado_cuotas';
+  paymentMethod: 'contado' | 'aplazado_pagare' | 'aplazado_letra' | 'aplazado_cuotas' | string;
   monthlyRent?: number;
   nextRentDueDate?: string;
   downPaymentPaid?: number;
   pendingBalance?: number;
+  address?: string;
+  municipality?: string;
+  [key: string]: any;
 }
 
 export interface PaymentObligation {
@@ -99,10 +107,10 @@ export interface PaymentObligation {
   studentId: string;
   studentName: string;
   propertyTitle: string;
-  type: 'pagare' | 'letra_cambio' | 'cuota_alquiler' | 'cuota_compra';
+  type: 'pagare' | 'letra_cambio' | 'cuota_alquiler' | 'cuota_compra' | string;
   amount: number;
   dueDate: string;
-  status: 'pendiente' | 'pagado' | 'vencido';
+  status: 'pendiente' | 'pagado' | 'vencido' | string;
   paidDate?: string;
   installmentNumber?: number;
   totalInstallments?: number;
@@ -111,7 +119,7 @@ export interface PaymentObligation {
 }
 
 export interface LoanCollateral {
-  type: 'property' | 'private_residence';
+  type: 'property' | 'private_residence' | string;
   propertyId?: string;
   propertyTitle?: string;
   surfaceM2: number;
@@ -120,64 +128,86 @@ export interface LoanCollateral {
 
 export interface MachineryLineOption {
   id: string;
-  label: string;
-  lathesCount: number;
-  capacityUnitsPerHour: number;
+  title?: string;
+  label?: string;
+  lathesCount?: number;
+  capacityUnitsPerHour?: number;
+  productionCapacityUnitsPerHour?: number;
   basePrice: number;
 }
+
+export type MachineryOption = MachineryLineOption;
 
 export interface MachineryItem {
   id: string;
   title: string;
-  subtitle: string;
-  category: 'metal_hierro' | 'plastico_montaje';
+  subtitle?: string;
+  category: 'metal_hierro' | 'plastico_montaje' | 'plastico_ensamblaje' | string;
   description: string;
-  equipmentList: string[];
-  requiredSurfaceM2: number; // 300 m2 total for metal (240 floor + 60 warehouses), 240 m2 total for plastic (180 floor + 60 warehouses)
-  productionFloorM2: number;
-  warehousesM2: number; // 60 m2
-  requiredStaff: number; // 5
-  requiredPowerKW: number; // 35 kW or 33 kW
-  basePrice: number;
-  imageUrl: string;
+  equipmentList?: string[];
+  equipment?: string[];
+  requiredSurfaceM2?: number;
+  totalRequiredM2?: number;
+  rawMaterialWarehouseM2?: number;
+  finishedProductWarehouseM2?: number;
+  productionFloorM2?: number;
+  warehousesM2?: number;
+  requiredStaff?: number;
+  requiredPowerKW?: number;
+  basePrice?: number;
+  imageUrl?: string;
   options?: MachineryLineOption[];
+  [key: string]: any;
 }
 
 export interface MachineryAcquisition {
   id: string;
   machineryId: string;
-  lineTitle: string;
-  category: 'metal_hierro' | 'plastico_montaje';
+  lineTitle?: string;
+  title?: string;
+  optionTitle?: string;
+  category: 'metal_hierro' | 'plastico_montaje' | 'plastico_ensamblaje' | string;
   studentId: string;
   studentName: string;
   basePrice: number;
-  financedPrice: number;
+  financedPrice?: number;
+  deferredPrice?: number;
   ivaAmount: number;
   totalPrice: number;
   downPaymentPaid: number;
   pendingBalance: number;
-  paymentMethod: 'contado' | 'aplazado_pagares';
-  installmentsCount?: number; // 24
+  paymentMethod: 'contado' | 'aplazado_pagares' | string;
+  installmentsCount?: number;
+  installmentCount?: number;
   purchaseDate: string;
-  assemblyDays: number; // 5
-  assemblyEndDate: string;
-  status: 'en_montaje' | 'operativa';
-  installedAtNaveId: string;
-  installedAtNaveTitle: string;
-  requiredStaff: number;
-  requiredPowerKW: number;
-  productionCapacityUnitsPerHour: number;
-  equipmentList: string[];
+  assemblyDays?: number;
+  assemblyEndDate?: string;
+  assemblyFinishDate?: string;
+  status: 'en_montaje' | 'operativa' | 'montaje' | string;
+  installedAtNaveId?: string;
+  installedAtNaveTitle?: string;
+  installedNaveId?: string;
+  installedNaveTitle?: string;
+  installationNaveTitle?: string;
+  requiredStaff?: number;
+  requiredPowerKW?: number;
+  powerKw?: number;
+  lathesCount?: number;
+  productionCapacityUnitsPerHour?: number;
+  equipmentList?: string[];
+  equipment?: string[];
+  imageUrl?: string;
+  [key: string]: any;
 }
 
 export interface AmortizationRow {
   period: number;
   dueDate: string;
-  payment: number; // cuota a pagar
-  interest: number; // interés
-  principal: number; // cuota amortizada
-  totalAmortized: number; // total amortizado
-  pendingBalance: number; // total pendiente de amortizar
+  payment: number;
+  interest: number;
+  principal: number;
+  totalAmortized: number;
+  pendingBalance: number;
   paid: boolean;
   paidDate?: string;
   isOverdue?: boolean;
@@ -186,8 +216,8 @@ export interface AmortizationRow {
 
 export interface UpcomingPaymentItem {
   id: string;
-  sourceType: 'obligation' | 'loan';
-  type: 'pagare' | 'letra_cambio' | 'cuota_alquiler' | 'cuota_compra' | 'cuota_prestamo';
+  sourceType: 'obligation' | 'loan' | string;
+  type: 'pagare' | 'letra_cambio' | 'cuota_alquiler' | 'cuota_compra' | 'cuota_prestamo' | string;
   title: string;
   concept: string;
   dueDate: string;
@@ -201,13 +231,14 @@ export interface UpcomingPaymentItem {
 }
 
 export type LoanStatus = 
-  | 'offered'          // Auto-generated 80% LTV offer waiting for student accept
-  | 'pending_teacher'  // 2nd+ loan waiting teacher approval
-  | 'teacher_offered'  // Teacher set conditions, waiting student accept
-  | 'active'           // Accepted & disbursed, monthly payments active
-  | 'rejected'         // Student rejected offer
-  | 'denied_teacher'   // Teacher rejected request
-  | 'paid_off';        // Fully repaid
+  | 'offered'          
+  | 'pending_teacher'  
+  | 'teacher_offered'  
+  | 'active'           
+  | 'rejected'         
+  | 'denied_teacher'   
+  | 'paid_off'
+  | string;
 
 export interface BankLoan {
   id: string;
@@ -218,10 +249,10 @@ export interface BankLoan {
   offeredAmount: number;
   approvedAmount?: number;
   termMonths: number;
-  annualInterestRate: number; // Euribor + 1%
-  euriborRate: number; // e.g. 3.50
-  spread: number; // e.g. 1.00
-  openingFee: number; // 0.1% (1 por mil)
+  annualInterestRate: number;
+  euriborRate: number;
+  spread: number;
+  openingFee: number;
   monthlyPayment: number;
   collateral: LoanCollateral;
   status: LoanStatus;

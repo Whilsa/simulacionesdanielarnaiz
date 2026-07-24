@@ -7,16 +7,19 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
-  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator
+  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition } from '../types.js';
 
-export type DocumentType = 'property_invoice' | 'loan_statement';
+export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement';
 
 export interface DocumentViewerData {
   type: DocumentType;
-  // Property invoice fields
+  // Property or machinery purchase fields
   acquisition?: PropertyAcquisition;
+  machineryAcquisition?: MachineryAcquisition;
+  
+  // Obligation statement fields
   obligation?: PaymentObligation;
   
   // Loan statement fields
@@ -42,44 +45,97 @@ export default function DocumentViewerModal({ data, onClose }: DocumentViewerMod
 
     if (data.type === 'property_invoice') {
       const acq = data.acquisition;
-      const ob = data.obligation;
-      const title = acq?.propertyTitle || ob?.propertyTitle || 'Inmueble Comercial';
-      const isRent = acq?.operation === 'alquiler' || ob?.type === 'cuota_alquiler';
-      const basePrice = acq?.basePrice || (ob ? Number((ob.amount / 1.21).toFixed(2)) : 0);
-      const ivaAmount = acq?.ivaAmount || (ob ? Number((ob.amount - basePrice).toFixed(2)) : 0);
-      const totalPrice = acq?.totalPrice || ob?.amount || 0;
-      const landPct = acq?.landPercentage || 30;
-      const landValue = Number(((basePrice * landPct) / 100).toFixed(2));
-      const buildingValue = Number((basePrice - landValue).toFixed(2));
+      const title = acq?.propertyTitle || 'Inmueble Comercial';
+      const isRent = acq?.operation === 'alquiler';
+      const basePrice = acq?.basePrice || 0;
+      const ivaAmount = acq?.ivaAmount || 0;
+      const totalPrice = acq?.totalPrice || 0;
+      const downPayment = acq?.downPaymentPaid || totalPrice;
+      const pendingBalance = acq?.pendingBalance || 0;
 
       textContent = `================================================
-FACTURA OFICIAL DE ${isRent ? 'ARRENDAMIENTO' : 'COMPRAVENTA'}
-Nº Factura: FACT-2026-${(acq?.id || ob?.id || '101').slice(-6)}
-Fecha de Expedición: ${new Date(acq?.purchaseDate || ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
+FACTURA OFICIAL DE ${isRent ? 'ARRENDAMIENTO' : 'COMPRAVENTA DE INMUEBLE'}
+Nº Factura Única: FAC-2026-${(acq?.id || '101').toUpperCase()}
+Fecha de Expedición: ${new Date(acq?.purchaseDate || Date.now()).toLocaleDateString('es-ES')}
 ------------------------------------------------
 EMISOR (Vendedor/Arrendador):
 Inmobiliaria Polígonos de España S.A.
 NIF: A-28009988 | C/ Alcalá 140, 28009 Madrid
-IBAN Cobro: ES21 0001 0002 9988 7755
 
 CLIENTE / COMPRADOR:
-${acq?.studentName || ob?.studentName || 'Empresa Estudiante'}
-NIF: B-87654321
+${acq?.studentName || 'Empresa Estudiante'}
 ------------------------------------------------
 DESGLOSE DEL INMUEBLE:
 Inmueble: ${title}
 Superficie: ${acq?.surfaceM2 || 'N/A'} m² | Ubicación: ${acq?.location || 'España'}
 
-${!isRent ? `
-Desglose Patrimonial Base:
-- Valor Terreno/Suelo (${landPct}%): ${landValue.toLocaleString('es-ES')} € (No Amortizable)
-- Valor Edificación (${100 - landPct}%): ${buildingValue.toLocaleString('es-ES')} € (Amortizable 2%/año)
-` : ''}
 Base Imponible: ${basePrice.toLocaleString('es-ES')} €
 IVA (21%): ${ivaAmount.toLocaleString('es-ES')} €
-------------------------------------------------
 TOTAL FACTURA: ${totalPrice.toLocaleString('es-ES')} €
-Forma de Pago: Domiciliación bancaria / Pagaré / Contado
+------------------------------------------------
+CONDICIONES DE PAGO:
+- Parte Pagada al Contado (Entrada / Inicial): ${downPayment.toLocaleString('es-ES')} €
+- Parte Pendiente de Pago (Saldo Aplazado): ${pendingBalance.toLocaleString('es-ES')} €
+Forma de Pago: ${acq?.paymentMethod === 'contado' ? 'Al Contado' : 'Pago Aplazado (Letras / Pagarés)'}
+================================================`;
+    } else if (data.type === 'machinery_invoice') {
+      const mac = data.machineryAcquisition;
+      const title = mac?.title || mac?.lineTitle || 'Línea de Producción Industrial';
+      const basePrice = mac?.basePrice || 0;
+      const ivaAmount = mac?.ivaAmount || 0;
+      const totalPrice = mac?.totalPrice || 0;
+      const downPayment = mac?.downPaymentPaid || totalPrice;
+      const pendingBalance = mac?.pendingBalance || 0;
+
+      textContent = `================================================
+FACTURA OFICIAL DE COMPRA DE MAQUINARIA INDUSTRIAL
+Nº Factura Única: FAC-2026-${(mac?.id || '201').toUpperCase()}
+Fecha de Expedición: ${new Date(mac?.purchaseDate || Date.now()).toLocaleDateString('es-ES')}
+------------------------------------------------
+PROVEEDOR / EMISOR:
+Maquinarias e Instalaciones Industriales S.A.
+NIF: A-99887766 | Polígono Industrial Central, Madrid
+
+CLIENTE / COMPRADOR:
+${mac?.studentName || 'Empresa Estudiante'}
+------------------------------------------------
+EQUIPAMIENTO / LÍNEA ADQUIRIDA:
+Línea: ${title} (${mac?.optionTitle || 'Configuración Estándar'})
+Ubicación Instalada: ${mac?.installationNaveTitle || 'Nave Industrial'}
+Capacidad Producción: ${mac?.productionCapacityUnitsPerHour || 60} unid/hora
+Plazo de Montaje: 5 Días Reales (Estado: ${mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento'})
+
+Base Imponible (Llave en mano): ${basePrice.toLocaleString('es-ES')} €
+IVA (21%): ${ivaAmount.toLocaleString('es-ES')} €
+TOTAL FACTURA: ${totalPrice.toLocaleString('es-ES')} €
+------------------------------------------------
+CONDICIONES DE PAGO:
+- Parte Pagada al Contado (Entrada + IVA): ${downPayment.toLocaleString('es-ES')} €
+- Parte Pendiente de Pago (Saldo Aplazado en Pagarés): ${pendingBalance.toLocaleString('es-ES')} €
+Forma de Pago: ${mac?.paymentMethod === 'contado' ? 'Al Contado' : 'Pago Aplazado (24 Pagarés Mensuales)'}
+================================================`;
+    } else if (data.type === 'obligation_statement') {
+      const ob = data.obligation;
+      const code = `EXT-2026-${(ob?.id || '001').toUpperCase()}`;
+      const isPaid = ob?.status === 'pagado';
+      const instrumentName = ob?.type === 'pagare' ? 'Pagaré Mercantil' : ob?.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota de Alquiler';
+
+      textContent = `================================================
+EXTRACTO CONTABLE DE PAGO APLAZADO / EFECTO MERCANTIL
+Nº Extracto Único: ${code}
+Fecha Emisión Extracto: ${new Date().toLocaleDateString('es-ES')}
+------------------------------------------------
+TITULAR Y DEUDOR:
+${ob?.studentName || 'Empresa Estudiante'}
+
+OPERACIÓN ORIGEN:
+Concepto: ${ob?.propertyTitle || 'Operación Empresarial'}
+Tipo de Efecto: ${instrumentName} (${ob?.installmentNumber || 1}/${ob?.totalInstallments || 1})
+Vencimiento: ${new Date(ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
+------------------------------------------------
+LIQUIDACIÓN DEL VENCIMIENTO:
+Importe del Vencimiento: ${(ob?.amount || 0).toLocaleString('es-ES')} €
+Estado: ${isPaid ? `PAGADO Y ABONADO el ${new Date(ob?.paidDate || Date.now()).toLocaleDateString('es-ES')}` : 'PENDIENTE DE COBRO / VENCIMIENTO'}
 ================================================`;
     } else if (data.type === 'loan_statement') {
       const loan = data.loan;
@@ -87,51 +143,14 @@ Forma de Pago: Domiciliación bancaria / Pagaré / Contado
       const principal = loan?.approvedAmount || loan?.offeredAmount || 0;
       const annualRate = (loan?.annualInterestRate || 4.50);
 
-      // Get or compute amortization schedule
-      const schedule: AmortizationRow[] = (loan?.schedule && loan.schedule.length > 0)
-        ? loan.schedule
-        : (() => {
-            const term = loan?.termMonths || 36;
-            const monthlyRate = (annualRate / 100) / 12;
-            const payment = monthlyRate > 0 && principal > 0
-              ? Number((principal * (monthlyRate * Math.pow(1 + monthlyRate, term)) / (Math.pow(1 + monthlyRate, term) - 1)).toFixed(2))
-              : 0;
-
-            let balance = principal;
-            let totalAmortized = 0;
-            const rows: AmortizationRow[] = [];
-            const startDate = new Date(loan?.createdAt || Date.now());
-
-            for (let i = 1; i <= term; i++) {
-              const dueDate = new Date(startDate);
-              dueDate.setMonth(dueDate.getMonth() + i);
-              const interest = Number((balance * monthlyRate).toFixed(2));
-              const pCap = Number((payment - interest).toFixed(2));
-              balance = Math.max(0, Number((balance - pCap).toFixed(2)));
-              totalAmortized = Number((totalAmortized + pCap).toFixed(2));
-
-              rows.push({
-                period: i,
-                dueDate: dueDate.toISOString(),
-                payment,
-                interest,
-                principal: pCap,
-                totalAmortized,
-                pendingBalance: balance,
-                paid: false
-              });
-            }
-            return rows;
-          })();
-
-      const scheduleText = schedule.map(s => 
+      const scheduleText = (loan?.schedule || []).map(s => 
         `Mes ${s.period} [${new Date(s.dueDate).toLocaleDateString('es-ES')}]: Cuota: ${s.payment} € | Capital: ${s.principal} € | Interés: ${s.interest} € | Cap. Pendiente: ${s.pendingBalance} €`
       ).join('\n');
 
       textContent = `================================================
 BANCO CENTRAL HIPOTECARIO S.A.
 PÓLIZA DE PRÉSTAMO HIPOTECARIO Y LIQUIDACIÓN
-Nº Póliza: POL-HIP-${loan?.id || '000'}
+Nº Póliza Única: POL-HIP-2026-${(loan?.id || '000').toUpperCase()}
 Fecha: ${new Date().toLocaleDateString('es-ES')}
 ------------------------------------------------
 PRESTATARIO / TITULAR:
@@ -140,7 +159,7 @@ IBAN de Cuenta: ${loan?.studentAccount || 'ES21...'}
 
 CONDICIONES FINANCIERAS:
 Capital Concedido: ${principal.toLocaleString('es-ES')} €
-Tipo de Interés: EURIBOR (3.50%) + Diferencial (1.00%) = ${annualRate.toFixed(2)}% TIN
+Tipo de Interés: ${annualRate.toFixed(2)}% TIN
 Plazo: ${loan?.termMonths || 36} Meses
 Comisión Apertura (0.10%): ${(principal * 0.001).toLocaleString('es-ES')} €
 
@@ -153,7 +172,7 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
 - Capital Pendiente tras Cuota: ${row.pendingBalance.toLocaleString('es-ES')} €
 ` : ''}
 ------------------------------------------------
-CUADRO COMPLETO DE AMORTIZACIÓN (${schedule.length} MESES):
+CUADRO COMPLETO DE AMORTIZACIÓN:
 ${scheduleText}
 ================================================`;
     }
@@ -173,7 +192,7 @@ ${scheduleText}
           <div className="flex items-center space-x-2">
             <Receipt className="w-5 h-5 text-amber-400" />
             <span className="font-bold text-sm">
-              Documento Contable / Factura Oficial (Vista de Impresión)
+              {data.type === 'obligation_statement' ? 'Extracto Contable de Pago Aplazado' : 'Factura Oficial / Documento Contable (Vista de Impresión)'}
             </span>
           </div>
 
@@ -210,24 +229,25 @@ ${scheduleText}
           {/* DOCUMENT TYPE 1: PROPERTY INVOICE */}
           {data.type === 'property_invoice' && (() => {
             const acq = data.acquisition;
-            const ob = data.obligation;
-            const title = acq?.propertyTitle || ob?.propertyTitle || 'Inmueble Comercial';
-            const isRent = acq?.operation === 'alquiler' || ob?.type === 'cuota_alquiler';
-            const basePrice = acq?.basePrice || (ob ? Number((ob.amount / 1.21).toFixed(2)) : 0);
-            const ivaAmount = acq?.ivaAmount || (ob ? Number((ob.amount - basePrice).toFixed(2)) : 0);
-            const totalPrice = acq?.totalPrice || ob?.amount || 0;
+            const title = acq?.propertyTitle || 'Inmueble Comercial';
+            const isRent = acq?.operation === 'alquiler';
+            const basePrice = acq?.basePrice || 0;
+            const ivaAmount = acq?.ivaAmount || 0;
+            const totalPrice = acq?.totalPrice || 0;
+            const downPayment = acq?.downPaymentPaid || totalPrice;
+            const pendingBalance = acq?.pendingBalance || 0;
             const landPct = acq?.landPercentage || 30;
             const landValue = Number(((basePrice * landPct) / 100).toFixed(2));
             const buildingValue = Number((basePrice - landValue).toFixed(2));
-            const invoiceNo = `FACT-2026-${(acq?.id || ob?.id || '101').replace(/\D/g, '').slice(-6) || '001042'}`;
-            const issueDate = new Date(acq?.purchaseDate || ob?.dueDate || Date.now()).toLocaleDateString('es-ES', {
+            const invoiceNo = `FAC-2026-${(acq?.id || '101').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+            const issueDate = new Date(acq?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
               year: 'numeric', month: 'long', day: 'numeric'
             });
 
             return (
               <div className="space-y-8">
                 
-                {/* Header: Company Logo Placeholder (Text Vector) & Invoice Title */}
+                {/* Header */}
                 <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
                   <div>
                     <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
@@ -246,7 +266,7 @@ ${scheduleText}
                   </div>
 
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-300 text-right w-full sm:w-auto font-mono">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">FACTURA OFICIAL</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">FACTURA OFICIAL ÚNICA</span>
                     <span className="text-base font-extrabold text-slate-900 block">{invoiceNo}</span>
                     <span className="text-[11px] text-slate-600 block mt-1">Fecha: {issueDate}</span>
                   </div>
@@ -268,10 +288,10 @@ ${scheduleText}
                     <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
                       DATOS DEL CLIENTE / RECEPTOR
                     </span>
-                    <p className="font-bold text-slate-900">{acq?.studentName || ob?.studentName || 'Empresa Estudiante S.L.'}</p>
+                    <p className="font-bold text-slate-900">{acq?.studentName || 'Empresa Estudiante S.L.'}</p>
                     <p className="text-slate-600">NIF/CIF: B-87654321</p>
                     <p className="text-slate-600">Titular de Cuenta de Explotación Comercial</p>
-                    <p className="text-slate-600 font-mono">IBAN Cliente: {acq?.id ? 'ES21 0001 0002 ...' : 'ES21...'}</p>
+                    <p className="text-slate-600 font-mono">Ref. Adquisición: #{acq?.id || '001'}</p>
                   </div>
                 </div>
 
@@ -307,16 +327,37 @@ ${scheduleText}
                   </table>
                 </div>
 
-                {/* Property Accounting Breakdown Box (Land vs Building) */}
+                {/* Payment Breakdown Box: Cash vs Deferred */}
+                <div className="p-5 bg-amber-50 rounded-xl border border-amber-300 space-y-3 font-mono">
+                  <h4 className="font-bold text-amber-900 font-sans text-xs flex items-center space-x-1.5 uppercase tracking-wider">
+                    <Receipt className="w-4 h-4 text-amber-700" />
+                    <span>DESGLOSE Y CONDICIONES DE PAGO DE LA COMPRA</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-sans">
+                    <div className="p-3.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-[10px] font-bold text-emerald-800 uppercase block mb-1">Parte Pagada al Contado (Entrada)</span>
+                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{downPayment.toLocaleString('es-ES')} €</span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">Abonado mediante transferencia bancaria inicial</span>
+                    </div>
+
+                    <div className="p-3.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-[10px] font-bold text-amber-800 uppercase block mb-1">Parte Pendiente de Pago (Saldo Aplazado)</span>
+                      <span className="text-base font-extrabold text-amber-900 block font-mono">{pendingBalance.toLocaleString('es-ES')} €</span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">
+                        {pendingBalance > 0 ? 'Financiado mediante efectos mercantiles / pagarés pendientes' : 'Operación 100% abonada al contado'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Property Accounting Breakdown Box */}
                 {!isRent && (
                   <div className="p-4 bg-slate-100 rounded-xl border border-slate-300 space-y-2">
                     <h4 className="font-bold text-slate-900 flex items-center space-x-1 text-xs">
                       <ShieldCheck className="w-4 h-4 text-slate-700" />
-                      <span>DESGLOSE PATRIMONIAL LEGAL Y CONTABLE (Según Valoración catastral)</span>
+                      <span>DESGLOSE PATRIMONIAL LEGAL Y CONTABLE</span>
                     </h4>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      En cumplimiento del Plan General de Contabilidad, la valoración del inmueble se desglosa objetivamente entre la porción de suelo indestructible (Terrenos) y la edificación amortizable:
-                    </p>
 
                     <div className="grid grid-cols-2 gap-4 pt-1 font-mono text-xs">
                       <div className="p-3 bg-white rounded-lg border border-slate-200">
@@ -336,7 +377,7 @@ ${scheduleText}
 
                 {/* Total Summary Footer */}
                 <div className="flex justify-end pt-2">
-                  <div className="w-full sm:w-72 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
+                  <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
                     <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
                       <span>Base Imponible:</span>
                       <span>{basePrice.toLocaleString('es-ES')} €</span>
@@ -346,23 +387,279 @@ ${scheduleText}
                       <span>+{ivaAmount.toLocaleString('es-ES')} €</span>
                     </div>
                     <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
-                      <span>TOTAL A PAGAR:</span>
+                      <span>TOTAL FACTURA:</span>
                       <span>{totalPrice.toLocaleString('es-ES')} €</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Footer stamp signature text */}
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
-                  Documento emitido electrónicamente en la plataforma educativa de Contabilidad Comercial e Inmobiliaria. Válido a efectos de justificación contable simulada.
+                  Documento emitido electrónicamente. Código de factura único e irrepetible.
                 </div>
 
               </div>
             );
           })()}
 
+          {/* DOCUMENT TYPE 2: MACHINERY INVOICE */}
+          {data.type === 'machinery_invoice' && (() => {
+            const mac = data.machineryAcquisition;
+            const title = mac?.title || mac?.lineTitle || 'Línea de Producción Industrial';
+            const basePrice = mac?.basePrice || 0;
+            const ivaAmount = mac?.ivaAmount || 0;
+            const totalPrice = mac?.totalPrice || 0;
+            const downPayment = mac?.downPaymentPaid || totalPrice;
+            const pendingBalance = mac?.pendingBalance || 0;
+            const invoiceNo = `FAC-2026-${(mac?.id || '201').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+            const issueDate = new Date(mac?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
+              year: 'numeric', month: 'long', day: 'numeric'
+            });
 
-          {/* DOCUMENT TYPE 2: BANK LOAN STATEMENT / CONTRACT */}
+            return (
+              <div className="space-y-8">
+                
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Wrench className="w-6 h-6 text-amber-600" />
+                      <span>MAQUINARIAS E INSTALACIONES INDUSTRIALES S.A.</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Suministros Llave en Mano de Líneas de Producción y Torneado
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      NIF: A-99887766 | Reg. Mercantil de Madrid, Tomo 8810, Folio 12
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Polígono Industrial Central, Av. de la Tecnología 12, Madrid
+                    </p>
+                  </div>
+
+                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-300 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-amber-800 block">FACTURA OFICIAL ÚNICA</span>
+                    <span className="text-base font-extrabold text-slate-900 block">{invoiceNo}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">Fecha: {issueDate}</span>
+                  </div>
+                </div>
+
+                {/* Issuer & Client Info Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      PROVEEDOR / EMISOR
+                    </span>
+                    <p className="font-bold text-slate-900">Maquinarias e Instalaciones Industriales S.A.</p>
+                    <p className="text-slate-600">CIF: A-99887766</p>
+                    <p className="text-slate-600">Domicilio: Polígono Industrial Central, Madrid</p>
+                    <p className="text-slate-600 font-mono">IBAN Cobro: ES21 0001 0002 9988 7799</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      CLIENTE / COMPRADOR
+                    </span>
+                    <p className="font-bold text-slate-900">{mac?.studentName || 'Empresa Estudiante'}</p>
+                    <p className="text-slate-600">Ubicación Instalación: {mac?.installationNaveTitle || 'Nave Industrial'}</p>
+                    <p className="text-slate-600 font-mono">Ref. Maquinaria: #{mac?.id || '001'}</p>
+                  </div>
+                </div>
+
+                {/* Line Items Table */}
+                <div className="border border-slate-300 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider print:bg-slate-900 print:text-white">
+                        <th className="p-3">Concepto y Especificación de la Maquinaria</th>
+                        <th className="p-3 text-center">Capacidad</th>
+                        <th className="p-3 text-right">Base Imponible</th>
+                        <th className="p-3 text-right">IVA (21%)</th>
+                        <th className="p-3 text-right">Total Importe</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-mono text-xs">
+                      <tr>
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900 block">{title}</span>
+                          <span className="text-[11px] text-amber-900 block font-semibold">
+                            {mac?.optionTitle || 'Configuración Industrial Estándar'}
+                          </span>
+                          <span className="text-[10px] text-slate-500 block">
+                            Precio llave en mano: incluye transporte, seguro de transporte y montaje completo.
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-slate-800">{mac?.productionCapacityUnitsPerHour || 60} u/h</td>
+                        <td className="p-3 text-right font-medium">{basePrice.toLocaleString('es-ES')} €</td>
+                        <td className="p-3 text-right font-medium text-slate-600">{ivaAmount.toLocaleString('es-ES')} €</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{totalPrice.toLocaleString('es-ES')} €</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Assembly and Delivery Notice */}
+                <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 flex items-start gap-3">
+                  <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-950">
+                    <strong className="block font-extrabold text-amber-900">Plazo Oficial de Montaje de 5 Días Reales:</strong>
+                    La maquinaria se entrega en régimen de montaje con un periodo garantizado de 5 días reales desde la compra antes de estar 100% operativa. Estado actual: <span className="font-bold uppercase text-amber-800">{mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento / Operativa'}</span>.
+                  </div>
+                </div>
+
+                {/* Payment Breakdown Box */}
+                <div className="p-5 bg-slate-50 rounded-xl border border-slate-300 space-y-3 font-mono">
+                  <h4 className="font-bold text-slate-900 font-sans text-xs flex items-center space-x-1.5 uppercase tracking-wider">
+                    <Receipt className="w-4 h-4 text-slate-700" />
+                    <span>CONDICIONES Y DESGLOSE DE PAGO</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-sans">
+                    <div className="p-3.5 bg-white rounded-lg border border-slate-200">
+                      <span className="text-[10px] font-bold text-emerald-800 uppercase block mb-1">Parte Pagada al Contado (Entrada + IVA)</span>
+                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{downPayment.toLocaleString('es-ES')} €</span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">Abonado en cuenta al formalizar la compra</span>
+                    </div>
+
+                    <div className="p-3.5 bg-white rounded-lg border border-slate-200">
+                      <span className="text-[10px] font-bold text-amber-800 uppercase block mb-1">Parte Pendiente de Pago (Saldo Aplazado en Pagarés)</span>
+                      <span className="text-base font-extrabold text-amber-900 block font-mono">{pendingBalance.toLocaleString('es-ES')} €</span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">
+                        {pendingBalance > 0 ? 'Financiado en 24 pagarés mensuales de vencimiento automático' : 'Sin saldo pendiente / Pago al contado'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Total Summary Footer */}
+                <div className="flex justify-end pt-2">
+                  <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
+                      <span>Base Imponible Llave en Mano:</span>
+                      <span>{basePrice.toLocaleString('es-ES')} €</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
+                      <span>21.00% IVA Soportado:</span>
+                      <span>+{ivaAmount.toLocaleString('es-ES')} €</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
+                      <span>TOTAL FACTURA:</span>
+                      <span>{totalPrice.toLocaleString('es-ES')} €</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento emitido electrónicamente. Código de factura único e irrepetible.
+                </div>
+
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 3: OBLIGATION STATEMENT (EXTRACTO DE PAGO) */}
+          {data.type === 'obligation_statement' && (() => {
+            const ob = data.obligation;
+            const extractNo = `EXT-2026-${(ob?.id || '001').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+            const isPaid = ob?.status === 'pagado';
+            const instrumentName = ob?.type === 'pagare' ? 'Pagaré Mercantil' : ob?.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota de Alquiler';
+
+            return (
+              <div className="space-y-8">
+                
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <FileText className="w-6 h-6 text-indigo-700" />
+                      <span>TENEDOR DE EFECTOS Y SERVICIOS FINANCIEROS S.A.</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Gestión Contable de Efectos Mercantiles y Compromisos de Pago Aplazado
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      NIF: A-28001122 | Registro Mercantil de Madrid, Tomo 9912, Folio 30
+                    </p>
+                  </div>
+
+                  <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-indigo-800 block">EXTRACTO CONTABLE ÚNICO</span>
+                    <span className="text-base font-extrabold text-slate-900 block">{extractNo}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">
+                      Fecha Extracto: {new Date().toLocaleDateString('es-ES')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Issuer & Client Info */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      TENEDOR DEL EFECTO / BENEFICIARIO
+                    </span>
+                    <p className="font-bold text-slate-900">Tenedor de Efectos Comerciales S.A.</p>
+                    <p className="text-slate-600">NIF: A-28001122</p>
+                    <p className="text-slate-600 font-mono">Cuenta Cobro: ES21 0001 0002 9988 7755</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      DEUDOR / TITULAR DE LA EMPRESA
+                    </span>
+                    <p className="font-bold text-slate-900">{ob?.studentName || 'Empresa Estudiante'}</p>
+                    <p className="text-slate-600">Estado Vencimiento: <span className={`font-bold ${isPaid ? 'text-emerald-700' : 'text-amber-700'}`}>{isPaid ? 'PAGADO Y LIQUIDADO' : 'PENDIENTE DE COBRO'}</span></p>
+                  </div>
+                </div>
+
+                {/* Extract Detail Box */}
+                <div className="border border-slate-300 rounded-xl p-5 bg-slate-50 space-y-4">
+                  <h3 className="font-bold text-slate-900 uppercase text-xs tracking-wider border-b border-slate-200 pb-2 flex items-center justify-between">
+                    <span>DETALLE DEL VENCIMIENTO APLAZADO</span>
+                    <span className="text-[10px] font-mono text-slate-500">Ref Obligación: #{ob?.id}</span>
+                  </h3>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-mono text-xs">
+                    <div className="bg-white p-3.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans uppercase block">Operación Origen</span>
+                      <span className="text-xs font-bold text-slate-900 block mt-0.5">{ob?.propertyTitle || 'Adquisición de Activo'}</span>
+                    </div>
+
+                    <div className="bg-white p-3.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans uppercase block">Tipo de Efecto / Cuota</span>
+                      <span className="text-xs font-bold text-slate-900 block mt-0.5">
+                        {instrumentName} {ob?.installmentNumber ? `(${ob.installmentNumber}/${ob.totalInstallments || 24})` : ''}
+                      </span>
+                    </div>
+
+                    <div className="bg-white p-3.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans uppercase block">Fecha de Vencimiento</span>
+                      <span className="text-xs font-bold text-slate-900 block mt-0.5">
+                        {new Date(ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-lg border border-slate-200 flex justify-between items-center font-mono">
+                    <div>
+                      <span className="text-xs font-sans font-bold text-slate-800 block">IMPORTE DEL EXTRACTO / VENCIMIENTO:</span>
+                      <span className="text-[10px] text-slate-500 font-sans">
+                        {isPaid ? `Abonado en cuenta el ${new Date(ob?.paidDate || Date.now()).toLocaleDateString('es-ES')}` : 'Cargo programado mediante vencimiento automático'}
+                      </span>
+                    </div>
+                    <span className={`text-lg font-extrabold px-3 py-1 rounded-lg border ${isPaid ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-900 bg-amber-50 border-amber-300'}`}>
+                      {(ob?.amount || 0).toLocaleString('es-ES')} €
+                    </span>
+                  </div>
+                </div>
+
+                <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Extracto oficial emitido con código único e irrepetible. Válido a efectos de comprobación contable.
+                </div>
+
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 4: BANK LOAN STATEMENT / CONTRACT */}
           {data.type === 'loan_statement' && (() => {
             const loan = data.loan;
             const row = data.loanInstallment || (data.installmentPeriod && loan?.schedule ? loan.schedule.find(s => s.period === data.installmentPeriod) : undefined);
@@ -371,47 +668,14 @@ ${scheduleText}
             const netDisbursed = Number((principal - openingFee).toFixed(2));
             const annualRate = (loan?.annualInterestRate || 4.50);
 
-            // Get or calculate complete amortization schedule
             const schedule: AmortizationRow[] = (loan?.schedule && loan.schedule.length > 0)
               ? loan.schedule
-              : (() => {
-                  const term = loan?.termMonths || 36;
-                  const monthlyRate = (annualRate / 100) / 12;
-                  const payment = monthlyRate > 0 && principal > 0
-                    ? Number((principal * (monthlyRate * Math.pow(1 + monthlyRate, term)) / (Math.pow(1 + monthlyRate, term) - 1)).toFixed(2))
-                    : 0;
-
-                  let balance = principal;
-                  let totalAmortized = 0;
-                  const rows: AmortizationRow[] = [];
-                  const startDate = new Date(loan?.createdAt || Date.now());
-
-                  for (let i = 1; i <= term; i++) {
-                    const dueDate = new Date(startDate);
-                    dueDate.setMonth(dueDate.getMonth() + i);
-                    const interest = Number((balance * monthlyRate).toFixed(2));
-                    const pCap = Number((payment - interest).toFixed(2));
-                    balance = Math.max(0, Number((balance - pCap).toFixed(2)));
-                    totalAmortized = Number((totalAmortized + pCap).toFixed(2));
-
-                    rows.push({
-                      period: i,
-                      dueDate: dueDate.toISOString(),
-                      payment,
-                      interest,
-                      principal: pCap,
-                      totalAmortized,
-                      pendingBalance: balance,
-                      paid: false
-                    });
-                  }
-                  return rows;
-                })();
+              : [];
 
             return (
               <div className="space-y-8">
                 
-                {/* Header: Bank Brand Logo (Vector Text) */}
+                {/* Header */}
                 <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
                   <div>
                     <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
@@ -422,16 +686,13 @@ ${scheduleText}
                       Departamento de Riesgos y Crédito Hipotecario Empresarial
                     </p>
                     <p className="text-[10px] text-slate-400">
-                      NIF: A-88776655 | Reg. Mercantil de Madrid, Tomo 12450, Folio 88, Hoja M-198273
-                    </p>
-                    <p className="text-[10px] text-slate-400">
-                      C/ Gran Vía 28, Central Corporativa, 28013 Madrid
+                      NIF: A-88776655 | Reg. Mercantil de Madrid, Tomo 12450, Folio 88
                     </p>
                   </div>
 
                   <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-300 text-right w-full sm:w-auto font-mono">
-                    <span className="text-[10px] uppercase font-bold text-emerald-800 block">PÓLIZA DE PRÉSTAMO</span>
-                    <span className="text-base font-extrabold text-slate-900 block">POL-HIP-2026-{(loan?.id || '001').slice(-6)}</span>
+                    <span className="text-[10px] uppercase font-bold text-emerald-800 block">PÓLIZA DE PRÉSTAMO ÚNICA</span>
+                    <span className="text-base font-extrabold text-slate-900 block">POL-HIP-2026-{(loan?.id || '001').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}</span>
                     <span className="text-[11px] text-slate-600 block mt-1">
                       Fecha Operación: {new Date(loan?.createdAt || Date.now()).toLocaleDateString('es-ES')}
                     </span>
@@ -446,7 +707,7 @@ ${scheduleText}
                     </span>
                     <p className="font-bold text-slate-900">Banco Central Hipotecario S.A.</p>
                     <p className="text-slate-600">NIF: A-88776655</p>
-                    <p className="text-slate-600">Cuenta Emisora Fondo: ES21 0001 0002 9988 7700</p>
+                    <p className="text-slate-600 font-mono">Cuenta Emisora Fondo: ES21 0001 0002 9988 7700</p>
                   </div>
 
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
@@ -474,7 +735,6 @@ ${scheduleText}
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Tipo de Interés (TIN)</span>
                       <span className="text-sm font-bold text-slate-900">{annualRate.toFixed(2)}%</span>
-                      <span className="text-[9px] text-slate-500 font-sans block">(Euribor 3.50% + 1%)</span>
                     </div>
 
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
@@ -485,53 +745,11 @@ ${scheduleText}
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Comisión Apertura</span>
                       <span className="text-sm font-bold text-slate-900">{openingFee.toLocaleString('es-ES')} €</span>
-                      <span className="text-[9px] text-slate-500 font-sans block">(0.10% del principal)</span>
                     </div>
-                  </div>
-
-                  <div className="bg-white p-3.5 rounded-lg border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 font-mono">
-                    <div>
-                      <span className="text-[11px] font-sans font-bold text-slate-800 block">Abono Neto Liquidado en Cuenta Bancaria:</span>
-                      <span className="text-[10px] text-slate-500 font-sans">
-                        Capital ({principal.toLocaleString('es-ES')} €) - Comisión de Apertura ({openingFee.toLocaleString('es-ES')} €)
-                      </span>
-                    </div>
-                    <span className="text-base font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200">
-                      +{netDisbursed.toLocaleString('es-ES')} €
-                    </span>
                   </div>
                 </div>
 
-                {/* Specific Installment Receipt Section (if triggered for a row) */}
-                {row && (
-                  <div className="p-5 bg-amber-50 rounded-xl border border-amber-300 space-y-3 font-mono">
-                    <h4 className="font-bold text-amber-900 font-sans text-xs flex items-center space-x-1.5">
-                      <Receipt className="w-4 h-4 text-amber-700" />
-                      <span>RECIBO DE LIQUIDACIÓN DE CUOTA MENSUAL Nº {row.period} / {loan?.termMonths || 36}</span>
-                    </h4>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-white p-3.5 rounded-lg border border-amber-200">
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-sans block">Vencimiento</span>
-                        <span className="font-bold text-slate-900">{new Date(row.dueDate).toLocaleDateString('es-ES')}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-sans block">Amortización Capital</span>
-                        <span className="font-bold text-slate-900">{row.principal.toLocaleString('es-ES')} €</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-sans block">Intereses Periodo</span>
-                        <span className="font-bold text-slate-900">{row.interest.toLocaleString('es-ES')} €</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-sans block">TOTAL A CARGAR</span>
-                        <span className="font-extrabold text-amber-900 text-sm">{row.payment.toLocaleString('es-ES')} €</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* CUADRO COMPLETO DE AMORTIZACIÓN DEL PRÉSTAMO (SISTEMA FRANCÉS) */}
+                {/* CUADRO COMPLETO DE AMORTIZACIÓN DEL PRÉSTAMO */}
                 <div className="space-y-3 pt-2">
                   <div className="flex items-center justify-between border-b-2 border-slate-900 pb-2">
                     <div className="flex items-center space-x-2">
@@ -540,9 +758,6 @@ ${scheduleText}
                         CUADRO COMPLETO DE AMORTIZACIÓN (SISTEMA FRANCÉS)
                       </h3>
                     </div>
-                    <span className="text-[10px] text-slate-600 font-mono font-semibold">
-                      {schedule.length} Meses | Cuota Constante: {schedule[0]?.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €/mes
-                    </span>
                   </div>
 
                   <div className="overflow-x-auto border border-slate-300 rounded-xl">
@@ -554,7 +769,6 @@ ${scheduleText}
                           <th className="py-2 px-2.5 text-right">Cuota Total</th>
                           <th className="py-2 px-2.5 text-right">Capital</th>
                           <th className="py-2 px-2.5 text-right">Intereses</th>
-                          <th className="py-2 px-2.5 text-right">Total Amort.</th>
                           <th className="py-2 px-2.5 text-right">Cap. Pendiente</th>
                           <th className="py-2 px-2 text-center w-20">Estado</th>
                         </tr>
@@ -567,13 +781,10 @@ ${scheduleText}
                             <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
                             <td className="py-1.5 px-2.5 text-right text-emerald-800 font-medium">{sRow.principal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
                             <td className="py-1.5 px-2.5 text-right text-amber-800">{sRow.interest.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                            <td className="py-1.5 px-2.5 text-right text-slate-600">{sRow.totalAmortized.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
                             <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.pendingBalance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
                             <td className="py-1.5 px-2 text-center font-sans text-[9.5px]">
                               {sRow.paid ? (
                                 <span className="inline-block px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold">PAGADO</span>
-                              ) : sRow.isOverdue ? (
-                                <span className="inline-block px-1.5 py-0.5 bg-rose-100 text-rose-800 rounded font-bold">VENCIDO</span>
                               ) : (
                                 <span className="inline-block px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">PENDIENTE</span>
                               )}
@@ -581,22 +792,12 @@ ${scheduleText}
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot>
-                        <tr className="bg-slate-100 text-slate-900 font-bold border-t-2 border-slate-400 font-mono text-xs">
-                          <td colSpan={2} className="py-2 px-2.5 font-sans">TOTALES PÓLIZA:</td>
-                          <td className="py-2 px-2.5 text-right">{schedule.reduce((acc, r) => acc + r.payment, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                          <td className="py-2 px-2.5 text-right text-emerald-800">{schedule.reduce((acc, r) => acc + r.principal, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                          <td className="py-2 px-2.5 text-right text-amber-800">{schedule.reduce((acc, r) => acc + r.interest, 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                          <td colSpan={3} className="py-2 px-2.5 text-right font-sans text-[10px] text-slate-500">Amortización Francés</td>
-                        </tr>
-                      </tfoot>
                     </table>
                   </div>
                 </div>
 
-                {/* Legal Footnote */}
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
-                  Documentación bancaria oficial simulada. Firmada electrónicamente por Banco Central Hipotecario S.A.
+                  Documentación bancaria oficial simulada.
                 </div>
 
               </div>
