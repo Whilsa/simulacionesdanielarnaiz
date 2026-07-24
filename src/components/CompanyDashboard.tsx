@@ -671,7 +671,9 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 font-medium">
-                            {data.obligations.map(ob => {
+                            {[...data.obligations]
+                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                              .map(ob => {
                               const isPaid = ob.status === 'pagado';
                               const isPending = ob.status === 'pendiente';
 
@@ -968,7 +970,10 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 font-medium">
-                            {data.obligations.filter(o => o.type !== 'cuota_alquiler').map(ob => {
+                            {[...data.obligations]
+                              .filter(o => o.type !== 'cuota_alquiler')
+                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                              .map(ob => {
                               const isPaid = ob.status === 'pagado';
 
                               return (

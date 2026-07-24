@@ -551,6 +551,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         console.warn('[Supabase Restore] Prestamos table select warning:', e);
       }
 
+      let resMachinery: any = { rows: [] };
+      try {
+        resMachinery = await client.query('SELECT * FROM maquinaria_adquisiciones ORDER BY fecha_compra DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Maquinaria table select warning:', e);
+      }
+
       const db = readDb();
 
       // Synchronize students and balances from Supabase "cuentas"
@@ -709,6 +716,48 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
           acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
           schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
+        }));
+      }
+
+      // Reconstruct db.machineryAcquisitions from Supabase "maquinaria_adquisiciones"
+      if (resMachinery.rows.length > 0) {
+        db.machineryAcquisitions = resMachinery.rows.map(row => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          machineryId: String(row.maquinaria_id),
+          category: String(row.categoria) as any,
+          lineTitle: String(row.linea_titulo),
+          title: String(row.linea_titulo),
+          optionTitle: String(row.linea_titulo),
+          lathesCount: 1,
+          productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+          imageUrl: row.categoria === 'metal_hierro' 
+            ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=1000'
+            : 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&q=80&w=1000',
+          basePrice: Number(row.precio_base),
+          financedPrice: Number(row.precio_financiado || row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          totalPrice: Number(row.precio_total),
+          downPaymentPaid: Number(row.entrada_pagada),
+          pendingBalance: Number(row.saldo_pendiente),
+          paymentMethod: String(row.metodo_pago) as any,
+          installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+          installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          assemblyDays: Number(row.dias_montaje || 5),
+          assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : 'operativa',
+          installedAtNaveId: String(row.nave_instalada_id),
+          installationNaveId: String(row.nave_instalada_id),
+          installedAtNaveTitle: String(row.nave_instalada_titulo),
+          installationNaveTitle: String(row.nave_instalada_titulo),
+          installationSurfaceM2: 300,
+          requiredStaff: Number(row.personal_requerido || 5),
+          requiredPowerKW: Number(row.potencia_kw || 35),
+          powerKw: Number(row.potencia_kw || 35),
+          equipmentList: row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : []
         }));
       }
 
@@ -2382,7 +2431,9 @@ app.get('/api/company/:studentId', (req, res) => {
   }
 
   const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
-  const obligations = db.paymentObligations.filter(o => o.studentId === studentId);
+  const obligations = db.paymentObligations
+    .filter(o => o.studentId === studentId)
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
   const loans = (db.loans || []).filter(l => l.studentId === studentId && l.status === 'active');
   const machineryAcquisitions = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
 

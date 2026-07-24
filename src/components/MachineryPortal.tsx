@@ -205,14 +205,46 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                 Los locales comerciales y almacenes estándar <strong>no son válidos</strong> para la instalación de maquinaria de producción. Si no dispones de una nave apta, la orden de compra quedará bloqueada.
               </p>
               <div className="pt-2 flex flex-wrap items-center gap-3 text-xs">
-                <span className="bg-slate-800/80 px-2.5 py-1 rounded-lg text-amber-300 border border-slate-700/60 font-semibold">
-                  Naves Industriales en tu empresa: <strong>{industrialNaves.length} disponib.</strong>
-                </span>
+                {myMachinery.length > 0 ? (
+                  <span className="bg-amber-950/80 px-3 py-1.5 rounded-lg text-amber-200 border border-amber-500/50 font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Aviso de Capacidad: Tu empresa ya dispone de <strong>{myMachinery.length} línea(s) de producción</strong> de maquinaria. Tenlo en cuenta antes de seguir comprando.</span>
+                  </span>
+                ) : (
+                  <span className="bg-slate-800/80 px-3 py-1.5 rounded-lg text-amber-300 border border-slate-700/60 font-semibold flex items-center gap-2">
+                    <Info className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Planificación Industrial: Si compras una nueva línea de producción, ten en cuenta su capacidad instalada antes de seguir comprando.</span>
+                  </span>
+                )}
                 {industrialNaves.length === 0 && (
-                  <span className="text-rose-300 font-bold bg-rose-900/60 px-2.5 py-1 rounded-lg border border-rose-500/40">
+                  <span className="text-rose-300 font-bold bg-rose-900/60 px-2.5 py-1.5 rounded-lg border border-rose-500/40">
                     ⚠️ No posees naves industriales. Acude primero al Portal Inmobiliario.
                   </span>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Turnkey & Assembly Official Conditions Box */}
+        <div className="mb-8 bg-amber-50/90 border border-amber-200/90 rounded-2xl p-5 text-xs text-slate-800 shadow-xs">
+          <div className="flex items-center gap-2 text-amber-900 font-extrabold text-sm mb-3">
+            <Wrench className="w-4 h-4 text-amber-600" />
+            <span>Condiciones Oficiales de Suministro y Montaje de Maquinaria</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-slate-700">
+            <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Precios Llave en Mano:</strong>
+                Todos los precios indicados son <strong>llave en mano</strong>, e incluyen transportes, seguros de transporte y montaje completo.
+              </div>
+            </div>
+            <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de Montaje (5 Días Reales):</strong>
+                Se tardan exactamente <strong>5 días reales</strong> en montar la maquinaria desde la compra antes de estar operativa.
               </div>
             </div>
           </div>
@@ -378,7 +410,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                         <span className="text-[10px] font-bold text-slate-400 uppercase block">Plazo de Montaje</span>
                         <span className="font-extrabold text-slate-900 flex items-center gap-1 mt-0.5">
                           <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                          {machinery.assemblyDays} días
+                          {machinery.assemblyDays} días reales
                         </span>
                       </div>
                     </div>
