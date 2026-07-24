@@ -731,7 +731,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                       <FileText className="w-3.5 h-3.5 text-indigo-600" />
                                       <span>Extracto</span>
                                     </button>
-                                    {isPending && (
+                                     {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
                                         onClick={() => handlePayObligation(ob.id)}
@@ -1022,7 +1022,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                       <FileText className="w-3.5 h-3.5 text-indigo-600" />
                                       <span>Extracto</span>
                                     </button>
-                                    {!isPaid && (
+                                    {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
                                         onClick={() => handlePayObligation(ob.id)}
@@ -1112,7 +1112,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                       <FileText className="w-3.5 h-3.5 text-indigo-600" />
                                       <span>Extracto</span>
                                     </button>
-                                    {!isPaid && (
+                                    {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
                                         onClick={() => handlePayObligation(ob.id)}
@@ -1292,7 +1292,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                         <FileText className="w-3.5 h-3.5 text-indigo-600" />
                                         <span>Extracto</span>
                                       </button>
-                                      {!isPaid && (
+                                      {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === "vencido")) && (
                                         <button
                                           disabled={payingObligationId === ob.id}
                                           onClick={() => handlePayObligation(ob.id)}

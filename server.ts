@@ -437,6 +437,19 @@ async function syncLoanToSupabase(loan: BankLoan) {
 async function syncMachineryToSupabase(mac: MachineryAcquisition) {
   if (!dbPool) return;
   try {
+    const lineTitleVal = mac.lineTitle || mac.title || mac.optionTitle || 'Línea de Maquinaria';
+    const deferredPriceVal = mac.deferredPrice || mac.financedPrice || mac.basePrice || 0;
+    const installmentCountVal = mac.installmentCount || mac.installmentsCount || null;
+    const purchaseDateVal = mac.purchaseDate ? new Date(mac.purchaseDate) : new Date();
+    const assemblyDaysVal = mac.assemblyDays || 5;
+    const assemblyFinishDateVal = (mac.assemblyFinishDate || mac.assemblyEndDate) ? new Date(mac.assemblyFinishDate || mac.assemblyEndDate!) : new Date();
+    const installedNaveIdVal = mac.installedNaveId || mac.installedAtNaveId || mac.installationNaveId || '';
+    const installedNaveTitleVal = mac.installedNaveTitle || mac.installedAtNaveTitle || mac.installationNaveTitle || 'Nave Industrial';
+    const requiredStaffVal = mac.requiredStaff || 5;
+    const powerKwVal = mac.powerKw || mac.requiredPowerKW || 35;
+    const capacityVal = mac.productionCapacityUnitsPerHour || 60;
+    const equipmentVal = JSON.stringify(mac.equipmentList || mac.equipment || []);
+
     await dbPool.query(
       `INSERT INTO maquinaria_adquisiciones (
         id, maquinaria_id, linea_titulo, categoria, alumno_id, alumno_nombre,
@@ -451,29 +464,29 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
         estado = EXCLUDED.estado`,
       [
         mac.id,
-        mac.machineryId,
-        mac.lineTitle,
-        mac.category,
+        mac.machineryId || 'machinery',
+        lineTitleVal,
+        mac.category || 'metal_hierro',
         mac.studentId,
-        mac.studentName,
-        mac.basePrice,
-        mac.deferredPrice,
-        mac.ivaAmount,
-        mac.totalPrice,
-        mac.downPaymentPaid,
-        mac.pendingBalance,
-        mac.paymentMethod,
-        mac.installmentCount || null,
-        new Date(mac.purchaseDate),
-        mac.assemblyDays,
-        new Date(mac.assemblyFinishDate),
-        mac.status,
-        mac.installedNaveId,
-        mac.installedNaveTitle,
-        mac.requiredStaff,
-        mac.powerKw,
-        mac.productionCapacityUnitsPerHour,
-        JSON.stringify(mac.equipment)
+        mac.studentName || 'Estudiante',
+        mac.basePrice || 0,
+        deferredPriceVal,
+        mac.ivaAmount || 0,
+        mac.totalPrice || 0,
+        mac.downPaymentPaid || 0,
+        mac.pendingBalance || 0,
+        mac.paymentMethod || 'contado',
+        installmentCountVal,
+        purchaseDateVal,
+        assemblyDaysVal,
+        assemblyFinishDateVal,
+        mac.status || 'montaje',
+        installedNaveIdVal,
+        installedNaveTitleVal,
+        requiredStaffVal,
+        powerKwVal,
+        capacityVal,
+        equipmentVal
       ]
     );
   } catch (e) {
@@ -721,44 +734,56 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       // Reconstruct db.machineryAcquisitions from Supabase "maquinaria_adquisiciones"
       if (resMachinery.rows.length > 0) {
-        db.machineryAcquisitions = resMachinery.rows.map(row => ({
-          id: String(row.id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          machineryId: String(row.maquinaria_id),
-          category: String(row.categoria) as any,
-          lineTitle: String(row.linea_titulo),
-          title: String(row.linea_titulo),
-          optionTitle: String(row.linea_titulo),
-          lathesCount: 1,
-          productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
-          imageUrl: row.categoria === 'metal_hierro' 
-            ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=1000'
-            : 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&q=80&w=1000',
-          basePrice: Number(row.precio_base),
-          financedPrice: Number(row.precio_financiado || row.precio_base),
-          ivaAmount: Number(row.importe_iva),
-          totalPrice: Number(row.precio_total),
-          downPaymentPaid: Number(row.entrada_pagada),
-          pendingBalance: Number(row.saldo_pendiente),
-          paymentMethod: String(row.metodo_pago) as any,
-          installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-          installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-          purchaseDate: new Date(row.fecha_compra).toISOString(),
-          assemblyDays: Number(row.dias_montaje || 5),
-          assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-          assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-          status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : 'operativa',
-          installedAtNaveId: String(row.nave_instalada_id),
-          installationNaveId: String(row.nave_instalada_id),
-          installedAtNaveTitle: String(row.nave_instalada_titulo),
-          installationNaveTitle: String(row.nave_instalada_titulo),
-          installationSurfaceM2: 300,
-          requiredStaff: Number(row.personal_requerido || 5),
-          requiredPowerKW: Number(row.potencia_kw || 35),
-          powerKw: Number(row.potencia_kw || 35),
-          equipmentList: row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : []
-        }));
+        db.machineryAcquisitions = resMachinery.rows.map(row => {
+          const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            machineryId: String(row.maquinaria_id),
+            category: String(row.categoria) as any,
+            lineTitle: String(row.linea_titulo),
+            title: String(row.linea_titulo),
+            optionTitle: String(row.linea_titulo),
+            lathesCount: 1,
+            productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+            imageUrl: row.categoria === 'metal_hierro' 
+              ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=1000'
+              : 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&q=80&w=1000',
+            basePrice: Number(row.precio_base),
+            financedPrice: Number(row.precio_financiado || row.precio_base),
+            deferredPrice: Number(row.precio_financiado || row.precio_base),
+            ivaAmount: Number(row.importe_iva),
+            totalPrice: Number(row.precio_total),
+            downPaymentPaid: Number(row.entrada_pagada),
+            pendingBalance: Number(row.saldo_pendiente),
+            paymentMethod: String(row.metodo_pago) as any,
+            installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+            installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+            purchaseDate: new Date(row.fecha_compra).toISOString(),
+            assemblyDays: Number(row.dias_montaje || 5),
+            assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+            assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : 'operativa',
+            installedAtNaveId: String(row.nave_instalada_id),
+            installedNaveId: String(row.nave_instalada_id),
+            installationNaveId: String(row.nave_instalada_id),
+            installedAtNaveTitle: String(row.nave_instalada_titulo),
+            installedNaveTitle: String(row.nave_instalada_titulo),
+            installationNaveTitle: String(row.nave_instalada_titulo),
+            installationSurfaceM2: 300,
+            requiredStaff: Number(row.personal_requerido || 5),
+            requiredPowerKW: Number(row.potencia_kw || 35),
+            powerKw: Number(row.potencia_kw || 35),
+            equipmentList: equip,
+            equipment: equip
+          };
+        });
+      } else if (db.machineryAcquisitions && db.machineryAcquisitions.length > 0) {
+        console.log(`[Supabase Sync] Syncing ${db.machineryAcquisitions.length} local machinery acquisitions to Supabase...`);
+        for (const mac of db.machineryAcquisitions) {
+          await syncMachineryToSupabase(mac);
+        }
       }
 
       db.isSeed = false;
@@ -2270,24 +2295,37 @@ app.post('/api/machinery/buy', (req, res) => {
       studentName: student.name,
       machineryId: machinery.id,
       category: machinery.category,
+      lineTitle: machinery.title,
       title: machinery.title,
       optionTitle: option.title,
       lathesCount: option.lathesCount,
       productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
       imageUrl: machinery.imageUrl,
       basePrice,
+      financedPrice: basePrice,
+      deferredPrice: basePrice,
       ivaAmount,
       totalPrice,
       paymentMethod: 'contado',
       downPaymentPaid: totalPrice,
       pendingBalance: 0,
       installationNaveId: targetAcquisition.id,
+      installedAtNaveId: targetAcquisition.id,
+      installedNaveId: targetAcquisition.id,
       installationNaveTitle: targetAcquisition.propertyTitle,
+      installedAtNaveTitle: targetAcquisition.propertyTitle,
+      installedNaveTitle: targetAcquisition.propertyTitle,
       installationSurfaceM2: targetAcquisition.surfaceM2,
       purchaseDate: now.toISOString(),
       assemblyDays: 5,
+      assemblyEndDate: assemblyFinishDate.toISOString(),
       assemblyFinishDate: assemblyFinishDate.toISOString(),
-      status: 'montaje'
+      status: 'montaje',
+      requiredStaff: machinery.requiredStaff || 5,
+      requiredPowerKW: machinery.requiredPowerKW || 35,
+      powerKw: machinery.requiredPowerKW || 35,
+      equipmentList: machinery.equipmentList || machinery.equipment || [],
+      equipment: machinery.equipmentList || machinery.equipment || []
     };
 
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
@@ -2351,26 +2389,40 @@ app.post('/api/machinery/buy', (req, res) => {
       studentName: student.name,
       machineryId: machinery.id,
       category: machinery.category,
+      lineTitle: machinery.title,
       title: machinery.title,
       optionTitle: option.title,
       lathesCount: option.lathesCount,
       productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
       imageUrl: machinery.imageUrl,
       basePrice: basePriceWithSurcharge,
+      financedPrice: basePriceWithSurcharge,
+      deferredPrice: basePriceWithSurcharge,
       ivaAmount,
       totalPrice: totalPriceWithSurchargeAndIva,
       paymentMethod: 'aplazado_pagares',
       downPaymentPaid: initialCashRequired,
       pendingBalance: pendingBaseBalance,
+      installmentsCount: count,
       installmentCount: count,
       installmentMonthlyAmount: installmentAmount,
       installationNaveId: targetAcquisition.id,
+      installedAtNaveId: targetAcquisition.id,
+      installedNaveId: targetAcquisition.id,
       installationNaveTitle: targetAcquisition.propertyTitle,
+      installedAtNaveTitle: targetAcquisition.propertyTitle,
+      installedNaveTitle: targetAcquisition.propertyTitle,
       installationSurfaceM2: targetAcquisition.surfaceM2,
       purchaseDate: now.toISOString(),
       assemblyDays: 5,
+      assemblyEndDate: assemblyFinishDate.toISOString(),
       assemblyFinishDate: assemblyFinishDate.toISOString(),
-      status: 'montaje'
+      status: 'montaje',
+      requiredStaff: machinery.requiredStaff || 5,
+      requiredPowerKW: machinery.requiredPowerKW || 35,
+      powerKw: machinery.requiredPowerKW || 35,
+      equipmentList: machinery.equipmentList || machinery.equipment || [],
+      equipment: machinery.equipmentList || machinery.equipment || []
     };
 
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
@@ -2548,6 +2600,11 @@ app.post('/api/obligations/pay', (req, res) => {
 
   if (obligation.status === 'pagado') {
     return res.status(400).json({ error: 'Esta obligación ya ha sido abonada anteriormente' });
+  }
+
+  const isDueDateReached = new Date(obligation.dueDate) <= new Date();
+  if (!isDueDateReached && obligation.status !== 'vencido') {
+    return res.status(400).json({ error: 'No está permitido abonar pagos aplazados antes de su fecha de vencimiento.' });
   }
 
   const student = db.users.find(u => u.id === studentId);
