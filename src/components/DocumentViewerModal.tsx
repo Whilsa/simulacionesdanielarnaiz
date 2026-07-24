@@ -9,9 +9,9 @@ import {
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer } from '../types.js';
 
-export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement';
+export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement';
 
 export interface DocumentViewerData {
   type: DocumentType;
@@ -26,6 +26,9 @@ export interface DocumentViewerData {
   loan?: BankLoan;
   loanInstallment?: AmortizationRow;
   installmentPeriod?: number;
+
+  // Bank transfer statement fields
+  transfer?: Transfer;
 }
 
 interface DocumentViewerModalProps {
@@ -174,6 +177,29 @@ Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
 ------------------------------------------------
 CUADRO COMPLETO DE AMORTIZACIÓN:
 ${scheduleText}
+================================================`;
+    } else if (data.type === 'transfer_statement') {
+      const tx = data.transfer;
+      const code = `EXT-TX-2026-${(tx?.id || '001').toUpperCase()}`;
+
+      textContent = `================================================
+BANCO CENTRAL DEL ALUMNADO / BANCA DIGITAL
+EXTRACTO OFICIAL DE MOVIMIENTO / TRANSFERENCIA BANCARIA
+Nº Justificante Único: ${code}
+Fecha de Registro: ${tx ? new Date(tx.timestamp).toLocaleString('es-ES') : new Date().toLocaleString('es-ES')}
+------------------------------------------------
+ORDENANTE / DEUDOR:
+Titular: ${tx?.senderName || 'Titular Ordenante'}
+IBAN: ${tx?.senderAccount || 'ES...'}
+
+BENEFICIARIO / RECEPTOR:
+Titular: ${tx?.receiverName || 'Titular Beneficiario'}
+IBAN: ${tx?.receiverAccount || 'ES...'}
+------------------------------------------------
+DETALLES DE LA TRANSACCIÓN:
+Concepto: ${tx?.concept || 'Transferencia Bancaria'}
+Importe Operación: ${(tx?.amount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Estado Contable: EJECUTADO Y ABONADO
 ================================================`;
     }
 
@@ -800,6 +826,88 @@ ${scheduleText}
                   Documentación bancaria oficial simulada.
                 </div>
 
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 5: BANK TRANSFER / MOVEMENT STATEMENT */}
+          {data.type === 'transfer_statement' && (() => {
+            const tx = data.transfer;
+            const code = `EXT-TX-2026-${(tx?.id || '001').toUpperCase()}`;
+
+            return (
+              <div className="space-y-8">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Landmark className="w-6 h-6 text-indigo-700" />
+                      <span>BANCO CENTRAL DEL ALUMNADO</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Sistema Integrado de Transferencias y Pagos Automáticos
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Entidad Bancaria Central del Sistema Educativo Comercial
+                    </p>
+                  </div>
+
+                  <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-indigo-800 block">EXTRACTO BANCARIO OFICIAL</span>
+                    <span className="text-base font-extrabold text-slate-900 block">{code}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">
+                      Fecha: {tx ? new Date(tx.timestamp).toLocaleString('es-ES') : new Date().toLocaleString('es-ES')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sender & Receiver Info */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      CUENTA ORDENANTE
+                    </span>
+                    <p className="font-bold text-slate-900">{tx?.senderName || 'Ordenante'}</p>
+                    <p className="text-slate-600 font-mono text-xs">{tx?.senderAccount || 'ES21...'}</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      CUENTA BENEFICIARIA
+                    </span>
+                    <p className="font-bold text-slate-900">{tx?.receiverName || 'Beneficiario'}</p>
+                    <p className="text-slate-600 font-mono text-xs">{tx?.receiverAccount || 'ES21...'}</p>
+                  </div>
+                </div>
+
+                {/* Transaction Detail Box */}
+                <div className="border border-slate-300 rounded-xl p-5 bg-slate-50 space-y-4">
+                  <h3 className="font-bold text-slate-900 uppercase text-xs tracking-wider border-b border-slate-200 pb-2 flex justify-between">
+                    <span>CONCEPTO Y DETALLES DE LA LIQUIDACIÓN</span>
+                    <span className="text-[10px] font-mono text-slate-500">Estado: LIQUIDADO Y EJECUTADO</span>
+                  </h3>
+
+                  <div className="bg-white p-4 rounded-lg border border-slate-200 font-mono text-xs space-y-2">
+                    <div className="text-slate-700">
+                      <span className="font-bold font-sans text-slate-500 text-[11px] block uppercase">Concepto de la Operación:</span>
+                      <p className="text-sm font-semibold text-slate-900 mt-1">"{tx?.concept}"</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-lg border border-slate-200 flex justify-between items-center font-mono">
+                    <div>
+                      <span className="text-xs font-sans font-bold text-slate-800 block">IMPORTE TOTAL TRANSACCIÓN:</span>
+                      <span className="text-[10px] text-slate-500 font-sans">Movimiento bancario procesado correctamente</span>
+                    </div>
+                    <span className="text-xl font-extrabold px-3 py-1.5 rounded-lg border text-emerald-800 bg-emerald-50 border-emerald-300">
+                      {(tx?.amount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    </span>
+                  </div>
+                </div>
+
+                <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento e impertérrita prueba de liquidación bancaria emitida electrónicamente.
+                </div>
               </div>
             );
           })()}

@@ -466,6 +466,12 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                               <span className="text-slate-500">Renta Mensual Total (con 21% IVA):</span>
                               <span className="font-extrabold text-slate-900">{(acq.monthlyRent || acq.totalPrice).toLocaleString('es-ES')} €/mes</span>
                             </div>
+                            <div className="flex justify-between bg-amber-50/60 p-1.5 rounded-lg border border-amber-100">
+                              <span className="text-amber-900 font-bold">Fianza Pagada (2 Mensualidades):</span>
+                              <span className="font-black text-amber-950">
+                                {(acq.depositPaid || ((acq.basePrice || (acq.monthlyRent ? acq.monthlyRent / 1.21 : 0)) * 2)).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                              </span>
+                            </div>
                             <div className="flex justify-between">
                               <span className="text-slate-500">Domiciliación Bancaria:</span>
                               <span className="font-bold text-emerald-600 flex items-center gap-1">
@@ -723,14 +729,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                     )}
                                   </td>
                                   <td className="p-3.5 text-right space-x-2">
-                                    <button
-                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-[11px] transition border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                                      title="Ver Extracto de Pago"
-                                    >
-                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                                      <span>Extracto</span>
-                                    </button>
+                                    
                                      {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
@@ -1014,14 +1013,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                     )}
                                   </td>
                                   <td className="p-3 text-right space-x-1.5">
-                                    <button
-                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                                      title="Ver Extracto de Pago"
-                                    >
-                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                                      <span>Extracto</span>
-                                    </button>
+                                    
                                     {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
@@ -1104,14 +1096,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                     )}
                                   </td>
                                   <td className="p-3 text-right space-x-1.5">
-                                    <button
-                                      onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                                      title="Ver Extracto de Pago"
-                                    >
-                                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                                      <span>Extracto</span>
-                                    </button>
+                                    
                                     {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
                                       <button
                                         disabled={payingObligationId === ob.id}
@@ -1284,14 +1269,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                       )}
                                     </td>
                                     <td className="p-3 text-right space-x-2">
-                                      <button
-                                        onClick={() => setActiveDocumentModal({ type: 'obligation_statement', obligation: ob })}
-                                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-[11px] transition border border-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                                        title="Ver Extracto de Pago"
-                                      >
-                                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                                        <span>Extracto</span>
-                                      </button>
+                                      
                                       {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === "vencido")) && (
                                         <button
                                           disabled={payingObligationId === ob.id}

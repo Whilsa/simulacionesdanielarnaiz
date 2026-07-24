@@ -9,9 +9,9 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw
+  Download, Upload, Database, RefreshCw, Edit, Building2, Wrench
 } from 'lucide-react';
-import { User, Transfer, SystemLog } from '../types.js';
+import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import Footer from './Footer.js';
 

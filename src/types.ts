@@ -94,6 +94,7 @@ export interface PropertyAcquisition {
   paymentMethod: 'contado' | 'aplazado_pagare' | 'aplazado_letra' | 'aplazado_cuotas' | string;
   monthlyRent?: number;
   nextRentDueDate?: string;
+  depositPaid?: number;
   downPaymentPaid?: number;
   pendingBalance?: number;
   address?: string;

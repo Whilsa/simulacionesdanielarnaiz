@@ -1395,7 +1395,7 @@ app.put('/api/users/:id', (req, res) => {
 // Adjust balance of a user (Teacher only)
 app.put('/api/users/:id/adjust-balance', (req, res) => {
   const { id } = req.params;
-  const { amount, actionType } = req.body; // actionType: 'add' | 'subtract' | 'set'
+  const { amount, actionType, concept } = req.body; // actionType: 'add' | 'subtract' | 'set'
 
   if (amount === undefined || isNaN(Number(amount))) {
     return res.status(400).json({ error: 'Cantidad inválida' });
@@ -1412,12 +1412,48 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
   const oldBalance = user.balance;
   const changeValue = Number(amount);
 
+  let transferAmount = changeValue;
+  let isAdd = true;
+
   if (actionType === 'add') {
-    user.balance += changeValue;
+    user.balance = Number((user.balance + changeValue).toFixed(2));
+    isAdd = true;
   } else if (actionType === 'subtract') {
-    user.balance = Math.max(0, user.balance - changeValue);
+    user.balance = Number(Math.max(0, user.balance - changeValue).toFixed(2));
+    isAdd = false;
   } else if (actionType === 'set') {
-    user.balance = Math.max(0, changeValue);
+    const diff = changeValue - user.balance;
+    user.balance = Number(Math.max(0, changeValue).toFixed(2));
+    if (diff >= 0) {
+      isAdd = true;
+      transferAmount = Number(diff.toFixed(2));
+    } else {
+      isAdd = false;
+      transferAmount = Number(Math.abs(diff).toFixed(2));
+    }
+  }
+
+  // Create forced transaction transfer record
+  const defaultConcept = concept && concept.trim() !== '' 
+    ? concept.trim() 
+    : (isAdd ? 'Abono forzado de fondos por Administración Docente' : 'Cobro forzado de fondos por Administración Docente');
+
+  const teacherIBAN = 'ES99 0000 0000 0000 0000 0000';
+
+  if (transferAmount > 0) {
+    const forcedTransfer: Transfer = {
+      id: generateId('tx'),
+      senderId: isAdd ? 'teacher-admin' : user.id,
+      senderName: isAdd ? 'Administración Docente / Profesor' : user.name,
+      senderAccount: isAdd ? teacherIBAN : user.accountNumber,
+      receiverId: isAdd ? user.id : 'teacher-admin',
+      receiverName: isAdd ? user.name : 'Administración Docente / Profesor',
+      receiverAccount: isAdd ? user.accountNumber : teacherIBAN,
+      amount: transferAmount,
+      concept: defaultConcept,
+      timestamp: new Date().toISOString()
+    };
+    db.transfers.unshift(forcedTransfer);
   }
 
   if (user.role === 'student') {
@@ -1427,7 +1463,7 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
   const newLog: SystemLog = {
     id: generateId('log'),
     action: 'BALANCE_ADJUSTMENT',
-    details: `Ajuste de saldo para ${user.name}. Tipo: ${actionType}, Cantidad: ${changeValue} €, Anterior: ${oldBalance} €, Nuevo: ${user.balance} €`,
+    details: `Transacción forzada (${isAdd ? 'Ingreso' : 'Deducción'}) para ${user.name}. Concepto: "${defaultConcept}". Importe: ${transferAmount} €, Anterior: ${oldBalance} €, Nuevo: ${user.balance} €`,
     timestamp: new Date().toISOString()
   };
   db.systemLogs.unshift(newLog);

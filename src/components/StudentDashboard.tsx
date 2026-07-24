@@ -7,11 +7,12 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Landmark, ArrowUpRight, ArrowDownLeft, Send, Copy, Check, 
-  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle
+  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText
 } from 'lucide-react';
 import { User, Transfer } from '../types.js';
 import StudentLoanSection from './StudentLoanSection.js';
 import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
+import DocumentViewerModal from './DocumentViewerModal.js';
 import Footer from './Footer.js';
 
 interface StudentDashboardProps {
@@ -25,6 +26,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [studentsList, setStudentsList] = useState<User[]>([]);
   const [copied, setCopied] = useState(false);
+  const [selectedExtractTx, setSelectedExtractTx] = useState<Transfer | null>(null);
 
   // New Transfer Form State
   const [customIBAN, setCustomIBAN] = useState('');
@@ -527,12 +529,20 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0">
+                        <div className="text-right shrink-0 flex flex-col items-end gap-1">
                           <p className={`text-base font-bold font-mono ${
                             isOutbound ? 'text-rose-600' : 'text-emerald-600'
                           }`}>
                             {isOutbound ? '-' : '+'}{tx.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
                           </p>
+                          <button
+                            onClick={() => setSelectedExtractTx(tx)}
+                            className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
+                            title="Descargar Extracto Bancario"
+                          >
+                            <FileText className="w-3 h-3 text-indigo-600" />
+                            <span>Extracto</span>
+                          </button>
                         </div>
                       </motion.div>
                     );
@@ -545,6 +555,17 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
         </div>
 
       </main>
+
+      {/* DOCUMENT VIEWER MODAL FOR EXTRACTS */}
+      {selectedExtractTx && (
+        <DocumentViewerModal
+          data={{
+            type: 'transfer_statement',
+            transfer: selectedExtractTx
+          }}
+          onClose={() => setSelectedExtractTx(null)}
+        />
+      )}
 
       <Footer />
     </div>
