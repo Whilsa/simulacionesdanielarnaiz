@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wrench, Building2, ShieldAlert, CheckCircle2, AlertCircle, ArrowLeft, 
-  Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight
+  Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight, Info
 } from 'lucide-react';
 import { User, MachineryItem, MachineryOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
 import Footer from './Footer.js';

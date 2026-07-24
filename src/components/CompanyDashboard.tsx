@@ -944,7 +944,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                     <div className="flex items-center justify-between">
                       <h3 className="text-xs font-black uppercase text-slate-500 tracking-wider flex items-center gap-2">
                         <Receipt className="w-4 h-4 text-amber-600" />
-                        <span>Operación Origen: Compra de Inmuebles con Pago Aplazado (Pagarés / Letras)</span>
+                        <span>Operación origen: compras</span>
                       </h3>
                       <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">
                         Efectos Mercantiles
@@ -1039,7 +1039,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                     <div className="flex items-center justify-between">
                       <h3 className="text-xs font-black uppercase text-slate-500 tracking-wider flex items-center gap-2">
                         <FileText className="w-4 h-4 text-indigo-600" />
-                        <span>Operación Origen: Arrendamiento y Alquiler Inmobiliario</span>
+                        <span>Operación origen: alquileres</span>
                       </h3>
                       <span className="text-[11px] font-bold text-indigo-800 bg-indigo-100 px-2.5 py-0.5 rounded-full">
                         Alquileres
@@ -1064,7 +1064,10 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 font-medium">
-                            {data.obligations.filter(o => o.type === 'cuota_alquiler').map(ob => {
+                            {[...data.obligations]
+                              .filter(o => o.type === 'cuota_alquiler')
+                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                              .map(ob => {
                               const isPaid = ob.status === 'pagado';
 
                               return (
