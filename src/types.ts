@@ -118,6 +118,58 @@ export interface LoanCollateral {
   appraisalValue: number;
 }
 
+export interface MachineryLineOption {
+  id: string;
+  label: string;
+  lathesCount: number;
+  capacityUnitsPerHour: number;
+  basePrice: number;
+}
+
+export interface MachineryItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  category: 'metal_hierro' | 'plastico_montaje';
+  description: string;
+  equipmentList: string[];
+  requiredSurfaceM2: number; // 300 m2 total for metal (240 floor + 60 warehouses), 240 m2 total for plastic (180 floor + 60 warehouses)
+  productionFloorM2: number;
+  warehousesM2: number; // 60 m2
+  requiredStaff: number; // 5
+  requiredPowerKW: number; // 35 kW or 33 kW
+  basePrice: number;
+  imageUrl: string;
+  options?: MachineryLineOption[];
+}
+
+export interface MachineryAcquisition {
+  id: string;
+  machineryId: string;
+  lineTitle: string;
+  category: 'metal_hierro' | 'plastico_montaje';
+  studentId: string;
+  studentName: string;
+  basePrice: number;
+  financedPrice: number;
+  ivaAmount: number;
+  totalPrice: number;
+  downPaymentPaid: number;
+  pendingBalance: number;
+  paymentMethod: 'contado' | 'aplazado_pagares';
+  installmentsCount?: number; // 24
+  purchaseDate: string;
+  assemblyDays: number; // 5
+  assemblyEndDate: string;
+  status: 'en_montaje' | 'operativa';
+  installedAtNaveId: string;
+  installedAtNaveTitle: string;
+  requiredStaff: number;
+  requiredPowerKW: number;
+  productionCapacityUnitsPerHour: number;
+  equipmentList: string[];
+}
+
 export interface AmortizationRow {
   period: number;
   dueDate: string;
@@ -188,6 +240,7 @@ export interface DatabaseSchema {
   acquisitions: PropertyAcquisition[];
   paymentObligations: PaymentObligation[];
   loans: BankLoan[];
+  machineryAcquisitions?: MachineryAcquisition[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }

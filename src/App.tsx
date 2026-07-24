@@ -11,11 +11,12 @@ import StudentDashboard from './components/StudentDashboard.js';
 import MainHub from './components/MainHub.js';
 import RealEstatePortal from './components/RealEstatePortal.js';
 import CompanyDashboard from './components/CompanyDashboard.js';
+import MachineryPortal from './components/MachineryPortal.js';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'company'>('hub');
+  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'company'>('hub');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   useEffect(() => {
@@ -101,6 +102,16 @@ export default function App() {
   if (activeModule === 'real_estate') {
     return (
       <RealEstatePortal
+        currentUser={currentUser}
+        onBackToHub={() => setActiveModule('hub')}
+        onUserBalanceUpdated={handleUserBalanceUpdated}
+      />
+    );
+  }
+
+  if (activeModule === 'machinery') {
+    return (
+      <MachineryPortal
         currentUser={currentUser}
         onBackToHub={() => setActiveModule('hub')}
         onUserBalanceUpdated={handleUserBalanceUpdated}

@@ -4,11 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, PaymentObligation, BankLoan } from '../types.js';
+import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition } from '../types.js';
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -38,6 +38,8 @@ interface CompanyDataResponse {
     totalLandValue: number;
     totalBuildingValue: number;
     annualBuildingDepreciation: number;
+    totalMachineryAssetsValue?: number;
+    machineryCount?: number;
     totalObligationsPendingAmount?: number;
     totalLoansPendingAmount?: number;
     totalLoansPendingPrincipal?: number;
@@ -48,6 +50,7 @@ interface CompanyDataResponse {
   acquisitions: PropertyAcquisition[];
   obligations: PaymentObligation[];
   loans?: BankLoan[];
+  machineryAcquisitions?: MachineryAcquisition[];
 }
 
 export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank, onUserBalanceUpdated }: CompanyDashboardProps) {
@@ -56,7 +59,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'obligations'>('owned');
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'obligations'>('owned');
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -314,6 +317,18 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
               </button>
 
               <button
+                onClick={() => setActiveTab('machinery')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'machinery'
+                    ? 'border-amber-600 text-amber-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Wrench className="w-4 h-4" />
+                <span>Maquinaria Industrial ({data.machineryAcquisitions?.length || 0})</span>
+              </button>
+
+              <button
                 onClick={() => setActiveTab('obligations')}
                 className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
                   activeTab === 'obligations'
@@ -484,7 +499,69 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
               </div>
             )}
 
-            {/* TAB 3: OBLIGATIONS, PROMISSORY NOTES & BANK LOANS */}
+            {/* TAB 3: MACHINERY */}
+            {activeTab === 'machinery' && (
+              <div className="space-y-4">
+                {(!data.machineryAcquisitions || data.machineryAcquisitions.length === 0) ? (
+                  <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-xs text-slate-500">
+                    Tu empresa aún no dispone de maquinaria industrial. Puedes adquirir líneas de producción desde la sección de Maquinaria.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {data.machineryAcquisitions.map(mac => {
+                      const isAssembly = mac.status === 'montaje';
+                      return (
+                        <div key={mac.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-amber-100 text-amber-900 rounded-full border border-amber-200">
+                                Linea de Producción
+                              </span>
+                              <span className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
+                                isAssembly ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              }`}>
+                                {isAssembly ? 'En Montaje (5 días)' : 'Operativa'}
+                              </span>
+                            </div>
+
+                            <h3 className="text-sm font-bold text-slate-900 mb-1">{mac.title}</h3>
+                            <p className="text-xs text-amber-800 font-semibold mb-3">{mac.optionTitle}</p>
+
+                            <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs border border-slate-100 font-sans">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Ubicación Instalación:</span>
+                                <span className="font-bold text-slate-900">{mac.installationNaveTitle} ({mac.installationSurfaceM2} m²)</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Capacidad Producción:</span>
+                                <span className="font-bold text-amber-900 font-mono">{mac.productionCapacityUnitsPerHour} unid / hora</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Inversión Adquisición:</span>
+                                <span className="font-bold text-slate-900">{mac.totalPrice.toLocaleString('es-ES')} €</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Modalidad Pago:</span>
+                                <span className="font-semibold text-slate-800">{mac.paymentMethod === 'contado' ? 'Al Contado' : 'Aplazado (24 Pagarés)'}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 pt-2 text-[11px] text-slate-400 border-t border-slate-100 flex justify-between items-center">
+                            <span>Adquirido: {new Date(mac.purchaseDate).toLocaleDateString('es-ES')}</span>
+                            {isAssembly && (
+                              <span className="font-semibold text-amber-700">
+                                Fin montaje: {new Date(mac.assemblyFinishDate).toLocaleDateString('es-ES')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {activeTab === 'obligations' && (
               <div className="space-y-6">
                 {/* 1. BANK LOANS SECTION */}

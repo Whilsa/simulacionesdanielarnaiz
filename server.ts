@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
@@ -192,8 +192,35 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         fecha_aceptacion TIMESTAMPTZ,
         tabla_amortizacion JSONB
       );
+
+      CREATE TABLE IF NOT EXISTS maquinaria_adquisiciones (
+        id VARCHAR(255) PRIMARY KEY,
+        maquinaria_id VARCHAR(255) NOT NULL,
+        linea_titulo TEXT NOT NULL,
+        categoria VARCHAR(50) NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        precio_base NUMERIC(12, 2) NOT NULL,
+        precio_financiado NUMERIC(12, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        precio_total NUMERIC(12, 2) NOT NULL,
+        entrada_pagada NUMERIC(12, 2) NOT NULL,
+        saldo_pendiente NUMERIC(12, 2) NOT NULL,
+        metodo_pago VARCHAR(50) NOT NULL,
+        numero_cuotas INT,
+        fecha_compra TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        dias_montaje INT NOT NULL DEFAULT 5,
+        fecha_fin_montaje TIMESTAMPTZ NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'en_montaje',
+        nave_instalada_id VARCHAR(255) NOT NULL,
+        nave_instalada_titulo TEXT NOT NULL,
+        personal_requerido INT NOT NULL,
+        potencia_kw NUMERIC(10, 2) NOT NULL,
+        capacidad_produccion_unidades_hora INT NOT NULL,
+        equipamiento JSONB
+      );
     `);
-    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago", "prestamos" verified/created.');
+    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago", "prestamos", "maquinaria_adquisiciones" verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
@@ -407,6 +434,53 @@ async function syncLoanToSupabase(loan: BankLoan) {
   }
 }
 
+async function syncMachineryToSupabase(mac: MachineryAcquisition) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO maquinaria_adquisiciones (
+        id, maquinaria_id, linea_titulo, categoria, alumno_id, alumno_nombre,
+        precio_base, precio_financiado, importe_iva, precio_total, entrada_pagada, saldo_pendiente,
+        metodo_pago, numero_cuotas, fecha_compra, dias_montaje, fecha_fin_montaje, estado,
+        nave_instalada_id, nave_instalada_titulo, personal_requerido, potencia_kw,
+        capacidad_produccion_unidades_hora, equipamiento
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      ON CONFLICT (id) DO UPDATE SET
+        saldo_pendiente = EXCLUDED.saldo_pendiente,
+        estado = EXCLUDED.estado`,
+      [
+        mac.id,
+        mac.machineryId,
+        mac.lineTitle,
+        mac.category,
+        mac.studentId,
+        mac.studentName,
+        mac.basePrice,
+        mac.deferredPrice,
+        mac.ivaAmount,
+        mac.totalPrice,
+        mac.downPaymentPaid,
+        mac.pendingBalance,
+        mac.paymentMethod,
+        mac.installmentCount || null,
+        new Date(mac.purchaseDate),
+        mac.assemblyDays,
+        new Date(mac.assemblyFinishDate),
+        mac.status,
+        mac.installedNaveId,
+        mac.installedNaveTitle,
+        mac.requiredStaff,
+        mac.powerKw,
+        mac.productionCapacityUnitsPerHour,
+        JSON.stringify(mac.equipment)
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing machinery acquisition to Supabase:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
@@ -437,6 +511,11 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     if (db.loans) {
       for (const loan of db.loans) {
         await syncLoanToSupabase(loan);
+      }
+    }
+    if (db.machineryAcquisitions) {
+      for (const mac of db.machineryAcquisitions) {
+        await syncMachineryToSupabase(mac);
       }
     }
   } catch (e) {
@@ -902,6 +981,7 @@ function readDb(): DatabaseSchema {
     if (!db.acquisitions) db.acquisitions = [];
     if (!db.paymentObligations) db.paymentObligations = [];
     if (!db.loans) db.loans = [];
+    if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
@@ -1968,6 +2048,329 @@ app.post('/api/properties/buy-rent', (req, res) => {
   return res.status(400).json({ error: 'Operación no válida.' });
 });
 
+// ================= MACHINERY CATALOG & ENDPOINTS =================
+
+const MACHINERY_CATALOG: MachineryItem[] = [
+  {
+    id: 'mac-metal-hierro',
+    category: 'metal_hierro',
+    title: 'Línea de Fabricación de Metal / Hierro (Varilla y Punta)',
+    description: 'Línea industrial completa para la fabricación de la varilla de acero y la punta de precisión de los destornilladores.',
+    imageUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=1000',
+    equipment: [
+      'Horno de inducción',
+      'Prensa de forja',
+      'Torno CNC de 2 ejes',
+      'Horno de temple',
+      'Pulidora / Afiladora',
+      'Equipo de control de calidad'
+    ],
+    requiredSurfaceM2: 240,
+    rawMaterialWarehouseM2: 30,
+    finishedProductWarehouseM2: 30,
+    totalRequiredM2: 300,
+    requiredStaff: 5,
+    powerKw: 35,
+    assemblyDays: 5,
+    options: [
+      {
+        id: 'opt-1-lathe',
+        lathesCount: 1,
+        title: 'Línea Estándar (1 Torno CNC de 2 ejes)',
+        productionCapacityUnitsPerHour: 60,
+        basePrice: 104000
+      },
+      {
+        id: 'opt-2-lathes',
+        lathesCount: 2,
+        title: 'Línea de Alta Capacidad (2 Tornos CNC de 2 ejes)',
+        productionCapacityUnitsPerHour: 100,
+        basePrice: 110000
+      }
+    ]
+  },
+  {
+    id: 'mac-plastico-ensamblaje',
+    category: 'plastico_ensamblaje',
+    title: 'Línea de Inyección de Plástico y Ensamblaje Final',
+    description: 'Línea automatizada para la inyección del mango plástico de polímero, marcado láser y ensamblaje final.',
+    imageUrl: 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&q=80&w=1000',
+    equipment: [
+      'Secador de granza',
+      'Refrigerador de agua (Chiller)',
+      'Prensa de inyección',
+      'Marcado láser de marca y referencia'
+    ],
+    requiredSurfaceM2: 180,
+    rawMaterialWarehouseM2: 30,
+    finishedProductWarehouseM2: 30,
+    totalRequiredM2: 240,
+    requiredStaff: 5,
+    powerKw: 33,
+    assemblyDays: 5,
+    options: [
+      {
+        id: 'opt-plastic-std',
+        lathesCount: 0,
+        title: 'Línea Inyectora y Marcado Láser',
+        productionCapacityUnitsPerHour: 120,
+        basePrice: 102000
+      }
+    ]
+  }
+];
+
+// GET machinery catalog
+app.get('/api/machinery/catalog', (req, res) => {
+  res.json({ success: true, catalog: MACHINERY_CATALOG });
+});
+
+// BUY machinery line
+app.post('/api/machinery/buy', (req, res) => {
+  const { studentId, machineryId, optionId, targetNaveId, paymentMethod } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  // Check for automatic payments and overdue debt blocking
+  processStudentAutomaticPayments(db, studentId);
+  const studentStatus = getStudentPaymentStatus(db, studentId);
+  if (studentStatus.isBlocked) {
+    return res.status(400).json({
+      error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${studentStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+    });
+  }
+
+  const machinery = MACHINERY_CATALOG.find(m => m.id === machineryId);
+  if (!machinery) {
+    return res.status(404).json({ error: 'Línea de maquinaria no encontrada en el catálogo' });
+  }
+
+  const option = machinery.options.find(o => o.id === optionId);
+  if (!option) {
+    return res.status(404).json({ error: 'Opción de configuración de maquinaria no encontrada' });
+  }
+
+  // Validation: Student MUST own or rent an Industrial Nave suitable for this machinery
+  const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
+  const targetAcquisition = acquisitions.find(a => a.id === targetNaveId || a.propertyId === targetNaveId);
+
+  if (!targetAcquisition) {
+    return res.status(400).json({
+      error: `Para comprar esta maquinaria se requiere obligatoriamente disponer de una Nave Industrial de al menos ${machinery.totalRequiredM2} m² (superficie de producción + 2 almacenes de 30 m²). Por favor, adquiere o alquila una Nave Industrial adecuada antes de continuar.`
+    });
+  }
+
+  if (targetAcquisition.propertyType !== 'nave_industrial') {
+    const typeLabel = targetAcquisition.propertyType === 'local_comercial' ? 'Local Comercial' : targetAcquisition.propertyType === 'almacen' ? 'Almacén' : 'Inmueble';
+    return res.status(400).json({
+      error: `Requisito de Ubicación Incumplido: El inmueble seleccionado "${targetAcquisition.propertyTitle}" es un ${typeLabel}. La maquinaria industrial de fabricación SOLO puede ser instalada dentro de una NAVE INDUSTRIAL.`
+    });
+  }
+
+  if (targetAcquisition.surfaceM2 < machinery.totalRequiredM2) {
+    return res.status(400).json({
+      error: `Superficie Insuficiente: La nave industrial seleccionada dispone de ${targetAcquisition.surfaceM2} m², pero la línea de maquinaria "${machinery.title}" requiere de un mínimo de ${machinery.totalRequiredM2} m² (${machinery.requiredSurfaceM2} m² de línea + 2 almacenes de 30 m²).`
+    });
+  }
+
+  const vendorName = 'Maquinarias e Instalaciones Industriales S.A.';
+  const vendorAccount = 'ES210001000299887799';
+  const now = new Date();
+
+  // Calculate 5-day assembly finish date
+  const assemblyFinishDate = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+
+  if (paymentMethod === 'contado') {
+    // CASH PURCHASE
+    const basePrice = option.basePrice;
+    const ivaAmount = Number((basePrice * 0.21).toFixed(2));
+    const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+
+    if (student.balance < totalPrice) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para compra al contado. Se requieren ${totalPrice.toLocaleString('es-ES')} € (Precio Base Llave en Mano: ${basePrice.toLocaleString('es-ES')} € + IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+      });
+    }
+
+    // Deduct total cash payment
+    student.balance = Number((student.balance - totalPrice).toFixed(2));
+
+    // Transfer record
+    const newTransfer: Transfer = {
+      id: generateId('tx'),
+      senderId: student.id,
+      senderName: student.name,
+      senderAccount: student.accountNumber,
+      receiverId: 'corp-maquinaria-proveedor',
+      receiverName: vendorName,
+      receiverAccount: vendorAccount,
+      amount: totalPrice,
+      concept: `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`,
+      timestamp: now.toISOString()
+    };
+    db.transfers.unshift(newTransfer);
+
+    // Create Machinery Acquisition Record
+    const machAcq: MachineryAcquisition = {
+      id: generateId('mac-acq'),
+      studentId: student.id,
+      studentName: student.name,
+      machineryId: machinery.id,
+      category: machinery.category,
+      title: machinery.title,
+      optionTitle: option.title,
+      lathesCount: option.lathesCount,
+      productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+      imageUrl: machinery.imageUrl,
+      basePrice,
+      ivaAmount,
+      totalPrice,
+      paymentMethod: 'contado',
+      downPaymentPaid: totalPrice,
+      pendingBalance: 0,
+      installationNaveId: targetAcquisition.id,
+      installationNaveTitle: targetAcquisition.propertyTitle,
+      installationSurfaceM2: targetAcquisition.surfaceM2,
+      purchaseDate: now.toISOString(),
+      assemblyDays: 5,
+      assemblyFinishDate: assemblyFinishDate.toISOString(),
+      status: 'montaje'
+    };
+
+    if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+    db.machineryAcquisitions.unshift(machAcq);
+
+    writeDb(db);
+
+    // Sync to Supabase
+    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
+    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+
+    return res.json({
+      success: true,
+      message: `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 5 días en ${targetAcquisition.propertyTitle}.`,
+      machineryAcquisition: machAcq,
+      updatedBalance: student.balance
+    });
+  } else if (paymentMethod === 'aplazado_pagares') {
+    // DEFERRED PAYMENT (+10% surcharge, 40% down payment + 100% IVA, 60% in 24 monthly promissory notes)
+    const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
+    const ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
+    const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
+
+    const downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
+    const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+    const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2)); // 60% of base
+
+    if (student.balance < initialCashRequired) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${initialCashRequired.toLocaleString('es-ES')} € (Entrada del 40%: ${downPaymentBase.toLocaleString('es-ES')} € + Total IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+      });
+    }
+
+    const count = 24;
+    const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
+
+    // Deduct initial cash payment
+    student.balance = Number((student.balance - initialCashRequired).toFixed(2));
+
+    // Transfer record for down payment
+    const newTransfer: Transfer = {
+      id: generateId('tx'),
+      senderId: student.id,
+      senderName: student.name,
+      senderAccount: student.accountNumber,
+      receiverId: 'corp-maquinaria-proveedor',
+      receiverName: vendorName,
+      receiverAccount: vendorAccount,
+      amount: initialCashRequired,
+      concept: `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`,
+      timestamp: now.toISOString()
+    };
+    db.transfers.unshift(newTransfer);
+
+    // Create Machinery Acquisition Record
+    const machAcqId = generateId('mac-acq');
+    const machAcq: MachineryAcquisition = {
+      id: machAcqId,
+      studentId: student.id,
+      studentName: student.name,
+      machineryId: machinery.id,
+      category: machinery.category,
+      title: machinery.title,
+      optionTitle: option.title,
+      lathesCount: option.lathesCount,
+      productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+      imageUrl: machinery.imageUrl,
+      basePrice: basePriceWithSurcharge,
+      ivaAmount,
+      totalPrice: totalPriceWithSurchargeAndIva,
+      paymentMethod: 'aplazado_pagares',
+      downPaymentPaid: initialCashRequired,
+      pendingBalance: pendingBaseBalance,
+      installmentCount: count,
+      installmentMonthlyAmount: installmentAmount,
+      installationNaveId: targetAcquisition.id,
+      installationNaveTitle: targetAcquisition.propertyTitle,
+      installationSurfaceM2: targetAcquisition.surfaceM2,
+      purchaseDate: now.toISOString(),
+      assemblyDays: 5,
+      assemblyFinishDate: assemblyFinishDate.toISOString(),
+      status: 'montaje'
+    };
+
+    if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+    db.machineryAcquisitions.unshift(machAcq);
+
+    // Generate 24 promissory notes payment obligations
+    const generatedObligations: PaymentObligation[] = [];
+    for (let i = 1; i <= count; i++) {
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + (i * 30));
+
+      const ob: PaymentObligation = {
+        id: generateId('obl'),
+        acquisitionId: machAcqId,
+        studentId: student.id,
+        studentName: student.name,
+        propertyTitle: `${machinery.title} (${option.title})`,
+        type: 'pagare',
+        amount: installmentAmount,
+        dueDate: dueDate.toISOString(),
+        status: 'pendiente',
+        installmentNumber: i,
+        totalInstallments: count
+      };
+      db.paymentObligations.push(ob);
+      generatedObligations.push(ob);
+    }
+
+    writeDb(db);
+
+    // Sync to Supabase
+    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
+    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+    for (const ob of generatedObligations) {
+      syncObligationToSupabase(ob).catch(e => console.error(e));
+    }
+
+    return res.json({
+      success: true,
+      message: `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido 24 pagarés mensuales de ${installmentAmount.toLocaleString('es-ES')} €/mes. El montaje dura 5 días en ${targetAcquisition.propertyTitle}.`,
+      machineryAcquisition: machAcq,
+      updatedBalance: student.balance
+    });
+  }
+
+  return res.status(400).json({ error: 'Forma de pago no válida.' });
+});
+
 // Get Company Financial & Property Assets (Mi Empresa Dashboard)
 app.get('/api/company/:studentId', (req, res) => {
   const { studentId } = req.params;
@@ -1981,6 +2384,24 @@ app.get('/api/company/:studentId', (req, res) => {
   const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
   const obligations = db.paymentObligations.filter(o => o.studentId === studentId);
   const loans = (db.loans || []).filter(l => l.studentId === studentId && l.status === 'active');
+  const machineryAcquisitions = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
+
+  // Update machinery status if assembly finished
+  let statusChanged = false;
+  const now = new Date();
+  for (const m of machineryAcquisitions) {
+    if (m.status === 'montaje') {
+      const finishDate = new Date(m.assemblyFinishDate);
+      if (now >= finishDate) {
+        m.status = 'operativa';
+        statusChanged = true;
+        syncMachineryToSupabase(m).catch(e => console.error(e));
+      }
+    }
+  }
+  if (statusChanged) {
+    writeDb(db);
+  }
 
   const ownedProperties = acquisitions.filter(a => a.operation === 'compra');
   const rentedProperties = acquisitions.filter(a => a.operation === 'alquiler');
@@ -1999,10 +2420,15 @@ app.get('/api/company/:studentId', (req, res) => {
     totalBuildingValue += buildingPart;
   }
 
+  let totalMachineryAssetsValue = 0;
+  for (const m of machineryAcquisitions) {
+    totalMachineryAssetsValue += m.basePrice;
+  }
+
   const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2)); // 2% amortización contable oficial de construcción en España
 
   // 1. Payment Obligations (Pagarés, letras de cambio y cuotas de compra aplazada)
-  // Las cuotas de alquiler de meses posteriores son compromisos de gasto corriente, no deudas financieras acumulatitvas.
+  // Las cuotas de alquiler de meses posteriores son compromisos de gasto corriente, no deudas financieras acumulativas.
   const pendingDebtObligations = obligations.filter(o => o.status === 'pendiente' && o.type !== 'cuota_alquiler');
   const totalObligationsPendingAmount = Number(pendingDebtObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
 
@@ -2042,17 +2468,20 @@ app.get('/api/company/:studentId', (req, res) => {
       totalRealEstateAssetsValue: Number(totalRealEstateAssetsValue.toFixed(2)),
       totalLandValue: Number(totalLandValue.toFixed(2)),
       totalBuildingValue: Number(totalBuildingValue.toFixed(2)),
+      totalMachineryAssetsValue: Number(totalMachineryAssetsValue.toFixed(2)),
       annualBuildingDepreciation,
       totalObligationsPendingAmount,
       totalLoansPendingAmount,
       totalLoansPendingPrincipal,
       totalPendingObligations,
       totalMonthlyRentCommitments,
-      activeLoansCount: loans.length
+      activeLoansCount: loans.length,
+      machineryCount: machineryAcquisitions.length
     },
     acquisitions,
     obligations,
-    loans
+    loans,
+    machineryAcquisitions
   });
 });
 
