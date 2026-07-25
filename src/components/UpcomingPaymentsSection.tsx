@@ -70,12 +70,16 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
 
   const getTypeName = (type: string) => {
     switch (type) {
-      case 'cuota_alquiler': return 'Cuota de Alquiler';
-      case 'cuota_compra': return 'Cuota Aplazada de Compra';
-      case 'pagare': return 'Pagaré Comercial';
-      case 'letra_cambio': return 'Letra de Cambio';
-      case 'cuota_prestamo': return 'Préstamo Hipotecario';
-      default: return 'Cargo Domiciliado';
+      case 'cuota_alquiler': return 'Cuota de alquiler';
+      case 'cuota_compra': return 'Cuota aplazada de compra';
+      case 'pagare': return 'Pagaré comercial';
+      case 'letra_cambio': return 'Letra de cambio';
+      case 'cuota_prestamo': return 'Préstamo hipotecario';
+      case 'cuota_nomina': return 'Nóminas del personal';
+      case 'liquidacion_impuesto':
+      case 'liquidacion_irpf': return 'Retención IRPF (Hacienda Pública - AEAT)';
+      case 'liquidacion_ss': return 'Seguridad Social (TGSS)';
+      default: return 'Cargo domiciliado';
     }
   };
 

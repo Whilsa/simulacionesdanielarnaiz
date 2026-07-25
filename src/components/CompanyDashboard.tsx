@@ -66,7 +66,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
   const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
   const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations'>('owned');
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans'>('owned');
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -95,6 +95,166 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   useEffect(() => {
     fetchCompanyData();
   }, [currentUser.id]);
+
+  const handleDownloadPayrollDetail = (periodName: string, employees: HiredEmployee[]) => {
+    if (!employees || employees.length === 0) return;
+
+    let totalGrossSum = 0;
+    let totalIRPFSum = 0;
+    let totalSSEmpSum = 0;
+    let totalNetSum = 0;
+    let totalSSCompSum = 0;
+
+    const empLines = employees.map((emp, i) => {
+      const isFirstMonth = new Date(emp.hireDate).getMonth() === new Date().getMonth() && new Date(emp.hireDate).getFullYear() === new Date().getFullYear();
+      const hireDay = new Date(emp.hireDate).getDate();
+      const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+      const daysWorked = isFirstMonth ? Math.max(1, daysInMonth - hireDay + 1) : daysInMonth;
+      const gross = isFirstMonth ? (emp.grossSalaryMonthly / daysInMonth) * daysWorked : emp.grossSalaryMonthly;
+      const irpf = Math.round(gross * 0.17 * 100) / 100;
+      const ssEmp = Math.round(gross * 0.0648 * 100) / 100;
+      const net = Math.round((gross - irpf - ssEmp) * 100) / 100;
+      const ssComp = Math.round(gross * 0.75 * 100) / 100;
+
+      totalGrossSum += gross;
+      totalIRPFSum += irpf;
+      totalSSEmpSum += ssEmp;
+      totalNetSum += net;
+      totalSSCompSum += ssComp;
+
+      return `${i + 1}. ${emp.employeeName} (Edad: ${emp.age} años)
+   Fecha de contratación: ${new Date(emp.hireDate).toLocaleDateString('es-ES')}
+   Días computados en mes: ${daysWorked} días ${isFirstMonth ? '(Proporcional primer mes)' : ''}
+   Sueldo bruto: ${gross.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+   Retención IRPF (17%): ${irpf.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+   Seguridad Social empleado (6,48%): ${ssEmp.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+   Sueldo líquido / neto a cobrar: ${net.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+   Aportación Seguridad Social empresa (75%): ${ssComp.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
+    }).join('\n\n');
+
+    const textContent = `===================================================================
+DETALLE Y RESUMEN DE NÓMINAS DE LA EMPRESA
+===================================================================
+Empresa: ${currentUser.name}
+Cuenta IBAN: ${currentUser.accountNumber}
+Periodo: ${periodName}
+Fecha de emisión: ${new Date().toLocaleDateString('es-ES')}
+
+-------------------------------------------------------------------
+DESGLOSE POR EMPLEADO:
+-------------------------------------------------------------------
+${empLines}
+
+-------------------------------------------------------------------
+RESUMEN TOTAL DE LA EMPRESA (${employees.length} empleados):
+-------------------------------------------------------------------
+Total sueldos brutos: ${totalGrossSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Total IRPF a retener e ingresar en Hacienda (AEAT): ${totalIRPFSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Total Seguridad Social a retener empleados (TGSS): ${totalSSEmpSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Total sueldos líquidos a abonar a los empleados: ${totalNetSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Total gasto en Seguridad Social a cargo de la empresa (75%): ${totalSSCompSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+===================================================================`;
+
+    const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Detalle_Nominas_${currentUser.name.replace(/\s+/g, '_')}_${periodName.replace(/\s+/g, '_')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getUpcoming24MonthsPayments = () => {
+    if (!data) return [];
+    const now = new Date();
+    const maxDate = new Date();
+    maxDate.setMonth(maxDate.getMonth() + 24);
+
+    const items: Array<{
+      id: string;
+      concept: string;
+      origin: string;
+      amount: number;
+      dueDate: string;
+      status: 'pendiente' | 'pagado' | 'vencido';
+    }> = [];
+
+    // 1. Payment obligations (Pagarés, letras, alquileres)
+    (data.obligations || []).forEach(ob => {
+      const d = new Date(ob.dueDate);
+      if (d <= maxDate) {
+        items.push({
+          id: ob.id,
+          concept: `${ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota de alquiler'} (${ob.installmentNumber || 1}/${ob.totalInstallments || 12}): ${ob.propertyTitle}`,
+          origin: ob.type === 'pagare' ? 'Pagaré comercial' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Alquiler de inmueble',
+          amount: ob.amount,
+          dueDate: ob.dueDate,
+          status: ob.status
+        });
+      }
+    });
+
+    // 2. Tax and Social Security obligations
+    (data.taxObligations || []).forEach(tax => {
+      const d = new Date(tax.dueDate);
+      if (d <= maxDate) {
+        items.push({
+          id: tax.id,
+          concept: tax.concept,
+          origin: tax.agency === 'AEAT' ? 'Hacienda Pública (AEAT)' : 'Seguridad Social (TGSS)',
+          amount: tax.amount,
+          dueDate: tax.dueDate,
+          status: tax.status
+        });
+      }
+    });
+
+    // 3. Bank Loan amortization schedules (for active loans)
+    (data.loans || []).filter(l => l.status === 'active').forEach(loan => {
+      (loan.schedule || []).forEach(row => {
+        const d = new Date(row.dueDate);
+        if (d <= maxDate && !row.paid) {
+          items.push({
+            id: `loan-${loan.id}-${row.installmentNumber}`,
+            concept: `Cuota ${row.installmentNumber}/${loan.termMonths} de préstamo hipotecario (${loan.collateral.propertyTitle || 'Garantía inmobiliaria'})`,
+            origin: 'Préstamo hipotecario',
+            amount: row.payment,
+            dueDate: row.dueDate,
+            status: 'pendiente'
+          });
+        }
+      });
+    });
+
+    // 4. Upcoming monthly net payrolls on day 26 of next 24 months
+    const studentEmps = data.hiredEmployees || [];
+    if (studentEmps.length > 0) {
+      const totalGross = studentEmps.reduce((acc, e) => acc + e.grossSalaryMonthly, 0);
+      const totalNet = Math.round((totalGross * (1 - 0.17 - 0.0648)) * 100) / 100;
+
+      for (let m = 0; m < 24; m++) {
+        const pDate = new Date(now.getFullYear(), now.getMonth() + m, 26, 9, 0, 0);
+        if (pDate <= maxDate) {
+          const isPastDay26 = m === 0 && now.getDate() >= 26;
+          if (!isPastDay26) {
+            const monthName = pDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+            items.push({
+              id: `payroll-${m}`,
+              concept: `Nóminas netas del personal de ${monthName} (${studentEmps.length} empleados)`,
+              origin: 'Nóminas de personal',
+              amount: totalNet,
+              dueDate: pDate.toISOString(),
+              status: 'pendiente'
+            });
+          }
+        }
+      }
+    }
+
+    items.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+    return items;
+  };
 
   const handlePayObligation = async (obligationId: string) => {
     setPayingObligationId(obligationId);
@@ -353,7 +513,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                 }`}
               >
                 <Building2 className="w-4 h-4" />
-                <span>Inmuebles en Propiedad ({data.acquisitions.filter(a => a.operation === 'compra').length})</span>
+                <span>Inmuebles en propiedad ({data.acquisitions.filter(a => a.operation === 'compra').length})</span>
               </button>
 
               <button
@@ -365,7 +525,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                 }`}
               >
                 <FileText className="w-4 h-4" />
-                <span>Inmuebles en Alquiler ({data.acquisitions.filter(a => a.operation === 'alquiler').length})</span>
+                <span>Inmuebles en alquiler ({data.acquisitions.filter(a => a.operation === 'alquiler').length})</span>
               </button>
 
               <button
@@ -377,7 +537,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                 }`}
               >
                 <Wrench className="w-4 h-4" />
-                <span>Maquinaria Industrial ({data.machineryAcquisitions?.length || 0})</span>
+                <span>Maquinaria ({data.machineryAcquisitions?.length || 0})</span>
               </button>
 
               <button
@@ -389,7 +549,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                 }`}
               >
                 <Users className="w-4 h-4" />
-                <span>Mis Empleados Contratados ({data.hiredEmployees?.length || 0})</span>
+                <span>Mis empleados contratados ({data.hiredEmployees?.length || 0})</span>
               </button>
 
               <button
@@ -402,9 +562,21 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
               >
                 <Clock className="w-4 h-4" />
                 <span>
-                  Deudas, Pagarés y Préstamos (
-                  {data.obligations.filter(o => o.status === 'pendiente').length + (data.loans?.length || 0) + (data.taxObligations?.filter(t => t.status === 'pendiente').length || 0)} activos
-                  )
+                  Próximos pagos ({getUpcoming24MonthsPayments().length})
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('loans')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'loans'
+                    ? 'border-emerald-600 text-emerald-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Landmark className="w-4 h-4" />
+                <span>
+                  Préstamos ({data.loans?.filter(l => l.status === 'active').length || 0})
                 </span>
               </button>
             </div>
@@ -580,40 +752,74 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {data.machineryAcquisitions.map(mac => {
                       const isAssembly = mac.status === 'montaje';
+                      const relatedObligations = (data.obligations || []).filter(o => o.propertyTitle === mac.title || o.propertyTitle === mac.optionTitle);
+                      const paidObligations = relatedObligations.filter(o => o.status === 'pagado');
+                      const pendingObligations = relatedObligations.filter(o => o.status === 'pendiente' || o.status === 'vencido');
+                      const paidAmountSum = paidObligations.reduce((acc, o) => acc + o.amount, 0) + (mac.paymentMethod === 'contado' ? mac.totalPrice : 0);
+                      const pendingAmountSum = pendingObligations.reduce((acc, o) => acc + o.amount, 0);
+
                       return (
-                        <div key={mac.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
+                        <div key={mac.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between space-y-4">
                           <div>
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-amber-100 text-amber-900 rounded-full border border-amber-200">
-                                Linea de Producción
+                                Línea de producción
                               </span>
                               <span className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
                                 isAssembly ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                               }`}>
-                                {isAssembly ? 'En Montaje (5 días)' : 'Operativa'}
+                                {isAssembly ? 'En montaje (5 días)' : 'Operativa'}
                               </span>
                             </div>
 
                             <h3 className="text-sm font-bold text-slate-900 mb-1">{mac.title}</h3>
                             <p className="text-xs text-amber-800 font-semibold mb-3">{mac.optionTitle}</p>
 
-                            <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs border border-slate-100 font-sans">
+                            <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs border border-slate-100 font-sans mb-3">
                               <div className="flex justify-between">
-                                <span className="text-slate-500">Ubicación Instalación:</span>
+                                <span className="text-slate-500">Ubicación instalación:</span>
                                 <span className="font-bold text-slate-900">{mac.installationNaveTitle} ({mac.installationSurfaceM2} m²)</span>
                               </div>
                               <div className="flex justify-between">
-                                <span className="text-slate-500">Capacidad Producción:</span>
+                                <span className="text-slate-500">Capacidad producción:</span>
                                 <span className="font-bold text-amber-900 font-mono">{mac.productionCapacityUnitsPerHour} unid / hora</span>
                               </div>
                               <div className="flex justify-between">
-                                <span className="text-slate-500">Inversión Adquisición:</span>
+                                <span className="text-slate-500">Inversión adquisición:</span>
                                 <span className="font-bold text-slate-900">{mac.totalPrice.toLocaleString('es-ES')} €</span>
                               </div>
                               <div className="flex justify-between">
-                                <span className="text-slate-500">Modalidad Pago:</span>
-                                <span className="font-semibold text-slate-800">{mac.paymentMethod === 'contado' ? 'Al Contado' : 'Aplazado (24 Pagarés)'}</span>
+                                <span className="text-slate-500">Modalidad pago:</span>
+                                <span className="font-semibold text-slate-800">{mac.paymentMethod === 'contado' ? 'Al contado' : 'Aplazado (24 pagarés)'}</span>
                               </div>
+                            </div>
+
+                            {/* Detalle de Pagos Realizados y Pendientes */}
+                            <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/80 text-xs space-y-2">
+                              <h4 className="font-bold text-amber-950 flex items-center justify-between">
+                                <span>Pagos realizados y pendientes</span>
+                                <span className="text-[10px] font-normal text-amber-800">
+                                  {mac.paymentMethod === 'contado' ? '100% abonado' : `${paidObligations.length} / 24 pagarés pagados`}
+                                </span>
+                              </h4>
+
+                              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-amber-200/60">
+                                <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                                  <span className="text-emerald-800 block text-[10px] font-bold">Total amortizado / pagado</span>
+                                  <span className="font-black text-emerald-950 text-sm">{paidAmountSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                </div>
+                                <div className="bg-amber-100/80 p-2 rounded-lg border border-amber-300">
+                                  <span className="text-amber-900 block text-[10px] font-bold">Total pendiente de vencimiento</span>
+                                  <span className="font-black text-amber-950 text-sm">{pendingAmountSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                </div>
+                              </div>
+
+                              {pendingObligations.length > 0 && (
+                                <div className="text-[10px] text-amber-900 pt-1">
+                                  <span>Próximo pagaré: </span>
+                                  <strong>{pendingObligations[0].amount.toLocaleString('es-ES')} €</strong> el {new Date(pendingObligations[0].dueDate).toLocaleDateString('es-ES')}
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -631,7 +837,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                               className="px-3.5 py-1.5 bg-amber-900 hover:bg-amber-800 text-amber-100 font-bold rounded-xl text-xs transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
                             >
                               <Receipt className="w-3.5 h-3.5 text-amber-300" />
-                              <span>Ver Factura</span>
+                              <span>Ver factura</span>
                             </button>
                           </div>
                         </div>
@@ -889,38 +1095,144 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
               </div>
             )}
 
-            {/* TAB 5: DEBTS, OBLIGATIONS AND TAXES */}
+            {/* TAB 5: UPCOMING PAYMENTS (PRÓXIMOS PAGOS) FOR THE NEXT 24 MONTHS */}
             {activeTab === 'obligations' && (
               <div className="space-y-6">
-                {/* 1. BANK LOANS SECTION */}
-                {data.loans && data.loans.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <Landmark className="w-4 h-4 text-emerald-600" />
-                        <span>Préstamos Bancarios y Hipotecarios Activos ({data.loans.length})</span>
+                <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-purple-600" />
+                        <span>Próximos pagos</span>
                       </h3>
-                      <span className="text-xs text-slate-500 font-medium">
-                        Origen: Banco Simulado (Financiación de Inmuebles)
-                      </span>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Relación cronológica ordenada por fecha de vencimiento de todos los importes a pagar en los próximos 24 meses (alquileres, adquisiciones de inmuebles o maquinaria, nóminas, Seguridad Social, Hacienda Pública y préstamos).
+                      </p>
                     </div>
+                    <span className="text-xs font-mono font-bold bg-purple-50 text-purple-900 border border-purple-200 px-3 py-1 rounded-full self-start sm:self-auto">
+                      Proyección 24 meses: {getUpcoming24MonthsPayments().length} pagos
+                    </span>
+                  </div>
 
+                  {getUpcoming24MonthsPayments().length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-500">
+                      No hay pagos programados para los próximos 24 meses.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
+                            <th className="p-3.5">Fecha de vencimiento</th>
+                            <th className="p-3.5">Concepto</th>
+                            <th className="p-3.5">Origen</th>
+                            <th className="p-3.5 text-right">Importe (€)</th>
+                            <th className="p-3.5">Estado</th>
+                            <th className="p-3.5 text-right">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium">
+                          {getUpcoming24MonthsPayments().map(item => {
+                            const isPaid = item.status === 'pagado';
+                            const isOverdue = item.status === 'vencido' || (!isPaid && new Date(item.dueDate) <= new Date());
+
+                            return (
+                              <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                                <td className="p-3.5 text-slate-900 font-mono font-bold">
+                                  {new Date(item.dueDate).toLocaleDateString('es-ES')}
+                                </td>
+                                <td className="p-3.5 text-slate-900 font-semibold">{item.concept}</td>
+                                <td className="p-3.5 text-slate-600">
+                                  <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 text-[11px] font-medium border border-slate-200">
+                                    {item.origin}
+                                  </span>
+                                </td>
+                                <td className="p-3.5 text-right font-black text-slate-900 text-sm">
+                                  {item.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                </td>
+                                <td className="p-3.5">
+                                  {isPaid ? (
+                                    <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      <span>Pagado</span>
+                                    </span>
+                                  ) : isOverdue ? (
+                                    <span className="inline-flex items-center gap-1 text-rose-800 bg-rose-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
+                                      <AlertTriangle className="w-3 h-3" />
+                                      <span>Vencido</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
+                                      <Clock className="w-3 h-3" />
+                                      <span>Pendiente de vencimiento</span>
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3.5 text-right">
+                                  {(!isPaid && isOverdue && !item.id.startsWith('payroll-') && !item.id.startsWith('loan-')) && (
+                                    <button
+                                      disabled={payingObligationId === item.id || payingTaxId === item.id}
+                                      onClick={() => {
+                                        if (item.origin.includes('AEAT') || item.origin.includes('TGSS')) {
+                                          handlePayTaxObligation(item.id);
+                                        } else {
+                                          handlePayObligation(item.id);
+                                        }
+                                      }}
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-[11px] transition shadow-xs cursor-pointer inline-flex items-center gap-1"
+                                    >
+                                      <span>Pagar</span>
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 6: BANK LOANS & MORTGAGES (PRÉSTAMOS) */}
+            {activeTab === 'loans' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Landmark className="w-5 h-5 text-emerald-600" />
+                        <span>Préstamos</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Detalle de préstamos bancarios e hipotecas activas concedidos para la financiación de bienes inmuebles.
+                      </p>
+                    </div>
+                  </div>
+
+                  {(!data.loans || data.loans.filter(l => l.status === 'active').length === 0) ? (
+                    <div className="p-8 text-center text-xs text-slate-500">
+                      No existen préstamos ni hipotecas activas en este momento.
+                    </div>
+                  ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {data.loans.map(loan => {
+                      {data.loans.filter(l => l.status === 'active').map(loan => {
                         const unpaidRows = (loan.schedule || []).filter(r => !r.paid);
                         const unpaidSum = unpaidRows.reduce((acc, r) => acc + r.payment, 0);
                         const unpaidPrincipal = unpaidRows.reduce((acc, r) => acc + r.principal, 0);
 
                         return (
-                          <div key={loan.id} className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between space-y-4 hover:border-emerald-300 transition-colors">
+                          <div key={loan.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between space-y-4 hover:border-emerald-300 transition-colors">
                             <div>
                               <div className="flex items-start justify-between">
                                 <div>
-                                  <span className="inline-block text-[10px] uppercase font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60 mb-1">
-                                    Préstamo Hipotecario
+                                  <span className="inline-block text-[10px] uppercase font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 mb-1">
+                                    Préstamo hipotecario
                                   </span>
                                   <h4 className="text-sm font-black text-slate-900 line-clamp-1">
-                                    {loan.collateral.propertyTitle || 'Garantía Inmobiliaria'}
+                                    {loan.collateral.propertyTitle || 'Garantía inmobiliaria'}
                                   </h4>
                                 </div>
                                 <span className="text-xs font-mono font-bold text-slate-500">
@@ -928,28 +1240,28 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                 </span>
                               </div>
 
-                              <div className="mt-3 grid grid-cols-2 gap-2 text-xs border-y border-slate-100 py-3 my-2">
+                              <div className="mt-3 grid grid-cols-2 gap-2 text-xs border-y border-slate-200/80 py-3 my-2">
                                 <div>
-                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital Otorgado</span>
+                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital otorgado</span>
                                   <span className="font-extrabold text-slate-800">{loan.offeredAmount.toLocaleString('es-ES')} €</span>
                                 </div>
                                 <div>
-                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuotas Pendientes</span>
-                                  <span className="font-extrabold text-red-700">{unpaidSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuotas pendientes</span>
+                                  <span className="font-extrabold text-rose-700">{unpaidSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
                                 </div>
                                 <div>
-                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital Vivo (Principal)</span>
+                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital vivo (principal)</span>
                                   <span className="font-extrabold text-slate-800">{unpaidPrincipal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
                                 </div>
                                 <div>
-                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuota Mensual</span>
+                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuota mensual</span>
                                   <span className="font-extrabold text-slate-900">{loan.monthlyPayment.toLocaleString('es-ES')} €/mes</span>
                                 </div>
                               </div>
 
                               <div className="flex items-center justify-between text-[11px] text-slate-500">
-                                <span>Plazo: {loan.termMonths} meses • {loan.annualInterestRate}% Int.</span>
-                                <span>{unpaidRows.length} cuotas rest.</span>
+                                <span>Plazo: {loan.termMonths} meses • {loan.annualInterestRate}% interés</span>
+                                <span>{unpaidRows.length} cuotas restantes</span>
                               </div>
                             </div>
 
@@ -958,198 +1270,11 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                               className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center justify-center gap-2"
                             >
                               <Calculator className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Ver Cuadro de Amortización Completo</span>
+                              <span>Ver cuadro de amortización completo</span>
                             </button>
                           </div>
                         );
                       })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 2. PAYMENT OBLIGATIONS TABLE */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-amber-600" />
-                      <span>Pagarés, Letras y Compromisos de Pago ({data.obligations.length})</span>
-                    </h3>
-                    <span className="text-xs text-slate-500 font-medium">
-                      Origen: Compraventa / Arrendamientos Inmobiliarios
-                    </span>
-                  </div>
-
-                  {data.obligations.length === 0 ? (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-xs text-slate-500">
-                      No existen obligaciones de pago ni pagarés emitidos.
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
-                              <th className="p-3.5">Instrumento</th>
-                              <th className="p-3.5">Inmueble Vinculado</th>
-                              <th className="p-3.5">Cuota / Vencimiento</th>
-                              <th className="p-3.5">Importe (€)</th>
-                              <th className="p-3.5">Fecha Vencimiento</th>
-                              <th className="p-3.5">Estado</th>
-                              <th className="p-3.5 text-right">Acción / Documento</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 font-medium">
-                            {[...data.obligations]
-                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-                              .map(ob => {
-                              const isPaid = ob.status === 'pagado';
-                              const isPending = ob.status === 'pendiente';
-
-                              const label = ob.type === 'pagare'
-                                ? 'Pagaré'
-                                : ob.type === 'letra_cambio'
-                                ? 'Letra de Cambio'
-                                : 'Cuota Alquiler';
-
-                              return (
-                                <tr key={ob.id} className="hover:bg-slate-50/80 transition">
-                                  <td className="p-3.5 font-bold text-slate-800">
-                                    <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px]">
-                                      {label}
-                                    </span>
-                                  </td>
-                                  <td className="p-3.5 font-medium text-slate-900">{ob.propertyTitle}</td>
-                                  <td className="p-3.5 text-slate-600">
-                                    Cuota {ob.installmentNumber || 1} de {ob.totalInstallments || 12}
-                                  </td>
-                                  <td className="p-3.5 font-black text-slate-900 text-sm">
-                                    {ob.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                  </td>
-                                  <td className="p-3.5 text-slate-700 font-mono">
-                                    {new Date(ob.dueDate).toLocaleDateString('es-ES')}
-                                  </td>
-                                  <td className="p-3.5">
-                                    {isPaid ? (
-                                      <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                                        <CheckCircle2 className="w-3 h-3" />
-                                        <span>Pagado ({new Date(ob.paidDate!).toLocaleDateString('es-ES')})</span>
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                                        <Clock className="w-3 h-3" />
-                                        <span>Pendiente de Cobro</span>
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="p-3.5 text-right space-x-2">
-                                    
-                                     {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === 'vencido')) && (
-                                      <button
-                                        disabled={payingObligationId === ob.id}
-                                        onClick={() => handlePayObligation(ob.id)}
-                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-[11px] transition shadow-xs cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
-                                      >
-                                        {payingObligationId === ob.id && <RefreshCw className="w-3 h-3 animate-spin" />}
-                                        <span>Pagar</span>
-                                      </button>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* 3. TAX & SOCIAL SECURITY OBLIGATIONS TABLE */}
-                <div className="space-y-3 pt-4 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      <Receipt className="w-4 h-4 text-violet-600" />
-                      <span>Impuestos, Retenciones IRPF y Cotizaciones Seguridad Social ({data.taxObligations?.length || 0})</span>
-                    </h3>
-                    <span className="text-xs text-slate-500 font-medium">
-                      Organismos Públicos: AEAT (Hacienda) y TGSS (Seguridad Social)
-                    </span>
-                  </div>
-
-                  {(!data.taxObligations || data.taxObligations.length === 0) ? (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-xs text-slate-500">
-                      No hay liquidaciones pendientes de impuestos ni de Seguridad Social.
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
-                              <th className="p-3.5">Organismo / Tipo</th>
-                              <th className="p-3.5">Concepto Liquidación</th>
-                              <th className="p-3.5">Importe (€)</th>
-                              <th className="p-3.5">Fecha Vencimiento</th>
-                              <th className="p-3.5">Estado</th>
-                              <th className="p-3.5 text-right">Acción</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 font-medium">
-                            {[...data.taxObligations]
-                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-                              .map(tax => {
-                                const isPaid = tax.status === 'pagado';
-                                const isIRPF = tax.type === 'irpf';
-
-                                return (
-                                  <tr key={tax.id} className="hover:bg-slate-50/80 transition">
-                                    <td className="p-3.5 font-bold">
-                                      <span className={`px-2.5 py-1 rounded-lg border text-[11px] ${
-                                        isIRPF 
-                                          ? 'bg-amber-50 text-amber-900 border-amber-200' 
-                                          : 'bg-indigo-50 text-indigo-900 border-indigo-200'
-                                      }`}>
-                                        {isIRPF ? 'AEAT (IRPF)' : 'TGSS (Seg. Social)'}
-                                      </span>
-                                    </td>
-                                    <td className="p-3.5 text-slate-800 font-semibold">{tax.concept}</td>
-                                    <td className="p-3.5 font-black text-slate-900 text-sm">
-                                      {tax.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                    </td>
-                                    <td className="p-3.5 text-slate-700 font-mono">
-                                      {new Date(tax.dueDate).toLocaleDateString('es-ES')}
-                                    </td>
-                                    <td className="p-3.5">
-                                      {isPaid ? (
-                                        <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                                          <CheckCircle2 className="w-3 h-3" />
-                                          <span>Liquidado ({new Date(tax.paidDate!).toLocaleDateString('es-ES')})</span>
-                                        </span>
-                                      ) : (
-                                        <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                                          <Clock className="w-3 h-3" />
-                                          <span>Pendiente de Ingreso</span>
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="p-3.5 text-right">
-                                      {!isPaid && (
-                                        <button
-                                          disabled={payingTaxId === tax.id}
-                                          onClick={() => handlePayTaxObligation(tax.id)}
-                                          className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white font-bold rounded-xl text-[11px] transition shadow-xs cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
-                                        >
-                                          {payingTaxId === tax.id && <RefreshCw className="w-3 h-3 animate-spin" />}
-                                          <span>Liquidar Impuesto</span>
-                                        </button>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                          </tbody>
-                        </table>
-                      </div>
                     </div>
                   )}
                 </div>

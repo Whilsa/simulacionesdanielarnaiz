@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { User } from '../types.js';
-import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight, Wrench, Users } from 'lucide-react';
+import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight, Wrench, Users, KeyRound } from 'lucide-react';
 import Footer from './Footer.js';
+import { ChangePasswordModal } from './ChangePasswordModal.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -17,6 +18,7 @@ interface MainHubProps {
 
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
@@ -41,10 +43,15 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700/60">
+            <button
+              onClick={() => setIsPasswordModalOpen(true)}
+              className="hidden sm:flex items-center gap-2 bg-slate-800/80 hover:bg-slate-700/80 px-3 py-1.5 rounded-xl border border-slate-700/60 transition cursor-pointer group"
+              title="Haz clic para cambiar tu contraseña"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
               <span className="text-xs text-slate-400 font-medium">Usuario:</span>
-              <span className="text-xs font-bold text-slate-200">{currentUser.name}</span>
-            </div>
+              <span className="text-xs font-bold text-slate-200 underline decoration-dashed decoration-slate-500 underline-offset-2">{currentUser.name}</span>
+            </button>
 
             <button
               onClick={onLogout}
@@ -57,6 +64,12 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           </div>
         </div>
       </header>
+
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+        currentUser={currentUser}
+      />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex flex-col justify-center">

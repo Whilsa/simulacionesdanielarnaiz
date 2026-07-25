@@ -1278,8 +1278,9 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           if (hireDateObj.getMonth() + 1 === currentMonth && hireDateObj.getFullYear() === currentYear) {
             isProportionalPayroll = true;
             const hireDay = hireDateObj.getDate();
-            const daysWorked = Math.max(1, 26 - Math.min(hireDay, 26) + 1);
-            const proportionalGross = (emp.grossSalaryMonthly / 30) * daysWorked;
+            const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+            const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+            const proportionalGross = (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
             totalGross += proportionalGross;
           } else {
             totalGross += emp.grossSalaryMonthly;
@@ -3617,7 +3618,23 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   // 4. Upcoming Payroll (Nóminas del día 26)
   const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
   if (studentEmps.length > 0) {
-    const totalGross = studentEmps.reduce((acc, e) => acc + e.grossSalaryMonthly, 0);
+    let totalGross = 0;
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+
+    for (const emp of studentEmps) {
+      const hireDateObj = new Date(emp.hireDate);
+      if (hireDateObj.getMonth() + 1 === curMonth && hireDateObj.getFullYear() === curYear) {
+        const hireDay = hireDateObj.getDate();
+        const daysInMonth = new Date(curYear, curMonth, 0).getDate();
+        const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+        totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+      } else {
+        totalGross += emp.grossSalaryMonthly;
+      }
+    }
+
+    totalGross = Math.round(totalGross * 100) / 100;
     const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
     const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
     const totalNetSalary = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
