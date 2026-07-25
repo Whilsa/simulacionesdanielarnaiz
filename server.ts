@@ -823,6 +823,9 @@ app.use((req, res, next) => {
     req.url.startsWith('/properties') ||
     req.url.startsWith('/company') ||
     req.url.startsWith('/obligations') ||
+    req.url.startsWith('/acquisitions') ||
+    req.url.startsWith('/machinery') ||
+    req.url.startsWith('/loans') ||
     req.url.startsWith('/reset-simulation')
   );
 
@@ -1704,6 +1707,17 @@ app.post('/api/restore', (req, res) => {
 app.get('/api/properties', (req, res) => {
   const db = readDb();
   res.json({ properties: db.properties || [] });
+});
+
+// Get acquisitions (filtered by studentId if query parameter provided)
+app.get('/api/acquisitions', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  let acquisitions = db.acquisitions || [];
+  if (studentId) {
+    acquisitions = acquisitions.filter(a => a.studentId === String(studentId));
+  }
+  res.json({ success: true, acquisitions });
 });
 
 // Publish single property or batch/group of properties (Teacher only)
