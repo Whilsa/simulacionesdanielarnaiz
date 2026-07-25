@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
@@ -84,7 +84,7 @@ export const REALISTIC_CORPORATE_SELLERS = [
   { id: 'corp-5', name: 'Promotora de Espacios Comerciales S.A.', account: 'ES210001000299887755' },
 ];
 
-// Create tables "cuentas", "movimientos", "inmuebles", "adquisiciones", and "obligaciones_pago" if they do not exist
+// Create tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago", "ofertas_empleo", "empleados_contratados", "registros_nomina", "obligaciones_fiscales"
 async function initSupabaseTables(): Promise<{ success: boolean; message?: string; error?: string }> {
   if (!dbPool) {
     return { success: false, error: 'DATABASE_URL no está configurada' };
@@ -96,8 +96,17 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       CREATE TABLE IF NOT EXISTS cuentas (
         id VARCHAR(255) PRIMARY KEY,
         alumno VARCHAR(255) NOT NULL,
-        saldo NUMERIC(12, 2) NOT NULL DEFAULT 0
+        saldo NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        usuario TEXT,
+        password TEXT,
+        account_number TEXT,
+        role TEXT
       );
+
+      ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS usuario TEXT;
+      ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS password TEXT;
+      ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS account_number TEXT;
+      ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS role TEXT;
 
       CREATE TABLE IF NOT EXISTS movimientos (
         id VARCHAR(255) PRIMARY KEY,
@@ -219,8 +228,68 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         capacidad_produccion_unidades_hora INT NOT NULL,
         equipamiento JSONB
       );
+
+      CREATE TABLE IF NOT EXISTS ofertas_empleo (
+        id VARCHAR(255) PRIMARY KEY,
+        titulo TEXT NOT NULL,
+        nombre_empleado TEXT NOT NULL,
+        genero VARCHAR(50) NOT NULL,
+        sueldo_bruto_mensual NUMERIC(12, 2) NOT NULL,
+        edad INT NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'disponible',
+        alumno_id VARCHAR(255),
+        alumno_nombre TEXT,
+        fecha_contratacion TIMESTAMPTZ,
+        avatar_url TEXT,
+        fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS empleados_contratados (
+        id VARCHAR(255) PRIMARY KEY,
+        oferta_id VARCHAR(255) NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        nombre_empleado TEXT NOT NULL,
+        genero VARCHAR(50) NOT NULL,
+        sueldo_bruto_mensual NUMERIC(12, 2) NOT NULL,
+        edad INT NOT NULL,
+        fecha_contratacion TIMESTAMPTZ NOT NULL,
+        maquinaria_asignada_id VARCHAR(255),
+        turno INT DEFAULT 1,
+        avatar_url TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS registros_nomina (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        fecha_nomina TIMESTAMPTZ NOT NULL,
+        mes INT NOT NULL,
+        anio INT NOT NULL,
+        num_empleados INT NOT NULL,
+        total_bruto NUMERIC(12, 2) NOT NULL,
+        total_ss_empleado NUMERIC(12, 2) NOT NULL,
+        total_irpf NUMERIC(12, 2) NOT NULL,
+        total_liquido NUMERIC(12, 2) NOT NULL,
+        total_ss_empresa NUMERIC(12, 2) NOT NULL,
+        es_proporcional BOOLEAN DEFAULT FALSE,
+        fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS obligaciones_fiscales (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        tipo VARCHAR(50) NOT NULL,
+        concepto TEXT NOT NULL,
+        importe NUMERIC(12, 2) NOT NULL,
+        fecha_vencimiento TIMESTAMPTZ NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'pendiente',
+        fecha_pago TIMESTAMPTZ,
+        nomina_id VARCHAR(255)
+      );
     `);
-    console.log('[Supabase DB] Tables "cuentas", "movimientos", "inmuebles", "adquisiciones", "obligaciones_pago", "prestamos", "maquinaria_adquisiciones" verified/created.');
+    console.log('[Supabase DB] Tables verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
@@ -233,14 +302,20 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
 }
 
 // Sync helper functions for Supabase
-async function syncAccountToSupabase(id: string, alumno: string, saldo: number) {
+async function syncAccountToSupabase(id: string, alumno: string, saldo: number, usuario?: string, password?: string, accountNumber?: string, role?: string) {
   if (!dbPool) return;
   try {
     await dbPool.query(
-      `INSERT INTO cuentas (id, alumno, saldo)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (id) DO UPDATE SET alumno = EXCLUDED.alumno, saldo = EXCLUDED.saldo`,
-      [id, alumno, saldo]
+      `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE SET 
+         alumno = EXCLUDED.alumno, 
+         saldo = EXCLUDED.saldo,
+         usuario = COALESCE(EXCLUDED.usuario, cuentas.usuario),
+         password = COALESCE(EXCLUDED.password, cuentas.password),
+         account_number = COALESCE(EXCLUDED.account_number, cuentas.account_number),
+         role = COALESCE(EXCLUDED.role, cuentas.role)`,
+      [id, alumno, saldo, usuario || null, password || null, accountNumber || null, role || 'student']
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing account to Supabase:', e);
@@ -494,12 +569,90 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
   }
 }
 
+async function syncJobListingToSupabase(job: JobListing) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO ofertas_empleo (id, titulo, nombre_empleado, genero, sueldo_bruto_mensual, edad, estado, alumno_id, alumno_nombre, fecha_contratacion, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET
+         titulo = EXCLUDED.titulo,
+         nombre_empleado = EXCLUDED.nombre_empleado,
+         genero = EXCLUDED.genero,
+         sueldo_bruto_mensual = EXCLUDED.sueldo_bruto_mensual,
+         edad = EXCLUDED.edad,
+         estado = EXCLUDED.estado,
+         alumno_id = EXCLUDED.alumno_id,
+         alumno_nombre = EXCLUDED.alumno_nombre,
+         fecha_contratacion = EXCLUDED.fecha_contratacion,
+         avatar_url = EXCLUDED.avatar_url`,
+      [job.id, job.title, job.employeeName, job.gender, job.grossSalaryMonthly, job.age, job.status, job.hiredByStudentId || null, job.hiredByStudentName || null, job.hiredAtDate || null, job.avatarUrl || null]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing job listing:', e);
+  }
+}
+
+async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO empleados_contratados (id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, genero, sueldo_bruto_mensual, edad, fecha_contratacion, maquinaria_asignada_id, turno, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (id) DO UPDATE SET
+         alumno_id = EXCLUDED.alumno_id,
+         alumno_nombre = EXCLUDED.alumno_nombre,
+         nombre_empleado = EXCLUDED.nombre_empleado,
+         genero = EXCLUDED.genero,
+         sueldo_bruto_mensual = EXCLUDED.sueldo_bruto_mensual,
+         edad = EXCLUDED.edad,
+         fecha_contratacion = EXCLUDED.fecha_contratacion,
+         maquinaria_asignada_id = EXCLUDED.maquinaria_asignada_id,
+         turno = EXCLUDED.turno,
+         avatar_url = EXCLUDED.avatar_url`,
+      [emp.id, emp.jobListingId, emp.studentId, emp.studentName, emp.employeeName, emp.gender, emp.grossSalaryMonthly, emp.age, emp.hireDate, emp.assignedMachineryId || null, emp.shift || 1, emp.avatarUrl || null]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing hired employee:', e);
+  }
+}
+
+async function syncPayrollRecordToSupabase(pr: PayrollRecord) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO registros_nomina (id, alumno_id, alumno_nombre, fecha_nomina, mes, anio, num_empleados, total_bruto, total_ss_empleado, total_irpf, total_liquido, total_ss_empresa, es_proporcional)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       ON CONFLICT (id) DO NOTHING`,
+      [pr.id, pr.studentId, pr.studentName, pr.payrollDate, pr.periodMonth, pr.periodYear, pr.employeeCount, pr.totalGrossSalary, pr.totalEmployeeSS, pr.totalEmployeeIRPF, pr.totalNetSalaryPaid, pr.totalCompanySS, pr.isProportional]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing payroll record:', e);
+  }
+}
+
+async function syncTaxObligationToSupabase(to: TaxObligation) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO obligaciones_fiscales (id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, fecha_pago, nomina_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET
+         estado = EXCLUDED.estado,
+         fecha_pago = EXCLUDED.fecha_pago`,
+      [to.id, to.studentId, to.studentName, to.type, to.concept, to.amount, to.dueDate, to.status, to.paidDate || null, to.payrollRecordId || null]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing tax obligation:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
     for (const user of db.users) {
       if (user.role === 'student') {
-        await syncAccountToSupabase(user.id, user.name, user.balance);
+        await syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role);
       }
     }
     for (const tx of db.transfers) {
@@ -531,6 +684,26 @@ async function syncAllToSupabase(db: DatabaseSchema) {
         await syncMachineryToSupabase(mac);
       }
     }
+    if (db.jobListings) {
+      for (const job of db.jobListings) {
+        await syncJobListingToSupabase(job);
+      }
+    }
+    if (db.hiredEmployees) {
+      for (const emp of db.hiredEmployees) {
+        await syncHiredEmployeeToSupabase(emp);
+      }
+    }
+    if (db.payrollRecords) {
+      for (const pr of db.payrollRecords) {
+        await syncPayrollRecordToSupabase(pr);
+      }
+    }
+    if (db.taxObligations) {
+      for (const tax of db.taxObligations) {
+        await syncTaxObligationToSupabase(tax);
+      }
+    }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
   }
@@ -542,7 +715,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
   try {
     const client = await dbPool.connect();
     try {
-      const resCuentas = await client.query('SELECT id, alumno, saldo FROM cuentas');
+      const resCuentas = await client.query('SELECT id, alumno, saldo, usuario, password, account_number, role FROM cuentas');
       
       // If Supabase has NO records, seed Supabase with current db.json state
       if (resCuentas.rows.length === 0) {
@@ -571,6 +744,34 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         console.warn('[Supabase Restore] Maquinaria table select warning:', e);
       }
 
+      let resJobs: any = { rows: [] };
+      try {
+        resJobs = await client.query('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Ofertas empleo table select warning:', e);
+      }
+
+      let resEmployees: any = { rows: [] };
+      try {
+        resEmployees = await client.query('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Empleados contratados table select warning:', e);
+      }
+
+      let resPayrolls: any = { rows: [] };
+      try {
+        resPayrolls = await client.query('SELECT * FROM registros_nomina ORDER BY fecha_nomina DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Registros nomina table select warning:', e);
+      }
+
+      let resTaxes: any = { rows: [] };
+      try {
+        resTaxes = await client.query('SELECT * FROM obligaciones_fiscales ORDER BY fecha_vencimiento ASC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Obligaciones fiscales table select warning:', e);
+      }
+
       const db = readDb();
 
       // Synchronize students and balances from Supabase "cuentas"
@@ -578,20 +779,28 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         const rowId = String(row.id);
         const rowAlumno = String(row.alumno);
         const rowSaldo = Number(row.saldo);
+        const rowUsuario = row.usuario ? String(row.usuario) : undefined;
+        const rowPassword = row.password ? String(row.password) : undefined;
+        const rowAccount = row.account_number ? String(row.account_number) : undefined;
+        const rowRole = row.role ? String(row.role) : 'student';
 
         let user = db.users.find(u => u.id === rowId || u.name.toLowerCase() === rowAlumno.toLowerCase());
         if (user) {
           user.balance = rowSaldo;
           user.name = rowAlumno;
+          if (rowUsuario) user.username = rowUsuario;
+          if (rowPassword) user.password = rowPassword;
+          if (rowAccount) user.accountNumber = rowAccount;
+          if (rowRole) user.role = rowRole as any;
         } else {
           // Add student if missing locally
           const newUser: User = {
             id: rowId,
-            username: rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
-            password: '123',
-            role: 'student',
+            username: rowUsuario || rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
+            password: rowPassword || '123',
+            role: (rowRole as any) || 'student',
             name: rowAlumno,
-            accountNumber: generateIBAN(),
+            accountNumber: rowAccount || generateIBAN(),
             balance: rowSaldo
           };
           db.users.push(newUser);
@@ -786,9 +995,82 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }
       }
 
+      // Reconstruct db.jobListings from Supabase "ofertas_empleo"
+      if (resJobs.rows.length > 0) {
+        db.jobListings = resJobs.rows.map((row: any) => ({
+          id: String(row.id),
+          title: String(row.titulo),
+          employeeName: String(row.nombre_empleado),
+          gender: row.genero as 'hombre' | 'mujer',
+          grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+          age: Number(row.edad),
+          status: row.estado as 'disponible' | 'contratado',
+          hiredByStudentId: row.alumno_id ? String(row.alumno_id) : undefined,
+          hiredByStudentName: row.alumno_nombre ? String(row.alumno_nombre) : undefined,
+          hiredAtDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : undefined,
+          avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
+      if (resEmployees.rows.length > 0) {
+        db.hiredEmployees = resEmployees.rows.map((row: any) => ({
+          id: String(row.id),
+          jobListingId: String(row.oferta_id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          employeeName: String(row.nombre_empleado),
+          gender: row.genero as 'hombre' | 'mujer',
+          grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+          age: Number(row.edad),
+          hireDate: new Date(row.fecha_contratacion).toISOString(),
+          assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
+          shift: Number(row.turno || 1),
+          avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
+        }));
+      }
+
+      // Reconstruct db.payrollRecords from Supabase "registros_nomina"
+      if (resPayrolls.rows.length > 0) {
+        db.payrollRecords = resPayrolls.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          payrollDate: new Date(row.fecha_nomina).toISOString(),
+          periodMonth: Number(row.mes),
+          periodYear: Number(row.anio),
+          employeeCount: Number(row.num_empleados),
+          totalGrossSalary: Number(row.total_bruto),
+          totalEmployeeSS: Number(row.total_ss_empleado),
+          totalEmployeeIRPF: Number(row.total_irpf),
+          totalNetSalaryPaid: Number(row.total_liquido),
+          totalCompanySS: Number(row.total_ss_empresa),
+          isProportional: Boolean(row.es_proporcional),
+          status: 'paid',
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.taxObligations from Supabase "obligaciones_fiscales"
+      if (resTaxes.rows.length > 0) {
+        db.taxObligations = resTaxes.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          type: row.tipo as 'irpf' | 'ss_employee' | 'ss_company',
+          concept: String(row.concepto),
+          amount: Number(row.importe),
+          dueDate: new Date(row.fecha_vencimiento).toISOString(),
+          status: row.estado as 'pendiente' | 'pagado',
+          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+          payrollRecordId: row.nomina_id ? String(row.nomina_id) : undefined
+        }));
+      }
+
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, and ${resLoans.rows.length} loans from Supabase!`);
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
     } finally {
       client.release();
@@ -961,6 +1243,199 @@ function getDefaultSeedProperties(): PropertyListing[] {
   ];
 }
 
+function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+  if (!db.payrollRecords) db.payrollRecords = [];
+  if (!db.taxObligations) db.taxObligations = [];
+  if (!db.jobListings) db.jobListings = [];
+
+  const now = new Date();
+  const currentDay = now.getDate();
+  const currentMonth = now.getMonth() + 1; // 1 - 12
+  const currentYear = now.getFullYear();
+
+  // 1. Process Payroll on day 26 or later
+  if (currentDay >= 26) {
+    const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
+
+    for (const studentId of studentsWithEmployees) {
+      const student = db.users.find(u => u.id === studentId && u.role === 'student');
+      if (!student) continue;
+
+      const alreadyProcessed = db.payrollRecords.some(
+        pr => pr.studentId === studentId && pr.periodMonth === currentMonth && pr.periodYear === currentYear
+      );
+
+      if (!alreadyProcessed) {
+        const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+        if (myEmployees.length === 0) continue;
+
+        let totalGross = 0;
+        let isProportionalPayroll = false;
+
+        for (const emp of myEmployees) {
+          const hireDateObj = new Date(emp.hireDate);
+          if (hireDateObj.getMonth() + 1 === currentMonth && hireDateObj.getFullYear() === currentYear) {
+            isProportionalPayroll = true;
+            const hireDay = hireDateObj.getDate();
+            const daysWorked = Math.max(1, 26 - Math.min(hireDay, 26) + 1);
+            const proportionalGross = (emp.grossSalaryMonthly / 30) * daysWorked;
+            totalGross += proportionalGross;
+          } else {
+            totalGross += emp.grossSalaryMonthly;
+          }
+        }
+
+        totalGross = Math.round(totalGross * 100) / 100;
+        const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
+        const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
+        const totalNetPaid = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
+        const totalCompanySS = Math.round(totalGross * 0.75 * 100) / 100;
+
+        student.balance = Math.round((student.balance - totalNetPaid) * 100) / 100;
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+        const txId = generateId('tx');
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'empleados-nomina',
+          receiverName: 'Personal Empleado / Nóminas',
+          receiverAccount: 'ES000000000000000000',
+          amount: totalNetPaid,
+          concept: `Pago automático de nóminas del mes ${currentMonth}/${currentYear} (${myEmployees.length} empleados)`,
+          timestamp: now.toISOString()
+        };
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalNetPaid, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+        const prId = generateId('payroll');
+        const newPR: PayrollRecord = {
+          id: prId,
+          studentId: student.id,
+          studentName: student.name,
+          payrollDate: now.toISOString(),
+          periodMonth: currentMonth,
+          periodYear: currentYear,
+          employeeCount: myEmployees.length,
+          totalGrossSalary: totalGross,
+          totalEmployeeSS: totalEmployeeSS,
+          totalEmployeeIRPF: totalEmployeeIRPF,
+          totalNetSalaryPaid: totalNetPaid,
+          totalCompanySS: totalCompanySS,
+          isProportional: isProportionalPayroll,
+          status: 'paid',
+          createdAt: now.toISOString()
+        };
+        db.payrollRecords.push(newPR);
+        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+
+        let nextMonth = currentMonth + 1;
+        let nextYear = currentYear;
+        if (nextMonth > 12) {
+          nextMonth = 1;
+          nextYear += 1;
+        }
+        const taxDueDate = new Date(nextYear, nextMonth - 1, 1, 9, 0, 0).toISOString();
+
+        const irpfObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'irpf',
+          concept: `Retención IRPF (17%) Nóminas ${currentMonth}/${currentYear}`,
+          amount: totalEmployeeIRPF,
+          dueDate: taxDueDate,
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        const ssEmpObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_employee',
+          concept: `Seguridad Social a cargo del empleado (6,48%) Nóminas ${currentMonth}/${currentYear}`,
+          amount: totalEmployeeSS,
+          dueDate: taxDueDate,
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        const ssCompObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_company',
+          concept: `Seguridad Social a cargo de la empresa (75%) Nóminas ${currentMonth}/${currentYear}`,
+          amount: totalCompanySS,
+          dueDate: taxDueDate,
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        db.taxObligations.push(irpfObl, ssEmpObl, ssCompObl);
+        syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+        syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
+        syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'PAYROLL_AUTOMATED',
+          details: `Nóminas pagadas automáticamente para ${student.name}: Líquido ${totalNetPaid}€ (${myEmployees.length} empleados). Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}€) y Seguridad Social (Empleado: ${totalEmployeeSS}€, Empresa: ${totalCompanySS}€).`,
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+      }
+    }
+  }
+
+  // 2. Process Tax Obligations on day 1 or later
+  if (currentDay >= 1) {
+    const pendingTaxes = db.taxObligations.filter(t => t.status === 'pendiente' && new Date(t.dueDate) <= now);
+    for (const tax of pendingTaxes) {
+      const student = db.users.find(u => u.id === tax.studentId && u.role === 'student');
+      if (!student) continue;
+
+      student.balance = Math.round((student.balance - tax.amount) * 100) / 100;
+      tax.status = 'pagado';
+      tax.paidDate = now.toISOString();
+
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+      syncTaxObligationToSupabase(tax).catch(e => console.error(e));
+
+      const txId = generateId('tx');
+      const receiverName = tax.type === 'irpf' ? 'Agencia Tributaria - Hacienda Pública' : 'Tesorería General de la Seguridad Social';
+      const transfer: Transfer = {
+        id: txId,
+        senderId: student.id,
+        senderName: student.name,
+        senderAccount: student.accountNumber,
+        receiverId: tax.type === 'irpf' ? 'hacienda' : 'seguridad-social',
+        receiverName: receiverName,
+        receiverAccount: 'ES000000000000000000',
+        amount: tax.amount,
+        concept: `Pago automático de ${tax.concept}`,
+        timestamp: now.toISOString()
+      };
+      db.transfers.unshift(transfer);
+      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', tax.amount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        action: 'TAX_AUTOMATED_PAYMENT',
+        details: `Pago automático fiscal realizado por ${student.name}: ${tax.concept} por importe de ${tax.amount}€`,
+        timestamp: now.toISOString(),
+        studentId: student.id,
+        studentName: student.name
+      });
+    }
+  }
+}
+
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
@@ -1003,44 +1478,17 @@ function readDb(): DatabaseSchema {
           balance: 1000
         }
       ],
-      transfers: [
-        {
-          id: 'tx-seed-1',
-          senderId: 'alumno-1',
-          senderName: 'Ana López',
-          senderAccount: 'ES910001000212345678',
-          receiverId: 'alumno-2',
-          receiverName: 'Carlos Ruiz',
-          receiverAccount: 'ES910001000287654321',
-          amount: 250,
-          concept: 'Compra de mercaderías (Simulada)',
-          timestamp: new Date(Date.now() - 3600000 * 2).toISOString()
-        },
-        {
-          id: 'tx-seed-2',
-          senderId: 'alumno-3',
-          senderName: 'Beatriz Gómez',
-          senderAccount: 'ES910001000244556677',
-          receiverId: 'alumno-1',
-          receiverName: 'Ana López',
-          receiverAccount: 'ES910001000212345678',
-          amount: 150,
-          concept: 'Alquiler de local comercial (Simulado)',
-          timestamp: new Date(Date.now() - 3600000 * 5).toISOString()
-        }
-      ],
-      systemLogs: [
-        {
-          id: 'log-seed',
-          action: 'CREATE_USER',
-          details: 'Sistema iniciado y cuentas preestablecidas creadas.',
-          timestamp: new Date().toISOString()
-        }
-      ],
+      transfers: [],
+      systemLogs: [],
       properties: getDefaultSeedProperties(),
       acquisitions: [],
       paymentObligations: [],
       loans: [],
+      machineryAcquisitions: [],
+      jobListings: [],
+      hiredEmployees: [],
+      payrollRecords: [],
+      taxObligations: [],
       defaultInitialBalance: 1000,
       isSeed: true
     };
@@ -1059,6 +1507,12 @@ function readDb(): DatabaseSchema {
     if (!db.paymentObligations) db.paymentObligations = [];
     if (!db.loans) db.loans = [];
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+    if (!db.jobListings) db.jobListings = [];
+    if (!db.hiredEmployees) db.hiredEmployees = [];
+    if (!db.payrollRecords) db.payrollRecords = [];
+    if (!db.taxObligations) db.taxObligations = [];
+
+    checkAndProcessAutomatedPayrollAndTaxes(db);
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
@@ -1339,7 +1793,7 @@ app.post('/api/users', (req, res) => {
 
   db.users.push(newUser);
   if (newUser.role === 'student') {
-    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance).catch(e => console.error(e));
+    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance, newUser.username, newUser.password, newUser.accountNumber, newUser.role).catch(e => console.error(e));
   }
 
   const newLog: SystemLog = {
@@ -1380,7 +1834,7 @@ app.put('/api/users/:id', (req, res) => {
   if (password) user.password = password.trim();
 
   if (user.role === 'student') {
-    syncAccountToSupabase(user.id, user.name, user.balance).catch(e => console.error(e));
+    syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role).catch(e => console.error(e));
   }
 
   const newLog: SystemLog = {
@@ -2600,8 +3054,13 @@ app.get('/api/company/:studentId', (req, res) => {
   totalLoansPendingAmount = Number(totalLoansPendingAmount.toFixed(2));
   totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
 
-  // 3. Total Combined Pending Debt
-  const totalPendingObligations = Number((totalObligationsPendingAmount + totalLoansPendingAmount).toFixed(2));
+  // 3. Total Combined Pending Debt (including pending tax/SS obligations)
+  const studentHiredEmployees = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  const studentPayrollRecords = (db.payrollRecords || []).filter(p => p.studentId === studentId);
+  const studentTaxObligations = (db.taxObligations || []).filter(t => t.studentId === studentId);
+
+  const totalPendingTaxAmount = Number(studentTaxObligations.filter(t => t.status === 'pendiente').reduce((acc, t) => acc + t.amount, 0).toFixed(2));
+  const totalPendingObligations = Number((totalObligationsPendingAmount + totalLoansPendingAmount + totalPendingTaxAmount).toFixed(2));
 
   const totalMonthlyRentCommitments = Number(rentedProperties.reduce((acc, r) => acc + (r.monthlyRent || 0), 0).toFixed(2));
 
@@ -2626,15 +3085,20 @@ app.get('/api/company/:studentId', (req, res) => {
       totalObligationsPendingAmount,
       totalLoansPendingAmount,
       totalLoansPendingPrincipal,
+      totalPendingTaxAmount,
       totalPendingObligations,
       totalMonthlyRentCommitments,
       activeLoansCount: loans.length,
-      machineryCount: machineryAcquisitions.length
+      machineryCount: machineryAcquisitions.length,
+      hiredEmployeesCount: studentHiredEmployees.length
     },
     acquisitions,
     obligations,
     loans,
-    machineryAcquisitions
+    machineryAcquisitions,
+    hiredEmployees: studentHiredEmployees,
+    payrollRecords: studentPayrollRecords,
+    taxObligations: studentTaxObligations
   });
 });
 
@@ -3343,6 +3807,363 @@ app.post('/api/teacher/loans/:id/review', (req, res) => {
     message: action === 'deny' ? 'Préstamo denegado.' : 'Préstamo aprobado con condiciones notificadas al alumno.',
     loan
   });
+});
+
+// ================= STUDENT CHANGE PASSWORD =================
+app.put('/api/student/change-password', (req, res) => {
+  const { studentId, currentPassword, newPassword } = req.body;
+  if (!studentId || !newPassword) {
+    return res.status(400).json({ error: 'Faltan datos requeridos' });
+  }
+
+  const db = readDb();
+  const user = db.users.find(u => u.id === studentId);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  if (currentPassword && user.password && currentPassword.trim() !== user.password) {
+    return res.status(400).json({ error: 'La contraseña actual no es correcta' });
+  }
+
+  user.password = newPassword.trim();
+  syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role).catch(e => console.error(e));
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'CHANGE_PASSWORD',
+    details: `El usuario ${user.name} (${user.username}) ha cambiado su contraseña`,
+    timestamp: new Date().toISOString(),
+    studentId: user.id,
+    studentName: user.name
+  });
+
+  writeDb(db);
+  res.json({ success: true, message: 'Contraseña actualizada correctamente' });
+});
+
+// ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
+app.get('/api/job-listings', (req, res) => {
+  const db = readDb();
+  res.json({ success: true, jobListings: db.jobListings || [] });
+});
+
+app.post('/api/teacher/job-listings/batch', (req, res) => {
+  const { count, gender, minSalary, maxSalary, minAge, maxAge } = req.body;
+
+  const numCount = Math.max(1, Math.min(Number(count) || 5, 50));
+  const numMinSalary = Math.max(800, Number(minSalary) || 1200);
+  const numMaxSalary = Math.max(numMinSalary, Number(maxSalary) || 2500);
+  const numMinAge = Math.max(18, Number(minAge) || 20);
+  const numMaxAge = Math.max(numMinAge, Number(maxAge) || 60);
+
+  const maleNames = ['Carlos', 'Javier', 'Alejandro', 'Manuel', 'David', 'Pablo', 'Álvaro', 'Diego', 'Gonzalo', 'Sergio', 'Fernando', 'Marcos', 'Hugo', 'Daniel', 'Adrián', 'Lucas', 'Mateo', 'Rubén', 'Jorge', 'Iván'];
+  const femaleNames = ['Ana', 'María', 'Carmen', 'Laura', 'Marta', 'Paula', 'Lucía', 'Sofía', 'Elena', 'Alba', 'Isabel', 'Cristina', 'Beatriz', 'Patricia', 'Andrea', 'Sara', 'Nuria', 'Rocío', 'Silvia', 'Sonia'];
+  const surnames = ['García', 'Rodríguez', 'González', 'Fernández', 'López', 'Martínez', 'Sánchez', 'Pérez', 'Gómez', 'Martín', 'Jiménez', 'Ruiz', 'Hernández', 'Díaz', 'Moreno', 'Muñoz', 'Álvarez', 'Romero', 'Alonso', 'Gutiérrez'];
+
+  const maleAvatar = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop';
+  const femaleAvatar = 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop';
+
+  const db = readDb();
+  if (!db.jobListings) db.jobListings = [];
+
+  const createdJobs: JobListing[] = [];
+
+  for (let i = 0; i < numCount; i++) {
+    let chosenGender: 'hombre' | 'mujer' = 'hombre';
+    if (gender === 'hombre') {
+      chosenGender = 'hombre';
+    } else if (gender === 'mujer') {
+      chosenGender = 'mujer';
+    } else {
+      chosenGender = Math.random() > 0.5 ? 'hombre' : 'mujer';
+    }
+
+    const first = chosenGender === 'hombre'
+      ? maleNames[Math.floor(Math.random() * maleNames.length)]
+      : femaleNames[Math.floor(Math.random() * femaleNames.length)];
+    const sur1 = surnames[Math.floor(Math.random() * surnames.length)];
+    const sur2 = surnames[Math.floor(Math.random() * surnames.length)];
+    const fullName = `${first} ${sur1} ${sur2}`;
+
+    const salary = Math.floor(Math.random() * (numMaxSalary - numMinSalary + 1)) + numMinSalary;
+    const age = Math.floor(Math.random() * (numMaxAge - numMinAge + 1)) + numMinAge;
+
+    const newJob: JobListing = {
+      id: generateId('job'),
+      title: 'Operario Industrial',
+      employeeName: fullName,
+      gender: chosenGender,
+      grossSalaryMonthly: salary,
+      age: age,
+      status: 'disponible',
+      avatarUrl: chosenGender === 'hombre' ? maleAvatar : femaleAvatar,
+      createdAt: new Date().toISOString()
+    };
+
+    db.jobListings.unshift(newJob);
+    createdJobs.push(newJob);
+    syncJobListingToSupabase(newJob).catch(e => console.error(e));
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'CREATE_JOB_LISTINGS_BATCH',
+    details: `Publicadas ${createdJobs.length} ofertas de empleo en Foro de Empleo (Sueldos: ${numMinSalary}-${numMaxSalary}€, Edades: ${numMinAge}-${numMaxAge})`,
+    timestamp: new Date().toISOString()
+  });
+
+  writeDb(db);
+  res.json({ success: true, count: createdJobs.length, createdJobs });
+});
+
+app.delete('/api/teacher/job-listings/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  db.jobListings = (db.jobListings || []).filter(j => j.id !== id);
+  if (dbPool) {
+    dbPool.query('DELETE FROM ofertas_empleo WHERE id = $1', [id]).catch(e => console.error(e));
+  }
+  writeDb(db);
+  res.json({ success: true, message: 'Oferta de empleo eliminada' });
+});
+
+app.delete('/api/teacher/job-listings', (req, res) => {
+  const db = readDb();
+  db.jobListings = (db.jobListings || []).filter(j => j.status === 'contratado');
+  if (dbPool) {
+    dbPool.query("DELETE FROM ofertas_empleo WHERE estado = 'disponible'").catch(e => console.error(e));
+  }
+  writeDb(db);
+  res.json({ success: true, message: 'Todas las ofertas disponibles han sido eliminadas' });
+});
+
+app.post('/api/jobs/:id/hire', (req, res) => {
+  const { id } = req.params;
+  const { studentId } = req.body;
+
+  const db = readDb();
+  if (!db.jobListings) db.jobListings = [];
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+
+  const job = db.jobListings.find(j => j.id === id);
+  if (!job) return res.status(404).json({ error: 'Oferta de empleo no encontrada' });
+  if (job.status !== 'disponible') return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
+
+  const student = db.users.find(u => u.id === studentId && u.role === 'student');
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  const now = new Date().toISOString();
+
+  job.status = 'contratado';
+  job.hiredByStudentId = student.id;
+  job.hiredByStudentName = student.name;
+  job.hiredAtDate = now;
+
+  const newHired: HiredEmployee = {
+    id: generateId('emp'),
+    jobListingId: job.id,
+    studentId: student.id,
+    studentName: student.name,
+    employeeName: job.employeeName,
+    gender: job.gender,
+    grossSalaryMonthly: job.grossSalaryMonthly,
+    age: job.age,
+    hireDate: now,
+    avatarUrl: job.avatarUrl
+  };
+
+  db.hiredEmployees.push(newHired);
+
+  syncJobListingToSupabase(job).catch(e => console.error(e));
+  syncHiredEmployeeToSupabase(newHired).catch(e => console.error(e));
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'HIRE_EMPLOYEE',
+    details: `El alumno ${student.name} ha contratado a ${job.employeeName} (Sueldo Bruto: ${job.grossSalaryMonthly}€/mes, Edad: ${job.age})`,
+    timestamp: now,
+    studentId: student.id,
+    studentName: student.name
+  });
+
+  writeDb(db);
+  res.json({ success: true, employee: newHired, job });
+});
+
+app.get('/api/student/employees', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const list = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  res.json({ success: true, employees: list });
+});
+
+app.put('/api/student/employees/:id/assign-machinery', (req, res) => {
+  const { id } = req.params;
+  const { machineryId, shift } = req.body;
+
+  const db = readDb();
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+
+  const emp = db.hiredEmployees.find(e => e.id === id);
+  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+  if (machineryId) {
+    const mac = (db.machineryAcquisitions || []).find(m => m.id === machineryId || m.machineryId === machineryId);
+    emp.assignedMachineryId = mac ? mac.id : machineryId;
+    emp.assignedMachineryTitle = mac ? (mac.title || mac.lineTitle) : undefined;
+  } else {
+    emp.assignedMachineryId = undefined;
+    emp.assignedMachineryTitle = undefined;
+  }
+
+  if (shift !== undefined) {
+    emp.shift = Number(shift) || 1;
+  }
+
+  syncHiredEmployeeToSupabase(emp).catch(e => console.error(e));
+  writeDb(db);
+  res.json({ success: true, employee: emp });
+});
+
+// ================= TEACHER ASSET ADMINISTRATION & DELETES =================
+app.delete('/api/obligations/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  const ob = db.paymentObligations.find(o => o.id === id);
+  if (!ob) return res.status(404).json({ error: 'Obligación no encontrada' });
+
+  db.paymentObligations = db.paymentObligations.filter(o => o.id !== id);
+  if (dbPool) {
+    dbPool.query('DELETE FROM obligaciones_pago WHERE id = $1', [id]).catch(e => console.error(e));
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'DELETE_OBLIGATION',
+    details: `Profesor ha eliminado la deuda / obligación ${ob.id} de ${ob.studentName}`,
+    timestamp: new Date().toISOString()
+  });
+
+  writeDb(db);
+  res.json({ success: true, message: 'Deuda eliminada' });
+});
+
+app.delete('/api/acquisitions/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  const acq = db.acquisitions.find(a => a.id === id);
+  if (!acq) return res.status(404).json({ error: 'Inmueble no encontrado' });
+
+  db.acquisitions = db.acquisitions.filter(a => a.id !== id);
+  if (dbPool) {
+    dbPool.query('DELETE FROM adquisiciones WHERE id = $1', [id]).catch(e => console.error(e));
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'DELETE_ACQUISITION',
+    details: `Profesor ha eliminado la adquisición ${acq.propertyTitle} de ${acq.studentName}`,
+    timestamp: new Date().toISOString()
+  });
+
+  writeDb(db);
+  res.json({ success: true, message: 'Inmueble eliminado' });
+});
+
+app.put('/api/acquisitions/:id', (req, res) => {
+  const { id } = req.params;
+  const { basePrice, propertyTitle, location, landPercentage, monthlyRent } = req.body;
+  const db = readDb();
+  const acq = db.acquisitions.find(a => a.id === id);
+  if (!acq) return res.status(404).json({ error: 'Inmueble no encontrado' });
+
+  if (basePrice !== undefined) acq.basePrice = Number(basePrice);
+  if (propertyTitle) acq.propertyTitle = propertyTitle;
+  if (location) acq.location = location;
+  if (landPercentage !== undefined) acq.landPercentage = Number(landPercentage);
+  if (monthlyRent !== undefined) acq.monthlyRent = Number(monthlyRent);
+
+  syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+  writeDb(db);
+  res.json({ success: true, acquisition: acq });
+});
+
+app.delete('/api/machinery/acquisitions/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+  const mac = db.machineryAcquisitions.find(m => m.id === id);
+  if (!mac) return res.status(404).json({ error: 'Maquinaria no encontrada' });
+
+  db.machineryAcquisitions = db.machineryAcquisitions.filter(m => m.id !== id);
+  if (dbPool) {
+    dbPool.query('DELETE FROM maquinaria_adquisiciones WHERE id = $1', [id]).catch(e => console.error(e));
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'DELETE_MACHINERY',
+    details: `Profesor ha eliminado la adquisición de maquinaria ${mac.title || mac.lineTitle} de ${mac.studentName}`,
+    timestamp: new Date().toISOString()
+  });
+
+  writeDb(db);
+  res.json({ success: true, message: 'Maquinaria eliminada' });
+});
+
+app.put('/api/machinery/acquisitions/:id', (req, res) => {
+  const { id } = req.params;
+  const { basePrice, status, requiredStaff } = req.body;
+  const db = readDb();
+  if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+  const mac = db.machineryAcquisitions.find(m => m.id === id);
+  if (!mac) return res.status(404).json({ error: 'Maquinaria no encontrada' });
+
+  if (basePrice !== undefined) mac.basePrice = Number(basePrice);
+  if (status) mac.status = status;
+  if (requiredStaff !== undefined) mac.requiredStaff = Number(requiredStaff);
+
+  syncMachineryToSupabase(mac).catch(e => console.error(e));
+  writeDb(db);
+  res.json({ success: true, machinery: mac });
+});
+
+app.delete('/api/loans/:id', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  const loan = db.loans.find(l => l.id === id);
+  if (!loan) return res.status(404).json({ error: 'Préstamo no encontrado' });
+
+  db.loans = db.loans.filter(l => l.id !== id);
+  if (dbPool) {
+    dbPool.query('DELETE FROM prestamos WHERE id = $1', [id]).catch(e => console.error(e));
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'DELETE_LOAN',
+    details: `Profesor ha eliminado el préstamo ${loan.id} de ${loan.studentName}`,
+    timestamp: new Date().toISOString()
+  });
+
+  writeDb(db);
+  res.json({ success: true, message: 'Préstamo eliminado' });
+});
+
+app.put('/api/loans/:id', (req, res) => {
+  const { id } = req.params;
+  const { offeredAmount, annualInterestRate, termMonths, status } = req.body;
+  const db = readDb();
+  const loan = db.loans.find(l => l.id === id);
+  if (!loan) return res.status(404).json({ error: 'Préstamo no encontrado' });
+
+  if (offeredAmount !== undefined) loan.offeredAmount = Number(offeredAmount);
+  if (annualInterestRate !== undefined) loan.annualInterestRate = Number(annualInterestRate);
+  if (termMonths !== undefined) loan.termMonths = Number(termMonths);
+  if (status) loan.status = status;
+
+  syncLoanToSupabase(loan).catch(e => console.error(e));
+  writeDb(db);
+  res.json({ success: true, loan });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------

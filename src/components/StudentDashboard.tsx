@@ -47,6 +47,53 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
     projected30DaysTotal: number;
   } | null>(null);
 
+  // Change Password Modal State
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassInput, setCurrentPassInput] = useState('');
+  const [newPassInput, setNewPassInput] = useState('');
+  const [passError, setPassError] = useState('');
+  const [passSuccess, setPassSuccess] = useState('');
+  const [isChangingPass, setIsChangingPass] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPassError('');
+    setPassSuccess('');
+    if (!newPassInput || newPassInput.trim().length < 1) {
+      setPassError('Escribe una nueva contraseña');
+      return;
+    }
+
+    setIsChangingPass(true);
+    try {
+      const res = await fetch('/api/student/change-password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: currentUser.id,
+          currentPassword: currentPassInput,
+          newPassword: newPassInput
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPassError(data.error || 'Error al cambiar la contraseña');
+      } else {
+        setPassSuccess('¡Contraseña actualizada con éxito!');
+        setCurrentPassInput('');
+        setNewPassInput('');
+        setTimeout(() => {
+          setShowPasswordModal(false);
+          setPassSuccess('');
+        }, 1500);
+      }
+    } catch (err) {
+      setPassError('Error de conexión al cambiar la contraseña');
+    } finally {
+      setIsChangingPass(false);
+    }
+  };
+
   useEffect(() => {
     fetchStudentData();
     // Poll balance and transactions every 4 seconds to allow interactive double-entry real-time feedback in the classroom!
@@ -212,11 +259,18 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
             </div>
             
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <div className="hidden sm:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
                 <p className="text-xs text-amber-200">Cliente de Simulación</p>
               </div>
+              <button
+                onClick={() => setShowPasswordModal(true)}
+                className="flex items-center space-x-1.5 bg-amber-800/80 hover:bg-amber-700/80 px-3 py-2 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer border border-amber-600/50"
+                title="Cambiar Contraseña"
+              >
+                <span>Clave</span>
+              </button>
               <button 
                 onClick={onLogout}
                 className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 px-3 py-2 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer border border-white/10"
@@ -565,6 +619,74 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           }}
           onClose={() => setSelectedExtractTx(null)}
         />
+      )}
+
+      {/* CHANGE PASSWORD MODAL */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Cambiar mi Contraseña</h3>
+            <p className="text-xs text-slate-500 mb-4">Actualiza la contraseña de acceso a tu cuenta bancaria y de alumno.</p>
+
+            {passError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 mb-3 font-semibold">
+                {passError}
+              </div>
+            )}
+
+            {passSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700 mb-3 font-semibold">
+                {passSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Contraseña Actual (opcional)</label>
+                <input
+                  type="password"
+                  value={currentPassInput}
+                  onChange={e => setCurrentPassInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-amber-500"
+                  placeholder="Tu clave actual"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Nueva Contraseña (*)</label>
+                <input
+                  type="password"
+                  required
+                  value={newPassInput}
+                  onChange={e => setNewPassInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-amber-500"
+                  placeholder="Escribe tu nueva contraseña personal"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPasswordModal(false);
+                    setPassError('');
+                    setPassSuccess('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isChangingPass}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white cursor-pointer shadow-xs disabled:opacity-50"
+                >
+                  {isChangingPass ? 'Guardando...' : 'Guardar Nueva Contraseña'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       <Footer />

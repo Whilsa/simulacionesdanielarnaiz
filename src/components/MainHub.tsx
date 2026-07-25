@@ -5,12 +5,12 @@
 
 import React from 'react';
 import { User } from '../types.js';
-import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight, Wrench } from 'lucide-react';
+import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight, Wrench, Users } from 'lucide-react';
 import Footer from './Footer.js';
 
 interface MainHubProps {
   currentUser: User;
-  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'company') => void;
+  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company') => void;
   onLogout: () => void;
   availablePropertiesCount?: number;
 }
@@ -74,8 +74,8 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           </p>
         </div>
 
-        {/* 4 Main Cards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 5 Main Cards Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
           {/* CARD 1: BANCO */}
           <div
             onClick={() => onSelectModule('bank')}
@@ -191,6 +191,46 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
               </div>
 
               <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-amber-600 transition-colors shadow-xs">
+                <ArrowRight className="w-4 h-4" />
+              </div>
+            </div>
+          </div>
+
+          {/* CARD 4: FORO DE EMPLEO */}
+          <div
+            onClick={() => onSelectModule('jobs')}
+            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-violet-500 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
+          >
+            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
+
+            <div>
+              <div className="w-14 h-14 rounded-2xl bg-violet-50 text-violet-700 flex items-center justify-center mb-6 shadow-inner border border-violet-200 group-hover:bg-violet-600 group-hover:text-white transition-colors duration-300">
+                <Users className="w-7 h-7" />
+              </div>
+
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xl font-bold text-slate-900 group-hover:text-violet-600 transition-colors">
+                  Foro de empleo
+                </h3>
+                <span className="text-xs font-bold text-violet-800 bg-violet-50 px-2.5 py-1 rounded-full border border-violet-200">
+                  Laboral
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                Contratación de empleados operarios publicados por el Profesor. Asignación a máquinas para cubrir el mínimo de 5 operarios por turno.
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Bolsa de Empleo</span>
+                <span className="text-base font-extrabold text-violet-900">
+                  Contratación
+                </span>
+              </div>
+
+              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-violet-600 transition-colors shadow-xs">
                 <ArrowRight className="w-4 h-4" />
               </div>
             </div>

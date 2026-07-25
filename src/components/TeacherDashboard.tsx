@@ -9,10 +9,11 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw, Edit, Building2, Wrench
+  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench
 } from 'lucide-react';
 import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
+import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
 import Footer from './Footer.js';
 
 interface TeacherDashboardProps {
@@ -22,7 +23,7 @@ interface TeacherDashboardProps {
 }
 
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'students' | 'transfers' | 'loans' | 'logs' | 'reset'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset'>('students');
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
@@ -41,7 +42,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [adjustAmount, setAdjustAmount] = useState('');
   const [adjustAction, setAdjustAction] = useState<'add' | 'subtract' | 'set'>('add');
+  const [adjustConcept, setAdjustConcept] = useState('');
   const [adjustError, setAdjustError] = useState('');
+
+  // Edit user state
+  const [editUserTarget, setEditUserTarget] = useState<User | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editError, setEditError] = useState('');
+  const [editSuccess, setEditSuccess] = useState('');
+  const [isEditingUser, setIsEditingUser] = useState(false);
 
   // Reset simulation state
   const [resetKeepUsers, setResetKeepUsers] = useState(true);
@@ -326,7 +337,8 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: Number(adjustAmount),
-          actionType: adjustAction
+          actionType: adjustAction,
+          concept: adjustConcept
         }),
       });
 
@@ -345,10 +357,56 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
       // Success
       setAdjustAmount('');
+      setAdjustConcept('');
       setSelectedUser(null);
       fetchData();
     } catch (err: any) {
       setAdjustError(err.message || 'Error de red.');
+    }
+  };
+
+  const handleOpenEditUser = (user: User) => {
+    setEditUserTarget(user);
+    setEditName(user.name);
+    setEditUsername(user.username);
+    setEditPassword(user.password || '');
+    setEditError('');
+    setEditSuccess('');
+  };
+
+  const handleEditUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUserTarget) return;
+    setEditError('');
+    setEditSuccess('');
+    setIsEditingUser(true);
+
+    try {
+      const res = await fetch(`/api/users/${editUserTarget.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editName,
+          username: editUsername,
+          password: editPassword
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setEditError(data.error || 'Error al actualizar los datos del alumno');
+      } else {
+        setEditSuccess('¡Datos del alumno actualizados con éxito!');
+        fetchData();
+        setTimeout(() => {
+          setEditUserTarget(null);
+          setEditSuccess('');
+        }, 1200);
+      }
+    } catch (err) {
+      setEditError('Error de red al actualizar los datos');
+    } finally {
+      setIsEditingUser(false);
     }
   };
 
@@ -577,6 +635,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             <span>Cuentas de Alumnos</span>
           </button>
           <button 
+            onClick={() => setActiveTab('assets')}
+            className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
+              activeTab === 'assets' 
+                ? 'border-amber-600 text-amber-600 bg-amber-50/20' 
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>Activos, Deudas y Pasivos</span>
+          </button>
+          <button 
             onClick={() => setActiveTab('transfers')}
             className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
               activeTab === 'transfers' 
@@ -715,6 +784,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                             <td className="py-4 px-2">
                               <div className="flex justify-center items-center space-x-2">
                                 <button
+                                  onClick={() => handleOpenEditUser(student)}
+                                  className="flex items-center space-x-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                  title="Editar nombre, usuario y contraseña"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Editar</span>
+                                </button>
+                                <button
                                   onClick={() => setSelectedUser(student)}
                                   className="flex items-center space-x-1 bg-slate-100 hover:bg-amber-50 text-slate-700 hover:text-amber-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
                                   title="Añadir o quitar saldo"
@@ -737,6 +814,18 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     </table>
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {/* ACTIVOS Y PASIVOS MANAGEMENT TAB */}
+            {activeTab === 'assets' && (
+              <motion.div
+                key="assets-panel"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <TeacherAssetsAndDebtsManagement students={users.filter(u => u.role === 'student')} />
               </motion.div>
             )}
 
@@ -1357,8 +1446,19 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       €
                     </div>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Concepto de la Transacción Forzada</label>
+                  <input
+                    type="text"
+                    value={adjustConcept}
+                    onChange={(e) => setAdjustConcept(e.target.value)}
+                    placeholder="Ej. Corrección de saldo por el profesor, Ajuste de evaluación..."
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Esta modificación se registrará en el diario de auditoría indicando los saldos previos y posteriores.
+                    Este concepto aparecerá registrado en el libro diario de transferencias del alumno.
                   </p>
                 </div>
 
@@ -1375,6 +1475,99 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer"
                   >
                     Guardar Ajuste
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* EDIT STUDENT DETAILS MODAL */}
+      <AnimatePresence>
+        {editUserTarget && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
+                <h3 className="font-display font-bold text-base flex items-center">
+                  <Edit3 className="w-5 h-5 mr-2 text-amber-400" />
+                  Editar Datos de Alumno
+                </h3>
+                <button 
+                  onClick={() => setEditUserTarget(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditUserSubmit} className="p-6 space-y-4">
+                {editError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700">
+                    {editError}
+                  </div>
+                )}
+                {editSuccess && (
+                  <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded-r-lg text-xs font-semibold text-emerald-700">
+                    {editSuccess}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre Completo</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de Acceso</label>
+                  <input
+                    type="text"
+                    required
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña Personalizada</label>
+                  <input
+                    type="text"
+                    required
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Esta contraseña quedará guardada de forma permanente y sincronizada en Supabase.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditUserTarget(null)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isEditingUser}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isEditingUser ? 'Guardando...' : 'Guardar Cambios'}
                   </button>
                 </div>
               </form>

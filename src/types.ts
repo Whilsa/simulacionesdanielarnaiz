@@ -273,6 +273,72 @@ export interface DatabaseSchema {
   paymentObligations: PaymentObligation[];
   loans: BankLoan[];
   machineryAcquisitions?: MachineryAcquisition[];
+  jobListings?: JobListing[];
+  hiredEmployees?: HiredEmployee[];
+  payrollRecords?: PayrollRecord[];
+  taxObligations?: TaxObligation[];
   defaultInitialBalance: number;
   isSeed?: boolean;
+}
+
+export interface JobListing {
+  id: string;
+  title: string;
+  employeeName: string;
+  gender: 'hombre' | 'mujer';
+  grossSalaryMonthly: number;
+  age: number;
+  status: 'disponible' | 'contratado';
+  hiredByStudentId?: string;
+  hiredByStudentName?: string;
+  hiredAtDate?: string;
+  avatarUrl?: string;
+  createdAt?: string;
+}
+
+export interface HiredEmployee {
+  id: string;
+  jobListingId: string;
+  studentId: string;
+  studentName: string;
+  employeeName: string;
+  gender: 'hombre' | 'mujer';
+  grossSalaryMonthly: number;
+  age: number;
+  hireDate: string;
+  assignedMachineryId?: string;
+  assignedMachineryTitle?: string;
+  shift?: number;
+  avatarUrl?: string;
+}
+
+export interface PayrollRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  payrollDate: string;
+  periodMonth: number;
+  periodYear: number;
+  employeeCount: number;
+  totalGrossSalary: number;
+  totalEmployeeSS: number;
+  totalEmployeeIRPF: number;
+  totalNetSalaryPaid: number;
+  totalCompanySS: number;
+  isProportional: boolean;
+  status: 'paid';
+  createdAt: string;
+}
+
+export interface TaxObligation {
+  id: string;
+  studentId: string;
+  studentName: string;
+  type: 'irpf' | 'ss_employee' | 'ss_company';
+  concept: string;
+  amount: number;
+  dueDate: string;
+  status: 'pendiente' | 'pagado';
+  paidDate?: string;
+  payrollRecordId?: string;
 }
