@@ -8,7 +8,7 @@ import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquis
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -326,6 +326,103 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
     } finally {
       setUpdatingEmpId(null);
     }
+  };
+
+  const handleDownloadPayrollCsv = () => {
+    if (!data || !data.hiredEmployees || data.hiredEmployees.length === 0) return;
+
+    const currentMonthStr = new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    const hiredList = data.hiredEmployees;
+
+    const headers = [
+      'Empleado',
+      'Edad',
+      'Fecha Contratación',
+      'Maquinaria Asignada',
+      'Turno',
+      'Sueldo Bruto (€)',
+      'IRPF Retenido 17% (€)',
+      'SS Empleado 6,48% (€)',
+      'Sueldo Neto (€)',
+      'SS Empresa 75% (€)',
+      'Coste Total Empresa (€)'
+    ];
+
+    let csvContent = `DETALLE DE NÓMINAS DEL MES ACTUAL (${currentMonthStr.toUpperCase()})\n`;
+    csvContent += `Empresa: ${currentUser.name}\n`;
+    csvContent += `CIF / NIF: ${currentUser.nifCif || 'B-99887766'}\n`;
+    csvContent += `Fecha Generación: ${new Date().toLocaleDateString('es-ES')}\n\n`;
+
+    csvContent += headers.join(';') + '\n';
+
+    let totalGross = 0;
+    let totalIrpf = 0;
+    let totalSsEmp = 0;
+    let totalNet = 0;
+    let totalSsComp = 0;
+    let totalCost = 0;
+
+    hiredList.forEach(e => {
+      const gross = e.grossSalaryMonthly;
+      const irpf = Math.round(gross * 0.17 * 100) / 100;
+      const ssEmp = Math.round(gross * 0.0648 * 100) / 100;
+      const net = Math.round((gross - irpf - ssEmp) * 100) / 100;
+      const ssComp = Math.round(gross * 0.75 * 100) / 100;
+      const cost = Math.round((gross + ssComp) * 100) / 100;
+
+      totalGross += gross;
+      totalIrpf += irpf;
+      totalSsEmp += ssEmp;
+      totalNet += net;
+      totalSsComp += ssComp;
+      totalCost += cost;
+
+      const mac = data.machineryAcquisitions?.find(m => m.id === e.assignedMachineryId);
+      const macTitle = mac ? `${mac.title || mac.lineTitle} (${mac.installationNaveTitle})` : 'Sin asignar';
+      const shiftText = e.shift === 1 ? 'Turno Mañana' : e.shift === 2 ? 'Turno Tarde' : e.shift === 3 ? 'Turno Noche' : 'Por defecto';
+
+      const row = [
+        `"${e.employeeName}"`,
+        e.age,
+        `"${new Date(e.hireDate).toLocaleDateString('es-ES')}"`,
+        `"${macTitle}"`,
+        `"${shiftText}"`,
+        gross.toFixed(2),
+        irpf.toFixed(2),
+        ssEmp.toFixed(2),
+        net.toFixed(2),
+        ssComp.toFixed(2),
+        cost.toFixed(2)
+      ];
+      csvContent += row.join(';') + '\n';
+    });
+
+    // Add totals row
+    csvContent += '\n';
+    const totalsRow = [
+      '"TOTALES PLANTILLA"',
+      '""',
+      '""',
+      '""',
+      '""',
+      totalGross.toFixed(2),
+      totalIrpf.toFixed(2),
+      totalSsEmp.toFixed(2),
+      totalNet.toFixed(2),
+      totalSsComp.toFixed(2),
+      totalCost.toFixed(2)
+    ];
+    csvContent += totalsRow.join(';') + '\n';
+
+    // Trigger download
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `detalle_nominas_${currentUser.username}_${new Date().toISOString().slice(0, 7)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -681,61 +778,73 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     No dispones de contratos de alquiler vigentes.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {data.acquisitions.filter(a => a.operation === 'alquiler').map(acq => (
-                      <div key={acq.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded-full">
-                              Arrendamiento Comercial
-                            </span>
-                            <span className="text-xs text-slate-400">
-                              Desde {new Date(acq.purchaseDate).toLocaleDateString('es-ES')}
-                            </span>
-                          </div>
+                  <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
+                            <th className="p-3.5">Inmueble</th>
+                            <th className="p-3.5">Ubicación</th>
+                            <th className="p-3.5">Superficie</th>
+                            <th className="p-3.5">Renta base mensual</th>
+                            <th className="p-3.5">IVA (21%)</th>
+                            <th className="p-3.5">Fianza pagada</th>
+                            <th className="p-3.5">Modalidad de pago</th>
+                            <th className="p-3.5 text-right">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium">
+                          {data.acquisitions.filter(a => a.operation === 'alquiler').map(acq => {
+                            const baseRent = acq.basePrice || (acq.monthlyRent ? acq.monthlyRent / 1.21 : 0);
+                            const ivaRent = acq.monthlyRent ? acq.monthlyRent - baseRent : baseRent * 0.21;
+                            const deposit = acq.depositPaid || (baseRent * 2);
 
-                          <h3 className="text-sm font-bold text-slate-900 mb-1">{acq.propertyTitle}</h3>
-                          <p className="text-xs text-slate-500 mb-4">{acq.location}</p>
-
-                          <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs border border-slate-100">
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">Renta Mensual Total (con 21% IVA):</span>
-                              <span className="font-extrabold text-slate-900">{(acq.monthlyRent || acq.totalPrice).toLocaleString('es-ES')} €/mes</span>
-                            </div>
-                            <div className="flex justify-between bg-amber-50/60 p-1.5 rounded-lg border border-amber-100">
-                              <span className="text-amber-900 font-bold">Fianza Pagada (2 Mensualidades):</span>
-                              <span className="font-black text-amber-950">
-                                {(acq.depositPaid || ((acq.basePrice || (acq.monthlyRent ? acq.monthlyRent / 1.21 : 0)) * 2)).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                              </span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">Domiciliación Bancaria:</span>
-                              <span className="font-bold text-emerald-600 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>Activa</span>
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end gap-2 flex-wrap">
-                            <button
-                              onClick={() => setSelectedPropertyForPayments(acq)}
-                              className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
-                            >
-                              <CreditCard className="w-3.5 h-3.5 text-indigo-200" />
-                              <span>Detalle de Pagos Realizados y Pendientes</span>
-                            </button>
-                            <button
-                              onClick={() => setActiveDocumentModal({ type: 'property_invoice', acquisition: acq })}
-                              className="px-3.5 py-2 bg-indigo-900 hover:bg-indigo-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
-                            >
-                              <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Ver Factura / Contrato</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                            return (
+                              <tr key={acq.id} className="hover:bg-slate-50/80 transition">
+                                <td className="p-3.5">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold">
+                                      <Building2 className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <span className="font-bold text-slate-900 block">{acq.propertyTitle}</span>
+                                      <span className="text-[10px] text-slate-400">Arrendado desde {new Date(acq.purchaseDate).toLocaleDateString('es-ES')}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="p-3.5 text-slate-600">{acq.location}</td>
+                                <td className="p-3.5 font-bold">{acq.surfaceM2} m²</td>
+                                <td className="p-3.5 font-bold text-slate-900">{baseRent.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/mes</td>
+                                <td className="p-3.5 text-slate-600">{ivaRent.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/mes</td>
+                                <td className="p-3.5 font-bold text-amber-900">{deposit.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                                <td className="p-3.5">
+                                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                                    Domiciliación bancaria
+                                  </span>
+                                </td>
+                                <td className="p-3.5 text-right space-x-2">
+                                  <button
+                                    onClick={() => setSelectedPropertyForPayments(acq)}
+                                    className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                    title="Ver historial y desglose de pagos realizados y pendientes por fechas, vencimiento y estado"
+                                  >
+                                    <CreditCard className="w-3.5 h-3.5 text-indigo-300" />
+                                    <span>Detalle de pagos</span>
+                                  </button>
+                                  <button
+                                    onClick={() => setActiveDocumentModal({ type: 'property_invoice', acquisition: acq })}
+                                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                  >
+                                    <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Ver factura / contrato</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -749,100 +858,89 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     Tu empresa aún no dispone de maquinaria industrial. Puedes adquirir líneas de producción desde la sección de Maquinaria.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {data.machineryAcquisitions.map(mac => {
-                      const isAssembly = mac.status === 'montaje';
-                      const relatedObligations = (data.obligations || []).filter(o => o.propertyTitle === mac.title || o.propertyTitle === mac.optionTitle);
-                      const paidObligations = relatedObligations.filter(o => o.status === 'pagado');
-                      const pendingObligations = relatedObligations.filter(o => o.status === 'pendiente' || o.status === 'vencido');
-                      const paidAmountSum = paidObligations.reduce((acc, o) => acc + o.amount, 0) + (mac.paymentMethod === 'contado' ? mac.totalPrice : 0);
-                      const pendingAmountSum = pendingObligations.reduce((acc, o) => acc + o.amount, 0);
+                  <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
+                            <th className="p-3.5">Maquinaria</th>
+                            <th className="p-3.5">Ubicación instalación</th>
+                            <th className="p-3.5">Capacidad producción</th>
+                            <th className="p-3.5">Inversión base</th>
+                            <th className="p-3.5">IVA (21%)</th>
+                            <th className="p-3.5">Estado montaje</th>
+                            <th className="p-3.5">Modalidad de pago</th>
+                            <th className="p-3.5 text-right">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium">
+                          {data.machineryAcquisitions.map(mac => {
+                            const isAssembly = mac.status === 'montaje';
+                            const baseVal = mac.basePrice || mac.totalPrice / 1.21;
+                            const ivaVal = mac.ivaAmount || mac.totalPrice - baseVal;
 
-                      return (
-                        <div key={mac.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between space-y-4">
-                          <div>
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-amber-100 text-amber-900 rounded-full border border-amber-200">
-                                Línea de producción
-                              </span>
-                              <span className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
-                                isAssembly ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              }`}>
-                                {isAssembly ? 'En montaje (5 días)' : 'Operativa'}
-                              </span>
-                            </div>
-
-                            <h3 className="text-sm font-bold text-slate-900 mb-1">{mac.title}</h3>
-                            <p className="text-xs text-amber-800 font-semibold mb-3">{mac.optionTitle}</p>
-
-                            <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs border border-slate-100 font-sans mb-3">
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Ubicación instalación:</span>
-                                <span className="font-bold text-slate-900">{mac.installationNaveTitle} ({mac.installationSurfaceM2} m²)</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Capacidad producción:</span>
-                                <span className="font-bold text-amber-900 font-mono">{mac.productionCapacityUnitsPerHour} unid / hora</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Inversión adquisición:</span>
-                                <span className="font-bold text-slate-900">{mac.totalPrice.toLocaleString('es-ES')} €</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Modalidad pago:</span>
-                                <span className="font-semibold text-slate-800">{mac.paymentMethod === 'contado' ? 'Al contado' : 'Aplazado (24 pagarés)'}</span>
-                              </div>
-                            </div>
-
-                            {/* Detalle de Pagos Realizados y Pendientes */}
-                            <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/80 text-xs space-y-2">
-                              <h4 className="font-bold text-amber-950 flex items-center justify-between">
-                                <span>Pagos realizados y pendientes</span>
-                                <span className="text-[10px] font-normal text-amber-800">
-                                  {mac.paymentMethod === 'contado' ? '100% abonado' : `${paidObligations.length} / 24 pagarés pagados`}
-                                </span>
-                              </h4>
-
-                              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-amber-200/60">
-                                <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-200">
-                                  <span className="text-emerald-800 block text-[10px] font-bold">Total amortizado / pagado</span>
-                                  <span className="font-black text-emerald-950 text-sm">{paidAmountSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
-                                </div>
-                                <div className="bg-amber-100/80 p-2 rounded-lg border border-amber-300">
-                                  <span className="text-amber-900 block text-[10px] font-bold">Total pendiente de vencimiento</span>
-                                  <span className="font-black text-amber-950 text-sm">{pendingAmountSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
-                                </div>
-                              </div>
-
-                              {pendingObligations.length > 0 && (
-                                <div className="text-[10px] text-amber-900 pt-1">
-                                  <span>Próximo pagaré: </span>
-                                  <strong>{pendingObligations[0].amount.toLocaleString('es-ES')} €</strong> el {new Date(pendingObligations[0].dueDate).toLocaleDateString('es-ES')}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="mt-4 pt-3 text-[11px] text-slate-400 border-t border-slate-100 flex justify-between items-center">
-                            <div>
-                              <span>Adquirido: {new Date(mac.purchaseDate).toLocaleDateString('es-ES')}</span>
-                              {isAssembly && (
-                                <span className="font-semibold text-amber-700 block mt-0.5">
-                                  Fin montaje: {new Date(mac.assemblyFinishDate).toLocaleDateString('es-ES')}
-                                </span>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => setActiveDocumentModal({ type: 'machinery_invoice', machineryAcquisition: mac })}
-                              className="px-3.5 py-1.5 bg-amber-900 hover:bg-amber-800 text-amber-100 font-bold rounded-xl text-xs transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
-                            >
-                              <Receipt className="w-3.5 h-3.5 text-amber-300" />
-                              <span>Ver factura</span>
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                            return (
+                              <tr key={mac.id} className="hover:bg-slate-50/80 transition">
+                                <td className="p-3.5">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center font-bold">
+                                      <Wrench className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <span className="font-bold text-slate-900 block">{mac.title}</span>
+                                      <span className="text-[10px] text-amber-800 font-semibold">{mac.optionTitle}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="p-3.5 text-slate-600">
+                                  {mac.installationNaveTitle} ({mac.installationSurfaceM2} m²)
+                                </td>
+                                <td className="p-3.5 font-bold font-mono text-amber-900">
+                                  {mac.productionCapacityUnitsPerHour} unid / hora
+                                </td>
+                                <td className="p-3.5 font-bold text-slate-900">
+                                  {baseVal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                </td>
+                                <td className="p-3.5 text-slate-600">
+                                  {ivaVal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                </td>
+                                <td className="p-3.5">
+                                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                    isAssembly ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  }`}>
+                                    {isAssembly ? 'En montaje' : 'Operativa'}
+                                  </span>
+                                </td>
+                                <td className="p-3.5">
+                                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                    mac.paymentMethod === 'contado' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {mac.paymentMethod === 'contado' ? 'Al contado' : 'Pago aplazado'}
+                                  </span>
+                                </td>
+                                <td className="p-3.5 text-right space-x-2">
+                                  <button
+                                    onClick={() => setSelectedPropertyForPayments(mac as any)}
+                                    className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                    title="Ver detalle de pagos a realizar por fechas, vencimiento y estado"
+                                  >
+                                    <CreditCard className="w-3.5 h-3.5 text-amber-300" />
+                                    <span>Detalle de pagos</span>
+                                  </button>
+                                  <button
+                                    onClick={() => setActiveDocumentModal({ type: 'machinery_invoice', machineryAcquisition: mac })}
+                                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                  >
+                                    <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Ver factura</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -864,7 +962,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     <div className="space-y-6">
                       {/* TOP SUMMARY CARDS FOR PAYROLL AND TAXES */}
                       <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                           <div>
                             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                               <Users className="w-5 h-5 text-blue-600" />
@@ -874,9 +972,20 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               Plantilla total: <strong>{hiredList.length} empleados contratados</strong> • Cierre y liquidación automática los días 26 de cada mes
                             </p>
                           </div>
-                          <span className="text-xs bg-blue-50 text-blue-900 px-3 py-1 rounded-full font-bold border border-blue-200 self-start sm:self-auto">
-                            Gastos Corrientes de Personal
-                          </span>
+                          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                            <button
+                              onClick={handleDownloadPayrollCsv}
+                              disabled={hiredList.length === 0}
+                              className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-50"
+                              title="Descargar detalle completo de las nóminas del mes actual"
+                            >
+                              <Download className="w-3.5 h-3.5 text-emerald-300" />
+                              <span>Descargar nóminas del mes actual</span>
+                            </button>
+                            <span className="text-xs bg-blue-50 text-blue-900 px-3 py-1 rounded-full font-bold border border-blue-200">
+                              Gastos Corrientes de Personal
+                            </span>
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -1664,72 +1773,90 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
         </div>
       )}
 
-      {/* PROPERTY PAYMENTS BREAKDOWN MODAL */}
+      {/* PROPERTY AND MACHINERY PAYMENTS BREAKDOWN MODAL */}
       {selectedPropertyForPayments && data && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
           <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
             {/* Modal Header */}
-            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30">
-                  <Building2 className="w-6 h-6" />
+            {(() => {
+              const item = selectedPropertyForPayments as any;
+              const isMachinery = !!item.title && !item.propertyTitle;
+              const itemTitle = item.propertyTitle || item.title || 'Detalle de elemento';
+              const itemSubtitle = isMachinery 
+                ? `${item.optionTitle || 'Línea de producción'} • Instalado en ${item.installationNaveTitle || 'Nave Industrial'}`
+                : `${item.location || 'Ubicación no especificada'} • ${item.operation === 'compra' ? 'Inmueble en propiedad' : 'Contrato de arrendamiento'}`;
+
+              return (
+                <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2.5 rounded-2xl border ${
+                      isMachinery 
+                        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' 
+                        : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    }`}>
+                      {isMachinery ? <Wrench className="w-6 h-6" /> : <Building2 className="w-6 h-6" />}
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-black text-white">{itemTitle}</h2>
+                      <p className="text-xs text-slate-400 font-medium">{itemSubtitle}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setSelectedPropertyForPayments(null)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
-                <div>
-                  <h2 className="text-lg font-black text-white">{selectedPropertyForPayments.propertyTitle}</h2>
-                  <p className="text-xs text-slate-400 font-medium">
-                    {selectedPropertyForPayments.location} • {selectedPropertyForPayments.operation === 'compra' ? 'Inmueble en Propiedad' : 'Contrato de Arrendamiento / Alquiler'}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedPropertyForPayments(null)}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+              );
+            })()}
 
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto space-y-5 flex-1 bg-slate-50 text-xs">
               {(() => {
+                const item = selectedPropertyForPayments as any;
                 const propObs = data.obligations.filter(o => 
-                  o.propertyId === selectedPropertyForPayments.propertyId || 
-                  o.propertyId === selectedPropertyForPayments.id ||
-                  o.propertyTitle === selectedPropertyForPayments.propertyTitle
+                  (item.id && (o.propertyId === item.id || o.acquisitionId === item.id)) ||
+                  (item.propertyId && o.propertyId === item.propertyId) ||
+                  (item.propertyTitle && o.propertyTitle === item.propertyTitle) ||
+                  (item.title && o.propertyTitle === item.title) ||
+                  (item.optionTitle && o.propertyTitle === item.optionTitle)
                 );
                 const paidObs = propObs.filter(o => o.status === 'pagado');
-                const pendingObs = propObs.filter(o => o.status === 'pendiente');
+                const pendingObs = propObs.filter(o => o.status === 'pendiente' || o.status === 'vencido');
 
-                const totalPaid = paidObs.reduce((acc, o) => acc + o.amount, 0);
+                const totalPaid = paidObs.reduce((acc, o) => acc + o.amount, 0) + (item.paymentMethod === 'contado' ? (item.totalPrice || item.basePrice || 0) : 0);
                 const totalPending = pendingObs.reduce((acc, o) => acc + o.amount, 0);
+
+                const isMachinery = !!item.title && !item.propertyTitle;
 
                 return (
                   <>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Precio / Renta Base</span>
+                        <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Importe / Inversión</span>
                         <div className="text-lg font-black text-slate-900">
-                          {selectedPropertyForPayments.operation === 'compra'
-                            ? `${selectedPropertyForPayments.totalPrice.toLocaleString('es-ES')} €`
-                            : `${(selectedPropertyForPayments.monthlyRent || selectedPropertyForPayments.totalPrice).toLocaleString('es-ES')} €/mes`}
+                          {item.operation === 'alquiler'
+                            ? `${(item.monthlyRent || item.totalPrice || 0).toLocaleString('es-ES')} €/mes`
+                            : `${(item.totalPrice || item.basePrice || 0).toLocaleString('es-ES')} €`}
                         </div>
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
-                          {selectedPropertyForPayments.operation === 'compra' ? 'Importe total operación' : 'Cuota mensual de alquiler'}
+                          {item.operation === 'alquiler' ? 'Renta mensual de alquiler' : 'Inversión total de adquisición'}
                         </span>
                       </div>
 
                       <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-900 shadow-2xs">
-                        <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Pagos Realizados</span>
+                        <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Pagos realizados</span>
                         <div className="text-lg font-black text-emerald-800">
                           {totalPaid.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
                         </div>
                         <span className="text-[10px] text-emerald-700 mt-0.5 block">
-                          {paidObs.length} cuota(s) abonadas
+                          {item.paymentMethod === 'contado' ? '100% abonado al contado' : `${paidObs.length} cuota(s) abonadas`}
                         </span>
                       </div>
 
                       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 shadow-2xs">
-                        <span className="text-[10px] font-extrabold uppercase text-amber-800 block mb-1">Pagos Pendientes</span>
+                        <span className="text-[10px] font-extrabold uppercase text-amber-800 block mb-1">Pagos pendientes</span>
                         <div className="text-lg font-black text-amber-900">
                           {totalPending.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
                         </div>
@@ -1742,22 +1869,22 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     {/* Installments Table */}
                     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                       <div className="p-3.5 bg-slate-100 border-b border-slate-200 font-bold text-slate-800 flex justify-between items-center">
-                        <span>Historial y Plan de Pagos del Inmueble</span>
+                        <span>{isMachinery ? 'Historial y plan de pagarés de la maquinaria' : 'Historial y plan de pagos del inmueble'}</span>
                         <span className="text-[11px] font-normal text-slate-500">{propObs.length} registros</span>
                       </div>
 
                       {propObs.length === 0 ? (
                         <div className="p-6 text-center text-slate-500">
-                          {selectedPropertyForPayments.paymentMethod === 'contado' 
-                            ? 'Inmueble abonado en su totalidad al contado en el momento de la compra.' 
-                            : 'No hay cuotas ni pagos pendientes registrados para este inmueble.'}
+                          {item.paymentMethod === 'contado' 
+                            ? 'Abonado en su totalidad al contado en la fecha de la transacción.' 
+                            : 'No hay cuotas ni pagarés pendientes registrados para este elemento.'}
                         </div>
                       ) : (
                         <div className="overflow-x-auto">
                           <table className="w-full text-left border-collapse">
                             <thead>
                               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                                <th className="p-3">Concepto / N° Cuota</th>
+                                <th className="p-3">Concepto / Nº cuota</th>
                                 <th className="p-3">Importe (€)</th>
                                 <th className="p-3">Vencimiento</th>
                                 <th className="p-3">Estado</th>
@@ -1771,7 +1898,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   <tr key={ob.id} className="hover:bg-slate-50/80 transition">
                                     <td className="p-3">
                                       <span className="font-bold text-slate-800 block">
-                                        {ob.type === 'cuota_alquiler' ? 'Renta de Alquiler' : ob.type === 'pagare' ? 'Pagaré' : 'Letra de Cambio'}
+                                        {ob.type === 'cuota_alquiler' ? 'Renta de alquiler' : ob.type === 'pagare' ? 'Pagaré' : 'Letra de cambio'}
                                       </span>
                                       <span className="text-[10px] text-slate-400">
                                         Cuota {ob.installmentNumber || 1} de {ob.totalInstallments || 1}
@@ -1797,7 +1924,6 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                       )}
                                     </td>
                                     <td className="p-3 text-right space-x-2">
-                                      
                                       {(!isPaid && (new Date(ob.dueDate) <= new Date() || ob.status === "vencido")) && (
                                         <button
                                           disabled={payingObligationId === ob.id}
@@ -1828,7 +1954,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 onClick={() => setSelectedPropertyForPayments(null)}
                 className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer"
               >
-                Cerrar Detalle de Pagos
+                Cerrar detalle de pagos
               </button>
             </div>
           </div>

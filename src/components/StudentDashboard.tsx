@@ -114,6 +114,10 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           const me = usersData.users.find((u: User) => u.id === currentUser.id);
           if (me) {
             setBalance(me.balance);
+          } else {
+            // Account was deleted by teacher, log out immediately
+            onLogout();
+            return;
           }
 
           // Filter out self from classmates list

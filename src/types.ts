@@ -12,6 +12,7 @@ export interface User {
   accountNumber: string;
   balance: number;
   initialBalance?: number;
+  nifCif?: string;
 }
 
 export interface Transfer {

@@ -25,7 +25,27 @@ export default function App() {
     const savedUser = localStorage.getItem('bes_sim_user');
     if (savedUser) {
       try {
-        setCurrentUser(JSON.parse(savedUser));
+        const parsed = JSON.parse(savedUser);
+        fetch('/api/users')
+          .then(res => res.json())
+          .then(data => {
+            if (data && Array.isArray(data.users)) {
+              const exists = data.users.some((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
+              if (exists) {
+                const freshUser = data.users.find((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
+                setCurrentUser(freshUser || parsed);
+              } else {
+                console.warn('Session user no longer exists on server, clearing session');
+                localStorage.removeItem('bes_sim_user');
+                setCurrentUser(null);
+              }
+            } else {
+              setCurrentUser(parsed);
+            }
+          })
+          .catch(() => {
+            setCurrentUser(parsed);
+          });
       } catch (e) {
         console.error('Failed to restore user session', e);
         localStorage.removeItem('bes_sim_user');

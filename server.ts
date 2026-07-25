@@ -322,12 +322,24 @@ async function syncAccountToSupabase(id: string, alumno: string, saldo: number, 
   }
 }
 
-async function deleteAccountFromSupabase(id: string) {
+async function deleteAccountFromSupabase(id: string, username?: string, name?: string) {
   if (!dbPool) return;
   try {
-    await dbPool.query('DELETE FROM cuentas WHERE id = $1', [id]);
+    const uname = (username || id).toLowerCase();
+    const studentName = (name || id).toLowerCase();
+
+    await dbPool.query('DELETE FROM cuentas WHERE id = $1 OR LOWER(usuario) = $2 OR LOWER(alumno) = $3', [id, uname, studentName]);
+    await dbPool.query('DELETE FROM movimientos WHERE cuenta_id = $1', [id]);
+    await dbPool.query('DELETE FROM adquisiciones WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM obligaciones_pago WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM prestamos WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM maquinaria_adquisiciones WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM ofertas_empleo WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM empleados_contratados WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM registros_nomina WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM obligaciones_fiscales WHERE alumno_id = $1', [id]);
   } catch (e) {
-    console.error('[Supabase DB] Error deleting account from Supabase:', e);
+    console.error('[Supabase DB] Error deleting account and related data from Supabase:', e);
   }
 }
 
@@ -1946,7 +1958,25 @@ app.delete('/api/users/:id', (req, res) => {
   }
 
   db.users = db.users.filter(u => u.id !== id);
-  deleteAccountFromSupabase(id).catch(e => console.error(e));
+
+  // Clean all student-owned records from local db memory
+  if (db.acquisitions) db.acquisitions = db.acquisitions.filter(a => a.studentId !== id);
+  if (db.paymentObligations) db.paymentObligations = db.paymentObligations.filter(o => o.studentId !== id);
+  if (db.loans) db.loans = db.loans.filter(l => l.studentId !== id);
+  if (db.machineryAcquisitions) db.machineryAcquisitions = db.machineryAcquisitions.filter(m => m.studentId !== id);
+  if (db.hiredEmployees) db.hiredEmployees = db.hiredEmployees.filter(e => e.studentId !== id);
+  if (db.payrollRecords) db.payrollRecords = db.payrollRecords.filter(p => p.studentId !== id);
+  if (db.taxObligations) db.taxObligations = db.taxObligations.filter(t => t.studentId !== id);
+  if (db.jobListings) {
+    db.jobListings = db.jobListings.map(j => {
+      if (j.hiredByStudentId === id) {
+        return { ...j, status: 'disponible', hiredByStudentId: undefined, hiredByStudentName: undefined, hiredAtDate: undefined };
+      }
+      return j;
+    });
+  }
+
+  deleteAccountFromSupabase(id, user.username, user.name).catch(e => console.error(e));
 
   const newLog: SystemLog = {
     id: generateId('log'),
