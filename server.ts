@@ -3193,6 +3193,76 @@ app.post('/api/obligations/pay', (req, res) => {
   });
 });
 
+// Pay due tax obligation (IRPF or Social Security)
+app.post('/api/taxes/pay', (req, res) => {
+  const { taxId, studentId } = req.body;
+  const db = readDb();
+
+  if (!db.taxObligations) db.taxObligations = [];
+  const tax = db.taxObligations.find(t => t.id === taxId && t.studentId === studentId);
+  if (!tax) {
+    return res.status(404).json({ error: 'Obligación fiscal no encontrada' });
+  }
+
+  if (tax.status === 'pagado') {
+    return res.status(400).json({ error: 'Esta obligación fiscal ya ha sido liquidada' });
+  }
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  }
+
+  if (student.balance < tax.amount) {
+    return res.status(400).json({
+      error: `Saldo insuficiente para liquidar este impuesto. Saldo actual: ${student.balance.toLocaleString('es-ES')} €, Importe a ingresar: ${tax.amount.toLocaleString('es-ES')} €`
+    });
+  }
+
+  // Deduct from bank balance
+  student.balance = Number((student.balance - tax.amount).toFixed(2));
+
+  const receiverName = tax.type === 'irpf' 
+    ? 'Agencia Tributaria - Hacienda (AEAT)' 
+    : 'Tesorería General de la Seguridad Social (TGSS)';
+  const receiverAccount = tax.type === 'irpf' 
+    ? 'ES00 0000 AEAT 0000 0000 0000' 
+    : 'ES00 0000 TGSS 0000 0000 0000';
+
+  // Create Transfer record
+  const newTransfer: Transfer = {
+    id: generateId('tx'),
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'organismo-oficial',
+    receiverName,
+    receiverAccount,
+    amount: tax.amount,
+    concept: `Liquidación Tributaria / SS: ${tax.concept}`,
+    timestamp: new Date().toISOString()
+  };
+  db.transfers.unshift(newTransfer);
+
+  // Mark tax obligation as paid
+  tax.status = 'pagado';
+  tax.paidDate = new Date().toISOString();
+
+  writeDb(db);
+
+  // Sync to Supabase
+  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+  syncTaxObligationToSupabase(tax).catch(e => console.error(e));
+  syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', tax.amount, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
+
+  return res.json({
+    success: true,
+    message: `¡Liquidación tributaria completada con éxito! Se han abonado ${tax.amount.toLocaleString('es-ES')} € a ${receiverName}.`,
+    tax,
+    updatedBalance: student.balance
+  });
+});
+
 // ---------------- LOAN MANAGEMENT SYSTEM ----------------
 
 function calculateFrenchAmortization(
@@ -3505,6 +3575,80 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           }
         }
       }
+    }
+  }
+
+  // 3. Tax Obligations (IRPF & Seguridad Social)
+  if (db.taxObligations) {
+    for (const tax of db.taxObligations) {
+      if (tax.studentId === studentId && tax.status !== 'pagado') {
+        const dDate = new Date(tax.dueDate);
+        const principal = tax.amount;
+        const penalty = dDate <= now ? Number((principal * 0.05).toFixed(2)) : 0;
+        const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+
+        const isIRPF = tax.type === 'irpf';
+        const title = isIRPF ? 'AEAT - Hacienda (Retención IRPF)' : 'TGSS - Seguridad Social';
+
+        const item: UpcomingPaymentItem = {
+          id: tax.id,
+          sourceType: 'tax',
+          type: isIRPF ? 'impuesto_irpf' : 'impuesto_ss',
+          title,
+          concept: tax.concept,
+          dueDate: tax.dueDate,
+          principalAmount: principal,
+          penaltyInterest: penalty,
+          totalAmount: Number((principal + penalty).toFixed(2)),
+          isOverdue: dDate <= now,
+          daysRemaining: daysRem,
+          installmentInfo: 'Liquidación Tributaria / SS'
+        };
+
+        if (dDate <= now) {
+          overdueItems.push(item);
+        } else if (dDate <= thirtyFiveDaysLater) {
+          upcoming30DaysItems.push(item);
+        }
+      }
+    }
+  }
+
+  // 4. Upcoming Payroll (Nóminas del día 26)
+  const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  if (studentEmps.length > 0) {
+    const totalGross = studentEmps.reduce((acc, e) => acc + e.grossSalaryMonthly, 0);
+    const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
+    const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
+    const totalNetSalary = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
+
+    let payrollYear = now.getFullYear();
+    let payrollMonth = now.getMonth();
+    if (now.getDate() >= 26) {
+      payrollMonth += 1;
+      if (payrollMonth > 11) {
+        payrollMonth = 0;
+        payrollYear += 1;
+      }
+    }
+    const nextPayrollDate = new Date(payrollYear, payrollMonth, 26, 9, 0, 0);
+
+    if (nextPayrollDate <= thirtyFiveDaysLater) {
+      const daysRem = Math.ceil((nextPayrollDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+      upcoming30DaysItems.push({
+        id: `payroll-${studentId}-${payrollYear}-${payrollMonth + 1}`,
+        sourceType: 'payroll',
+        type: 'cuota_nomina',
+        title: `Nóminas del Personal (${studentEmps.length} empleados)`,
+        concept: `Transferencia mensual de salarios netos el día 26`,
+        dueDate: nextPayrollDate.toISOString(),
+        principalAmount: totalNetSalary,
+        penaltyInterest: 0,
+        totalAmount: totalNetSalary,
+        isOverdue: false,
+        daysRemaining: daysRem,
+        installmentInfo: `Día 26 - Mes ${payrollMonth + 1}/${payrollYear}`
+      });
     }
   }
 

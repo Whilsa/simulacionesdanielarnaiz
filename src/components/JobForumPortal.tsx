@@ -349,29 +349,20 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
 
         {/* TABS & FILTERS */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-          <div className="flex items-center gap-2 bg-slate-200/80 p-1 rounded-2xl">
-            <button
-              onClick={() => setActiveTab('available')}
-              className={`px-4 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer ${
-                activeTab === 'available' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Ofertas de Empleo ({availableJobs.length})
-            </button>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold text-slate-900 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">
+              <Briefcase className="w-4 h-4 text-violet-600" />
+              <span>Ofertas de Empleo Candidatos ({availableJobs.length})</span>
+            </h2>
             {!isTeacher && (
-              <button
-                onClick={() => setActiveTab('my_employees')}
-                className={`px-4 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer ${
-                  activeTab === 'my_employees' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Mis Empleados Contratados ({myEmployees.length})
-              </button>
+              <span className="text-xs bg-blue-50 text-blue-900 px-3 py-2 rounded-2xl font-semibold border border-blue-200 flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-blue-600" />
+                <span>La gestión de tus empleados contratados se realiza desde <strong>Patrimonio de la Empresa (Mi Empresa)</strong></span>
+              </span>
             )}
           </div>
 
-          {activeTab === 'available' && (
-            <div className="flex items-center gap-3 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs text-xs">
+          <div className="flex items-center gap-3 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs text-xs">
               <div className="flex items-center gap-1.5 text-slate-500 font-semibold px-2">
                 <Filter className="w-3.5 h-3.5" />
                 <span>Filtros:</span>
@@ -401,13 +392,11 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 <span className="font-extrabold text-slate-900">{maxSalaryFilter} €</span>
               </div>
             </div>
-          )}
         </div>
 
-        {/* TAB 1: AVAILABLE JOB LISTINGS */}
-        {activeTab === 'available' && (
-          <div>
-            {filteredJobs.length === 0 ? (
+        {/* AVAILABLE JOB LISTINGS */}
+        <div>
+          {filteredJobs.length === 0 ? (
               <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-xs">
                 <Users className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                 <h3 className="text-lg font-bold text-slate-800">No hay candidatos disponibles</h3>
@@ -475,176 +464,6 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
               </div>
             )}
           </div>
-        )}
-
-        {/* TAB 2: MY HIRED EMPLOYEES & MACHINERY ASSIGNMENT */}
-        {activeTab === 'my_employees' && !isTeacher && (
-          <div>
-            {/* Staffing requirement banner */}
-            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-xs text-blue-900 flex items-center gap-3 mb-6">
-              <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
-              <div>
-                <strong className="font-bold">Normativa de Trabajo y Turnos Industrial:</strong>
-                <span> Cada máquina instalada requiere un <strong>mínimo de 5 empleados por turno (Mañana, Tarde y Noche)</strong> para operar al 100% de su capacidad nominal. Los costes de nómina e impuestos se liquidarán automáticamente el día 26.</span>
-              </div>
-            </div>
-
-            {/* Shift Staffing Summary per Machine */}
-            {machineryList.length > 0 && (
-              <div className="mb-8 bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs">
-                <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
-                  <Wrench className="w-4 h-4 text-violet-600" />
-                  <span>Estado de Cobertura de Plantilla por Máquina y Turno (Min. 5 operarios/turno)</span>
-                </h3>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {machineryList.map(m => {
-                    const assignedToThisMachine = myEmployees.filter(e => e.assignedMachineryId === m.id);
-                    const countMorning = assignedToThisMachine.filter(e => e.shift === 1).length;
-                    const countAfternoon = assignedToThisMachine.filter(e => e.shift === 2).length;
-                    const countNight = assignedToThisMachine.filter(e => e.shift === 3).length;
-
-                    return (
-                      <div key={m.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs">
-                        <div className="font-bold text-slate-900 text-sm mb-1">{m.title || m.lineTitle}</div>
-                        <p className="text-[11px] text-slate-500 mb-3">Ubicación: {m.installationNaveTitle}</p>
-
-                        <div className="grid grid-cols-3 gap-2">
-                          <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                            countMorning >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                          }`}>
-                            <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Mañana</span>
-                            <span className="text-base font-extrabold my-0.5">{countMorning} / 5</span>
-                            <span className="text-[9px] font-semibold">{countMorning >= 5 ? '✅ Cubierto' : `Faltan ${5 - countMorning}`}</span>
-                          </div>
-
-                          <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                            countAfternoon >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                          }`}>
-                            <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Tarde</span>
-                            <span className="text-base font-extrabold my-0.5">{countAfternoon} / 5</span>
-                            <span className="text-[9px] font-semibold">{countAfternoon >= 5 ? '✅ Cubierto' : `Faltan ${5 - countAfternoon}`}</span>
-                          </div>
-
-                          <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                            countNight >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                          }`}>
-                            <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Noche</span>
-                            <span className="text-base font-extrabold my-0.5">{countNight} / 5</span>
-                            <span className="text-[9px] font-semibold">{countNight >= 5 ? '✅ Cubierto' : `Faltan ${5 - countNight}`}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {myEmployees.length === 0 ? (
-              <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-xs">
-                <Briefcase className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                <h3 className="text-lg font-bold text-slate-800">Aún no tienes empleados contratados</h3>
-                <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                  Accede a la pestaña de "Ofertas de Empleo" para contratar operarios industriales para tu empresa.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-xs text-blue-900 flex items-center gap-3">
-                  <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
-                  <div>
-                    <strong className="font-bold">Requisito Técnico de Producción:</strong>
-                    <span> Cada máquina industrial requiere un mínimo de <strong>5 operarios</strong> asignados por turno de trabajo para operar a pleno rendimiento. El pago de nóminas e IRPF/SS se procesa automáticamente los días 26 de cada mes.</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {myEmployees.map(emp => (
-                    <div key={emp.id} className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs">
-                      <div className="flex items-center gap-3 mb-4">
-                        <img
-                          src={emp.avatarUrl}
-                          alt={emp.employeeName}
-                          className="w-12 h-12 rounded-2xl object-cover border border-slate-200"
-                        />
-                        <div>
-                          <h4 className="font-bold text-slate-900 text-sm">{emp.employeeName}</h4>
-                          <span className="text-[11px] text-slate-500">
-                            Contratado el {new Date(emp.hireDate).toLocaleDateString('es-ES')}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4 text-xs space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Sueldo Bruto:</span>
-                          <strong className="text-slate-900">{emp.grossSalaryMonthly.toLocaleString('es-ES')} €/mes</strong>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">IRPF Retenido (17%):</span>
-                          <span className="text-slate-700">{(emp.grossSalaryMonthly * 0.17).toFixed(2)} €</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">SS Empleado (6.48%):</span>
-                          <span className="text-slate-700">{(emp.grossSalaryMonthly * 0.0648).toFixed(2)} €</span>
-                        </div>
-                        <div className="flex justify-between border-t border-slate-200 pt-1 font-bold">
-                          <span className="text-slate-700">Líquido a Percibir:</span>
-                          <span className="text-emerald-700">{(emp.grossSalaryMonthly * (1 - 0.17 - 0.0648)).toFixed(2)} €</span>
-                        </div>
-                      </div>
-
-                      {/* Machinery & Shift Assignment Form */}
-                      <div className="space-y-2">
-                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                          Asignación a Maquinaria
-                        </label>
-                        <select
-                          value={emp.assignedMachineryId || ''}
-                          onChange={e => handleAssignMachinery(emp.id, e.target.value, emp.shift || 1)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-violet-500"
-                        >
-                          <option value="">-- Sin máquina asignada --</option>
-                          {machineryList.map(m => (
-                            <option key={m.id} value={m.id}>
-                              {m.title || m.lineTitle} ({m.installationNaveTitle})
-                            </option>
-                          ))}
-                        </select>
-
-                        {emp.assignedMachineryId && (
-                          <div className="flex items-center justify-between pt-1">
-                            <span className="text-xs text-slate-500 font-medium">Turno:</span>
-                            <div className="flex gap-1">
-                              {[
-                                { shiftNum: 1, label: 'Mañana' },
-                                { shiftNum: 2, label: 'Tarde' },
-                                { shiftNum: 3, label: 'Noche' }
-                              ].map(({ shiftNum, label }) => (
-                                <button
-                                  key={shiftNum}
-                                  onClick={() => handleAssignMachinery(emp.id, emp.assignedMachineryId!, shiftNum)}
-                                  className={`px-2 py-1 text-[11px] rounded-lg font-bold transition cursor-pointer ${
-                                    (emp.shift || 1) === shiftNum
-                                      ? 'bg-violet-600 text-white'
-                                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </main>
 
       <Footer />

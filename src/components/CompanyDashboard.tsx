@@ -4,11 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition } from '../types.js';
+import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation } from '../types.js';
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -43,14 +43,19 @@ interface CompanyDataResponse {
     totalObligationsPendingAmount?: number;
     totalLoansPendingAmount?: number;
     totalLoansPendingPrincipal?: number;
+    totalPendingTaxAmount?: number;
     totalPendingObligations: number;
     totalMonthlyRentCommitments: number;
     activeLoansCount?: number;
+    hiredEmployeesCount?: number;
   };
   acquisitions: PropertyAcquisition[];
   obligations: PaymentObligation[];
   loans?: BankLoan[];
   machineryAcquisitions?: MachineryAcquisition[];
+  hiredEmployees?: HiredEmployee[];
+  payrollRecords?: PayrollRecord[];
+  taxObligations?: TaxObligation[];
 }
 
 export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank, onUserBalanceUpdated }: CompanyDashboardProps) {
@@ -59,7 +64,9 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'obligations'>('owned');
+  const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
+  const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations'>('owned');
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -113,6 +120,51 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
       setError(err.message);
     } finally {
       setPayingObligationId(null);
+    }
+  };
+
+  const handlePayTaxObligation = async (taxId: string) => {
+    setPayingTaxId(taxId);
+    setError(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await fetch('/api/taxes/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taxId,
+          studentId: currentUser.id
+        })
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Error al liquidar el impuesto/SS');
+
+      setSuccessMsg(json.message);
+      fetchCompanyData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setPayingTaxId(null);
+    }
+  };
+
+  const handleAssignEmployeeMachineryShift = async (employeeId: string, machineryId?: string, shift?: number) => {
+    setUpdatingEmpId(employeeId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/student/employees/${employeeId}/assign-machinery`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineryId, shift })
+      });
+      if (!res.ok) throw new Error('Error al actualizar asignación del empleado');
+      fetchCompanyData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setUpdatingEmpId(null);
     }
   };
 
@@ -329,17 +381,29 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
               </button>
 
               <button
+                onClick={() => setActiveTab('employees')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'employees'
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>Mis Empleados Contratados ({data.hiredEmployees?.length || 0})</span>
+              </button>
+
+              <button
                 onClick={() => setActiveTab('obligations')}
                 className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
                   activeTab === 'obligations'
-                    ? 'border-amber-600 text-amber-700'
+                    ? 'border-purple-600 text-purple-700'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
                 <Clock className="w-4 h-4" />
                 <span>
                   Deudas, Pagarés y Préstamos (
-                  {data.obligations.filter(o => o.status === 'pendiente').length + (data.loans?.length || 0)} activos
+                  {data.obligations.filter(o => o.status === 'pendiente').length + (data.loans?.length || 0) + (data.taxObligations?.filter(t => t.status === 'pendiente').length || 0)} activos
                   )
                 </span>
               </button>
@@ -577,6 +641,255 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                 )}
               </div>
             )}
+
+            {/* TAB 4: HIRED EMPLOYEES & PAYROLL BREAKDOWN */}
+            {activeTab === 'employees' && (
+              <div className="space-y-6">
+                {(() => {
+                  const hiredList = data.hiredEmployees || [];
+                  const totalGrossMonthly = hiredList.reduce((sum, e) => sum + e.grossSalaryMonthly, 0);
+                  const totalIRPFWithholding = Math.round(totalGrossMonthly * 0.17 * 100) / 100;
+                  const totalEmployeeSS = Math.round(totalGrossMonthly * 0.0648 * 100) / 100;
+                  const totalNetSalaries = Math.round((totalGrossMonthly - totalIRPFWithholding - totalEmployeeSS) * 100) / 100;
+                  const totalCompanySS = Math.round(totalGrossMonthly * 0.75 * 100) / 100;
+                  const totalCompanyStaffExpense = Math.round((totalGrossMonthly + totalCompanySS) * 100) / 100;
+
+                  return (
+                    <div className="space-y-6">
+                      {/* TOP SUMMARY CARDS FOR PAYROLL AND TAXES */}
+                      <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div>
+                            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                              <Users className="w-5 h-5 text-blue-600" />
+                              <span>Resumen de Masa Salarial y Cotizaciones Sociales</span>
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Plantilla total: <strong>{hiredList.length} empleados contratados</strong> • Cierre y liquidación automática los días 26 de cada mes
+                            </p>
+                          </div>
+                          <span className="text-xs bg-blue-50 text-blue-900 px-3 py-1 rounded-full font-bold border border-blue-200 self-start sm:self-auto">
+                            Gastos Corrientes de Personal
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                          {/* Card 1: Sueldo Bruto Total */}
+                          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block mb-1">
+                              Sueldo Bruto Total
+                            </span>
+                            <div className="text-lg font-black text-slate-900">
+                              {totalGrossMonthly.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            </div>
+                            <span className="text-[10px] text-slate-500 mt-1 block font-medium">Suma de nóminas brutas</span>
+                          </div>
+
+                          {/* Card 2: Total IRPF a Retener */}
+                          <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-4">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-800 block mb-1">
+                              IRPF a Retener Total (17%)
+                            </span>
+                            <div className="text-lg font-black text-amber-900">
+                              {totalIRPFWithholding.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            </div>
+                            <span className="text-[10px] text-amber-800/80 mt-1 block font-medium">A ingresar en Hacienda (AEAT)</span>
+                          </div>
+
+                          {/* Card 3: Seguridad Social Empleado */}
+                          <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-2xl p-4">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-800 block mb-1">
+                              SS Empleado (6,48%)
+                            </span>
+                            <div className="text-lg font-black text-indigo-900">
+                              {totalEmployeeSS.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            </div>
+                            <span className="text-[10px] text-indigo-800/80 mt-1 block font-medium">A ingresar en TGSS</span>
+                          </div>
+
+                          {/* Card 4: Seguridad Social Empresa */}
+                          <div className="bg-violet-50/80 border border-violet-200/80 rounded-2xl p-4">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-violet-800 block mb-1">
+                              SS Empresa (75%)
+                            </span>
+                            <div className="text-lg font-black text-violet-900">
+                              {totalCompanySS.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            </div>
+                            <span className="text-[10px] text-violet-800/80 mt-1 block font-medium">Gasto patronal en TGSS</span>
+                          </div>
+
+                          {/* Card 5: Gasto Total Empresa */}
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 block mb-1">
+                              Gasto Total Empresa
+                            </span>
+                            <div className="text-lg font-black text-emerald-950">
+                              {totalCompanyStaffExpense.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            </div>
+                            <span className="text-[10px] text-emerald-800/80 mt-1 block font-medium">
+                              Sueldo Neto: {totalNetSalaries.toLocaleString('es-ES')} €
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* MACHINERY SHIFT COVERAGE SUMMARY */}
+                      {data.machineryAcquisitions && data.machineryAcquisitions.length > 0 && (
+                        <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                              <Wrench className="w-4 h-4 text-amber-600" />
+                              <span>Cobertura de Operarios por Máquina y Turno</span>
+                            </h3>
+                            <span className="text-xs text-slate-500 font-medium">Requisito: 5 operarios / turno / máquina</span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {data.machineryAcquisitions.map(m => {
+                              const assignedToThisMachine = hiredList.filter(e => e.assignedMachineryId === m.id);
+                              const countMorning = assignedToThisMachine.filter(e => e.shift === 1).length;
+                              const countAfternoon = assignedToThisMachine.filter(e => e.shift === 2).length;
+                              const countNight = assignedToThisMachine.filter(e => e.shift === 3).length;
+
+                              return (
+                                <div key={m.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs">
+                                  <div className="font-bold text-slate-900 text-sm mb-1">{m.title || m.lineTitle}</div>
+                                  <p className="text-[11px] text-slate-500 mb-3">Ubicación: {m.installationNaveTitle}</p>
+
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                      countMorning >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                    }`}>
+                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Mañana</span>
+                                      <span className="text-base font-extrabold my-0.5">{countMorning} / 5</span>
+                                      <span className="text-[9px] font-semibold">{countMorning >= 5 ? '✅ Cubierto' : `Faltan ${5 - countMorning}`}</span>
+                                    </div>
+
+                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                      countAfternoon >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                    }`}>
+                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Tarde</span>
+                                      <span className="text-base font-extrabold my-0.5">{countAfternoon} / 5</span>
+                                      <span className="text-[9px] font-semibold">{countAfternoon >= 5 ? '✅ Cubierto' : `Faltan ${5 - countAfternoon}`}</span>
+                                    </div>
+
+                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                      countNight >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                    }`}>
+                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Noche</span>
+                                      <span className="text-base font-extrabold my-0.5">{countNight} / 5</span>
+                                      <span className="text-[9px] font-semibold">{countNight >= 5 ? '✅ Cubierto' : `Faltan ${5 - countNight}`}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* LIST OF HIRED EMPLOYEES CARDS */}
+                      {hiredList.length === 0 ? (
+                        <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-xs">
+                          <Briefcase className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                          <h3 className="text-lg font-bold text-slate-800">Aún no tienes empleados contratados</h3>
+                          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                            Accede a la sección Foro de Empleo para contratar operarios e incorporarlos a la plantilla de tu empresa.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {hiredList.map(emp => (
+                            <div key={emp.id} className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs">
+                              <div className="flex items-center gap-3 mb-4">
+                                <img
+                                  src={emp.avatarUrl}
+                                  alt={emp.employeeName}
+                                  className="w-12 h-12 rounded-2xl object-cover border border-slate-200"
+                                />
+                                <div>
+                                  <h4 className="font-bold text-slate-900 text-sm">{emp.employeeName}</h4>
+                                  <span className="text-[11px] text-slate-500">
+                                    Edad: {emp.age} años • Contratado el {new Date(emp.hireDate).toLocaleDateString('es-ES')}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4 text-xs space-y-2">
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">Sueldo Bruto:</span>
+                                  <strong className="text-slate-900">{emp.grossSalaryMonthly.toLocaleString('es-ES')} €/mes</strong>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">IRPF Retenido (17%):</span>
+                                  <span className="text-amber-800 font-semibold">{(emp.grossSalaryMonthly * 0.17).toFixed(2)} €</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">SS Empleado (6,48%):</span>
+                                  <span className="text-indigo-800 font-semibold">{(emp.grossSalaryMonthly * 0.0648).toFixed(2)} €</span>
+                                </div>
+                                <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
+                                  <span className="text-slate-700">Sueldo Líquido/Neto:</span>
+                                  <span className="text-emerald-700">{(emp.grossSalaryMonthly * (1 - 0.17 - 0.0648)).toFixed(2)} €</span>
+                                </div>
+                              </div>
+
+                              {/* Machinery & Shift Assignment Controls */}
+                              <div className="space-y-2.5">
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                                  Asignación de Maquinaria
+                                </label>
+                                <select
+                                  value={emp.assignedMachineryId || ''}
+                                  disabled={updatingEmpId === emp.id}
+                                  onChange={e => handleAssignEmployeeMachineryShift(emp.id, e.target.value, emp.shift || 1)}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+                                >
+                                  <option value="">-- Sin máquina asignada --</option>
+                                  {(data.machineryAcquisitions || []).map(m => (
+                                    <option key={m.id} value={m.id}>
+                                      {m.title || m.lineTitle} ({m.installationNaveTitle})
+                                    </option>
+                                  ))}
+                                </select>
+
+                                {emp.assignedMachineryId && (
+                                  <div className="flex items-center justify-between pt-1">
+                                    <span className="text-xs text-slate-500 font-medium">Turno Asignado:</span>
+                                    <div className="flex gap-1">
+                                      {[
+                                        { shiftNum: 1, label: 'Mañana' },
+                                        { shiftNum: 2, label: 'Tarde' },
+                                        { shiftNum: 3, label: 'Noche' }
+                                      ].map(({ shiftNum, label }) => (
+                                        <button
+                                          key={shiftNum}
+                                          disabled={updatingEmpId === emp.id}
+                                          onClick={() => handleAssignEmployeeMachineryShift(emp.id, emp.assignedMachineryId!, shiftNum)}
+                                          className={`px-2.5 py-1 text-[11px] rounded-lg font-bold transition cursor-pointer ${
+                                            (emp.shift || 1) === shiftNum
+                                              ? 'bg-blue-600 text-white shadow-xs'
+                                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                          }`}
+                                        >
+                                          {label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* TAB 5: DEBTS, OBLIGATIONS AND TAXES */}
             {activeTab === 'obligations' && (
               <div className="space-y-6">
                 {/* 1. BANK LOANS SECTION */}
@@ -744,6 +1057,96 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
                                 </tr>
                               );
                             })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. TAX & SOCIAL SECURITY OBLIGATIONS TABLE */}
+                <div className="space-y-3 pt-4 border-t border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <Receipt className="w-4 h-4 text-violet-600" />
+                      <span>Impuestos, Retenciones IRPF y Cotizaciones Seguridad Social ({data.taxObligations?.length || 0})</span>
+                    </h3>
+                    <span className="text-xs text-slate-500 font-medium">
+                      Organismos Públicos: AEAT (Hacienda) y TGSS (Seguridad Social)
+                    </span>
+                  </div>
+
+                  {(!data.taxObligations || data.taxObligations.length === 0) ? (
+                    <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-xs text-slate-500">
+                      No hay liquidaciones pendientes de impuestos ni de Seguridad Social.
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
+                              <th className="p-3.5">Organismo / Tipo</th>
+                              <th className="p-3.5">Concepto Liquidación</th>
+                              <th className="p-3.5">Importe (€)</th>
+                              <th className="p-3.5">Fecha Vencimiento</th>
+                              <th className="p-3.5">Estado</th>
+                              <th className="p-3.5 text-right">Acción</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-medium">
+                            {[...data.taxObligations]
+                              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                              .map(tax => {
+                                const isPaid = tax.status === 'pagado';
+                                const isIRPF = tax.type === 'irpf';
+
+                                return (
+                                  <tr key={tax.id} className="hover:bg-slate-50/80 transition">
+                                    <td className="p-3.5 font-bold">
+                                      <span className={`px-2.5 py-1 rounded-lg border text-[11px] ${
+                                        isIRPF 
+                                          ? 'bg-amber-50 text-amber-900 border-amber-200' 
+                                          : 'bg-indigo-50 text-indigo-900 border-indigo-200'
+                                      }`}>
+                                        {isIRPF ? 'AEAT (IRPF)' : 'TGSS (Seg. Social)'}
+                                      </span>
+                                    </td>
+                                    <td className="p-3.5 text-slate-800 font-semibold">{tax.concept}</td>
+                                    <td className="p-3.5 font-black text-slate-900 text-sm">
+                                      {tax.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                    </td>
+                                    <td className="p-3.5 text-slate-700 font-mono">
+                                      {new Date(tax.dueDate).toLocaleDateString('es-ES')}
+                                    </td>
+                                    <td className="p-3.5">
+                                      {isPaid ? (
+                                        <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
+                                          <CheckCircle2 className="w-3 h-3" />
+                                          <span>Liquidado ({new Date(tax.paidDate!).toLocaleDateString('es-ES')})</span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full text-[10px] font-bold">
+                                          <Clock className="w-3 h-3" />
+                                          <span>Pendiente de Ingreso</span>
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="p-3.5 text-right">
+                                      {!isPaid && (
+                                        <button
+                                          disabled={payingTaxId === tax.id}
+                                          onClick={() => handlePayTaxObligation(tax.id)}
+                                          className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white font-bold rounded-xl text-[11px] transition shadow-xs cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                                        >
+                                          {payingTaxId === tax.id && <RefreshCw className="w-3 h-3 animate-spin" />}
+                                          <span>Liquidar Impuesto</span>
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                           </tbody>
                         </table>
                       </div>
