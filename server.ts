@@ -1255,11 +1255,64 @@ function getDefaultSeedProperties(): PropertyListing[] {
   ];
 }
 
+function normalizeAndFixTaxObligations(db: DatabaseSchema) {
+  if (!db.taxObligations) return;
+  for (const tax of db.taxObligations) {
+    if (tax.status !== 'pendiente') continue;
+
+    const d = new Date(tax.dueDate);
+    let changed = false;
+
+    // 1. Fix TGSS SS obligations -> must be due on the 20th of the month
+    if ((tax.type as string) === 'ss_employee' || (tax.type as string) === 'ss_company' || (tax.type as string) === 'ss' || (tax.type as string) === 'seguridad_social') {
+      if (d.getDate() !== 20) {
+        d.setDate(20);
+        tax.dueDate = d.toISOString();
+        changed = true;
+      }
+      if (tax.type === 'ss_company' && tax.concept.includes('31,4%')) {
+        tax.concept = tax.concept.replace('31,4%', '75%');
+        changed = true;
+      }
+    }
+
+    // 2. Fix AEAT IRPF obligations -> must be due on 15th of month following quarter (Jan 15, Apr 15, Jul 15, Oct 15)
+    if (tax.type === 'irpf') {
+      const month = d.getMonth(); // 0-indexed
+      let correctMonth = 9; // Oct 15 default for Q3
+      let correctYear = d.getFullYear();
+
+      if (month === 7) { // August -> Q3 IRPF -> October 15
+        correctMonth = 9;
+      } else if (month === 10) { // November -> Q4 IRPF -> January 15
+        correctMonth = 0;
+        correctYear += 1;
+      } else if (month === 1) { // February -> Q1 IRPF -> April 15
+        correctMonth = 3;
+      } else if (month === 4) { // May -> Q2 IRPF -> July 15
+        correctMonth = 6;
+      }
+
+      if (d.getDate() !== 15 || d.getMonth() !== correctMonth) {
+        const fixedDate = new Date(correctYear, correctMonth, 15, 9, 0, 0);
+        tax.dueDate = fixedDate.toISOString();
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      syncTaxObligationToSupabase(tax).catch(e => console.error(e));
+    }
+  }
+}
+
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
   if (!db.taxObligations) db.taxObligations = [];
   if (!db.jobListings) db.jobListings = [];
+
+  normalizeAndFixTaxObligations(db);
 
   const now = new Date();
   const currentDay = now.getDate();
@@ -1345,25 +1398,31 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         db.payrollRecords.push(newPR);
         syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
 
+        // TGSS SS due date: 20th of following month
         let nextMonth = currentMonth + 1;
         let nextYear = currentYear;
         if (nextMonth > 12) {
           nextMonth = 1;
           nextYear += 1;
         }
-        const taxDueDate = new Date(nextYear, nextMonth - 1, 1, 9, 0, 0).toISOString();
+        const ssDueDateObj = new Date(nextYear, nextMonth - 1, 20, 9, 0, 0);
 
-        const irpfObl: TaxObligation = {
-          id: generateId('tax'),
-          studentId: student.id,
-          studentName: student.name,
-          type: 'irpf',
-          concept: `Retención IRPF (17%) Nóminas ${currentMonth}/${currentYear}`,
-          amount: totalEmployeeIRPF,
-          dueDate: taxDueDate,
-          status: 'pendiente',
-          payrollRecordId: prId
-        };
+        // AEAT IRPF due date: 15th of first month of following quarter
+        let qNum = 1;
+        let irpfDueDateObj: Date;
+        if (currentMonth >= 10) {
+          qNum = 4;
+          irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+        } else if (currentMonth >= 7) {
+          qNum = 3;
+          irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0); // Oct 15
+        } else if (currentMonth >= 4) {
+          qNum = 2;
+          irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0); // Jul 15
+        } else {
+          qNum = 1;
+          irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0); // Apr 15
+        }
 
         const ssEmpObl: TaxObligation = {
           id: generateId('tax'),
@@ -1372,7 +1431,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           type: 'ss_employee',
           concept: `Seguridad Social a cargo del empleado (6,48%) Nóminas ${currentMonth}/${currentYear}`,
           amount: totalEmployeeSS,
-          dueDate: taxDueDate,
+          dueDate: ssDueDateObj.toISOString(),
           status: 'pendiente',
           payrollRecordId: prId
         };
@@ -1384,15 +1443,42 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           type: 'ss_company',
           concept: `Seguridad Social a cargo de la empresa (75%) Nóminas ${currentMonth}/${currentYear}`,
           amount: totalCompanySS,
-          dueDate: taxDueDate,
+          dueDate: ssDueDateObj.toISOString(),
           status: 'pendiente',
           payrollRecordId: prId
         };
 
-        db.taxObligations.push(irpfObl, ssEmpObl, ssCompObl);
-        syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+        db.taxObligations.push(ssEmpObl, ssCompObl);
         syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
         syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+        const existingIrpf = db.taxObligations.find(t => 
+          t.studentId === student.id && 
+          t.type === 'irpf' && 
+          t.status === 'pendiente' && 
+          new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
+          new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
+        );
+
+        if (existingIrpf) {
+          existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
+          existingIrpf.concept = `Retención IRPF (17%) Trimestre Q${qNum} ${currentYear} (AEAT)`;
+          syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
+        } else {
+          const irpfObl: TaxObligation = {
+            id: generateId('tax'),
+            studentId: student.id,
+            studentName: student.name,
+            type: 'irpf',
+            concept: `Retención IRPF (17%) Trimestre Q${qNum} ${currentYear} (AEAT)`,
+            amount: totalEmployeeIRPF,
+            dueDate: irpfDueDateObj.toISOString(),
+            status: 'pendiente',
+            payrollRecordId: prId
+          };
+          db.taxObligations.push(irpfObl);
+          syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+        }
 
         db.systemLogs.unshift({
           id: generateId('log'),
