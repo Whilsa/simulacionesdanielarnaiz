@@ -2782,9 +2782,18 @@ app.post('/api/machinery/buy', (req, res) => {
 
   // Calculate existing occupied m² in this Nave Industrial by all installed machinery lines
   const existingMachinery = (db.machineryAcquisitions || []).filter(
-    m => m.studentId === studentId && (m.installationNaveId === targetAcquisition.id || m.installationNaveId === targetAcquisition.propertyId)
+    m => m.studentId === studentId && (
+      m.installationNaveId === targetAcquisition.id || 
+      m.installationNaveId === targetAcquisition.propertyId ||
+      m.installedAtNaveId === targetAcquisition.id ||
+      m.installedNaveId === targetAcquisition.id
+    )
   );
-  const occupiedSurfaceM2 = existingMachinery.reduce((sum, m) => sum + (m.totalRequiredM2 || 0), 0);
+  const occupiedSurfaceM2 = existingMachinery.reduce((sum, m) => {
+    const cat = MACHINERY_CATALOG.find(c => c.id === m.machineryId);
+    const reqM2 = m.totalRequiredM2 || m.requiredSurfaceM2 || (cat ? cat.totalRequiredM2 : 270);
+    return sum + reqM2;
+  }, 0);
   const availableSurfaceM2 = targetAcquisition.surfaceM2 - occupiedSurfaceM2;
 
   if (availableSurfaceM2 < machinery.totalRequiredM2) {
@@ -2851,6 +2860,8 @@ app.post('/api/machinery/buy', (req, res) => {
       paymentMethod: 'contado',
       downPaymentPaid: totalPrice,
       pendingBalance: 0,
+      totalRequiredM2: machinery.totalRequiredM2,
+      requiredSurfaceM2: machinery.requiredSurfaceM2,
       installationNaveId: targetAcquisition.id,
       installedAtNaveId: targetAcquisition.id,
       installedNaveId: targetAcquisition.id,
@@ -2948,6 +2959,8 @@ app.post('/api/machinery/buy', (req, res) => {
       installmentsCount: count,
       installmentCount: count,
       installmentMonthlyAmount: installmentAmount,
+      totalRequiredM2: machinery.totalRequiredM2,
+      requiredSurfaceM2: machinery.requiredSurfaceM2,
       installationNaveId: targetAcquisition.id,
       installedAtNaveId: targetAcquisition.id,
       installedNaveId: targetAcquisition.id,
@@ -3678,16 +3691,26 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
 
     let totalGross = 0;
     for (const emp of studentEmps) {
-      const hireDateObj = new Date(emp.hireDate);
-      const hireYear = hireDateObj.getFullYear();
-      const hireMonth = hireDateObj.getMonth() + 1;
+      if (!emp.hireDate) {
+        totalGross += emp.grossSalaryMonthly;
+        continue;
+      }
+      const parts = emp.hireDate.split('T')[0].split('-');
+      const hireYear = parseInt(parts[0], 10);
+      const hireMonth = parseInt(parts[1], 10);
+      const hireDay = parseInt(parts[2], 10);
 
+      if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+        // Not hired yet in target month
+        continue;
+      }
       if (hireYear === targetYear && hireMonth === targetMonth) {
-        const hireDay = hireDateObj.getDate();
+        // First month: proportional
         const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
         const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
         totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
-      } else if (targetYear > hireYear || (targetYear === hireYear && targetMonth > hireMonth)) {
+      } else {
+        // Subsequent months: 100% full salary
         totalGross += emp.grossSalaryMonthly;
       }
     }

@@ -105,12 +105,23 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
     let totalNetSum = 0;
     let totalSSCompSum = 0;
 
+    const curNow = new Date();
+    const curY = curNow.getFullYear();
+    const curM = curNow.getMonth() + 1;
+
     const empLines = employees.map((emp, i) => {
-      const isFirstMonth = new Date(emp.hireDate).getMonth() === new Date().getMonth() && new Date(emp.hireDate).getFullYear() === new Date().getFullYear();
-      const hireDay = new Date(emp.hireDate).getDate();
-      const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+      let isFirstMonth = false;
+      let hireDay = 1;
+      if (emp.hireDate) {
+        const parts = emp.hireDate.split('T')[0].split('-');
+        const hy = parseInt(parts[0], 10);
+        const hm = parseInt(parts[1], 10);
+        hireDay = parseInt(parts[2], 10);
+        isFirstMonth = (hy === curY && hm === curM);
+      }
+      const daysInMonth = new Date(curY, curM, 0).getDate();
       const daysWorked = isFirstMonth ? Math.max(1, daysInMonth - hireDay + 1) : daysInMonth;
-      const gross = isFirstMonth ? (emp.grossSalaryMonthly / daysInMonth) * daysWorked : emp.grossSalaryMonthly;
+      const gross = isFirstMonth ? Math.round(((emp.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100 : emp.grossSalaryMonthly;
       const irpf = Math.round(gross * 0.17 * 100) / 100;
       const ssEmp = Math.round(gross * 0.0648 * 100) / 100;
       const net = Math.round((gross - irpf - ssEmp) * 100) / 100;
@@ -123,8 +134,8 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
       totalSSCompSum += ssComp;
 
       return `${i + 1}. ${emp.employeeName} (Edad: ${emp.age} años)
-   Fecha de contratación: ${new Date(emp.hireDate).toLocaleDateString('es-ES')}
-   Días computados en mes: ${daysWorked} días ${isFirstMonth ? '(Proporcional primer mes)' : ''}
+   Fecha de contratación: ${emp.hireDate ? emp.hireDate.split('T')[0] : 'N/A'}
+   Días computados en mes: ${daysWorked} días ${isFirstMonth ? '(Proporcional primer mes)' : '(100% Mes completo)'}
    Sueldo bruto: ${gross.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
    Retención IRPF (17%): ${irpf.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
    Seguridad Social empleado (6,48%): ${ssEmp.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
@@ -252,16 +263,24 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
 
             let monthGross = 0;
             studentEmps.forEach(e => {
-              const hDate = new Date(e.hireDate);
-              const hireYear = hDate.getFullYear();
-              const hireMonth = hDate.getMonth() + 1;
+              if (!e.hireDate) {
+                monthGross += e.grossSalaryMonthly;
+                return;
+              }
+              const parts = e.hireDate.split('T')[0].split('-');
+              const hireYear = parseInt(parts[0], 10);
+              const hireMonth = parseInt(parts[1], 10);
+              const hireDay = parseInt(parts[2], 10);
 
+              if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+                // Not hired yet
+                return;
+              }
               if (hireYear === targetYear && hireMonth === targetMonth) {
-                const hireDay = hDate.getDate();
                 const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
                 const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
                 monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
-              } else if (targetYear > hireYear || (targetYear === hireYear && targetMonth > hireMonth)) {
+              } else {
                 monthGross += e.grossSalaryMonthly;
               }
             });
@@ -988,12 +1007,16 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   const curMonth = curNow.getMonth() + 1;
 
                   const totalGrossMonthly = hiredList.reduce((sum, e) => {
-                    const hDate = new Date(e.hireDate);
-                    const hireYear = hDate.getFullYear();
-                    const hireMonth = hDate.getMonth() + 1;
+                    if (!e.hireDate) return sum + e.grossSalaryMonthly;
+                    const parts = e.hireDate.split('T')[0].split('-');
+                    const hireYear = parseInt(parts[0], 10);
+                    const hireMonth = parseInt(parts[1], 10);
+                    const hireDay = parseInt(parts[2], 10);
 
+                    if (curYear < hireYear || (curYear === hireYear && curMonth < hireMonth)) {
+                      return sum; // Future hire -> not active in current month
+                    }
                     if (hireYear === curYear && hireMonth === curMonth) {
-                      const hireDay = hDate.getDate();
                       const daysInMonth = new Date(curYear, curMonth, 0).getDate();
                       const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
                       return sum + Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
@@ -1164,13 +1187,18 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                       ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                           {hiredList.map(emp => {
-                            const hDate = new Date(emp.hireDate);
-                            const hireYear = hDate.getFullYear();
-                            const hireMonth = hDate.getMonth() + 1;
+                            let hireYear = curYear;
+                            let hireMonth = curMonth;
+                            let hireDay = 1;
+                            if (emp.hireDate) {
+                              const parts = emp.hireDate.split('T')[0].split('-');
+                              hireYear = parseInt(parts[0], 10);
+                              hireMonth = parseInt(parts[1], 10);
+                              hireDay = parseInt(parts[2], 10);
+                            }
                             const isFirstMonth = (hireYear === curYear && hireMonth === curMonth);
-                            
                             const daysInMonth = new Date(curYear, curMonth, 0).getDate();
-                            const workedDays = isFirstMonth ? Math.max(1, daysInMonth - hDate.getDate() + 1) : daysInMonth;
+                            const workedDays = isFirstMonth ? Math.max(1, daysInMonth - hireDay + 1) : daysInMonth;
                             
                             const grossForMonth = isFirstMonth 
                               ? Math.round(((emp.grossSalaryMonthly / daysInMonth) * workedDays) * 100) / 100
@@ -1193,7 +1221,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     <div>
                                       <h4 className="font-bold text-slate-900 text-sm">{emp.employeeName}</h4>
                                       <span className="text-[11px] text-slate-500 block">
-                                        Alta: <strong className="font-mono">{hDate.toLocaleDateString('es-ES')}</strong>
+                                        Alta: <strong className="font-mono">{emp.hireDate ? emp.hireDate.split('T')[0] : 'N/A'}</strong>
                                       </span>
                                     </div>
                                   </div>
@@ -1282,7 +1310,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     onClick={() => setActiveDocumentModal({
                                       type: 'payroll_payslip',
                                       hiredEmployee: emp,
-                                      studentName: data.name,
+                                      studentName: currentUser.name || data?.company?.name || 'Alumno',
                                       employeeName: emp.employeeName,
                                       periodMonth: curNow.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }),
                                       workedDays,

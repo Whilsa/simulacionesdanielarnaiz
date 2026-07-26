@@ -71,14 +71,30 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   // Filter industrial naves owned or rented by student
   const industrialNaves = studentAcquisitions.filter(a => a.propertyType === 'nave_industrial');
 
+  // Helper to calculate available surface m² in a nave subtracting already installed machinery
+  const getNaveAvailableSurface = (nave: PropertyAcquisition) => {
+    const installed = myMachinery.filter(m => 
+      m.installationNaveId === nave.id || 
+      m.installationNaveId === nave.propertyId ||
+      m.installedAtNaveId === nave.id ||
+      m.installedNaveId === nave.id
+    );
+    const occupied = installed.reduce((sum, m) => {
+      const cat = catalog.find(c => c.id === m.machineryId);
+      const reqM2 = m.totalRequiredM2 || m.requiredSurfaceM2 || (cat ? cat.totalRequiredM2 : 270);
+      return sum + reqM2;
+    }, 0);
+    return Math.max(0, nave.surfaceM2 - occupied);
+  };
+
   const handleOpenBuyModal = (machinery: MachineryItem, option: MachineryLineOption) => {
     setErrorMsg('');
     setSuccessMsg('');
     setSelectedMachinery(machinery);
     setSelectedOption(option);
 
-    // Auto-select first valid nave if available
-    const validNave = industrialNaves.find(n => n.surfaceM2 >= machinery.totalRequiredM2);
+    // Auto-select first valid nave with enough available surface
+    const validNave = industrialNaves.find(n => getNaveAvailableSurface(n) >= machinery.totalRequiredM2);
     if (validNave) {
       setSelectedNaveId(validNave.id);
     } else if (industrialNaves.length > 0) {
@@ -106,8 +122,10 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
       return;
     }
 
-    if (targetNave.surfaceM2 < selectedMachinery.totalRequiredM2) {
-      setErrorMsg(`La nave industrial seleccionada dispone de ${targetNave.surfaceM2} m², pero esta línea requiere al menos ${selectedMachinery.totalRequiredM2} m².`);
+    const availableM2 = getNaveAvailableSurface(targetNave);
+    if (availableM2 < selectedMachinery.totalRequiredM2) {
+      const occupiedM2 = targetNave.surfaceM2 - availableM2;
+      setErrorMsg(`Superficie Insuficiente: La nave industrial "${targetNave.propertyTitle}" dispone de ${targetNave.surfaceM2} m² en total. Actualmente tiene ocupados ${occupiedM2} m² por otra(s) máquina(s), por lo que solo quedan libres ${availableM2} m². Esta nueva línea requiere ${selectedMachinery.totalRequiredM2} m².`);
       return;
     }
 
@@ -517,10 +535,11 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                   >
                     <option value="">-- Selecciona una Nave Industrial --</option>
                     {industrialNaves.map(nave => {
-                      const isEnough = nave.surfaceM2 >= selectedMachinery.totalRequiredM2;
+                      const availM2 = getNaveAvailableSurface(nave);
+                      const isEnough = availM2 >= selectedMachinery.totalRequiredM2;
                       return (
                         <option key={nave.id} value={nave.id}>
-                          {nave.propertyTitle} ({nave.surfaceM2} m²) - {isEnough ? 'Apta para montaje' : '⚠️ m² insuficientes'}
+                          {nave.propertyTitle} (Libres: {availM2} m² / Total: {nave.surfaceM2} m²) - {isEnough ? 'Apta para montaje' : '⚠️ m² libres insuficientes'}
                         </option>
                       );
                     })}

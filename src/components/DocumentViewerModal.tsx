@@ -933,7 +933,7 @@ Estado Contable: EJECUTADO Y ABONADO
           {data.type === 'payroll_payslip' && (() => {
             const emp = data.hiredEmployee;
             const empName = data.employeeName || emp?.employeeName || 'Empleado/a';
-            const compName = data.studentName || 'Empresa Estudiante S.L.';
+            const compName = data.studentName || 'Alumno';
             const compCif = data.studentNifCif || 'B-99887766';
             const monthStr = data.periodMonth || new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
             
