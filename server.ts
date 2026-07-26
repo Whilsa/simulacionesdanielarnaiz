@@ -3674,70 +3674,126 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     }
   }
 
-  // 4. Upcoming Payroll (Nóminas del día 26)
+  // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas del día 26 y tributos previsibles del día 20)
   const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
   if (studentEmps.length > 0) {
-    let payrollYear = now.getFullYear();
-    let payrollMonth = now.getMonth(); // 0-indexed
-    if (now.getDate() >= 26) {
-      payrollMonth += 1;
-      if (payrollMonth > 11) {
-        payrollMonth = 0;
-        payrollYear += 1;
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth(); // 0-indexed
+
+    // Check current month and next month
+    for (let mOffset = 0; mOffset <= 2; mOffset++) {
+      const pDate = new Date(curYear, curMonth + mOffset, 26, 9, 0, 0);
+      const targetYear = pDate.getFullYear();
+      const targetMonth = pDate.getMonth() + 1; // 1-indexed
+
+      let monthGross = 0;
+      for (const emp of studentEmps) {
+        if (!emp.hireDate) {
+          monthGross += emp.grossSalaryMonthly;
+          continue;
+        }
+        const parts = emp.hireDate.split('T')[0].split('-');
+        const hireYear = parseInt(parts[0], 10);
+        const hireMonth = parseInt(parts[1], 10);
+        const hireDay = parseInt(parts[2], 10);
+
+        if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+          continue;
+        }
+        if (hireYear === targetYear && hireMonth === targetMonth) {
+          const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+          const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+          monthGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+        } else {
+          monthGross += emp.grossSalaryMonthly;
+        }
       }
-    }
-    const targetYear = payrollYear;
-    const targetMonth = payrollMonth + 1; // 1-indexed
 
-    let totalGross = 0;
-    for (const emp of studentEmps) {
-      if (!emp.hireDate) {
-        totalGross += emp.grossSalaryMonthly;
-        continue;
+      monthGross = Math.round(monthGross * 100) / 100;
+      if (monthGross <= 0) continue;
+
+      const totalEmployeeIRPF = Math.round(monthGross * 0.17 * 100) / 100;
+      const totalEmployeeSS = Math.round(monthGross * 0.0648 * 100) / 100;
+      const totalCompanySS = Math.round(monthGross * 0.314 * 100) / 100;
+      const totalSSTotal = Math.round((totalEmployeeSS + totalCompanySS) * 100) / 100;
+      const totalNetSalary = Math.round((monthGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
+
+      // 4a. Net Payrolls on Day 26
+      if (pDate >= now && pDate <= thirtyFiveDaysLater) {
+        const daysRem = Math.ceil((pDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        upcoming30DaysItems.push({
+          id: `payroll-${studentId}-${targetYear}-${targetMonth}`,
+          sourceType: 'payroll',
+          type: 'cuota_nomina',
+          title: `Nóminas del Personal (${studentEmps.length} empleados)`,
+          concept: `Transferencia mensual de salarios netos el día 26`,
+          dueDate: pDate.toISOString(),
+          principalAmount: totalNetSalary,
+          penaltyInterest: 0,
+          totalAmount: totalNetSalary,
+          isOverdue: false,
+          daysRemaining: daysRem,
+          installmentInfo: `Día 26 - Mes ${targetMonth}/${targetYear}`
+        });
       }
-      const parts = emp.hireDate.split('T')[0].split('-');
-      const hireYear = parseInt(parts[0], 10);
-      const hireMonth = parseInt(parts[1], 10);
-      const hireDay = parseInt(parts[2], 10);
 
-      if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
-        // Not hired yet in target month
-        continue;
+      // 4b. Tax Obligations (AEAT IRPF & TGSS SS) due on 20th of following month
+      const taxDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month after targetMonth
+      if (taxDueDate >= now && taxDueDate <= thirtyFiveDaysLater) {
+        const daysRem = Math.ceil((taxDueDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        const followingMonthNum = taxDueDate.getMonth() + 1;
+        const followingYearNum = taxDueDate.getFullYear();
+
+        // Check if IRPF obligation already in db.taxObligations
+        const hasIrpfInDb = (db.taxObligations || []).some(t => 
+          t.studentId === studentId && 
+          t.type === 'irpf' && 
+          new Date(t.dueDate).getFullYear() === followingYearNum && 
+          new Date(t.dueDate).getMonth() === taxDueDate.getMonth()
+        );
+
+        if (!hasIrpfInDb && totalEmployeeIRPF > 0) {
+          upcoming30DaysItems.push({
+            id: `payroll-irpf-${studentId}-${targetYear}-${targetMonth}`,
+            sourceType: 'tax',
+            type: 'impuesto_irpf',
+            title: `AEAT - Hacienda (Retención IRPF Previsible)`,
+            concept: `Liquidación previsible de retenciones IRPF de nóminas`,
+            dueDate: taxDueDate.toISOString(),
+            principalAmount: totalEmployeeIRPF,
+            penaltyInterest: 0,
+            totalAmount: totalEmployeeIRPF,
+            isOverdue: false,
+            daysRemaining: daysRem,
+            installmentInfo: `Día 20 - Previsión Mes ${targetMonth}/${targetYear}`
+          });
+        }
+
+        // Check if SS obligation already in db.taxObligations
+        const hasSsInDb = (db.taxObligations || []).some(t => 
+          t.studentId === studentId && 
+          ((t.type as string) === 'ss_employee' || (t.type as string) === 'ss_company' || (t.type as string) === 'ss' || (t.type as string) === 'seguridad_social') && 
+          new Date(t.dueDate).getFullYear() === followingYearNum && 
+          new Date(t.dueDate).getMonth() === taxDueDate.getMonth()
+        );
+
+        if (!hasSsInDb && totalSSTotal > 0) {
+          upcoming30DaysItems.push({
+            id: `payroll-ss-${studentId}-${targetYear}-${targetMonth}`,
+            sourceType: 'tax',
+            type: 'impuesto_ss',
+            title: `TGSS - Seguridad Social (Previsible)`,
+            concept: `Liquidación previsible cuotas Seg. Social (empresa + empleado)`,
+            dueDate: taxDueDate.toISOString(),
+            principalAmount: totalSSTotal,
+            penaltyInterest: 0,
+            totalAmount: totalSSTotal,
+            isOverdue: false,
+            daysRemaining: daysRem,
+            installmentInfo: `Día 20 - Previsión Mes ${targetMonth}/${targetYear}`
+          });
+        }
       }
-      if (hireYear === targetYear && hireMonth === targetMonth) {
-        // First month: proportional
-        const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-        const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-        totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
-      } else {
-        // Subsequent months: 100% full salary
-        totalGross += emp.grossSalaryMonthly;
-      }
-    }
-
-    totalGross = Math.round(totalGross * 100) / 100;
-    const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
-    const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
-    const totalNetSalary = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
-
-    const nextPayrollDate = new Date(payrollYear, payrollMonth, 26, 9, 0, 0);
-
-    if (nextPayrollDate <= thirtyFiveDaysLater) {
-      const daysRem = Math.ceil((nextPayrollDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
-      upcoming30DaysItems.push({
-        id: `payroll-${studentId}-${payrollYear}-${payrollMonth + 1}`,
-        sourceType: 'payroll',
-        type: 'cuota_nomina',
-        title: `Nóminas del Personal (${studentEmps.length} empleados)`,
-        concept: `Transferencia mensual de salarios netos el día 26`,
-        dueDate: nextPayrollDate.toISOString(),
-        principalAmount: totalNetSalary,
-        penaltyInterest: 0,
-        totalAmount: totalNetSalary,
-        isOverdue: false,
-        daysRemaining: daysRem,
-        installmentInfo: `Día 26 - Mes ${payrollMonth + 1}/${payrollYear}`
-      });
     }
   }
 

@@ -250,54 +250,99 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
       });
     });
 
-    // 4. Upcoming monthly net payrolls on day 26 of next 24 months
+    // 4. Upcoming monthly net payrolls and foreseeable tax payments (AEAT & TGSS) for next 24 months
     const studentEmps = data.hiredEmployees || [];
     if (studentEmps.length > 0) {
       for (let m = 0; m < 24; m++) {
         const pDate = new Date(now.getFullYear(), now.getMonth() + m, 26, 9, 0, 0);
-        if (pDate <= maxDate) {
-          const isPastDay26 = m === 0 && now.getDate() >= 26;
-          if (!isPastDay26) {
-            const targetYear = pDate.getFullYear();
-            const targetMonth = pDate.getMonth() + 1; // 1-based
+        const taxDueDate = new Date(pDate.getFullYear(), pDate.getMonth() + 1, 20, 9, 0, 0);
 
-            let monthGross = 0;
-            studentEmps.forEach(e => {
-              if (!e.hireDate) {
-                monthGross += e.grossSalaryMonthly;
-                return;
-              }
-              const parts = e.hireDate.split('T')[0].split('-');
-              const hireYear = parseInt(parts[0], 10);
-              const hireMonth = parseInt(parts[1], 10);
-              const hireDay = parseInt(parts[2], 10);
+        if (pDate <= maxDate || taxDueDate <= maxDate) {
+          const targetYear = pDate.getFullYear();
+          const targetMonth = pDate.getMonth() + 1; // 1-based
 
-              if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
-                // Not hired yet
-                return;
-              }
-              if (hireYear === targetYear && hireMonth === targetMonth) {
-                const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-                const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-                monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
-              } else {
-                monthGross += e.grossSalaryMonthly;
-              }
-            });
+          let monthGross = 0;
+          studentEmps.forEach(e => {
+            if (!e.hireDate) {
+              monthGross += e.grossSalaryMonthly;
+              return;
+            }
+            const parts = e.hireDate.split('T')[0].split('-');
+            const hireYear = parseInt(parts[0], 10);
+            const hireMonth = parseInt(parts[1], 10);
+            const hireDay = parseInt(parts[2], 10);
 
+            if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+              // Not hired yet
+              return;
+            }
+            if (hireYear === targetYear && hireMonth === targetMonth) {
+              const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+              monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
+            } else {
+              monthGross += e.grossSalaryMonthly;
+            }
+          });
+
+          if (monthGross > 0) {
             const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
             const monthSSEmp = Math.round(monthGross * 0.0648 * 100) / 100;
+            const monthSSComp = Math.round(monthGross * 0.314 * 100) / 100;
+            const monthSSTotal = Math.round((monthSSEmp + monthSSComp) * 100) / 100;
             const monthNet = Math.round((monthGross - monthIRPF - monthSSEmp) * 100) / 100;
 
-            const monthName = pDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
-            items.push({
-              id: `payroll-${m}`,
-              concept: `Pago de nóminas`,
-              origin: 'Nóminas de personal',
-              amount: monthNet,
-              dueDate: pDate.toISOString(),
-              status: 'pendiente'
-            });
+            // 4a. Net Payroll (if pDate is in future)
+            if (pDate >= now && pDate <= maxDate) {
+              items.push({
+                id: `payroll-net-${m}`,
+                concept: `Pago de salarios netos (Nóminas de personal)`,
+                origin: 'Nóminas de personal',
+                amount: monthNet,
+                dueDate: pDate.toISOString(),
+                status: 'pendiente'
+              });
+            }
+
+            // 4b. Predictable AEAT IRPF & TGSS SS tax payments due on 20th of following month
+            if (taxDueDate >= now && taxDueDate <= maxDate) {
+              const followingMonth = taxDueDate.getMonth(); // 0-indexed
+              const followingYear = taxDueDate.getFullYear();
+
+              const hasIrpfInDb = (data.taxObligations || []).some(t => 
+                t.type === 'irpf' && 
+                new Date(t.dueDate).getFullYear() === followingYear && 
+                new Date(t.dueDate).getMonth() === followingMonth
+              );
+
+              const hasSsInDb = (data.taxObligations || []).some(t => 
+                (t.type === 'ss' || t.type === 'seguridad_social') && 
+                new Date(t.dueDate).getFullYear() === followingYear && 
+                new Date(t.dueDate).getMonth() === followingMonth
+              );
+
+              if (!hasIrpfInDb && monthIRPF > 0) {
+                items.push({
+                  id: `payroll-irpf-${m}`,
+                  concept: `Retenciones IRPF de nóminas (Hacienda Pública)`,
+                  origin: 'Hacienda Pública (AEAT)',
+                  amount: monthIRPF,
+                  dueDate: taxDueDate.toISOString(),
+                  status: 'pendiente'
+                });
+              }
+
+              if (!hasSsInDb && monthSSTotal > 0) {
+                items.push({
+                  id: `payroll-ss-${m}`,
+                  concept: `Cuotas Seguridad Social de nóminas (empresa + empleado)`,
+                  origin: 'Seguridad Social (TGSS)',
+                  amount: monthSSTotal,
+                  dueDate: taxDueDate.toISOString(),
+                  status: 'pendiente'
+                });
+              }
+            }
           }
         }
       }
