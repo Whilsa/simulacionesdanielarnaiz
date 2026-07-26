@@ -253,6 +253,32 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
     // 4. Upcoming monthly net payrolls, Seguridad Social (TGSS on 20th of next month, separated) and IRPF (AEAT on 15th of month following quarter)
     const studentEmps = data.hiredEmployees || [];
     if (studentEmps.length > 0) {
+      const getGrossForMonth = (tMonth: number, tYear: number) => {
+        let gSum = 0;
+        studentEmps.forEach(e => {
+          if (!e.hireDate) {
+            gSum += e.grossSalaryMonthly;
+          } else {
+            const parts = e.hireDate.split('T')[0].split('-');
+            const hYear = parseInt(parts[0], 10);
+            const hMonth = parseInt(parts[1], 10);
+            const hDay = parseInt(parts[2], 10);
+
+            if (tYear < hYear || (tYear === hYear && tMonth < hMonth)) {
+              return; // Not hired yet
+            }
+            if (hYear === tYear && hMonth === tMonth) {
+              const daysInMonth = new Date(tYear, tMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hDay + 1);
+              gSum += (e.grossSalaryMonthly / daysInMonth) * daysWorked;
+            } else {
+              gSum += e.grossSalaryMonthly;
+            }
+          }
+        });
+        return Math.round(gSum * 100) / 100;
+      };
+
       // Map to aggregate quarterly IRPF: key "YEAR-Q", value: total IRPF
       const quarterlyIRPFMap: { [key: string]: { amount: number; dueDate: Date; qNum: number; targetYear: number } } = {};
 
@@ -314,7 +340,6 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
         monthGross = Math.round(monthGross * 100) / 100;
 
         if (monthGross > 0) {
-          const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
           const monthSSEmp = Math.round(monthGross * 0.0648 * 100) / 100;
           const monthSSComp = Math.round(monthGross * 0.75 * 100) / 100; // 75%
 
@@ -378,9 +403,12 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
           const qKey = `IRPF-Q${qNum}-${targetYear}`;
 
           if (!quarterlyIRPFMap[qKey]) {
-            quarterlyIRPFMap[qKey] = { amount: 0, dueDate: irpfDueDate, qNum, targetYear };
+            const qGross = getGrossForMonth((qNum - 1) * 3 + 1, targetYear) +
+                           getGrossForMonth((qNum - 1) * 3 + 2, targetYear) +
+                           getGrossForMonth((qNum - 1) * 3 + 3, targetYear);
+            const qIRPFAmount = Math.round(qGross * 0.17 * 100) / 100;
+            quarterlyIRPFMap[qKey] = { amount: qIRPFAmount, dueDate: irpfDueDate, qNum, targetYear };
           }
-          quarterlyIRPFMap[qKey].amount = Math.round((quarterlyIRPFMap[qKey].amount + monthIRPF) * 100) / 100;
         }
       }
 

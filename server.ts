@@ -1255,6 +1255,33 @@ function getDefaultSeedProperties(): PropertyListing[] {
   ];
 }
 
+function calcGrossForStudentMonth(studentId: string, targetMonth: number, targetYear: number, db: DatabaseSchema): number {
+  const emps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  let totalGross = 0;
+  for (const emp of emps) {
+    if (!emp.hireDate) {
+      totalGross += emp.grossSalaryMonthly;
+      continue;
+    }
+    const parts = emp.hireDate.split('T')[0].split('-');
+    const hireYear = parseInt(parts[0], 10);
+    const hireMonth = parseInt(parts[1], 10);
+    const hireDay = parseInt(parts[2], 10);
+
+    if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+      continue; // Not hired yet in targetMonth
+    }
+    if (hireYear === targetYear && hireMonth === targetMonth) {
+      const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+      const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+      totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+    } else {
+      totalGross += emp.grossSalaryMonthly;
+    }
+  }
+  return Math.round(totalGross * 100) / 100;
+}
+
 function normalizeAndFixTaxObligations(db: DatabaseSchema) {
   if (!db.taxObligations) return;
   for (const tax of db.taxObligations) {
@@ -1270,21 +1297,41 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
         tax.dueDate = d.toISOString();
         changed = true;
       }
+      const match = tax.concept.match(/(\d{1,2})\/(\d{4})/);
+      let targetMonth = d.getMonth() === 0 ? 12 : d.getMonth();
+      let targetYear = d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear();
+      if (match) {
+        targetMonth = parseInt(match[1], 10);
+        targetYear = parseInt(match[2], 10);
+      }
+
+      const mGross = calcGrossForStudentMonth(tax.studentId, targetMonth, targetYear, db);
+
       if (tax.type === 'ss_employee') {
-        const match = tax.concept.match(/(\d{1,2}\/\d{4})/);
-        const monthYearStr = match ? match[1] : `${d.getMonth() === 0 ? 12 : d.getMonth()}/${d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear()}`;
-        const newConcept = `Cuotas Seguridad Social Trabajador (6,48%) Mes ${monthYearStr}`;
+        const newConcept = `Cuotas Seguridad Social Trabajador (6,48%) Mes ${targetMonth}/${targetYear}`;
         if (tax.concept !== newConcept) {
           tax.concept = newConcept;
           changed = true;
         }
+        if (mGross > 0) {
+          const expectedSS = Math.round(mGross * 0.0648 * 100) / 100;
+          if (tax.amount !== expectedSS) {
+            tax.amount = expectedSS;
+            changed = true;
+          }
+        }
       } else if (tax.type === 'ss_company') {
-        const match = tax.concept.match(/(\d{1,2}\/\d{4})/);
-        const monthYearStr = match ? match[1] : `${d.getMonth() === 0 ? 12 : d.getMonth()}/${d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear()}`;
-        const newConcept = `Aportación patronal Seguridad Social (75%) Mes ${monthYearStr}`;
+        const newConcept = `Aportación patronal Seguridad Social (75%) Mes ${targetMonth}/${targetYear}`;
         if (tax.concept !== newConcept) {
           tax.concept = newConcept;
           changed = true;
+        }
+        if (mGross > 0) {
+          const expectedSSComp = Math.round(mGross * 0.75 * 100) / 100;
+          if (tax.amount !== expectedSSComp) {
+            tax.amount = expectedSSComp;
+            changed = true;
+          }
         }
       }
     }
@@ -1322,6 +1369,18 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
       if (tax.concept !== newConcept) {
         tax.concept = newConcept;
         changed = true;
+      }
+
+      const qGross = calcGrossForStudentMonth(tax.studentId, (qNum - 1) * 3 + 1, refYear, db) +
+                     calcGrossForStudentMonth(tax.studentId, (qNum - 1) * 3 + 2, refYear, db) +
+                     calcGrossForStudentMonth(tax.studentId, (qNum - 1) * 3 + 3, refYear, db);
+
+      if (qGross > 0) {
+        const expectedIRPF = Math.round(qGross * 0.17 * 100) / 100;
+        if (tax.amount !== expectedIRPF) {
+          tax.amount = expectedIRPF;
+          changed = true;
+        }
       }
     }
 
@@ -1385,14 +1444,20 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         let isProportionalPayroll = false;
 
         for (const emp of myEmployees) {
-          const hireDateObj = new Date(emp.hireDate);
-          if (hireDateObj.getMonth() + 1 === currentMonth && hireDateObj.getFullYear() === currentYear) {
-            isProportionalPayroll = true;
-            const hireDay = hireDateObj.getDate();
-            const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
-            const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-            const proportionalGross = (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
-            totalGross += proportionalGross;
+          if (emp.hireDate) {
+            const parts = emp.hireDate.split('T')[0].split('-');
+            const hireYear = parseInt(parts[0], 10);
+            const hireMonth = parseInt(parts[1], 10);
+            const hireDay = parseInt(parts[2], 10);
+
+            if (hireMonth === currentMonth && hireYear === currentYear) {
+              isProportionalPayroll = true;
+              const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+              totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+            } else if (hireYear < currentYear || (hireYear === currentYear && hireMonth < currentMonth)) {
+              totalGross += emp.grossSalaryMonthly;
+            }
           } else {
             totalGross += emp.grossSalaryMonthly;
           }
@@ -3966,12 +4031,17 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           new Date(t.dueDate).getMonth() === dueMonthNum
         );
 
-        if (!hasIrpfInDb && totalEmployeeIRPF > 0) {
+        const qGross = calcGrossForStudentMonth(studentId, (qNum - 1) * 3 + 1, targetYear, db) +
+                       calcGrossForStudentMonth(studentId, (qNum - 1) * 3 + 2, targetYear, db) +
+                       calcGrossForStudentMonth(studentId, (qNum - 1) * 3 + 3, targetYear, db);
+        const fullQuarterIRPF = Math.round(qGross * 0.17 * 100) / 100;
+
+        if (!hasIrpfInDb && fullQuarterIRPF > 0) {
           // Avoid duplicate entry if loop processes multiple months of same quarter
           const existingIrpfIndex = upcoming30DaysItems.findIndex(item => item.id.startsWith(`payroll-irpf-${studentId}-q${qNum}-${targetYear}`));
           if (existingIrpfIndex >= 0) {
-            upcoming30DaysItems[existingIrpfIndex].principalAmount = Math.round((upcoming30DaysItems[existingIrpfIndex].principalAmount + totalEmployeeIRPF) * 100) / 100;
-            upcoming30DaysItems[existingIrpfIndex].totalAmount = upcoming30DaysItems[existingIrpfIndex].principalAmount;
+            upcoming30DaysItems[existingIrpfIndex].principalAmount = fullQuarterIRPF;
+            upcoming30DaysItems[existingIrpfIndex].totalAmount = fullQuarterIRPF;
           } else {
             upcoming30DaysItems.push({
               id: `payroll-irpf-${studentId}-q${qNum}-${targetYear}`,
@@ -3980,9 +4050,9 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
               title: `AEAT - Hacienda (Retención IRPF Q${qNum})`,
               concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${targetYear}`,
               dueDate: irpfDueDate.toISOString(),
-              principalAmount: totalEmployeeIRPF,
+              principalAmount: fullQuarterIRPF,
               penaltyInterest: 0,
-              totalAmount: totalEmployeeIRPF,
+              totalAmount: fullQuarterIRPF,
               isOverdue: false,
               daysRemaining: daysRem,
               installmentInfo: `Día 15 del mes siguiente al trimestre Q${qNum}`
