@@ -1329,6 +1329,27 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
       syncTaxObligationToSupabase(tax).catch(e => console.error(e));
     }
   }
+
+  // Consolidation: merge duplicate pending obligations for same studentId + type + dueDate
+  const pendingMap = new Map<string, TaxObligation>();
+  const toRemoveIds = new Set<string>();
+
+  for (const tax of db.taxObligations) {
+    if (tax.status !== 'pendiente') continue;
+    const key = `${tax.studentId}-${tax.type}-${tax.dueDate}`;
+    if (!pendingMap.has(key)) {
+      pendingMap.set(key, tax);
+    } else {
+      const existing = pendingMap.get(key)!;
+      existing.amount = Math.round((existing.amount + tax.amount) * 100) / 100;
+      toRemoveIds.add(tax.id);
+      syncTaxObligationToSupabase(existing).catch(e => console.error(e));
+    }
+  }
+
+  if (toRemoveIds.size > 0) {
+    db.taxObligations = db.taxObligations.filter(t => !toRemoveIds.has(t.id));
+  }
 }
 
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
@@ -3785,38 +3806,71 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     }
   }
 
-  // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas del día 26 y tributos previsibles del día 20)
+  // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas el día 1 del mes siguiente y tributos el 20 TGSS / 15 AEAT)
   const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
   if (studentEmps.length > 0) {
     const curYear = now.getFullYear();
     const curMonth = now.getMonth(); // 0-indexed
 
-    // Check current month and next month
+    // Check current month and next 2 months
     for (let mOffset = 0; mOffset <= 2; mOffset++) {
-      const pDate = new Date(curYear, curMonth + mOffset, 26, 9, 0, 0);
-      const targetYear = pDate.getFullYear();
-      const targetMonth = pDate.getMonth() + 1; // 1-indexed
+      const refDate = new Date(curYear, curMonth + mOffset, 1, 9, 0, 0);
+      const targetYear = refDate.getFullYear();
+      const targetMonth = refDate.getMonth() + 1; // 1-indexed
+
+      // Net payroll due date is 1st of following month
+      const netPayDate = new Date(targetYear, targetMonth, 1, 9, 0, 0);
 
       let monthGross = 0;
-      for (const emp of studentEmps) {
-        if (!emp.hireDate) {
-          monthGross += emp.grossSalaryMonthly;
-          continue;
-        }
-        const parts = emp.hireDate.split('T')[0].split('-');
-        const hireYear = parseInt(parts[0], 10);
-        const hireMonth = parseInt(parts[1], 10);
-        const hireDay = parseInt(parts[2], 10);
+      let empIdx = 0;
 
-        if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
-          continue;
-        }
-        if (hireYear === targetYear && hireMonth === targetMonth) {
-          const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-          const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-          monthGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+      for (const emp of studentEmps) {
+        empIdx++;
+        let empGross = 0;
+
+        if (!emp.hireDate) {
+          empGross = emp.grossSalaryMonthly;
         } else {
-          monthGross += emp.grossSalaryMonthly;
+          const parts = emp.hireDate.split('T')[0].split('-');
+          const hireYear = parseInt(parts[0], 10);
+          const hireMonth = parseInt(parts[1], 10);
+          const hireDay = parseInt(parts[2], 10);
+
+          if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+            continue; // Not hired yet
+          }
+          if (hireYear === targetYear && hireMonth === targetMonth) {
+            const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+            const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+            empGross = (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+          } else {
+            empGross = emp.grossSalaryMonthly;
+          }
+        }
+
+        monthGross += empGross;
+
+        const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
+        const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
+        const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
+
+        // 4a. Individual Net Payroll payment per employee on Day 1 of following month
+        if (netPayDate >= now && netPayDate <= thirtyFiveDaysLater && eNet > 0) {
+          const daysRem = Math.ceil((netPayDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+          upcoming30DaysItems.push({
+            id: `payroll-${studentId}-${emp.id || empIdx}-${targetYear}-${targetMonth}`,
+            sourceType: 'payroll',
+            type: 'cuota_nomina',
+            title: `Nómina neta (${emp.employeeName || (emp as any).name || 'Empleado'})`,
+            concept: `Nómina neta - ${emp.employeeName || (emp as any).name || 'Empleado'} (Mes ${targetMonth}/${targetYear})`,
+            dueDate: netPayDate.toISOString(),
+            principalAmount: eNet,
+            penaltyInterest: 0,
+            totalAmount: eNet,
+            isOverdue: false,
+            daysRemaining: daysRem,
+            installmentInfo: `Día 1 del mes siguiente`
+          });
         }
       }
 
@@ -3826,26 +3880,6 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
       const totalEmployeeIRPF = Math.round(monthGross * 0.17 * 100) / 100;
       const totalEmployeeSS = Math.round(monthGross * 0.0648 * 100) / 100;
       const totalCompanySS = Math.round(monthGross * 0.75 * 100) / 100;
-      const totalNetSalary = Math.round((monthGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
-
-      // 4a. Net Payrolls on Day 26
-      if (pDate >= now && pDate <= thirtyFiveDaysLater) {
-        const daysRem = Math.ceil((pDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
-        upcoming30DaysItems.push({
-          id: `payroll-${studentId}-${targetYear}-${targetMonth}`,
-          sourceType: 'payroll',
-          type: 'cuota_nomina',
-          title: `Nóminas del Personal (${studentEmps.length} empleados)`,
-          concept: `Transferencia mensual de salarios netos el día 26`,
-          dueDate: pDate.toISOString(),
-          principalAmount: totalNetSalary,
-          penaltyInterest: 0,
-          totalAmount: totalNetSalary,
-          isOverdue: false,
-          daysRemaining: daysRem,
-          installmentInfo: `Día 26 - Mes ${targetMonth}/${targetYear}`
-        });
-      }
 
       // 4b. TGSS SS Tax Obligations due on 20th of following month - SEPARATED (Employee 6.48% & Company 75%)
       const ssDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month after targetMonth
@@ -3936,8 +3970,8 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           // Avoid duplicate entry if loop processes multiple months of same quarter
           const existingIrpfIndex = upcoming30DaysItems.findIndex(item => item.id.startsWith(`payroll-irpf-${studentId}-q${qNum}-${targetYear}`));
           if (existingIrpfIndex >= 0) {
-            upcoming30DaysItems[existingIrpfIndex].principalAmount += totalEmployeeIRPF;
-            upcoming30DaysItems[existingIrpfIndex].totalAmount += totalEmployeeIRPF;
+            upcoming30DaysItems[existingIrpfIndex].principalAmount = Math.round((upcoming30DaysItems[existingIrpfIndex].principalAmount + totalEmployeeIRPF) * 100) / 100;
+            upcoming30DaysItems[existingIrpfIndex].totalAmount = upcoming30DaysItems[existingIrpfIndex].principalAmount;
           } else {
             upcoming30DaysItems.push({
               id: `payroll-irpf-${studentId}-q${qNum}-${targetYear}`,

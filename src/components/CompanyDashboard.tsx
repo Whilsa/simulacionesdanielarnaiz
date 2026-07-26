@@ -257,33 +257,57 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
       const quarterlyIRPFMap: { [key: string]: { amount: number; dueDate: Date; qNum: number; targetYear: number } } = {};
 
       for (let m = 0; m < 24; m++) {
-        const pDate = new Date(now.getFullYear(), now.getMonth() + m, 26, 9, 0, 0);
-        const ssDueDate = new Date(pDate.getFullYear(), pDate.getMonth() + 1, 20, 9, 0, 0);
+        const refDate = new Date(now.getFullYear(), now.getMonth() + m, 1, 9, 0, 0);
+        const targetYear = refDate.getFullYear();
+        const targetMonth = refDate.getMonth() + 1; // 1-based
 
-        const targetYear = pDate.getFullYear();
-        const targetMonth = pDate.getMonth() + 1; // 1-based
+        const pDate = new Date(targetYear, targetMonth, 1, 9, 0, 0); // 1st of month following targetMonth
+        const ssDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month following targetMonth
 
         let monthGross = 0;
-        studentEmps.forEach(e => {
-          if (!e.hireDate) {
-            monthGross += e.grossSalaryMonthly;
-            return;
-          }
-          const parts = e.hireDate.split('T')[0].split('-');
-          const hireYear = parseInt(parts[0], 10);
-          const hireMonth = parseInt(parts[1], 10);
-          const hireDay = parseInt(parts[2], 10);
+        let empIndex = 0;
 
-          if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
-            // Not hired yet
-            return;
-          }
-          if (hireYear === targetYear && hireMonth === targetMonth) {
-            const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-            const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-            monthGross += (e.grossSalaryMonthly / daysInMonth) * daysWorked;
+        studentEmps.forEach(e => {
+          empIndex++;
+          let eGross = 0;
+
+          if (!e.hireDate) {
+            eGross = e.grossSalaryMonthly;
           } else {
-            monthGross += e.grossSalaryMonthly;
+            const parts = e.hireDate.split('T')[0].split('-');
+            const hireYear = parseInt(parts[0], 10);
+            const hireMonth = parseInt(parts[1], 10);
+            const hireDay = parseInt(parts[2], 10);
+
+            if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+              // Not hired yet
+              return;
+            }
+            if (hireYear === targetYear && hireMonth === targetMonth) {
+              const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+              eGross = (e.grossSalaryMonthly / daysInMonth) * daysWorked;
+            } else {
+              eGross = e.grossSalaryMonthly;
+            }
+          }
+
+          monthGross += eGross;
+
+          const eIRPF = Math.round(eGross * 0.17 * 100) / 100;
+          const eSSEmp = Math.round(eGross * 0.0648 * 100) / 100;
+          const eNet = Math.round((eGross - eIRPF - eSSEmp) * 100) / 100;
+
+          // 4a. Individual Net Payroll per employee on Day 1 of following month
+          if (pDate >= now && pDate <= maxDate && eNet > 0) {
+            items.push({
+              id: `payroll-net-${e.id || empIndex}-${targetYear}-${targetMonth}`,
+              concept: `Nómina neta - ${e.employeeName || e.name || 'Empleado'} (Mes ${targetMonth}/${targetYear})`,
+              origin: 'Nóminas de personal',
+              amount: eNet,
+              dueDate: pDate.toISOString(),
+              status: 'pendiente'
+            });
           }
         });
 
@@ -293,19 +317,6 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
           const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
           const monthSSEmp = Math.round(monthGross * 0.0648 * 100) / 100;
           const monthSSComp = Math.round(monthGross * 0.75 * 100) / 100; // 75%
-          const monthNet = Math.round((monthGross - monthIRPF - monthSSEmp) * 100) / 100;
-
-          // 4a. Net Payroll on day 26
-          if (pDate >= now && pDate <= maxDate) {
-            items.push({
-              id: `payroll-net-${m}`,
-              concept: `Pago de salarios netos (Nóminas del mes ${targetMonth}/${targetYear})`,
-              origin: 'Nóminas de personal',
-              amount: monthNet,
-              dueDate: pDate.toISOString(),
-              status: 'pendiente'
-            });
-          }
 
           // 4b. TGSS SS tax payments due on 20th of following month - SEPARATED (Empleado 6,48% / Empresa 75%)
           if (ssDueDate >= now && ssDueDate <= maxDate) {
@@ -1137,7 +1148,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               <span>Resumen de Masa Salarial y Cotizaciones Sociales ({curNow.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })})</span>
                             </h3>
                             <p className="text-xs text-slate-500 mt-0.5">
-                              Plantilla total: <strong>{hiredList.length} empleados contratados</strong> • Cierre y liquidación automática los días 26 de cada mes
+                              Plantilla total: <strong>{hiredList.length} empleados contratados</strong> • Pago de salarios el día 1 del mes siguiente
                             </p>
                           </div>
                           <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
