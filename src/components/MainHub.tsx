@@ -262,7 +262,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
                 onDrop={(e) => handleDrop(e, index)}
                 onDragEnd={handleDragEnd}
                 onClick={() => onSelectModule(card.id)}
-                className={`aspect-square flex flex-col justify-between bg-white rounded-3xl border-2 border-slate-200/80 p-6 sm:p-8 shadow-sm hover:shadow-2xl transition-all duration-300 relative overflow-hidden group cursor-pointer select-none ${card.hoverBorder} transform hover:-translate-y-1 ${
+                className={`flex flex-col justify-between bg-white rounded-3xl border-2 border-slate-200/80 p-6 sm:p-7 shadow-sm hover:shadow-2xl transition-all duration-300 relative overflow-hidden group cursor-pointer select-none ${card.hoverBorder} transform hover:-translate-y-1 h-auto ${
                   isDragging ? 'opacity-40 scale-95 border-dashed border-amber-500 bg-amber-50/50' : ''
                 }`}
               >

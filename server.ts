@@ -3714,8 +3714,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
 
       const totalEmployeeIRPF = Math.round(monthGross * 0.17 * 100) / 100;
       const totalEmployeeSS = Math.round(monthGross * 0.0648 * 100) / 100;
-      const totalCompanySS = Math.round(monthGross * 0.314 * 100) / 100;
-      const totalSSTotal = Math.round((totalEmployeeSS + totalCompanySS) * 100) / 100;
+      const totalCompanySS = Math.round(monthGross * 0.75 * 100) / 100;
       const totalNetSalary = Math.round((monthGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
 
       // 4a. Net Payrolls on Day 26
@@ -3737,61 +3736,113 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         });
       }
 
-      // 4b. Tax Obligations (AEAT IRPF & TGSS SS) due on 20th of following month
-      const taxDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month after targetMonth
-      if (taxDueDate >= now && taxDueDate <= thirtyFiveDaysLater) {
-        const daysRem = Math.ceil((taxDueDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
-        const followingMonthNum = taxDueDate.getMonth() + 1;
-        const followingYearNum = taxDueDate.getFullYear();
+      // 4b. TGSS SS Tax Obligations due on 20th of following month - SEPARATED (Employee 6.48% & Company 75%)
+      const ssDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month after targetMonth
+      if (ssDueDate >= now && ssDueDate <= thirtyFiveDaysLater) {
+        const daysRem = Math.ceil((ssDueDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        const followingMonthNum = ssDueDate.getMonth() + 1;
+        const followingYearNum = ssDueDate.getFullYear();
 
-        // Check if IRPF obligation already in db.taxObligations
-        const hasIrpfInDb = (db.taxObligations || []).some(t => 
+        const hasSsEmpInDb = (db.taxObligations || []).some(t => 
           t.studentId === studentId && 
-          t.type === 'irpf' && 
+          ((t.type as string) === 'ss_employee' || (t.type as string) === 'ss') && 
           new Date(t.dueDate).getFullYear() === followingYearNum && 
-          new Date(t.dueDate).getMonth() === taxDueDate.getMonth()
+          new Date(t.dueDate).getMonth() === ssDueDate.getMonth()
         );
 
-        if (!hasIrpfInDb && totalEmployeeIRPF > 0) {
+        if (!hasSsEmpInDb && totalEmployeeSS > 0) {
           upcoming30DaysItems.push({
-            id: `payroll-irpf-${studentId}-${targetYear}-${targetMonth}`,
+            id: `payroll-ss-emp-${studentId}-${targetYear}-${targetMonth}`,
             sourceType: 'tax',
-            type: 'impuesto_irpf',
-            title: `AEAT - Hacienda (Retención IRPF Previsible)`,
-            concept: `Liquidación previsible de retenciones IRPF de nóminas`,
-            dueDate: taxDueDate.toISOString(),
-            principalAmount: totalEmployeeIRPF,
+            type: 'impuesto_ss_emp',
+            title: `TGSS - Seg. Social Empleado (6,48%)`,
+            concept: `Cuotas Seg. Social a cargo del trabajador (Mes ${targetMonth}/${targetYear})`,
+            dueDate: ssDueDate.toISOString(),
+            principalAmount: totalEmployeeSS,
             penaltyInterest: 0,
-            totalAmount: totalEmployeeIRPF,
+            totalAmount: totalEmployeeSS,
             isOverdue: false,
             daysRemaining: daysRem,
-            installmentInfo: `Día 20 - Previsión Mes ${targetMonth}/${targetYear}`
+            installmentInfo: `Día 20 del mes siguiente`
           });
         }
 
-        // Check if SS obligation already in db.taxObligations
-        const hasSsInDb = (db.taxObligations || []).some(t => 
+        const hasSsCompInDb = (db.taxObligations || []).some(t => 
           t.studentId === studentId && 
-          ((t.type as string) === 'ss_employee' || (t.type as string) === 'ss_company' || (t.type as string) === 'ss' || (t.type as string) === 'seguridad_social') && 
+          (t.type as string) === 'ss_company' && 
           new Date(t.dueDate).getFullYear() === followingYearNum && 
-          new Date(t.dueDate).getMonth() === taxDueDate.getMonth()
+          new Date(t.dueDate).getMonth() === ssDueDate.getMonth()
         );
 
-        if (!hasSsInDb && totalSSTotal > 0) {
+        if (!hasSsCompInDb && totalCompanySS > 0) {
           upcoming30DaysItems.push({
-            id: `payroll-ss-${studentId}-${targetYear}-${targetMonth}`,
+            id: `payroll-ss-comp-${studentId}-${targetYear}-${targetMonth}`,
             sourceType: 'tax',
-            type: 'impuesto_ss',
-            title: `TGSS - Seguridad Social (Previsible)`,
-            concept: `Liquidación previsible cuotas Seg. Social (empresa + empleado)`,
-            dueDate: taxDueDate.toISOString(),
-            principalAmount: totalSSTotal,
+            type: 'impuesto_ss_comp',
+            title: `TGSS - Seg. Social Empresa (75%)`,
+            concept: `Aportación empresarial a la Seg. Social (Mes ${targetMonth}/${targetYear})`,
+            dueDate: ssDueDate.toISOString(),
+            principalAmount: totalCompanySS,
             penaltyInterest: 0,
-            totalAmount: totalSSTotal,
+            totalAmount: totalCompanySS,
             isOverdue: false,
             daysRemaining: daysRem,
-            installmentInfo: `Día 20 - Previsión Mes ${targetMonth}/${targetYear}`
+            installmentInfo: `Día 20 del mes siguiente`
           });
+        }
+      }
+
+      // 4c. Quarterly AEAT IRPF Tax Obligation due on 15th of first month of following quarter
+      let irpfDueDate: Date;
+      let qNum = 1;
+      if (targetMonth >= 10) {
+        qNum = 4;
+        irpfDueDate = new Date(targetYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+      } else if (targetMonth >= 7) {
+        qNum = 3;
+        irpfDueDate = new Date(targetYear, 9, 15, 9, 0, 0); // Oct 15
+      } else if (targetMonth >= 4) {
+        qNum = 2;
+        irpfDueDate = new Date(targetYear, 6, 15, 9, 0, 0); // Jul 15
+      } else {
+        qNum = 1;
+        irpfDueDate = new Date(targetYear, 3, 15, 9, 0, 0); // Apr 15
+      }
+
+      if (irpfDueDate >= now && irpfDueDate <= thirtyFiveDaysLater) {
+        const daysRem = Math.ceil((irpfDueDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        const dueYearNum = irpfDueDate.getFullYear();
+        const dueMonthNum = irpfDueDate.getMonth();
+
+        const hasIrpfInDb = (db.taxObligations || []).some(t => 
+          t.studentId === studentId && 
+          t.type === 'irpf' && 
+          new Date(t.dueDate).getFullYear() === dueYearNum && 
+          new Date(t.dueDate).getMonth() === dueMonthNum
+        );
+
+        if (!hasIrpfInDb && totalEmployeeIRPF > 0) {
+          // Avoid duplicate entry if loop processes multiple months of same quarter
+          const existingIrpfIndex = upcoming30DaysItems.findIndex(item => item.id.startsWith(`payroll-irpf-${studentId}-q${qNum}-${targetYear}`));
+          if (existingIrpfIndex >= 0) {
+            upcoming30DaysItems[existingIrpfIndex].principalAmount += totalEmployeeIRPF;
+            upcoming30DaysItems[existingIrpfIndex].totalAmount += totalEmployeeIRPF;
+          } else {
+            upcoming30DaysItems.push({
+              id: `payroll-irpf-${studentId}-q${qNum}-${targetYear}`,
+              sourceType: 'tax',
+              type: 'impuesto_irpf',
+              title: `AEAT - Hacienda (Retención IRPF Q${qNum})`,
+              concept: `Liquidación trimestral retenciones IRPF de nóminas (17%)`,
+              dueDate: irpfDueDate.toISOString(),
+              principalAmount: totalEmployeeIRPF,
+              penaltyInterest: 0,
+              totalAmount: totalEmployeeIRPF,
+              isOverdue: false,
+              daysRemaining: daysRem,
+              installmentInfo: `Día 15 del mes siguiente al trimestre Q${qNum}`
+            });
+          }
         }
       }
     }

@@ -250,102 +250,152 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
       });
     });
 
-    // 4. Upcoming monthly net payrolls and foreseeable tax payments (AEAT & TGSS) for next 24 months
+    // 4. Upcoming monthly net payrolls, Seguridad Social (TGSS on 20th of next month, separated) and IRPF (AEAT on 15th of month following quarter)
     const studentEmps = data.hiredEmployees || [];
     if (studentEmps.length > 0) {
+      // Map to aggregate quarterly IRPF: key "YEAR-Q", value: total IRPF
+      const quarterlyIRPFMap: { [key: string]: { amount: number; dueDate: Date; qName: string } } = {};
+
       for (let m = 0; m < 24; m++) {
         const pDate = new Date(now.getFullYear(), now.getMonth() + m, 26, 9, 0, 0);
-        const taxDueDate = new Date(pDate.getFullYear(), pDate.getMonth() + 1, 20, 9, 0, 0);
+        const ssDueDate = new Date(pDate.getFullYear(), pDate.getMonth() + 1, 20, 9, 0, 0);
 
-        if (pDate <= maxDate || taxDueDate <= maxDate) {
-          const targetYear = pDate.getFullYear();
-          const targetMonth = pDate.getMonth() + 1; // 1-based
+        const targetYear = pDate.getFullYear();
+        const targetMonth = pDate.getMonth() + 1; // 1-based
 
-          let monthGross = 0;
-          studentEmps.forEach(e => {
-            if (!e.hireDate) {
-              monthGross += e.grossSalaryMonthly;
-              return;
-            }
-            const parts = e.hireDate.split('T')[0].split('-');
-            const hireYear = parseInt(parts[0], 10);
-            const hireMonth = parseInt(parts[1], 10);
-            const hireDay = parseInt(parts[2], 10);
+        let monthGross = 0;
+        studentEmps.forEach(e => {
+          if (!e.hireDate) {
+            monthGross += e.grossSalaryMonthly;
+            return;
+          }
+          const parts = e.hireDate.split('T')[0].split('-');
+          const hireYear = parseInt(parts[0], 10);
+          const hireMonth = parseInt(parts[1], 10);
+          const hireDay = parseInt(parts[2], 10);
 
-            if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
-              // Not hired yet
-              return;
-            }
-            if (hireYear === targetYear && hireMonth === targetMonth) {
-              const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-              monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
-            } else {
-              monthGross += e.grossSalaryMonthly;
-            }
-          });
+          if (targetYear < hireYear || (targetYear === hireYear && targetMonth < hireMonth)) {
+            // Not hired yet
+            return;
+          }
+          if (hireYear === targetYear && hireMonth === targetMonth) {
+            const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+            const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+            monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
+          } else {
+            monthGross += e.grossSalaryMonthly;
+          }
+        });
 
-          if (monthGross > 0) {
-            const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
-            const monthSSEmp = Math.round(monthGross * 0.0648 * 100) / 100;
-            const monthSSComp = Math.round(monthGross * 0.314 * 100) / 100;
-            const monthSSTotal = Math.round((monthSSEmp + monthSSComp) * 100) / 100;
-            const monthNet = Math.round((monthGross - monthIRPF - monthSSEmp) * 100) / 100;
+        if (monthGross > 0) {
+          const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
+          const monthSSEmp = Math.round(monthGross * 0.0648 * 100) / 100;
+          const monthSSComp = Math.round(monthGross * 0.75 * 100) / 100; // 75%
+          const monthNet = Math.round((monthGross - monthIRPF - monthSSEmp) * 100) / 100;
 
-            // 4a. Net Payroll (if pDate is in future)
-            if (pDate >= now && pDate <= maxDate) {
+          // 4a. Net Payroll on day 26
+          if (pDate >= now && pDate <= maxDate) {
+            items.push({
+              id: `payroll-net-${m}`,
+              concept: `Pago de salarios netos (Nóminas del mes ${targetMonth}/${targetYear})`,
+              origin: 'Nóminas de personal',
+              amount: monthNet,
+              dueDate: pDate.toISOString(),
+              status: 'pendiente'
+            });
+          }
+
+          // 4b. TGSS SS tax payments due on 20th of following month - SEPARATED (Empleado 6,48% / Empresa 75%)
+          if (ssDueDate >= now && ssDueDate <= maxDate) {
+            const followingMonth = ssDueDate.getMonth(); // 0-indexed
+            const followingYear = ssDueDate.getFullYear();
+
+            const hasSsEmpInDb = (data.taxObligations || []).some(t => 
+              (t.type === 'ss_employee' || t.type === 'ss') && 
+              new Date(t.dueDate).getFullYear() === followingYear && 
+              new Date(t.dueDate).getMonth() === followingMonth
+            );
+
+            const hasSsCompInDb = (data.taxObligations || []).some(t => 
+              t.type === 'ss_company' && 
+              new Date(t.dueDate).getFullYear() === followingYear && 
+              new Date(t.dueDate).getMonth() === followingMonth
+            );
+
+            if (!hasSsEmpInDb && monthSSEmp > 0) {
               items.push({
-                id: `payroll-net-${m}`,
-                concept: `Pago de salarios netos (Nóminas de personal)`,
-                origin: 'Nóminas de personal',
-                amount: monthNet,
-                dueDate: pDate.toISOString(),
+                id: `payroll-ss-emp-${m}`,
+                concept: `Cuotas Seguridad Social Trabajador (6,48%) - Mes ${targetMonth}/${targetYear}`,
+                origin: 'Seguridad Social (TGSS)',
+                amount: monthSSEmp,
+                dueDate: ssDueDate.toISOString(),
                 status: 'pendiente'
               });
             }
 
-            // 4b. Predictable AEAT IRPF & TGSS SS tax payments due on 20th of following month
-            if (taxDueDate >= now && taxDueDate <= maxDate) {
-              const followingMonth = taxDueDate.getMonth(); // 0-indexed
-              const followingYear = taxDueDate.getFullYear();
-
-              const hasIrpfInDb = (data.taxObligations || []).some(t => 
-                t.type === 'irpf' && 
-                new Date(t.dueDate).getFullYear() === followingYear && 
-                new Date(t.dueDate).getMonth() === followingMonth
-              );
-
-              const hasSsInDb = (data.taxObligations || []).some(t => 
-                (t.type === 'ss' || t.type === 'seguridad_social') && 
-                new Date(t.dueDate).getFullYear() === followingYear && 
-                new Date(t.dueDate).getMonth() === followingMonth
-              );
-
-              if (!hasIrpfInDb && monthIRPF > 0) {
-                items.push({
-                  id: `payroll-irpf-${m}`,
-                  concept: `Retenciones IRPF de nóminas (Hacienda Pública)`,
-                  origin: 'Hacienda Pública (AEAT)',
-                  amount: monthIRPF,
-                  dueDate: taxDueDate.toISOString(),
-                  status: 'pendiente'
-                });
-              }
-
-              if (!hasSsInDb && monthSSTotal > 0) {
-                items.push({
-                  id: `payroll-ss-${m}`,
-                  concept: `Cuotas Seguridad Social de nóminas (empresa + empleado)`,
-                  origin: 'Seguridad Social (TGSS)',
-                  amount: monthSSTotal,
-                  dueDate: taxDueDate.toISOString(),
-                  status: 'pendiente'
-                });
-              }
+            if (!hasSsCompInDb && monthSSComp > 0) {
+              items.push({
+                id: `payroll-ss-comp-${m}`,
+                concept: `Aportación patronal Seguridad Social (75%) - Mes ${targetMonth}/${targetYear}`,
+                origin: 'Seguridad Social (TGSS)',
+                amount: monthSSComp,
+                dueDate: ssDueDate.toISOString(),
+                status: 'pendiente'
+              });
             }
           }
+
+          // 4c. Quarterly AEAT IRPF accumulator - Due on 15th of first month of following quarter
+          let qNum = 1;
+          let irpfDueDate: Date;
+          if (targetMonth >= 10) {
+            qNum = 4;
+            irpfDueDate = new Date(targetYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+          } else if (targetMonth >= 7) {
+            qNum = 3;
+            irpfDueDate = new Date(targetYear, 9, 15, 9, 0, 0); // Oct 15
+          } else if (targetMonth >= 4) {
+            qNum = 2;
+            irpfDueDate = new Date(targetYear, 6, 15, 9, 0, 0); // Jul 15
+          } else {
+            qNum = 1;
+            irpfDueDate = new Date(targetYear, 3, 15, 9, 0, 0); // Apr 15
+          }
+
+          const qKey = `IRPF-Q${qNum}-${targetYear}`;
+          const qName = `Q${qNum} ${targetYear} (${targetMonth >= 10 ? 'Oct-Dic' : targetMonth >= 7 ? 'Jul-Sep' : targetMonth >= 4 ? 'Abr-Jun' : 'Ene-Mar'})`;
+
+          if (!quarterlyIRPFMap[qKey]) {
+            quarterlyIRPFMap[qKey] = { amount: 0, dueDate: irpfDueDate, qName };
+          }
+          quarterlyIRPFMap[qKey].amount = Math.round((quarterlyIRPFMap[qKey].amount + monthIRPF) * 100) / 100;
         }
       }
+
+      // Add accumulated quarterly IRPF items
+      Object.entries(quarterlyIRPFMap).forEach(([qKey, qData], idx) => {
+        if (qData.dueDate >= now && qData.dueDate <= maxDate && qData.amount > 0) {
+          const dueYear = qData.dueDate.getFullYear();
+          const dueMonth = qData.dueDate.getMonth();
+
+          const hasIrpfInDb = (data.taxObligations || []).some(t => 
+            t.type === 'irpf' && 
+            new Date(t.dueDate).getFullYear() === dueYear && 
+            new Date(t.dueDate).getMonth() === dueMonth
+          );
+
+          if (!hasIrpfInDb) {
+            items.push({
+              id: `payroll-irpf-quarterly-${idx}-${qKey}`,
+              concept: `Retenciones IRPF de nóminas (17%) - Trimestre ${qData.qName}`,
+              origin: 'Hacienda Pública (AEAT)',
+              amount: qData.amount,
+              dueDate: qData.dueDate.toISOString(),
+              status: 'pendiente'
+            });
+          }
+        }
+      });
     }
 
     items.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
