@@ -76,8 +76,11 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
       case 'letra_cambio': return 'Letra de cambio';
       case 'cuota_prestamo': return 'Préstamo hipotecario';
       case 'cuota_nomina': return 'Nóminas del personal';
+      case 'impuesto_ss_emp': return 'Cuotas SS Trabajador (6,48%)';
+      case 'impuesto_ss_comp': return 'Aportación Patronal SS (75%)';
+      case 'impuesto_irpf':
       case 'liquidacion_impuesto':
-      case 'liquidacion_irpf': return 'Retención IRPF (Hacienda Pública - AEAT)';
+      case 'liquidacion_irpf': return 'Retención IRPF de nóminas (17%)';
       case 'liquidacion_ss': return 'Seguridad Social (TGSS)';
       default: return 'Cargo domiciliado';
     }
@@ -252,7 +255,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                     </div>
                     <div>
                       <span className="font-bold text-slate-900 text-xs block leading-tight">{item.title}</span>
-                      <span className="text-[10px] text-slate-500 block">{getTypeName(item.type)}</span>
+                      <span className="text-[10px] text-slate-500 block">{item.concept || getTypeName(item.type)}</span>
                     </div>
                   </div>
 

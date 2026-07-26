@@ -220,11 +220,11 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
       const d = new Date(tax.dueDate);
       if (d <= maxDate) {
         const isIRPF = tax.type === 'irpf';
-        const concept = isIRPF ? 'Pago a Hacienda Pública por retenciones' : 'Pago a Seguridad Social de empresa y empleado';
+        const origin = (isIRPF || tax.agency === 'AEAT') ? 'Hacienda Pública (AEAT)' : 'Seguridad Social (TGSS)';
         items.push({
           id: tax.id,
-          concept,
-          origin: tax.agency === 'AEAT' ? 'Hacienda Pública (AEAT)' : 'Seguridad Social (TGSS)',
+          concept: tax.concept || (isIRPF ? 'Retenciones IRPF de nóminas (17%)' : 'Seguridad Social'),
+          origin,
           amount: tax.amount,
           dueDate: tax.dueDate,
           status: tax.status
@@ -254,7 +254,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
     const studentEmps = data.hiredEmployees || [];
     if (studentEmps.length > 0) {
       // Map to aggregate quarterly IRPF: key "YEAR-Q", value: total IRPF
-      const quarterlyIRPFMap: { [key: string]: { amount: number; dueDate: Date; qName: string } } = {};
+      const quarterlyIRPFMap: { [key: string]: { amount: number; dueDate: Date; qNum: number; targetYear: number } } = {};
 
       for (let m = 0; m < 24; m++) {
         const pDate = new Date(now.getFullYear(), now.getMonth() + m, 26, 9, 0, 0);
@@ -281,11 +281,13 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
           if (hireYear === targetYear && hireMonth === targetMonth) {
             const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
             const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-            monthGross += Math.round(((e.grossSalaryMonthly / daysInMonth) * daysWorked) * 100) / 100;
+            monthGross += (e.grossSalaryMonthly / daysInMonth) * daysWorked;
           } else {
             monthGross += e.grossSalaryMonthly;
           }
         });
+
+        monthGross = Math.round(monthGross * 100) / 100;
 
         if (monthGross > 0) {
           const monthIRPF = Math.round(monthGross * 0.17 * 100) / 100;
@@ -325,7 +327,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
             if (!hasSsEmpInDb && monthSSEmp > 0) {
               items.push({
                 id: `payroll-ss-emp-${m}`,
-                concept: `Cuotas Seguridad Social Trabajador (6,48%) - Mes ${targetMonth}/${targetYear}`,
+                concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${targetMonth}/${targetYear}`,
                 origin: 'Seguridad Social (TGSS)',
                 amount: monthSSEmp,
                 dueDate: ssDueDate.toISOString(),
@@ -336,7 +338,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
             if (!hasSsCompInDb && monthSSComp > 0) {
               items.push({
                 id: `payroll-ss-comp-${m}`,
-                concept: `Aportación patronal Seguridad Social (75%) - Mes ${targetMonth}/${targetYear}`,
+                concept: `Aportación patronal Seguridad Social (75%) Mes ${targetMonth}/${targetYear}`,
                 origin: 'Seguridad Social (TGSS)',
                 amount: monthSSComp,
                 dueDate: ssDueDate.toISOString(),
@@ -363,10 +365,9 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
           }
 
           const qKey = `IRPF-Q${qNum}-${targetYear}`;
-          const qName = `Q${qNum} ${targetYear} (${targetMonth >= 10 ? 'Oct-Dic' : targetMonth >= 7 ? 'Jul-Sep' : targetMonth >= 4 ? 'Abr-Jun' : 'Ene-Mar'})`;
 
           if (!quarterlyIRPFMap[qKey]) {
-            quarterlyIRPFMap[qKey] = { amount: 0, dueDate: irpfDueDate, qName };
+            quarterlyIRPFMap[qKey] = { amount: 0, dueDate: irpfDueDate, qNum, targetYear };
           }
           quarterlyIRPFMap[qKey].amount = Math.round((quarterlyIRPFMap[qKey].amount + monthIRPF) * 100) / 100;
         }
@@ -387,7 +388,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
           if (!hasIrpfInDb) {
             items.push({
               id: `payroll-irpf-quarterly-${idx}-${qKey}`,
-              concept: `Retenciones IRPF de nóminas (17%) - Trimestre ${qData.qName}`,
+              concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qData.qNum} ${qData.targetYear}`,
               origin: 'Hacienda Pública (AEAT)',
               amount: qData.amount,
               dueDate: qData.dueDate.toISOString(),

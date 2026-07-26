@@ -1270,9 +1270,22 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
         tax.dueDate = d.toISOString();
         changed = true;
       }
-      if (tax.type === 'ss_company' && tax.concept.includes('31,4%')) {
-        tax.concept = tax.concept.replace('31,4%', '75%');
-        changed = true;
+      if (tax.type === 'ss_employee') {
+        const match = tax.concept.match(/(\d{1,2}\/\d{4})/);
+        const monthYearStr = match ? match[1] : `${d.getMonth() === 0 ? 12 : d.getMonth()}/${d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear()}`;
+        const newConcept = `Cuotas Seguridad Social Trabajador (6,48%) Mes ${monthYearStr}`;
+        if (tax.concept !== newConcept) {
+          tax.concept = newConcept;
+          changed = true;
+        }
+      } else if (tax.type === 'ss_company') {
+        const match = tax.concept.match(/(\d{1,2}\/\d{4})/);
+        const monthYearStr = match ? match[1] : `${d.getMonth() === 0 ? 12 : d.getMonth()}/${d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear()}`;
+        const newConcept = `Aportación patronal Seguridad Social (75%) Mes ${monthYearStr}`;
+        if (tax.concept !== newConcept) {
+          tax.concept = newConcept;
+          changed = true;
+        }
       }
     }
 
@@ -1281,21 +1294,33 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
       const month = d.getMonth(); // 0-indexed
       let correctMonth = 9; // Oct 15 default for Q3
       let correctYear = d.getFullYear();
+      let qNum = 3;
 
-      if (month === 7) { // August -> Q3 IRPF -> October 15
+      if (month === 7 || month === 9) { // August or Oct -> Q3 IRPF -> October 15
         correctMonth = 9;
-      } else if (month === 10) { // November -> Q4 IRPF -> January 15
+        qNum = 3;
+      } else if (month === 10 || month === 0) { // November or Jan -> Q4 IRPF -> January 15
         correctMonth = 0;
-        correctYear += 1;
-      } else if (month === 1) { // February -> Q1 IRPF -> April 15
+        correctYear = d.getFullYear();
+        qNum = 4;
+      } else if (month === 1 || month === 3) { // February or Apr -> Q1 IRPF -> April 15
         correctMonth = 3;
-      } else if (month === 4) { // May -> Q2 IRPF -> July 15
+        qNum = 1;
+      } else if (month === 4 || month === 6) { // May or Jul -> Q2 IRPF -> July 15
         correctMonth = 6;
+        qNum = 2;
       }
 
       if (d.getDate() !== 15 || d.getMonth() !== correctMonth) {
         const fixedDate = new Date(correctYear, correctMonth, 15, 9, 0, 0);
         tax.dueDate = fixedDate.toISOString();
+        changed = true;
+      }
+
+      const refYear = correctMonth === 0 ? correctYear - 1 : correctYear;
+      const newConcept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${refYear}`;
+      if (tax.concept !== newConcept) {
+        tax.concept = newConcept;
         changed = true;
       }
     }
@@ -1429,7 +1454,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           studentId: student.id,
           studentName: student.name,
           type: 'ss_employee',
-          concept: `Seguridad Social a cargo del empleado (6,48%) Nóminas ${currentMonth}/${currentYear}`,
+          concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${currentMonth}/${currentYear}`,
           amount: totalEmployeeSS,
           dueDate: ssDueDateObj.toISOString(),
           status: 'pendiente',
@@ -1441,7 +1466,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           studentId: student.id,
           studentName: student.name,
           type: 'ss_company',
-          concept: `Seguridad Social a cargo de la empresa (75%) Nóminas ${currentMonth}/${currentYear}`,
+          concept: `Aportación patronal Seguridad Social (75%) Mes ${currentMonth}/${currentYear}`,
           amount: totalCompanySS,
           dueDate: ssDueDateObj.toISOString(),
           status: 'pendiente',
@@ -1462,7 +1487,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
 
         if (existingIrpf) {
           existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
-          existingIrpf.concept = `Retención IRPF (17%) Trimestre Q${qNum} ${currentYear} (AEAT)`;
+          existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
           syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
         } else {
           const irpfObl: TaxObligation = {
@@ -1470,7 +1495,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
             studentId: student.id,
             studentName: student.name,
             type: 'irpf',
-            concept: `Retención IRPF (17%) Trimestre Q${qNum} ${currentYear} (AEAT)`,
+            concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`,
             amount: totalEmployeeIRPF,
             dueDate: irpfDueDateObj.toISOString(),
             status: 'pendiente',
@@ -3842,7 +3867,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
             sourceType: 'tax',
             type: 'impuesto_ss_emp',
             title: `TGSS - Seg. Social Empleado (6,48%)`,
-            concept: `Cuotas Seg. Social a cargo del trabajador (Mes ${targetMonth}/${targetYear})`,
+            concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${targetMonth}/${targetYear}`,
             dueDate: ssDueDate.toISOString(),
             principalAmount: totalEmployeeSS,
             penaltyInterest: 0,
@@ -3866,7 +3891,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
             sourceType: 'tax',
             type: 'impuesto_ss_comp',
             title: `TGSS - Seg. Social Empresa (75%)`,
-            concept: `Aportación empresarial a la Seg. Social (Mes ${targetMonth}/${targetYear})`,
+            concept: `Aportación patronal Seguridad Social (75%) Mes ${targetMonth}/${targetYear}`,
             dueDate: ssDueDate.toISOString(),
             principalAmount: totalCompanySS,
             penaltyInterest: 0,
@@ -3919,7 +3944,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
               sourceType: 'tax',
               type: 'impuesto_irpf',
               title: `AEAT - Hacienda (Retención IRPF Q${qNum})`,
-              concept: `Liquidación trimestral retenciones IRPF de nóminas (17%)`,
+              concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${targetYear}`,
               dueDate: irpfDueDate.toISOString(),
               principalAmount: totalEmployeeIRPF,
               penaltyInterest: 0,
