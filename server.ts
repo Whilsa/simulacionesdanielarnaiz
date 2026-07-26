@@ -2780,9 +2780,16 @@ app.post('/api/machinery/buy', (req, res) => {
     });
   }
 
-  if (targetAcquisition.surfaceM2 < machinery.totalRequiredM2) {
+  // Calculate existing occupied m² in this Nave Industrial by all installed machinery lines
+  const existingMachinery = (db.machineryAcquisitions || []).filter(
+    m => m.studentId === studentId && (m.installationNaveId === targetAcquisition.id || m.installationNaveId === targetAcquisition.propertyId)
+  );
+  const occupiedSurfaceM2 = existingMachinery.reduce((sum, m) => sum + (m.totalRequiredM2 || 0), 0);
+  const availableSurfaceM2 = targetAcquisition.surfaceM2 - occupiedSurfaceM2;
+
+  if (availableSurfaceM2 < machinery.totalRequiredM2) {
     return res.status(400).json({
-      error: `Superficie Insuficiente: La nave industrial seleccionada dispone de ${targetAcquisition.surfaceM2} m², pero la línea de maquinaria "${machinery.title}" requiere de un mínimo de ${machinery.totalRequiredM2} m² (${machinery.requiredSurfaceM2} m² de línea + 2 almacenes de 30 m²).`
+      error: `Superficie Insuficiente en la Nave Industrial: La nave "${targetAcquisition.propertyTitle}" dispone de ${targetAcquisition.surfaceM2} m² en total. Actualmente tiene instalada(s) ${existingMachinery.length} máquina(s) ocupando un total de ${occupiedSurfaceM2} m², por lo que solo quedan libres ${availableSurfaceM2} m². La nueva línea de maquinaria "${machinery.title}" requiere de ${machinery.totalRequiredM2} m² (${machinery.requiredSurfaceM2} m² de línea + 2 almacenes de 30 m²). Por favor, adquiere o alquila una nueva Nave Industrial.`
     });
   }
 
@@ -3378,6 +3385,14 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             const penalty = Number((principal * 0.05).toFixed(2));
             const totalRequired = Number((principal + penalty).toFixed(2));
             const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota / Alquiler';
+            let concept = `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`;
+            if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
+              concept = `Cuota de alquiler n.º ${ob.installmentNumber || 1} de ${ob.propertyTitle}`;
+            } else if (ob.type === 'compra' || ob.type === 'compra_inmueble') {
+              concept = `Pago aplazado de compra de ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 12})`;
+            } else if (ob.type === 'maquinaria' || (ob.propertyTitle && (ob.propertyTitle.toLowerCase().includes('línea') || ob.propertyTitle.toLowerCase().includes('maquina') || ob.propertyTitle.toLowerCase().includes('máquina')))) {
+              concept = `Pago aplazado de la máquina ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`;
+            }
 
             pendingItems.push({
               id: ob.id,
@@ -3386,7 +3401,7 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
               principal,
               penaltyInterest: penalty,
               totalRequired,
-              concept: `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`,
+              concept,
               obligationRef: ob
             });
           }
@@ -3405,15 +3420,16 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
                 const principal = row.payment;
                 const penalty = Number((principal * 0.05).toFixed(2));
                 const totalRequired = Number((principal + penalty).toFixed(2));
+                const periodNum = row.period || (row as any).installmentNumber || 1;
 
                 pendingItems.push({
-                  id: `${loan.id}-row-${row.period}`,
+                  id: `${loan.id}-row-${periodNum}`,
                   sourceType: 'loan',
                   dueDate: dDate,
                   principal,
                   penaltyInterest: penalty,
                   totalRequired,
-                  concept: `Cuota de préstamo hipotecario (${row.period}/${loan.termMonths}): Ref. ${loan.id}`,
+                  concept: `Cuota ${periodNum}/${loan.termMonths} de préstamo hipotecario (${loan.collateral?.propertyTitle || 'Garantía inmobiliaria'})`,
                   loanRef: loan,
                   loanRowIndex: idx
                 });
@@ -3648,18 +3664,30 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   // 4. Upcoming Payroll (Nóminas del día 26)
   const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
   if (studentEmps.length > 0) {
-    let totalGross = 0;
-    const curYear = now.getFullYear();
-    const curMonth = now.getMonth() + 1;
+    let payrollYear = now.getFullYear();
+    let payrollMonth = now.getMonth(); // 0-indexed
+    if (now.getDate() >= 26) {
+      payrollMonth += 1;
+      if (payrollMonth > 11) {
+        payrollMonth = 0;
+        payrollYear += 1;
+      }
+    }
+    const targetYear = payrollYear;
+    const targetMonth = payrollMonth + 1; // 1-indexed
 
+    let totalGross = 0;
     for (const emp of studentEmps) {
       const hireDateObj = new Date(emp.hireDate);
-      if (hireDateObj.getMonth() + 1 === curMonth && hireDateObj.getFullYear() === curYear) {
+      const hireYear = hireDateObj.getFullYear();
+      const hireMonth = hireDateObj.getMonth() + 1;
+
+      if (hireYear === targetYear && hireMonth === targetMonth) {
         const hireDay = hireDateObj.getDate();
-        const daysInMonth = new Date(curYear, curMonth, 0).getDate();
+        const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
         const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
         totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
-      } else {
+      } else if (targetYear > hireYear || (targetYear === hireYear && targetMonth > hireMonth)) {
         totalGross += emp.grossSalaryMonthly;
       }
     }
@@ -3669,15 +3697,6 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
     const totalNetSalary = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
 
-    let payrollYear = now.getFullYear();
-    let payrollMonth = now.getMonth();
-    if (now.getDate() >= 26) {
-      payrollMonth += 1;
-      if (payrollMonth > 11) {
-        payrollMonth = 0;
-        payrollYear += 1;
-      }
-    }
     const nextPayrollDate = new Date(payrollYear, payrollMonth, 26, 9, 0, 0);
 
     if (nextPayrollDate <= thirtyFiveDaysLater) {

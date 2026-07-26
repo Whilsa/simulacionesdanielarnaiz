@@ -5,7 +5,10 @@
 
 import React, { useState } from 'react';
 import { User } from '../types.js';
-import { Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, MapPin, CreditCard, ChevronRight, Wrench, Users, KeyRound } from 'lucide-react';
+import { 
+  Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
+  Wrench, Users, KeyRound, GripVertical, RotateCcw
+} from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
 
@@ -16,9 +19,153 @@ interface MainHubProps {
   availablePropertiesCount?: number;
 }
 
+type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs';
+
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+
+  // Default ordering requirement:
+  // 1: Banco, 2: Patrimonio de la empresa, 3: Portal inmobiliario, 4: Maquinaria, 5: Foro de empleo
+  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs'];
+
+  const [cardOrder, setCardOrder] = useState<ModuleType[]>(() => {
+    try {
+      const saved = localStorage.getItem(`hub_cards_order_${currentUser.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === 5) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return defaultOrder;
+  });
+
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIdx(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === targetIdx) return;
+
+    const newOrder = [...cardOrder];
+    const [movedItem] = newOrder.splice(draggedIdx, 1);
+    newOrder.splice(targetIdx, 0, movedItem);
+
+    setCardOrder(newOrder);
+    setDraggedIdx(null);
+    try {
+      localStorage.setItem(`hub_cards_order_${currentUser.id}`, JSON.stringify(newOrder));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null);
+  };
+
+  const handleResetOrder = () => {
+    setCardOrder(defaultOrder);
+    try {
+      localStorage.setItem(`hub_cards_order_${currentUser.id}`, JSON.stringify(defaultOrder));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const getCardDetails = (type: ModuleType) => {
+    switch (type) {
+      case 'bank':
+        return {
+          id: 'bank' as ModuleType,
+          title: 'Banco',
+          badge: 'Simulador',
+          badgeStyle: 'bg-amber-50 text-amber-800 border-amber-200/80',
+          hoverBorder: 'hover:border-amber-400',
+          hoverBg: 'group-hover:bg-amber-500',
+          hoverText: 'group-hover:text-amber-600',
+          iconBg: 'bg-amber-50 text-amber-600 border-amber-100',
+          Icon: Landmark,
+          description: 'Acceso al simulador bancario corporativo. Realiza transferencias, gestiona tu IBAN, consulta extractos de movimientos e historial de cobros y pagos.',
+          statLabel: 'Saldo Disponible',
+          statValue: `${currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`
+        };
+      case 'company':
+        return {
+          id: 'company' as ModuleType,
+          title: 'Patrimonio de la empresa',
+          badge: 'Patrimonio',
+          badgeStyle: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
+          hoverBorder: 'hover:border-emerald-400',
+          hoverBg: 'group-hover:bg-emerald-600',
+          hoverText: 'group-hover:text-emerald-600',
+          iconBg: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+          Icon: Briefcase,
+          description: 'Resumen corporativo: saldo bancario, inmuebles en propiedad (% Suelo/Edificación y amortizaciones), contratos de alquiler, máquinas y nóminas.',
+          statLabel: 'Empresa',
+          statValue: currentUser.name
+        };
+      case 'real_estate':
+        return {
+          id: 'real_estate' as ModuleType,
+          title: 'Portal inmobiliario',
+          badge: 'Mercado',
+          badgeStyle: 'bg-blue-50 text-blue-800 border-blue-200/80',
+          hoverBorder: 'hover:border-blue-400',
+          hoverBg: 'group-hover:bg-blue-600',
+          hoverText: 'group-hover:text-blue-600',
+          iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
+          Icon: Building2,
+          description: 'Mercado de naves industriales, almacenes y locales comerciales. Compra o alquila inmuebles con opción de pago aplazado o fianza.',
+          statLabel: 'Ofertas Activas',
+          statValue: `${availablePropertiesCount} Disponibles`
+        };
+      case 'machinery':
+        return {
+          id: 'machinery' as ModuleType,
+          title: 'Maquinaria industrial',
+          badge: 'Industrial',
+          badgeStyle: 'bg-amber-50 text-amber-800 border-amber-200/80',
+          hoverBorder: 'hover:border-amber-500',
+          hoverBg: 'group-hover:bg-amber-600',
+          hoverText: 'group-hover:text-amber-600',
+          iconBg: 'bg-amber-50 text-amber-700 border-amber-200',
+          Icon: Wrench,
+          description: 'Adquisición de lotes de maquinaria para producción (Metal/Hierro y Plástico/Ensamblaje) e instalación dentro de Nave Industrial.',
+          statLabel: 'Lotes de Fabricación',
+          statValue: '2 Líneas Disponibles'
+        };
+      case 'jobs':
+        return {
+          id: 'jobs' as ModuleType,
+          title: 'Foro de empleo',
+          badge: 'Laboral',
+          badgeStyle: 'bg-violet-50 text-violet-800 border-violet-200/80',
+          hoverBorder: 'hover:border-violet-500',
+          hoverBg: 'group-hover:bg-violet-600',
+          hoverText: 'group-hover:text-violet-600',
+          iconBg: 'bg-violet-50 text-violet-700 border-violet-200',
+          Icon: Users,
+          description: 'Contratación de empleados operarios publicados por el Profesor y asignación a máquinas para cubrir los turnos de trabajo.',
+          statLabel: 'Bolsa de Empleo',
+          statValue: 'Contratación Activa'
+        };
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
@@ -73,221 +220,103 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex flex-col justify-center">
-        {/* Welcome Hero */}
-        <div className="mb-8 text-center sm:text-left">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 text-xs font-semibold mb-3">
-            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-            <span>Panel Principal de Operaciones</span>
+        
+        {/* Welcome Hero & Controls */}
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 text-xs font-semibold mb-3">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>Panel Principal de Operaciones</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              Bienvenido, {currentUser.name}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600 max-w-2xl">
+              Puedes arrastrar y soltar las tarjetas para personalizarlas según tu preferencia. Por defecto, Banco y Patrimonio ocupan las primeras posiciones.
+            </p>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Bienvenido, {currentUser.name}
-          </h2>
-          <p className="mt-1 text-sm text-slate-600 max-w-2xl">
-            Selecciona la plataforma a la que deseas acceder. Todas las transacciones e inversiones están sincronizadas en tiempo real con la contabilidad de tu empresa.
-          </p>
+
+          <button
+            onClick={handleResetOrder}
+            className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold shadow-xs transition cursor-pointer"
+            title="Restablecer el orden predeterminado de las tarjetas"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+            <span>Orden inicial</span>
+          </button>
         </div>
 
-        {/* 5 Main Cards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
-          {/* CARD 1: BANCO */}
-          <div
-            onClick={() => onSelectModule('bank')}
-            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-amber-400 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
-            
-            <div>
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mb-6 shadow-inner border border-amber-100 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-300">
-                <Landmark className="w-7 h-7" />
+        {/* 2-Column Square Cards Grid with Drag & Drop */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
+          {cardOrder.map((modType, index) => {
+            const card = getCardDetails(modType);
+            const IconComponent = card.Icon;
+            const isDragging = draggedIdx === index;
+
+            return (
+              <div
+                key={card.id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDrop={(e) => handleDrop(e, index)}
+                onDragEnd={handleDragEnd}
+                onClick={() => onSelectModule(card.id)}
+                className={`aspect-square flex flex-col justify-between bg-white rounded-3xl border-2 border-slate-200/80 p-6 sm:p-8 shadow-sm hover:shadow-2xl transition-all duration-300 relative overflow-hidden group cursor-pointer select-none ${card.hoverBorder} transform hover:-translate-y-1 ${
+                  isDragging ? 'opacity-40 scale-95 border-dashed border-amber-500 bg-amber-50/50' : ''
+                }`}
+              >
+                {/* Background decorative accent */}
+                <div className="absolute top-0 right-0 w-44 h-44 bg-slate-500/5 rounded-full -mr-12 -mt-12 transition-transform duration-500 group-hover:scale-125" />
+
+                {/* Drag Handle Top Right */}
+                <div 
+                  className="absolute top-5 right-5 z-20 flex items-center gap-1 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1 rounded-xl text-slate-400 hover:text-slate-700 cursor-grab active:cursor-grabbing transition"
+                  title="Haz clic y arrastra para reordenar"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <GripVertical className="w-4 h-4" />
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Mover</span>
+                </div>
+
+                {/* Card Header & Content */}
+                <div>
+                  <div className={`w-16 h-16 rounded-2xl ${card.iconBg} flex items-center justify-center mb-6 shadow-xs border ${card.hoverBg} group-hover:text-white transition-colors duration-300`}>
+                    <IconComponent className="w-8 h-8" />
+                  </div>
+
+                  <div className="flex items-center gap-3 mb-3 pr-20">
+                    <h3 className={`text-2xl font-bold text-slate-900 ${card.hoverText} transition-colors tracking-tight line-clamp-1`}>
+                      {card.title}
+                    </h3>
+                    <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${card.badgeStyle} shrink-0`}>
+                      {card.badge}
+                    </span>
+                  </div>
+
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal">
+                    {card.description}
+                  </p>
+                </div>
+
+                {/* Card Footer */}
+                <div className="pt-5 border-t border-slate-100 flex items-center justify-between mt-4">
+                  <div>
+                    <span className="text-[11px] font-bold text-slate-400 block uppercase tracking-wider">
+                      {card.statLabel}
+                    </span>
+                    <span className="text-base sm:text-lg font-extrabold text-slate-900 line-clamp-1">
+                      {card.statValue}
+                    </span>
+                  </div>
+
+                  <div className={`w-11 h-11 rounded-2xl bg-slate-900 text-white flex items-center justify-center ${card.hoverBg} transition-colors shadow-md`}>
+                    <ArrowRight className="w-5 h-5" />
+                  </div>
+                </div>
               </div>
-
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-slate-900 group-hover:text-amber-600 transition-colors">
-                  Banco
-                </h3>
-                <span className="text-xs font-bold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
-                  Simulador
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Acceso al simulador bancario corporativo. Realiza transferencias, gestiona tu IBAN, consulta el extracto de movimientos e historial de pagos.
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Saldo Disponible</span>
-                <span className="text-base font-extrabold text-slate-900">
-                  {currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                </span>
-              </div>
-
-              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-amber-500 transition-colors shadow-xs">
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
-
-          {/* CARD 2: PORTAL INMOBILIARIO */}
-          <div
-            onClick={() => onSelectModule('real_estate')}
-            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-blue-400 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
-
-            <div>
-              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-6 shadow-inner border border-blue-100 group-hover:bg-blue-600 group-hover:text-white transition-colors duration-300">
-                <Building2 className="w-7 h-7" />
-              </div>
-
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
-                  Portal inmobiliario
-                </h3>
-                <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">
-                  Mercado
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Mercado de naves industriales, almacenes y locales comerciales. Compra o alquila inmuebles con opción de pago aplazado (Pagarés / Letras de cambio) o fianza.
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Inmuebles Activos</span>
-                <span className="text-base font-extrabold text-blue-900">
-                  {availablePropertiesCount} Ofertas disponibles
-                </span>
-              </div>
-
-              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-blue-600 transition-colors shadow-xs">
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
-
-          {/* CARD 3: MAQUINARIA */}
-          <div
-            onClick={() => onSelectModule('machinery')}
-            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-amber-500 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
-
-            <div>
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center mb-6 shadow-inner border border-amber-200 group-hover:bg-amber-600 group-hover:text-white transition-colors duration-300">
-                <Wrench className="w-7 h-7" />
-              </div>
-
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-slate-900 group-hover:text-amber-600 transition-colors">
-                  Maquinaria
-                </h3>
-                <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
-                  Industrial
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Adquisición de lotes de maquinaria para producción (Línea de Metal/Hierro y Línea de Plástico/Ensamblaje). Instalación en Nave Industrial.
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Lotes de Fabricación</span>
-                <span className="text-base font-extrabold text-amber-900">
-                  2 Líneas Disponibles
-                </span>
-              </div>
-
-              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-amber-600 transition-colors shadow-xs">
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
-
-          {/* CARD 4: FORO DE EMPLEO */}
-          <div
-            onClick={() => onSelectModule('jobs')}
-            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-violet-500 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
-
-            <div>
-              <div className="w-14 h-14 rounded-2xl bg-violet-50 text-violet-700 flex items-center justify-center mb-6 shadow-inner border border-violet-200 group-hover:bg-violet-600 group-hover:text-white transition-colors duration-300">
-                <Users className="w-7 h-7" />
-              </div>
-
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-slate-900 group-hover:text-violet-600 transition-colors">
-                  Foro de empleo
-                </h3>
-                <span className="text-xs font-bold text-violet-800 bg-violet-50 px-2.5 py-1 rounded-full border border-violet-200">
-                  Laboral
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Contratación de empleados operarios publicados por el Profesor. Asignación a máquinas para cubrir el mínimo de 5 operarios por turno.
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Bolsa de Empleo</span>
-                <span className="text-base font-extrabold text-violet-900">
-                  Contratación
-                </span>
-              </div>
-
-              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-violet-600 transition-colors shadow-xs">
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
-
-          {/* CARD 4: EMPRESA (NOMBRE DEL ALUMNO / PROFESOR) */}
-          <div
-            onClick={() => onSelectModule('company')}
-            className="group relative bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs hover:shadow-xl hover:border-emerald-400 transition-all duration-300 flex flex-col justify-between cursor-pointer overflow-hidden transform hover:-translate-y-1"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-125" />
-
-            <div>
-              <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-6 shadow-inner border border-emerald-100 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-300">
-                <Briefcase className="w-7 h-7" />
-              </div>
-
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-slate-900 group-hover:text-emerald-600 transition-colors line-clamp-1" title={currentUser.name}>
-                  {currentUser.name}
-                </h3>
-                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
-                  Patrimonio
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Resumen de la empresa: saldo bancario, inmuebles en propiedad (% Suelo/Edificación y amortización), contratos de alquiler y gestión de vencimientos (Pagarés/Letras).
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Estado de Empresa</span>
-                <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg">
-                  Ver Estado Contable
-                </span>
-              </div>
-
-              <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center group-hover:bg-emerald-600 transition-colors shadow-xs">
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
+            );
+          })}
         </div>
 
         {/* Informational Footer Note */}
@@ -301,7 +330,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
               <p className="text-xs text-slate-600">Cualquier alquiler, compra de inmueble o pago de pagaré reflejará el cargo directamente en la cuenta bancaria.</p>
             </div>
           </div>
-          <div className="text-xs text-slate-500 font-mono">v1.2.1 • Academic</div>
+          <div className="text-xs text-slate-500 font-mono">v1.2.2 • Academic</div>
         </div>
       </main>
 

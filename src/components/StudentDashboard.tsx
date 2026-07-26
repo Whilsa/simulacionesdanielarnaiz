@@ -327,7 +327,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
               <div>
                 <div className="flex items-center space-x-2">
-                  <span className="font-extrabold text-sm">🔔 Aviso de Pagos Automáticos Programados (Próximos 30 días)</span>
+                  <span className="font-extrabold text-sm">🔔 Vencimientos de los próximos 30 días</span>
                   <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full uppercase">
                     {paymentStatus.upcomingCount} {paymentStatus.upcomingCount === 1 ? 'cargo' : 'cargos'}
                   </span>

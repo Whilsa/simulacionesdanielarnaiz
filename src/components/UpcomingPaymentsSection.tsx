@@ -105,9 +105,9 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
           </div>
           <div>
             <h3 className="font-display font-bold text-slate-900 text-base flex items-center gap-2">
-              <span>Pagos Automáticos Domiciliados</span>
+              <span>Vencimientos de los próximos 30 días</span>
               <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200/80 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                Siguientes 30 días reales
+                Pagos Automáticos Domiciliados
               </span>
             </h3>
             <p className="text-xs text-slate-500">

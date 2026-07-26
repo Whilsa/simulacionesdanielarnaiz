@@ -9,9 +9,9 @@ import {
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord } from '../types.js';
 
-export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement';
+export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip';
 
 export interface DocumentViewerData {
   type: DocumentType;
@@ -29,6 +29,23 @@ export interface DocumentViewerData {
 
   // Bank transfer statement fields
   transfer?: Transfer;
+
+  // Payroll payslip fields
+  hiredEmployee?: HiredEmployee;
+  payrollRecord?: PayrollRecord;
+  employeeName?: string;
+  studentName?: string;
+  studentNifCif?: string;
+  periodMonth?: string;
+  workedDays?: number;
+  totalMonthDays?: number;
+  grossSalaryMonthly?: number;
+  proportionalGross?: number;
+  irpfAmount?: number;
+  ssEmployeeAmount?: number;
+  netSalary?: number;
+  ssCompanyAmount?: number;
+  totalCompanyCost?: number;
 }
 
 interface DocumentViewerModalProps {
@@ -907,6 +924,194 @@ Estado Contable: EJECUTADO Y ABONADO
 
                 <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
                   Documento e impertérrita prueba de liquidación bancaria emitida electrónicamente.
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 6: OFFICIAL PAYROLL PAYSLIP */}
+          {data.type === 'payroll_payslip' && (() => {
+            const emp = data.hiredEmployee;
+            const empName = data.employeeName || emp?.employeeName || 'Empleado/a';
+            const compName = data.studentName || 'Empresa Estudiante S.L.';
+            const compCif = data.studentNifCif || 'B-99887766';
+            const monthStr = data.periodMonth || new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+            
+            const hireDateStr = emp?.hireDate ? new Date(emp.hireDate).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
+            
+            const gross = data.proportionalGross !== undefined 
+              ? data.proportionalGross 
+              : (emp ? emp.grossSalaryMonthly : 2000);
+            
+            const irpf = data.irpfAmount !== undefined ? data.irpfAmount : Math.round(gross * 0.17 * 100) / 100;
+            const ssEmp = data.ssEmployeeAmount !== undefined ? data.ssEmployeeAmount : Math.round(gross * 0.0648 * 100) / 100;
+            const net = data.netSalary !== undefined ? data.netSalary : Math.round((gross - irpf - ssEmp) * 100) / 100;
+            const ssComp = data.ssCompanyAmount !== undefined ? data.ssCompanyAmount : Math.round(gross * 0.75 * 100) / 100;
+            const totalCost = data.totalCompanyCost !== undefined ? data.totalCompanyCost : Math.round((gross + ssComp) * 100) / 100;
+
+            const workedDays = data.workedDays || 31;
+            const totalDays = data.totalMonthDays || 31;
+
+            return (
+              <div className="space-y-6">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-5">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Receipt className="w-6 h-6 text-blue-700" />
+                      <span>NÓMINA INDIVIDUAL DE SALARIOS</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1 font-mono">
+                      Recibo Oficial de Salarios • Ley de Contrato de Trabajo
+                    </p>
+                  </div>
+
+                  <div className="bg-blue-50 p-3.5 rounded-xl border border-blue-200 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-blue-800 block">PERIODO DE LIQUIDACIÓN</span>
+                    <span className="text-sm font-extrabold text-slate-900 block capitalize">{monthStr}</span>
+                    <span className="text-[11px] text-blue-700 font-semibold block mt-0.5">
+                      {workedDays} días trabajados (Base {totalDays} días)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Company & Employee Data Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      DATOS DE LA EMPRESA
+                    </span>
+                    <p className="font-bold text-slate-900">{compName}</p>
+                    <p className="text-slate-600">CIF / NIF: <span className="font-mono">{compCif}</span></p>
+                    <p className="text-slate-600">C.C.C. Seg. Social: <span className="font-mono">28/1234567/89</span></p>
+                    <p className="text-slate-600">Domicilio: Polígono Industrial de España, Naves 1-4</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      DATOS DEL TRABAJADOR / TRABAJADORA
+                    </span>
+                    <p className="font-bold text-slate-900">{empName}</p>
+                    <p className="text-slate-600">NIF / NIE: <span className="font-mono">12345678-Z</span></p>
+                    <p className="text-slate-600">N.º Afiliación S.S.: <span className="font-mono">28 98765432 10</span></p>
+                    <p className="text-slate-600">Categoría / Puesto: Operario Industrial de Producción</p>
+                    <p className="text-slate-600">Fecha de Alta / Antigüedad: <span className="font-mono">{hireDateStr}</span></p>
+                  </div>
+                </div>
+
+                {/* DEVENGOS Y DEDUCCIONES TABLE */}
+                <div className="border border-slate-300 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white font-bold uppercase text-[10px]">
+                        <th className="p-2.5">Concepto Salarial / Estructura</th>
+                        <th className="p-2.5 text-right w-28">Devengos (€)</th>
+                        <th className="p-2.5 text-right w-28">Deducciones (€)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-mono text-[11px]">
+                      {/* DEVENGOS */}
+                      <tr className="bg-slate-50/70 font-semibold text-slate-800">
+                        <td className="p-2.5 font-sans">
+                          1. DEVENGOS (Percepciones Salariales)
+                          {workedDays < totalDays && (
+                            <span className="block text-[10px] text-blue-700 font-medium">
+                              * Ajuste proporcional por contratación el día {new Date(emp?.hireDate || Date.now()).getDate()} ({workedDays}/{totalDays} días)
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right"></td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 pl-6 font-sans text-slate-700">Salario Base del puesto / Turno asignado</td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right"></td>
+                      </tr>
+
+                      {/* TOTAL DEVENGADO */}
+                      <tr className="bg-blue-50/50 font-bold border-t border-b border-blue-200">
+                        <td className="p-2.5 font-sans text-blue-900 uppercase text-[10px]">A. TOTAL DEVENGADO (Sueldo Bruto)</td>
+                        <td className="p-2.5 text-right text-blue-900">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right"></td>
+                      </tr>
+
+                      {/* DEDUCCIONES */}
+                      <tr className="bg-slate-50/70 font-semibold text-slate-800">
+                        <td className="p-2.5 font-sans">2. DEDUCCIONES A CARGO DEL TRABAJADOR</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right"></td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Contingencias Comunes (4,70%)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.047 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Desempleo (1,55%)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.0155 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Formación Profesional (0,10%)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.001 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+                      <tr className="bg-slate-50/50">
+                        <td className="p-2.5 pl-6 font-sans text-slate-800 font-bold">Subtotal Aportaciones Seguridad Social Trabajador (6,48%)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{ssEmp.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 pl-6 font-sans text-slate-700">Retención a cuenta del I.R.P.F. (17,00%)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{irpf.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+
+                      {/* TOTAL DEDUCCIONES */}
+                      <tr className="bg-amber-50/50 font-bold border-t border-b border-amber-200">
+                        <td className="p-2.5 font-sans text-amber-900 uppercase text-[10px]">B. TOTAL DEDUCCIONES (SS + IRPF)</td>
+                        <td className="p-2.5 text-right"></td>
+                        <td className="p-2.5 text-right text-amber-900">{(ssEmp + irpf).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* LIQUIDO A PERCIBIR BOX */}
+                <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-4 flex justify-between items-center font-mono">
+                  <div>
+                    <span className="text-xs font-sans font-bold text-emerald-950 uppercase block">LÍQUIDO TOTAL A PERCIBIR (SUELDO NETO):</span>
+                    <span className="text-[11px] text-emerald-800 font-sans">Abonado por transferencia bancaria el día 26 de cada mes</span>
+                  </div>
+                  <span className="text-2xl font-black px-4 py-1.5 rounded-lg border text-emerald-900 bg-white border-emerald-400 shadow-xs">
+                    {net.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                  </span>
+                </div>
+
+                {/* DETERMINACIÓN DE BASES Y APORTACIÓN EMPRESA */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-3">
+                  <h4 className="font-bold text-slate-800 text-[11px] uppercase tracking-wider border-b border-slate-200 pb-1.5">
+                    DETERMINACIÓN DE BASES DE COTIZACIÓN Y APORTACIÓN A CARGO DE LA EMPRESA
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-xs">
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">Base Cotización Contingencias</span>
+                      <span className="font-bold text-slate-900">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">Aportación Empresa SS (75,00%)</span>
+                      <span className="font-bold text-indigo-900">{ssComp.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">COSTE TOTAL EMPRESA</span>
+                      <span className="font-bold text-slate-900">{totalCost.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento e impreso oficial de nómina generado por el Simulador Contable Corporativo.
                 </div>
               </div>
             );
