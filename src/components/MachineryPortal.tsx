@@ -250,19 +250,26 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <Wrench className="w-4 h-4 text-amber-600" />
             <span>Condiciones Oficiales de Suministro y Montaje de Maquinaria</span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-slate-700">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-slate-700">
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div>
                 <strong className="text-slate-900 block font-bold text-xs mb-0.5">Precios Llave en Mano:</strong>
-                Todos los precios indicados son <strong>llave en mano</strong>, e incluyen transportes, seguros de transporte y montaje completo.
+                Todos los precios indicados son <strong>llave en mano</strong>, e incluyen transportes, seguros y montaje completo.
               </div>
             </div>
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de Montaje (5 Días Reales):</strong>
-                Se tardan exactamente <strong>5 días reales</strong> en montar la maquinaria desde la compra antes de estar operativa.
+                Se tardan exactamente <strong>5 días reales</strong> en montar la maquinaria antes de estar operativa.
+              </div>
+            </div>
+            <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
+              <Zap className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Suministro Eléctrico Requerido:</strong>
+                Puedes comprar la máquina, pero el montaje <strong>no empezará</strong> hasta haber contratado la luz y potencia necesaria.
               </div>
             </div>
           </div>

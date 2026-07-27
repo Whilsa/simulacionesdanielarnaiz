@@ -63,7 +63,6 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
   const requiredStorageM2 = requiredWarehouseCount * 30; // 30 m2 per warehouse
   const defaultAdminM2 = Math.max(40, Math.round(naveSurface * 0.10));
 
-  // Initial state values
   const [machineryM2, setMachineryM2] = useState<number>(
     existingFloorPlan?.machineryZoneM2 || Math.max(requiredMachineryM2, 240)
   );
@@ -76,6 +75,19 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
 
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Sync state when existingFloorPlan or requirements change
+  useEffect(() => {
+    if (existingFloorPlan) {
+      setMachineryM2(existingFloorPlan.machineryZoneM2 || Math.max(requiredMachineryM2, 240));
+      setStorageM2(existingFloorPlan.storageZoneM2 || Math.max(requiredStorageM2, 60));
+      setAdminM2(existingFloorPlan.adminZoneM2 || defaultAdminM2);
+    } else {
+      setMachineryM2(Math.max(requiredMachineryM2, 240));
+      setStorageM2(Math.max(requiredStorageM2, 60));
+      setAdminM2(defaultAdminM2);
+    }
+  }, [existingFloorPlan, requiredMachineryM2, requiredStorageM2, defaultAdminM2, acquisition.id]);
 
   // Keep within total surface
   const usedM2 = machineryM2 + storageM2 + adminM2;
@@ -157,74 +169,83 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           }}
         >
           {/* Visual Zones Layout */}
-          <div className="grid grid-cols-12 gap-2 h-full w-full">
+          <div className="flex gap-2 h-full w-full">
             {/* Machinery Zone */}
             <div 
-              style={{ flex: machineryM2 }}
-              className="col-span-6 bg-blue-900/40 border-2 border-blue-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-blue-400 transition"
+              style={{ flex: machineryM2 || 1 }}
+              className="bg-blue-900/40 border-2 border-blue-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-blue-400 transition min-w-[120px]"
             >
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-bold text-blue-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Box className="w-3.5 h-3.5 text-blue-400" /> Zona de Maquinaria
+              <div className="flex justify-between items-start gap-1">
+                <span className="text-xs font-bold text-blue-300 uppercase tracking-wider flex items-center gap-1">
+                  <Box className="w-3.5 h-3.5 text-blue-400 shrink-0" /> <span className="truncate">Maquinaria</span>
                 </span>
-                <span className="text-xs font-mono bg-blue-950/80 text-blue-300 px-2 py-0.5 rounded border border-blue-800">
+                <span className="text-xs font-mono bg-blue-950/80 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 shrink-0">
                   {machineryM2} m²
                 </span>
               </div>
-              <div className="space-y-1 my-auto text-xs text-blue-200/80">
-                <p>• Línea Metal: {metalMachinesCount} unid. ({metalMachinesCount * 240} m² min)</p>
-                <p>• Línea Plástico: {plasticMachinesCount} unid. ({plasticMachinesCount * 180} m² min)</p>
+              <div className="space-y-1 my-auto text-[11px] text-blue-200/80">
+                <p>• Metal: {metalMachinesCount} ({metalMachinesCount * 240} m² min)</p>
+                <p>• Plástico: {plasticMachinesCount} ({plasticMachinesCount * 180} m² min)</p>
               </div>
-              <div className="text-[10px] text-blue-400 font-mono">
-                Requerido mín: {requiredMachineryM2} m² {isMachineryValid ? '✓' : '⚠️ Insuficiente'}
+              <div className="text-[10px] text-blue-400 font-mono truncate">
+                Mín: {requiredMachineryM2} m² {isMachineryValid ? '✓' : '⚠️ Insuficiente'}
               </div>
             </div>
 
             {/* Storage Zone */}
             <div 
-              style={{ flex: storageM2 }}
-              className="col-span-3 bg-emerald-900/40 border-2 border-emerald-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-emerald-400 transition"
+              style={{ flex: storageM2 || 1 }}
+              className="bg-emerald-900/40 border-2 border-emerald-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-emerald-400 transition min-w-[100px]"
             >
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-emerald-400" /> Almacenes ({requiredWarehouseCount})
+              <div className="flex justify-between items-start gap-1">
+                <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1">
+                  <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Almacenes</span>
                 </span>
-                <span className="text-xs font-mono bg-emerald-950/80 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800">
+                <span className="text-xs font-mono bg-emerald-950/80 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800 shrink-0">
                   {storageM2} m²
                 </span>
               </div>
-              <div className="space-y-1 text-[11px] text-emerald-200/80 my-auto">
+              <div className="space-y-0.5 text-[10px] text-emerald-200/80 my-auto">
                 {warehouseDescriptions.map((desc, idx) => (
                   <p key={idx} className="truncate" title={desc}>• {desc}</p>
                 ))}
               </div>
-              <div className="text-[10px] text-emerald-400 font-mono">
-                Requerido mín: {requiredStorageM2} m² {isStorageValid ? '✓' : '⚠️ Insuficiente'}
+              <div className="text-[10px] text-emerald-400 font-mono truncate">
+                Mín: {requiredStorageM2} m² {isStorageValid ? '✓' : '⚠️ Insuficiente'}
               </div>
             </div>
 
             {/* Admin & Free Zone */}
-            <div className="col-span-3 flex flex-col gap-2 h-full">
+            <div 
+              style={{ flex: (adminM2 + freeM2) || 1 }}
+              className="flex flex-col gap-2 h-full min-w-[100px]"
+            >
               {/* Admin Zone */}
-              <div className="flex-1 bg-purple-900/40 border-2 border-purple-500/60 rounded-md p-2.5 flex flex-col justify-between backdrop-blur-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-[11px] font-bold text-purple-300 uppercase">Administración</span>
-                  <span className="text-[10px] font-mono bg-purple-950 text-purple-300 px-1.5 py-0.5 rounded border border-purple-800">
+              <div 
+                style={{ flex: adminM2 || 1 }}
+                className="bg-purple-900/40 border-2 border-purple-500/60 rounded-md p-2 flex flex-col justify-between backdrop-blur-sm"
+              >
+                <div className="flex justify-between items-center gap-1">
+                  <span className="text-[10px] font-bold text-purple-300 uppercase truncate">Administración</span>
+                  <span className="text-[10px] font-mono bg-purple-950 text-purple-300 px-1 py-0.5 rounded border border-purple-800 shrink-0">
                     {adminM2} m²
                   </span>
                 </div>
-                <span className="text-[10px] text-purple-200/70">Oficinas y climatización</span>
+                <span className="text-[9px] text-purple-200/70 truncate">Oficinas y climatización</span>
               </div>
 
               {/* Free Zone */}
-              <div className="flex-1 bg-slate-800/60 border-2 border-slate-600/60 rounded-md p-2.5 flex flex-col justify-between backdrop-blur-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-[11px] font-bold text-slate-300 uppercase">Zona Diáfana / Libre</span>
-                  <span className="text-[10px] font-mono bg-slate-900 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
+              <div 
+                style={{ flex: freeM2 || 1 }}
+                className="bg-slate-800/60 border-2 border-slate-600/60 rounded-md p-2 flex flex-col justify-between backdrop-blur-sm"
+              >
+                <div className="flex justify-between items-center gap-1">
+                  <span className="text-[10px] font-bold text-slate-300 uppercase truncate">Diáfana / Libre</span>
+                  <span className="text-[10px] font-mono bg-slate-900 text-slate-300 px-1 py-0.5 rounded border border-slate-700 shrink-0">
                     {freeM2} m²
                   </span>
                 </div>
-                <span className="text-[10px] text-slate-400">Paso y carga/descarga</span>
+                <span className="text-[9px] text-slate-400 truncate">Paso y maniobra</span>
               </div>
             </div>
           </div>

@@ -3,14 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { User } from '../types.js';
+import React, { useState, useEffect } from 'react';
+import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
   Wrench, Users, KeyRound, GripVertical, RotateCcw
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
+import { ElectricitySupplyCard } from './ElectricitySupplyCard.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -24,6 +25,54 @@ type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs';
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+
+  // Electricity & Asset State
+  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
+  const [machinery, setMachinery] = useState<MachineryAcquisition[]>([]);
+  const [employees, setEmployees] = useState<HiredEmployee[]>([]);
+  const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
+
+  const fetchHubData = async () => {
+    try {
+      const [compRes, cRes] = await Promise.all([
+        fetch(`/api/company/dashboard?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/contract?studentId=${currentUser.id}`)
+      ]);
+      if (compRes.ok) {
+        const cData = await compRes.json();
+        setAcquisitions(cData.acquisitions || []);
+        setMachinery(cData.machineryAcquisitions || []);
+        setEmployees(cData.hiredEmployees || []);
+      }
+      if (cRes.ok) {
+        const elecJson = await cRes.json();
+        setElectricityContract(elecJson.contract);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    if (!isTeacher) {
+      fetchHubData();
+    }
+  }, [currentUser.id, isTeacher]);
+
+  const handleContractElectricity = async (powerKw: number) => {
+    try {
+      const res = await fetch('/api/electricity/contract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: currentUser.id, contractedPowerKw: powerKw })
+      });
+      if (res.ok) {
+        await fetchHubData();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Default ordering requirement:
   // 1: Banco, 2: Patrimonio de la empresa, 3: Portal inmobiliario, 4: Maquinaria, 5: Foro de empleo
@@ -318,6 +367,19 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
             );
           })}
         </div>
+
+        {/* Electricity Supply & Power Contracting Card */}
+        {!isTeacher && (
+          <div className="mt-8 sm:mt-10">
+            <ElectricitySupplyCard
+              acquisitions={acquisitions}
+              machinery={machinery}
+              employees={employees}
+              currentContract={electricityContract}
+              onContractSupply={handleContractElectricity}
+            />
+          </div>
+        )}
 
         {/* Informational Footer Note */}
         <div className="mt-12 bg-slate-200/60 rounded-2xl p-4 sm:p-6 border border-slate-300/60 flex flex-col sm:flex-row items-center justify-between gap-4">

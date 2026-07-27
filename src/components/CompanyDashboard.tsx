@@ -920,19 +920,21 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 </span>
               </button>
 
-              <button
-                onClick={() => setActiveTab('energia')}
-                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-                  activeTab === 'energia'
-                    ? 'border-amber-600 text-amber-700'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <Zap className="w-4 h-4 text-amber-500" />
-                <span>
-                  Energía / Luz {electricityContract ? `(${electricityContract.contractedPowerKw} kW)` : ''}
-                </span>
-              </button>
+              {electricityContract && (
+                <button
+                  onClick={() => setActiveTab('energia')}
+                  className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                    activeTab === 'energia'
+                      ? 'border-amber-600 text-amber-700'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Zap className="w-4 h-4 text-amber-500" />
+                  <span>
+                    Energía / Luz ({electricityContract.contractedPowerKw} kW)
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* TAB 1: OWNED PROPERTIES */}
@@ -1175,6 +1177,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-medium">
                           {data.machineryAcquisitions.map(mac => {
+                            const isPendingEnergy = mac.status === 'pendiente_energia';
                             const isAssembly = mac.status === 'montaje';
                             const baseVal = mac.basePrice || mac.totalPrice / 1.21;
                             const ivaVal = mac.ivaAmount || mac.totalPrice - baseVal;
@@ -1205,11 +1208,28 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   {ivaVal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
                                 </td>
                                 <td className="p-3.5">
-                                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                                    isAssembly ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                  }`}>
-                                    {isAssembly ? 'En montaje' : 'Operativa'}
-                                  </span>
+                                  {isPendingEnergy ? (
+                                    <div className="flex flex-col gap-1 items-start">
+                                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
+                                        <Zap className="w-3 h-3 text-rose-600" />
+                                        Montaje pausado (Falta Luz)
+                                      </span>
+                                      <button
+                                        onClick={() => setActiveTab('energia')}
+                                        className="text-[10px] text-amber-700 font-bold hover:underline cursor-pointer"
+                                      >
+                                        Contratar Luz ({mac.requiredPowerKW || 35} kW)
+                                      </button>
+                                    </div>
+                                  ) : isAssembly ? (
+                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                                      En montaje (5 días)
+                                    </span>
+                                  ) : (
+                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                      Operativa
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="p-3.5">
                                   <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
@@ -2358,6 +2378,17 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
         <DocumentViewerModal
           data={activeDocumentModal}
           onClose={() => setActiveDocumentModal(null)}
+        />
+      )}
+
+      {/* NAVE FLOOR PLAN MODAL */}
+      {selectedNaveForFloorPlan && (
+        <NaveFloorPlanViewer
+          acquisition={selectedNaveForFloorPlan}
+          studentMachinery={data.machineryAcquisitions || []}
+          existingFloorPlan={naveFloorPlans.find(fp => fp.acquisitionId === selectedNaveForFloorPlan.id || fp.propertyTitle === selectedNaveForFloorPlan.propertyTitle)}
+          onSave={handleSaveFloorPlan}
+          onClose={() => setSelectedNaveForFloorPlan(null)}
         />
       )}
     </div>

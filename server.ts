@@ -3233,7 +3233,16 @@ app.post('/api/machinery/buy', (req, res) => {
   const vendorAccount = 'ES210001000299887799';
   const now = new Date();
 
-  // Calculate 5-day assembly finish date
+  // Check electricity supply contract power requirements
+  const elecContract = (db.electricityContracts || []).find(c => c.studentId === student.id && c.status === 'active');
+  const studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === student.id);
+  const totalMachineryPowerNeeded = studentMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0) + (machinery.requiredPowerKW || 35);
+  const totalPowerNeeded = totalMachineryPowerNeeded + 10; // 10 kW for basic nave lighting & HVAC
+
+  const isPowerContracted = elecContract && elecContract.contractedPowerKw >= totalPowerNeeded;
+  const initialMachineryStatus = isPowerContracted ? 'montaje' : 'pendiente_energia';
+
+  // Calculate 5-day assembly finish date if electricity is available
   const assemblyFinishDate = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
 
   if (paymentMethod === 'contado') {
@@ -3298,9 +3307,9 @@ app.post('/api/machinery/buy', (req, res) => {
       installationSurfaceM2: targetAcquisition.surfaceM2,
       purchaseDate: now.toISOString(),
       assemblyDays: 5,
-      assemblyEndDate: assemblyFinishDate.toISOString(),
-      assemblyFinishDate: assemblyFinishDate.toISOString(),
-      status: 'montaje',
+      assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+      assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+      status: initialMachineryStatus,
       requiredStaff: machinery.requiredStaff || 5,
       requiredPowerKW: machinery.requiredPowerKW || 35,
       powerKw: machinery.requiredPowerKW || 35,
@@ -3318,9 +3327,13 @@ app.post('/api/machinery/buy', (req, res) => {
     syncMachineryToSupabase(machAcq).catch(e => console.error(e));
     syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
 
+    const statusMsg = isPowerContracted
+      ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 5 días en ${targetAcquisition.propertyTitle}.`
+      : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
+
     return res.json({
       success: true,
-      message: `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 5 días en ${targetAcquisition.propertyTitle}.`,
+      message: statusMsg,
       machineryAcquisition: machAcq,
       updatedBalance: student.balance
     });
@@ -3397,9 +3410,9 @@ app.post('/api/machinery/buy', (req, res) => {
       installationSurfaceM2: targetAcquisition.surfaceM2,
       purchaseDate: now.toISOString(),
       assemblyDays: 5,
-      assemblyEndDate: assemblyFinishDate.toISOString(),
-      assemblyFinishDate: assemblyFinishDate.toISOString(),
-      status: 'montaje',
+      assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+      assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+      status: initialMachineryStatus,
       requiredStaff: machinery.requiredStaff || 5,
       requiredPowerKW: machinery.requiredPowerKW || 35,
       powerKw: machinery.requiredPowerKW || 35,
@@ -3443,9 +3456,13 @@ app.post('/api/machinery/buy', (req, res) => {
       syncObligationToSupabase(ob).catch(e => console.error(e));
     }
 
+    const defStatusMsg = isPowerContracted
+      ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido 24 pagarés mensuales de ${installmentAmount.toLocaleString('es-ES')} €/mes. El montaje de 5 días ha comenzado en ${targetAcquisition.propertyTitle}.`
+      : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
+
     return res.json({
       success: true,
-      message: `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido 24 pagarés mensuales de ${installmentAmount.toLocaleString('es-ES')} €/mes. El montaje dura 5 días en ${targetAcquisition.propertyTitle}.`,
+      message: defStatusMsg,
       machineryAcquisition: machAcq,
       updatedBalance: student.balance
     });
@@ -4960,7 +4977,7 @@ app.get('/api/electricity/contract', (req, res) => {
 });
 
 app.post('/api/electricity/contract', (req, res) => {
-  const { studentId, contractedPowerKw } = req.body;
+  const { studentId, contractedPowerKw, powerKw } = req.body;
   const db = readDb();
   const student = db.users.find(u => u.id === studentId);
   if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
@@ -4968,7 +4985,7 @@ app.post('/api/electricity/contract', (req, res) => {
   if (!db.electricityContracts) db.electricityContracts = [];
 
   let contract = db.electricityContracts.find(c => c.studentId === studentId && c.status === 'active');
-  const pKw = Number(contractedPowerKw) || 30;
+  const pKw = Number(contractedPowerKw || powerKw) || 30;
 
   if (contract) {
     contract.contractedPowerKw = pKw;
@@ -4989,9 +5006,34 @@ app.post('/api/electricity/contract', (req, res) => {
     db.electricityContracts.push(contract);
   }
 
+  // Unblock machinery that was waiting for electricity/power
+  const studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
+  const totalMachineryPowerNeeded = studentMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0);
+  const totalPowerNeeded = totalMachineryPowerNeeded + 10;
+
+  let unblockedCount = 0;
+  if (pKw >= totalPowerNeeded) {
+    const now = new Date();
+    const finishDate = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+    for (const m of studentMachinery) {
+      if (m.status === 'pendiente_energia') {
+        m.status = 'montaje';
+        m.assemblyFinishDate = finishDate.toISOString();
+        m.assemblyEndDate = finishDate.toISOString();
+        unblockedCount++;
+        syncMachineryToSupabase(m).catch(e => console.error(e));
+      }
+    }
+  }
+
   checkAndProcessAutomatedElectricity(db);
   writeDb(db);
-  res.json({ success: true, contract });
+
+  const message = unblockedCount > 0 
+    ? `¡Suministro eléctrico contratado (${pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 5 días para ${unblockedCount} línea(s) de maquinaria.`
+    : `¡Suministro eléctrico de ${pKw} kW contratado correctamente!`;
+
+  res.json({ success: true, contract, message, unblockedCount });
 });
 
 app.get('/api/electricity/bills', (req, res) => {
