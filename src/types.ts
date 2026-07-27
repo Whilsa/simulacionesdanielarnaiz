@@ -351,6 +351,8 @@ export interface ElectricityBill {
 export interface NaveFloorPlan {
   id: string;
   propertyId: string;
+  acquisitionId?: string;
+  propertyTitle?: string;
   studentId: string;
   machineryZoneM2: number;
   storageZoneM2: number;

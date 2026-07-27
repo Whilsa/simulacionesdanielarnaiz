@@ -2387,7 +2387,11 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
         <NaveFloorPlanViewer
           acquisition={selectedNaveForFloorPlan}
           studentMachinery={data.machineryAcquisitions || []}
-          existingFloorPlan={naveFloorPlans.find(fp => fp.acquisitionId === selectedNaveForFloorPlan.id || fp.propertyTitle === selectedNaveForFloorPlan.propertyTitle)}
+          existingFloorPlan={naveFloorPlans.find(fp => 
+            (fp.propertyId && (String(fp.propertyId) === String(selectedNaveForFloorPlan.propertyId) || String(fp.propertyId) === String(selectedNaveForFloorPlan.id))) ||
+            (fp.acquisitionId && String(fp.acquisitionId) === String(selectedNaveForFloorPlan.id)) ||
+            (fp.propertyTitle && selectedNaveForFloorPlan.propertyTitle && fp.propertyTitle.toLowerCase().trim() === selectedNaveForFloorPlan.propertyTitle.toLowerCase().trim())
+          )}
           onSave={handleSaveFloorPlan}
           onClose={() => setSelectedNaveForFloorPlan(null)}
         />

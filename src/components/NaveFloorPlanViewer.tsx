@@ -87,7 +87,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
       setStorageM2(Math.max(requiredStorageM2, 60));
       setAdminM2(defaultAdminM2);
     }
-  }, [existingFloorPlan, requiredMachineryM2, requiredStorageM2, defaultAdminM2, acquisition.id]);
+  }, [existingFloorPlan?.id, existingFloorPlan?.updatedAt, requiredMachineryM2, requiredStorageM2, defaultAdminM2, acquisition.id]);
 
   // Keep within total surface
   const usedM2 = machineryM2 + storageM2 + adminM2;
@@ -104,6 +104,8 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
     try {
       await onSave({
         propertyId: acquisition.propertyId || acquisition.id,
+        acquisitionId: acquisition.id,
+        propertyTitle: acquisition.propertyTitle,
         machineryZoneM2: machineryM2,
         storageZoneM2: storageM2,
         adminZoneM2: adminM2,

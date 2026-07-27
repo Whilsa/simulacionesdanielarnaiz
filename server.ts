@@ -725,6 +725,7 @@ async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (id) DO UPDATE SET
+        inmueble_id = EXCLUDED.inmueble_id,
         zona_maquinaria_m2 = EXCLUDED.zona_maquinaria_m2,
         zona_almacen_m2 = EXCLUDED.zona_almacen_m2,
         zona_admin_m2 = EXCLUDED.zona_admin_m2,
@@ -733,7 +734,7 @@ async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
         fecha_actualizacion = EXCLUDED.fecha_actualizacion`,
       [
         plan.id,
-        plan.propertyId || '',
+        plan.propertyId || plan.acquisitionId || '',
         plan.studentId,
         plan.machineryZoneM2 || 0,
         plan.storageZoneM2 || 0,
@@ -5200,13 +5201,25 @@ app.get('/api/electricity/floor-plans', (req, res) => {
 });
 
 app.post('/api/electricity/floor-plan', (req, res) => {
-  const { studentId, propertyId, machineryZoneM2, storageZoneM2, adminZoneM2, freeZoneM2, warehousesCount } = req.body;
+  const { studentId, propertyId, acquisitionId, propertyTitle, machineryZoneM2, storageZoneM2, adminZoneM2, freeZoneM2, warehousesCount } = req.body;
   const db = readDb();
 
   if (!db.naveFloorPlans) db.naveFloorPlans = [];
 
-  let plan = db.naveFloorPlans.find(p => p.studentId === studentId && p.propertyId === propertyId);
+  const targetPropId = propertyId || acquisitionId || '';
+
+  let plan = db.naveFloorPlans.find(p => p.studentId === studentId && (
+    (p.propertyId && targetPropId && String(p.propertyId) === String(targetPropId)) ||
+    (p.acquisitionId && targetPropId && String(p.acquisitionId) === String(targetPropId)) ||
+    (p.propertyId && propertyId && String(p.propertyId) === String(propertyId)) ||
+    (p.acquisitionId && acquisitionId && String(p.acquisitionId) === String(acquisitionId)) ||
+    (p.propertyTitle && propertyTitle && p.propertyTitle.toLowerCase().trim() === propertyTitle.toLowerCase().trim())
+  ));
+
   if (plan) {
+    plan.propertyId = propertyId || plan.propertyId || targetPropId;
+    if (acquisitionId) plan.acquisitionId = acquisitionId;
+    if (propertyTitle) plan.propertyTitle = propertyTitle;
     plan.machineryZoneM2 = Number(machineryZoneM2) || 0;
     plan.storageZoneM2 = Number(storageZoneM2) || 0;
     plan.adminZoneM2 = Number(adminZoneM2) || 0;
@@ -5216,7 +5229,9 @@ app.post('/api/electricity/floor-plan', (req, res) => {
   } else {
     plan = {
       id: generateId('floor_plan'),
-      propertyId,
+      propertyId: targetPropId,
+      acquisitionId: acquisitionId || targetPropId,
+      propertyTitle: propertyTitle || '',
       studentId,
       machineryZoneM2: Number(machineryZoneM2) || 0,
       storageZoneM2: Number(storageZoneM2) || 0,
