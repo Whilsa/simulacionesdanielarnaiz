@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract } from '../types';
+import React, { useState, useEffect } from 'react';
+import { PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types';
 import { Zap, HelpCircle, CheckCircle2, Sliders, Shield, ArrowRight, Lightbulb, Monitor, Thermometer, Factory, Building2, Store } from 'lucide-react';
 
 interface Props {
   acquisitions: PropertyAcquisition[];
   machinery: MachineryAcquisition[];
   employees: HiredEmployee[];
+  floorPlans?: NaveFloorPlan[];
   currentContract?: ElectricityContract;
   onContractSupply: (powerKw: number) => Promise<void>;
 }
@@ -14,6 +15,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
   acquisitions,
   machinery,
   employees,
+  floorPlans = [],
   currentContract,
   onContractSupply
 }) => {
@@ -28,11 +30,15 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
   let maxActiveShifts = 0;
 
   machinery.forEach(m => {
-    const mKw = m.requiredPowerKW || m.powerKw || (m.category === 'metal_hierro' ? 35 : 25);
+    const mKw = Number(m.requiredPowerKW || m.powerKw) || (m.category === 'metal_hierro' ? 35 : 25);
     totalMachineryKw += mKw;
 
     // Check employees assigned to this machine
-    const assignedEmps = employees.filter(e => e.assignedMachineryId === m.id || e.assignedMachineryTitle === m.title);
+    const assignedEmps = employees.filter(e => 
+      e.assignedMachineryId === m.id || 
+      e.assignedMachineryTitle === m.title || 
+      (e.assignedMachineryTitle && m.lineTitle && e.assignedMachineryTitle.includes(m.lineTitle))
+    );
     const shiftCount = Math.max(1, Math.min(3, assignedEmps.length));
     if (shiftCount > maxActiveShifts) maxActiveShifts = shiftCount;
 
@@ -43,15 +49,13 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
   if (machinery.length > 0 && maxActiveShifts === 0) maxActiveShifts = 1;
 
-  // 2. Calculate Lighting Consumption & Power
+  // 2. Calculate Lighting, HVAC & Computers from Properties & Floor Plans
   let totalLightingKw = 0;
   let totalLightingKwhMonth = 0;
 
-  // 3. Calculate Computers Consumption & Power (0.10 kWh/h = 0.10 kW)
   let totalComputersKw = 0;
   let totalComputersKwhMonth = 0;
 
-  // 4. Calculate HVAC Consumption & Power
   let totalHvacKw = 0;
   let totalHvacKwhMonth = 0;
 
@@ -60,48 +64,68 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
   let almacenSurfaceTotal = 0;
 
   acquisitions.forEach(prop => {
-    const pType = prop.propertyType || prop.type || '';
-    const isNave = pType === 'nave_industrial' || prop.propertyTitle?.toLowerCase().includes('nave');
-    const isLocal = pType === 'local_comercial' || prop.propertyTitle?.toLowerCase().includes('local');
-    const isAlmacen = pType === 'almacen' || prop.propertyTitle?.toLowerCase().includes('almacén');
+    const pType = (prop.propertyType || prop.type || '').toLowerCase();
+    const pTitle = (prop.propertyTitle || prop.title || '').toLowerCase();
+    const isNave = pType === 'nave_industrial' || pType.includes('nave') || pTitle.includes('nave');
+    const isLocal = pType === 'local_comercial' || pType.includes('local') || pTitle.includes('local');
+    const isAlmacen = pType === 'almacen' || pType.includes('almacen') || pType.includes('almacén') || pTitle.includes('almacén') || pTitle.includes('almacen');
 
-    const surface = prop.surfaceM2 || 500;
+    const surface = Number(prop.surfaceM2) || 500;
 
     if (isNave) {
       naveSurfaceTotal += surface;
-      // Nave lighting: 1 kWh per m2 per shift month (or 1 W/m2/h * active shift hours)
+
+      // Check if a floor plan exists for this nave
+      const plan = floorPlans.find(fp => 
+        String(fp.propertyId) === String(prop.propertyId) || 
+        String(fp.propertyId) === String(prop.id)
+      );
+
+      const adminM2 = plan ? plan.adminZoneM2 : Math.round(surface * 0.10);
+      const machineryM2 = plan ? plan.machineryZoneM2 : Math.round(surface * 0.50);
+      const storageM2 = plan ? plan.storageZoneM2 : Math.round(surface * 0.25);
+      const freeM2 = plan ? plan.freeZoneM2 : Math.max(0, surface - adminM2 - machineryM2 - storageM2);
+
+      // Lighting in Nave:
+      // Machinery Zone: 8 W/m² = 0.008 kW/m²
+      // Storage Zone: 5 W/m² = 0.005 kW/m²
+      // Admin Zone: 10 W/m² = 0.010 kW/m²
+      // Free Zone: 3 W/m² = 0.003 kW/m²
+      const lightKwNave = (machineryM2 * 0.008) + (storageM2 * 0.005) + (adminM2 * 0.010) + (freeM2 * 0.003);
+      totalLightingKw += lightKwNave;
+
       const naveShifts = maxActiveShifts || 1;
-      const lightingKwNave = surface * 0.005; // ~5 W/m2
-      totalLightingKw += lightingKwNave;
-      totalLightingKwhMonth += surface * naveShifts * 1.0; // 1 kWh/m2 per shift
+      totalLightingKwhMonth += lightKwNave * naveShifts * 160;
 
-      // Administration zone in Nave (10% of surface) for HVAC (60 W/m2 = 0.06 kW/m2)
-      const adminSurface = Math.round(surface * 0.10);
-      const hvacKwNaveAdmin = adminSurface * 0.060;
+      // HVAC in Admin Zone of Nave: 60 W/m² = 0.060 kW/m² (1 shift = 160h)
+      const hvacKwNaveAdmin = adminM2 * 0.060;
       totalHvacKw += hvacKwNaveAdmin;
-      totalHvacKwhMonth += hvacKwNaveAdmin * 160; // 1 shift Mon-Fri
+      totalHvacKwhMonth += hvacKwNaveAdmin * 160;
 
-      // Computers in Nave (default 2 admin PCs)
-      totalComputersKw += 2 * 0.10;
-      totalComputersKwhMonth += 2 * 0.10 * 160;
+      // Computers in Admin Zone of Nave (1 PC per ~20m² of admin space, minimum 2 PCs per nave)
+      const pcCount = Math.max(2, Math.round(adminM2 / 20));
+      totalComputersKw += pcCount * 0.10;
+      totalComputersKwhMonth += pcCount * 0.10 * 160;
+
     } else if (isLocal) {
       localSurfaceTotal += surface;
-      // Local comercial lighting: 15 W/m2 = 0.015 kW/m2 (1 shift = 160h)
+      // Local Comercial Lighting: 15 W/m² = 0.015 kW/m² (1 shift = 160h)
       const lightKwLocal = surface * 0.015;
       totalLightingKw += lightKwLocal;
       totalLightingKwhMonth += lightKwLocal * 160;
 
-      // Local HVAC: 60 W/m2 = 0.060 kW/m2 (1 shift = 160h)
+      // Local Comercial HVAC: 60 W/m² = 0.060 kW/m² (1 shift = 160h)
       const hvacKwLocal = surface * 0.060;
       totalHvacKw += hvacKwLocal;
       totalHvacKwhMonth += hvacKwLocal * 160;
 
-      // Computers in Local (default 1 PC)
-      totalComputersKw += 1 * 0.10;
-      totalComputersKwhMonth += 1 * 0.10 * 160;
+      // Computers in Local (default 2 PCs)
+      totalComputersKw += 2 * 0.10;
+      totalComputersKwhMonth += 2 * 0.10 * 160;
+
     } else if (isAlmacen) {
       almacenSurfaceTotal += surface;
-      // Almacen lighting: 6 W/m2 = 0.006 kW/m2 (1 shift = 160h)
+      // Almacen Lighting: 6 W/m² = 0.006 kW/m² (1 shift = 160h)
       const lightKwAlm = surface * 0.006;
       totalLightingKw += lightKwAlm;
       totalLightingKwhMonth += lightKwAlm * 160;
@@ -114,7 +138,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
   // Total Recommended Power in kW
   const totalRawKw = totalMachineryKw + totalLightingKw + totalComputersKw + totalHvacKw;
-  const recommendedPowerKw = Math.max(15, Math.ceil((totalRawKw * 1.15) / 5) * 5); // Rounded to steps of 5 kW
+  const recommendedPowerKw = totalRawKw > 0 ? Math.max(15, Math.ceil((totalRawKw * 1.15) / 5) * 5) : 0;
 
   const estimatedMonthlyKwh = Math.round(
     totalMachineryKwhMonth + totalLightingKwhMonth + totalComputersKwhMonth + totalHvacKwhMonth
@@ -128,10 +152,14 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
   const ivaEst = (subtotalEst + ieeEst) * 0.21;
   const totalCostEst = Math.round((subtotalEst + ieeEst + ivaEst) * 100) / 100;
 
-  // Initialize selected power if 0
-  if (selectedPowerKw === 0 && recommendedPowerKw > 0) {
-    setSelectedPowerKw(recommendedPowerKw);
-  }
+  // Sync selected power on contract or recommendation change
+  useEffect(() => {
+    if (currentContract?.contractedPowerKw) {
+      setSelectedPowerKw(currentContract.contractedPowerKw);
+    } else if (recommendedPowerKw > 0) {
+      setSelectedPowerKw(recommendedPowerKw);
+    }
+  }, [currentContract?.contractedPowerKw, recommendedPowerKw]);
 
   const handleContract = async () => {
     setContracting(true);
@@ -236,16 +264,16 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
             <h5 className="font-bold text-amber-400 text-sm mb-2">Normativa de Cálculo IberLuz Comercializadora:</h5>
             <ul className="list-disc list-inside space-y-1.5 text-slate-300">
               <li>
-                <strong className="text-white">1. Maquinaria:</strong> Potencia de la maquinaria ({totalMachineryKw} kW) multiplicada por el número de turnos de empleados asignados ({maxActiveShifts} turnos = {maxActiveShifts * 160}h/mes).
+                <strong className="text-white">1. Maquinaria:</strong> Potencia acumulada de líneas adquiridas ({totalMachineryKw} kW). Consumo mensual estimado según turnos de operarios asignados ({maxActiveShifts} turno(s) = {maxActiveShifts * 160}h/mes).
               </li>
               <li>
-                <strong className="text-white">2. Iluminación:</strong> Naves Industriales (1 kWh/m² por turno activo, {naveSurfaceTotal} m²), Locales Comerciales (15 W/m² = 0.015 kWh/m²/h, {localSurfaceTotal} m²), Almacenes (6 W/m² = 0.006 kWh/m²/h, {almacenSurfaceTotal} m²). 1 turno L-V (160h/mes).
+                <strong className="text-white">2. Iluminación:</strong> Según plano de distribución asignado a cada nave (Producción: 8 W/m², Almacén: 5 W/m², Administración: 10 W/m², Zona Libre: 3 W/m²). Locales comerciales (15 W/m²), Almacenes (6 W/m²).
               </li>
               <li>
-                <strong className="text-white">3. Ordenadores:</strong> 0,10 kWh/h por ordenador encendido durante 1 turno de L-V (160h/mes). <em>(Próximamente añadiremos la función de comprar y asignar ordenadores)</em>.
+                <strong className="text-white">3. Ordenadores:</strong> 0,10 kW por equipo informático estimado en zona administrativa de naves y locales (160h/mes). <em>(Próximamente añadiremos la función de comprar y asignar ordenadores)</em>.
               </li>
               <li>
-                <strong className="text-white">4. Climatización:</strong> Locales comerciales (60 W/m² = 0.06 kWh/m²/h) y Zona de Administración de Naves (10% de superficie, 60 W/m²). 1 turno L-V.
+                <strong className="text-white">4. Climatización:</strong> Climatización en zona de Administración de naves industriales y locales comerciales (60 W/m² = 0,06 kW/m²).
               </li>
             </ul>
           </div>

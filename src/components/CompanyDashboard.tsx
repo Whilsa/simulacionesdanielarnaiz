@@ -1138,6 +1138,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   acquisitions={data.acquisitions}
                   machinery={data.machineryAcquisitions || []}
                   employees={data.hiredEmployees || []}
+                  floorPlans={naveFloorPlans}
                   currentContract={electricityContract}
                   onContractSupply={handleContractElectricity}
                 />

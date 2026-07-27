@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract } from '../types.js';
+import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
   Wrench, Users, KeyRound, GripVertical, RotateCcw
@@ -31,12 +31,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
   const [machinery, setMachinery] = useState<MachineryAcquisition[]>([]);
   const [employees, setEmployees] = useState<HiredEmployee[]>([]);
   const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
+  const [floorPlans, setFloorPlans] = useState<NaveFloorPlan[]>([]);
 
   const fetchHubData = async () => {
     try {
-      const [compRes, cRes] = await Promise.all([
+      const [compRes, cRes, fpRes] = await Promise.all([
         fetch(`/api/company/dashboard?studentId=${currentUser.id}`),
-        fetch(`/api/electricity/contract?studentId=${currentUser.id}`)
+        fetch(`/api/electricity/contract?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/floor-plans?studentId=${currentUser.id}`)
       ]);
       if (compRes.ok) {
         const cData = await compRes.json();
@@ -47,6 +49,10 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
       if (cRes.ok) {
         const elecJson = await cRes.json();
         setElectricityContract(elecJson.contract);
+      }
+      if (fpRes.ok) {
+        const fpJson = await fpRes.json();
+        setFloorPlans(fpJson.floorPlans || []);
       }
     } catch (e) {
       console.error(e);
@@ -375,6 +381,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
               acquisitions={acquisitions}
               machinery={machinery}
               employees={employees}
+              floorPlans={floorPlans}
               currentContract={electricityContract}
               onContractSupply={handleContractElectricity}
             />
