@@ -3473,7 +3473,10 @@ app.post('/api/machinery/buy', (req, res) => {
 
 // Get Company Financial & Property Assets (Mi Empresa Dashboard)
 app.get('/api/company/:studentId', (req, res) => {
-  const { studentId } = req.params;
+  let studentId = req.params.studentId;
+  if (studentId === 'dashboard' && req.query.studentId) {
+    studentId = String(req.query.studentId);
+  }
   const db = readDb();
 
   const user = db.users.find(u => u.id === studentId);

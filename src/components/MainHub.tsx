@@ -36,7 +36,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
   const fetchHubData = async () => {
     try {
       const [compRes, cRes, fpRes] = await Promise.all([
-        fetch(`/api/company/dashboard?studentId=${currentUser.id}`),
+        fetch(`/api/company/${currentUser.id}`),
         fetch(`/api/electricity/contract?studentId=${currentUser.id}`),
         fetch(`/api/electricity/floor-plans?studentId=${currentUser.id}`)
       ]);
