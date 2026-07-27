@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 
 const { Pool } = pg;
@@ -1646,6 +1646,232 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   }
 }
 
+function calculateElectricityForStudent(studentId: string, month: number, year: number, db: DatabaseSchema): ElectricityBill | null {
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return null;
+
+  const studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === studentId);
+  const studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
+  const studentEmployees = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  const contract = (db.electricityContracts || []).find(c => c.studentId === studentId && c.status === 'active');
+
+  if (!contract) return null;
+
+  let totalMachineryKw = 0;
+  let totalMachineryKwhMonth = 0;
+  let maxShifts = 0;
+
+  studentMachinery.forEach(m => {
+    const mKw = m.requiredPowerKW || m.powerKw || (m.category === 'metal_hierro' ? 35 : 25);
+    totalMachineryKw += mKw;
+
+    const assigned = studentEmployees.filter(e => e.assignedMachineryId === m.id || e.assignedMachineryTitle === m.title);
+    const shifts = Math.max(1, Math.min(3, assigned.length));
+    if (shifts > maxShifts) maxShifts = shifts;
+
+    const h = shifts * 8 * 20;
+    totalMachineryKwhMonth += mKw * h;
+  });
+
+  if (studentMachinery.length > 0 && maxShifts === 0) maxShifts = 1;
+
+  let totalLightingKwhMonth = 0;
+  let totalComputersKwhMonth = 0;
+  let totalHvacKwhMonth = 0;
+
+  const propertyBreakdown: ElectricityPropertyBreakdown[] = [];
+
+  studentAcquisitions.forEach(prop => {
+    const pType = prop.propertyType || prop.type || '';
+    const isNave = pType === 'nave_industrial' || prop.propertyTitle?.toLowerCase().includes('nave');
+    const isLocal = pType === 'local_comercial' || prop.propertyTitle?.toLowerCase().includes('local');
+    const isAlmacen = pType === 'almacen' || prop.propertyTitle?.toLowerCase().includes('almacén');
+
+    const surface = prop.surfaceM2 || 500;
+    let propLightingKwh = 0;
+    let propHvacKwh = 0;
+    let propPcKwh = 0;
+    let propMachineryKwh = 0;
+
+    if (isNave) {
+      const naveShifts = maxShifts || 1;
+      propLightingKwh = surface * naveShifts * 1.0;
+      totalLightingKwhMonth += propLightingKwh;
+
+      const adminSurf = Math.round(surface * 0.10);
+      propHvacKwh = adminSurf * 0.060 * 160;
+      totalHvacKwhMonth += propHvacKwh;
+
+      propPcKwh = 2 * 0.10 * 160;
+      totalComputersKwhMonth += propPcKwh;
+
+      propMachineryKwh = totalMachineryKwhMonth;
+    } else if (isLocal) {
+      propLightingKwh = surface * 0.015 * 160;
+      totalLightingKwhMonth += propLightingKwh;
+
+      propHvacKwh = surface * 0.060 * 160;
+      totalHvacKwhMonth += propHvacKwh;
+
+      propPcKwh = 1 * 0.10 * 160;
+      totalComputersKwhMonth += propPcKwh;
+    } else if (isAlmacen) {
+      propLightingKwh = surface * 0.006 * 160;
+      totalLightingKwhMonth += propLightingKwh;
+
+      propPcKwh = 1 * 0.10 * 160;
+      totalComputersKwhMonth += propPcKwh;
+    }
+
+    const propTotalKwh = Math.round(propMachineryKwh + propLightingKwh + propHvacKwh + propPcKwh);
+    propertyBreakdown.push({
+      propertyId: prop.propertyId || prop.id,
+      propertyTitle: prop.propertyTitle || 'Inmueble',
+      propertyType: pType,
+      surfaceM2: surface,
+      machineryCount: studentMachinery.length,
+      activeShifts: maxShifts,
+      kwhMachinery: Math.round(propMachineryKwh),
+      kwhLighting: Math.round(propLightingKwh),
+      kwhComputers: Math.round(propPcKwh),
+      kwhHvac: Math.round(propHvacKwh),
+      totalKwh: propTotalKwh,
+      kwPowerEstimate: contract.contractedPowerKw,
+      costEstimate: Math.round(propTotalKwh * contract.pricePerKwh * 100) / 100
+    });
+  });
+
+  const totalKwh = Math.round(totalMachineryKwhMonth + totalLightingKwhMonth + totalComputersKwhMonth + totalHvacKwhMonth);
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const powerAmount = Math.round(contract.contractedPowerKw * daysInMonth * contract.pricePerKwDay * 100) / 100;
+  const energyAmount = Math.round(totalKwh * contract.pricePerKwh * 100) / 100;
+  const equipmentRental = 0.85;
+
+  const taxableBase = Math.round((powerAmount + energyAmount + equipmentRental) * 100) / 100;
+  const electricityTax = Math.round((taxableBase * 0.0511269632) * 100) / 100;
+  const subtotalWithTax = Math.round((taxableBase + electricityTax) * 100) / 100;
+  const ivaAmount = Math.round((subtotalWithTax * 0.21) * 100) / 100;
+  const totalAmount = Math.round((subtotalWithTax + ivaAmount) * 100) / 100;
+
+  let nextMonth = month + 1;
+  let nextYear = year;
+  if (nextMonth > 12) {
+    nextMonth = 1;
+    nextYear += 1;
+  }
+  const dueDateObj = new Date(nextYear, nextMonth - 1, 5, 9, 0, 0);
+
+  const billNumber = `IBL-${year}-${month < 10 ? '0' + month : month}-${studentId.slice(-4).toUpperCase()}`;
+
+  return {
+    id: generateId('elec_bill'),
+    studentId: student.id,
+    studentName: student.name,
+    contractId: contract.id,
+    billNumber,
+    periodMonth: month,
+    periodYear: year,
+    startDate: `${year}-${month < 10 ? '0' + month : month}-01`,
+    endDate: `${year}-${month < 10 ? '0' + month : month}-${daysInMonth}`,
+    daysCount: daysInMonth,
+    contractedPowerKw: contract.contractedPowerKw,
+    pricePerKwDay: contract.pricePerKwDay,
+    powerAmount,
+    totalKwh,
+    pricePerKwh: contract.pricePerKwh,
+    energyAmount,
+    equipmentRental,
+    taxableBase,
+    electricityTax,
+    subtotalWithTax,
+    ivaRate: 21,
+    ivaAmount,
+    totalAmount,
+    dueDate: dueDateObj.toISOString(),
+    status: 'pendiente',
+    createdAt: new Date().toISOString(),
+    cupsCode: contract.cupsCode,
+    companyName: student.name,
+    cifNif: student.nifCif || 'B-98765432',
+    propertyBreakdown
+  };
+}
+
+function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
+  if (!db.electricityContracts) db.electricityContracts = [];
+  if (!db.electricityBills) db.electricityBills = [];
+
+  const now = new Date();
+  const currentDay = now.getDate();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
+  let prevMonth = currentMonth - 1;
+  let prevYear = currentYear;
+  if (prevMonth < 1) {
+    prevMonth = 12;
+    prevYear = currentYear - 1;
+  }
+
+  // 1. Generate bill for previous month if not existing
+  for (const contract of db.electricityContracts.filter(c => c.status === 'active')) {
+    const existingBill = db.electricityBills.find(
+      b => b.studentId === contract.studentId && b.periodMonth === prevMonth && b.periodYear === prevYear
+    );
+
+    if (!existingBill) {
+      const newBill = calculateElectricityForStudent(contract.studentId, prevMonth, prevYear, db);
+      if (newBill) {
+        db.electricityBills.push(newBill);
+      }
+    }
+  }
+
+  // 2. On day 5 or later of month: Process payment for unpaid electricity bills automatically
+  if (currentDay >= 5) {
+    const pendingBills = db.electricityBills.filter(
+      b => b.status === 'pendiente' && new Date(b.dueDate) <= now
+    );
+
+    for (const bill of pendingBills) {
+      const student = db.users.find(u => u.id === bill.studentId && u.role === 'student');
+      if (!student) continue;
+
+      student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
+      bill.status = 'pagado';
+      bill.paidDate = now.toISOString();
+
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+      const txId = generateId('tx');
+      const transfer: Transfer = {
+        id: txId,
+        senderId: student.id,
+        senderName: student.name,
+        senderAccount: student.accountNumber,
+        receiverId: 'iberluz-comercializadora',
+        receiverName: 'IberLuz Comercializadora S.A.',
+        receiverAccount: 'ES210001000299887722',
+        amount: bill.totalAmount,
+        concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (Nº ${bill.billNumber})`,
+        timestamp: now.toISOString()
+      };
+      db.transfers.unshift(transfer);
+      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        action: 'ELECTRICITY_AUTOMATED_PAYMENT',
+        details: `Pago automático de electricidad IberLuz realizado para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
+        timestamp: now.toISOString(),
+        studentId: student.id,
+        studentName: student.name
+      });
+    }
+  }
+}
+
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
@@ -1721,8 +1947,12 @@ function readDb(): DatabaseSchema {
     if (!db.hiredEmployees) db.hiredEmployees = [];
     if (!db.payrollRecords) db.payrollRecords = [];
     if (!db.taxObligations) db.taxObligations = [];
+    if (!db.electricityContracts) db.electricityContracts = [];
+    if (!db.electricityBills) db.electricityBills = [];
+    if (!db.naveFloorPlans) db.naveFloorPlans = [];
 
     checkAndProcessAutomatedPayrollAndTaxes(db);
+    checkAndProcessAutomatedElectricity(db);
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
@@ -4719,6 +4949,97 @@ app.put('/api/loans/:id', (req, res) => {
   syncLoanToSupabase(loan).catch(e => console.error(e));
   writeDb(db);
   res.json({ success: true, loan });
+});
+
+// ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
+app.get('/api/electricity/contract', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const contract = (db.electricityContracts || []).find(c => c.studentId === studentId && c.status === 'active');
+  res.json({ success: true, contract: contract || null });
+});
+
+app.post('/api/electricity/contract', (req, res) => {
+  const { studentId, contractedPowerKw } = req.body;
+  const db = readDb();
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  if (!db.electricityContracts) db.electricityContracts = [];
+
+  let contract = db.electricityContracts.find(c => c.studentId === studentId && c.status === 'active');
+  const pKw = Number(contractedPowerKw) || 30;
+
+  if (contract) {
+    contract.contractedPowerKw = pKw;
+  } else {
+    const cups = `ES003140${Math.floor(1000000000 + Math.random() * 9000000000)}F`;
+    contract = {
+      id: generateId('elec_contract'),
+      studentId: student.id,
+      studentName: student.name,
+      contractedPowerKw: pKw,
+      tariffName: 'IberLuz 3.0TD Industrial',
+      pricePerKwDay: 0.11,
+      pricePerKwh: 0.14,
+      status: 'active',
+      contractDate: new Date().toISOString(),
+      cupsCode: cups
+    };
+    db.electricityContracts.push(contract);
+  }
+
+  checkAndProcessAutomatedElectricity(db);
+  writeDb(db);
+  res.json({ success: true, contract });
+});
+
+app.get('/api/electricity/bills', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const bills = (db.electricityBills || []).filter(b => b.studentId === studentId);
+  bills.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json({ success: true, bills });
+});
+
+app.get('/api/electricity/floor-plans', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const plans = (db.naveFloorPlans || []).filter(p => p.studentId === studentId);
+  res.json({ success: true, floorPlans: plans });
+});
+
+app.post('/api/electricity/floor-plan', (req, res) => {
+  const { studentId, propertyId, machineryZoneM2, storageZoneM2, adminZoneM2, freeZoneM2, warehousesCount } = req.body;
+  const db = readDb();
+
+  if (!db.naveFloorPlans) db.naveFloorPlans = [];
+
+  let plan = db.naveFloorPlans.find(p => p.studentId === studentId && p.propertyId === propertyId);
+  if (plan) {
+    plan.machineryZoneM2 = Number(machineryZoneM2) || 0;
+    plan.storageZoneM2 = Number(storageZoneM2) || 0;
+    plan.adminZoneM2 = Number(adminZoneM2) || 0;
+    plan.freeZoneM2 = Number(freeZoneM2) || 0;
+    plan.warehousesCount = Number(warehousesCount) || 2;
+    plan.updatedAt = new Date().toISOString();
+  } else {
+    plan = {
+      id: generateId('floor_plan'),
+      propertyId,
+      studentId,
+      machineryZoneM2: Number(machineryZoneM2) || 0,
+      storageZoneM2: Number(storageZoneM2) || 0,
+      adminZoneM2: Number(adminZoneM2) || 0,
+      freeZoneM2: Number(freeZoneM2) || 0,
+      warehousesCount: Number(warehousesCount) || 2,
+      updatedAt: new Date().toISOString()
+    };
+    db.naveFloorPlans.push(plan);
+  }
+
+  writeDb(db);
+  res.json({ success: true, floorPlan: plan });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------

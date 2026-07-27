@@ -278,8 +278,86 @@ export interface DatabaseSchema {
   hiredEmployees?: HiredEmployee[];
   payrollRecords?: PayrollRecord[];
   taxObligations?: TaxObligation[];
+  electricityContracts?: ElectricityContract[];
+  electricityBills?: ElectricityBill[];
+  naveFloorPlans?: NaveFloorPlan[];
   defaultInitialBalance: number;
   isSeed?: boolean;
+}
+
+export interface ElectricityContract {
+  id: string;
+  studentId: string;
+  studentName: string;
+  contractedPowerKw: number;
+  tariffName: string;
+  pricePerKwDay: number;
+  pricePerKwh: number;
+  status: 'active' | 'cancelled';
+  contractDate: string;
+  cupsCode: string;
+}
+
+export interface ElectricityPropertyBreakdown {
+  propertyId: string;
+  propertyTitle: string;
+  propertyType: string;
+  surfaceM2: number;
+  machineryCount: number;
+  activeShifts: number;
+  kwhMachinery: number;
+  kwhLighting: number;
+  kwhComputers: number;
+  kwhHvac: number;
+  totalKwh: number;
+  kwPowerEstimate: number;
+  costEstimate: number;
+}
+
+export interface ElectricityBill {
+  id: string;
+  studentId: string;
+  studentName: string;
+  contractId: string;
+  billNumber: string;
+  periodMonth: number;
+  periodYear: number;
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  contractedPowerKw: number;
+  pricePerKwDay: number;
+  powerAmount: number;
+  totalKwh: number;
+  pricePerKwh: number;
+  energyAmount: number;
+  equipmentRental: number;
+  taxableBase: number;
+  electricityTax: number;
+  subtotalWithTax: number;
+  ivaRate: number;
+  ivaAmount: number;
+  totalAmount: number;
+  dueDate: string;
+  status: 'pendiente' | 'pagado';
+  paidDate?: string;
+  createdAt: string;
+  cupsCode: string;
+  companyName?: string;
+  cifNif?: string;
+  propertyBreakdown?: ElectricityPropertyBreakdown[];
+}
+
+export interface NaveFloorPlan {
+  id: string;
+  propertyId: string;
+  studentId: string;
+  machineryZoneM2: number;
+  storageZoneM2: number;
+  adminZoneM2: number;
+  freeZoneM2: number;
+  warehousesCount: number;
+  updatedAt: string;
 }
 
 export interface JobListing {

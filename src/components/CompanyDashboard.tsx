@@ -4,15 +4,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation } from '../types.js';
+import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan } from '../types.js';
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
 import Footer from './Footer.js';
+import { NaveFloorPlanViewer } from './NaveFloorPlanViewer.js';
+import { ElectricitySupplyCard } from './ElectricitySupplyCard.js';
+import { ElectricityAssetTab } from './ElectricityAssetTab.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
@@ -66,7 +69,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
   const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
   const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans'>('owned');
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia'>('owned');
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -74,6 +77,36 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [debtFilterOrigin, setDebtFilterOrigin] = useState<'all' | 'loans' | 'obligations'>('all');
   const [selectedLoanForTable, setSelectedLoanForTable] = useState<BankLoan | null>(null);
   const [selectedPropertyForPayments, setSelectedPropertyForPayments] = useState<PropertyAcquisition | null>(null);
+
+  // Electricity & Floor Plan State
+  const [selectedNaveForFloorPlan, setSelectedNaveForFloorPlan] = useState<PropertyAcquisition | null>(null);
+  const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
+  const [electricityBills, setElectricityBills] = useState<ElectricityBill[]>([]);
+  const [naveFloorPlans, setNaveFloorPlans] = useState<NaveFloorPlan[]>([]);
+
+  const fetchElectricityData = async () => {
+    try {
+      const [cRes, bRes, fRes] = await Promise.all([
+        fetch(`/api/electricity/contract?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/bills?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/floor-plans?studentId=${currentUser.id}`)
+      ]);
+      if (cRes.ok) {
+        const cJson = await cRes.json();
+        setElectricityContract(cJson.contract);
+      }
+      if (bRes.ok) {
+        const bJson = await bRes.json();
+        setElectricityBills(bJson.bills || []);
+      }
+      if (fRes.ok) {
+        const fJson = await fRes.json();
+        setNaveFloorPlans(fJson.floorPlans || []);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchCompanyData = async () => {
     setLoading(true);
@@ -94,7 +127,31 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
 
   useEffect(() => {
     fetchCompanyData();
+    fetchElectricityData();
   }, [currentUser.id]);
+
+  const handleSaveFloorPlan = async (plan: Partial<NaveFloorPlan>) => {
+    const res = await fetch('/api/electricity/floor-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...plan, studentId: currentUser.id })
+    });
+    if (res.ok) {
+      await fetchElectricityData();
+    }
+  };
+
+  const handleContractElectricity = async (powerKw: number) => {
+    const res = await fetch('/api/electricity/contract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentId: currentUser.id, contractedPowerKw: powerKw })
+    });
+    if (res.ok) {
+      await fetchElectricityData();
+      await fetchCompanyData();
+    }
+  };
 
   const handleDownloadPayrollDetail = (periodName: string, employees: HiredEmployee[]) => {
     if (!employees || employees.length === 0) return;
@@ -862,6 +919,20 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   Préstamos ({data.loans?.filter(l => l.status === 'active').length || 0})
                 </span>
               </button>
+
+              <button
+                onClick={() => setActiveTab('energia')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'energia'
+                    ? 'border-amber-600 text-amber-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Zap className="w-4 h-4 text-amber-500" />
+                <span>
+                  Energía / Luz {electricityContract ? `(${electricityContract.contractedPowerKw} kW)` : ''}
+                </span>
+              </button>
             </div>
 
             {/* TAB 1: OWNED PROPERTIES */}
@@ -884,13 +955,14 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                             <th className="p-3.5">IVA (21%)</th>
                             <th className="p-3.5">Desglose Suelo / Edificación</th>
                             <th className="p-3.5">Modalidad Pago</th>
-                            <th className="p-3.5 text-right">Documento</th>
+                            <th className="p-3.5 text-right">Acciones y Documentos</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-medium">
                           {data.acquisitions.filter(a => a.operation === 'compra').map(acq => {
                             const landVal = (acq.basePrice * acq.landPercentage) / 100;
                             const buildVal = acq.basePrice - landVal;
+                            const isNave = acq.propertyType === 'nave_industrial' || acq.type === 'nave_industrial' || acq.propertyTitle?.toLowerCase().includes('nave');
 
                             return (
                               <tr key={acq.id} className="hover:bg-slate-50/80 transition">
@@ -929,6 +1001,16 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   </span>
                                 </td>
                                 <td className="p-3.5 text-right space-x-2">
+                                  {isNave && (
+                                    <button
+                                      onClick={() => setSelectedNaveForFloorPlan(acq)}
+                                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                      title="Ver y distribuir la superficie en el plano de la nave industrial"
+                                    >
+                                      <LayoutGrid className="w-3.5 h-3.5 text-blue-200" />
+                                      <span>Plano de Nave</span>
+                                    </button>
+                                  )}
                                   <button
                                     onClick={() => setSelectedPropertyForPayments(acq)}
                                     className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
@@ -984,6 +1066,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                             const baseRent = acq.basePrice || (acq.monthlyRent ? acq.monthlyRent / 1.21 : 0);
                             const ivaRent = acq.monthlyRent ? acq.monthlyRent - baseRent : baseRent * 0.21;
                             const deposit = acq.depositPaid || (baseRent * 2);
+                            const isNave = acq.propertyType === 'nave_industrial' || acq.type === 'nave_industrial' || acq.propertyTitle?.toLowerCase().includes('nave');
 
                             return (
                               <tr key={acq.id} className="hover:bg-slate-50/80 transition">
@@ -1009,6 +1092,16 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   </span>
                                 </td>
                                 <td className="p-3.5 text-right space-x-2">
+                                  {isNave && (
+                                    <button
+                                      onClick={() => setSelectedNaveForFloorPlan(acq)}
+                                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                      title="Ver y distribuir la superficie en el plano de la nave industrial"
+                                    >
+                                      <LayoutGrid className="w-3.5 h-3.5 text-blue-200" />
+                                      <span>Plano de Nave</span>
+                                    </button>
+                                  )}
                                   <button
                                     onClick={() => setSelectedPropertyForPayments(acq)}
                                     className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
@@ -1022,7 +1115,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
                                   >
                                     <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                                    <span>Ver factura / contrato</span>
+                                    <span>Ver Factura</span>
                                   </button>
                                 </td>
                               </tr>
@@ -1033,6 +1126,27 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* TAB 7: ENERGIA / LUZ */}
+            {activeTab === 'energia' && (
+              <div className="space-y-6">
+                <ElectricitySupplyCard
+                  acquisitions={data.acquisitions}
+                  machinery={data.machineryAcquisitions || []}
+                  employees={data.hiredEmployees || []}
+                  currentContract={electricityContract}
+                  onContractSupply={handleContractElectricity}
+                />
+
+                <ElectricityAssetTab
+                  acquisitions={data.acquisitions}
+                  contract={electricityContract}
+                  bills={electricityBills}
+                  studentName={currentUser.name}
+                  onOpenContractCard={() => {}}
+                />
               </div>
             )}
 
