@@ -289,6 +289,8 @@ export interface ElectricityContract {
   id: string;
   studentId: string;
   studentName: string;
+  propertyId?: string;
+  propertyTitle?: string;
   contractedPowerKw: number;
   tariffName: string;
   pricePerKwDay: number;

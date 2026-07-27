@@ -17,7 +17,7 @@ import JobForumPortal from './components/JobForumPortal.js';
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company'>('hub');
+  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity'>('hub');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   useEffect(() => {
@@ -154,6 +154,18 @@ export default function App() {
     return (
       <CompanyDashboard
         currentUser={currentUser}
+        onBackToHub={() => setActiveModule('hub')}
+        onGoToBank={() => setActiveModule('bank')}
+        onUserBalanceUpdated={handleUserBalanceUpdated}
+      />
+    );
+  }
+
+  if (activeModule === 'electricity') {
+    return (
+      <CompanyDashboard
+        currentUser={currentUser}
+        initialTab="energia"
         onBackToHub={() => setActiveModule('hub')}
         onGoToBank={() => setActiveModule('bank')}
         onUserBalanceUpdated={handleUserBalanceUpdated}

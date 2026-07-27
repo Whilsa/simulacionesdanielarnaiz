@@ -7,20 +7,19 @@ import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
-import { ElectricitySupplyCard } from './ElectricitySupplyCard.js';
 
 interface MainHubProps {
   currentUser: User;
-  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company') => void;
+  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity') => void;
   onLogout: () => void;
   availablePropertiesCount?: number;
 }
 
-type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs';
+type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity';
 
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
@@ -30,14 +29,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
   const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [machinery, setMachinery] = useState<MachineryAcquisition[]>([]);
   const [employees, setEmployees] = useState<HiredEmployee[]>([]);
-  const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
+  const [electricityContracts, setElectricityContracts] = useState<ElectricityContract[]>([]);
   const [floorPlans, setFloorPlans] = useState<NaveFloorPlan[]>([]);
 
   const fetchHubData = async () => {
     try {
       const [compRes, cRes, fpRes] = await Promise.all([
         fetch(`/api/company/${currentUser.id}`),
-        fetch(`/api/electricity/contract?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/contracts?studentId=${currentUser.id}`),
         fetch(`/api/electricity/floor-plans?studentId=${currentUser.id}`)
       ]);
       if (compRes.ok) {
@@ -48,7 +47,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
       }
       if (cRes.ok) {
         const elecJson = await cRes.json();
-        setElectricityContract(elecJson.contract);
+        setElectricityContracts(elecJson.contracts || []);
       }
       if (fpRes.ok) {
         const fpJson = await fpRes.json();
@@ -65,31 +64,18 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
     }
   }, [currentUser.id, isTeacher]);
 
-  const handleContractElectricity = async (powerKw: number) => {
-    try {
-      const res = await fetch('/api/electricity/contract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: currentUser.id, contractedPowerKw: powerKw })
-      });
-      if (res.ok) {
-        await fetchHubData();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Default ordering requirement:
-  // 1: Banco, 2: Patrimonio de la empresa, 3: Portal inmobiliario, 4: Maquinaria, 5: Foro de empleo
-  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs'];
+  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity'];
 
   const [cardOrder, setCardOrder] = useState<ModuleType[]>(() => {
     try {
       const saved = localStorage.getItem(`hub_cards_order_${currentUser.id}`);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length === 5) {
+        if (Array.isArray(parsed)) {
+          // Ensure 'electricity' is present in order
+          if (!parsed.includes('electricity')) {
+            parsed.push('electricity');
+          }
           return parsed;
         }
       }
@@ -218,6 +204,23 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           description: 'Contratación de empleados operarios publicados por el Profesor y asignación a máquinas para cubrir los turnos de trabajo.',
           statLabel: 'Bolsa de Empleo',
           statValue: 'Contratación Activa'
+        };
+      case 'electricity':
+        return {
+          id: 'electricity' as ModuleType,
+          title: 'Suministro Eléctrico',
+          badge: 'Energía',
+          badgeStyle: 'bg-amber-50 text-amber-800 border-amber-200/80',
+          hoverBorder: 'hover:border-amber-500',
+          hoverBg: 'group-hover:bg-amber-500',
+          hoverText: 'group-hover:text-amber-600',
+          iconBg: 'bg-amber-50 text-amber-700 border-amber-200',
+          Icon: Zap,
+          description: 'Contratación de potencia, asesoría energética, facturación y configuración del suministro eléctrico individual para cada uno de los inmuebles.',
+          statLabel: 'Suministros por Inmueble',
+          statValue: electricityContracts.length > 0 
+            ? `${electricityContracts.length} ${electricityContracts.length === 1 ? 'Contrato Activo' : 'Contratos Activos'}`
+            : 'Contratación Activa'
         };
     }
   };
@@ -373,20 +376,6 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
             );
           })}
         </div>
-
-        {/* Electricity Supply & Power Contracting Card */}
-        {!isTeacher && (
-          <div className="mt-8 sm:mt-10">
-            <ElectricitySupplyCard
-              acquisitions={acquisitions}
-              machinery={machinery}
-              employees={employees}
-              floorPlans={floorPlans}
-              currentContract={electricityContract}
-              onContractSupply={handleContractElectricity}
-            />
-          </div>
-        )}
 
         {/* Informational Footer Note */}
         <div className="mt-12 bg-slate-200/60 rounded-2xl p-4 sm:p-6 border border-slate-300/60 flex flex-col sm:flex-row items-center justify-between gap-4">

@@ -1889,9 +1889,27 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
   const totalKwh = Math.round(totalMachineryKwhMonth + totalLightingKwhMonth + totalComputersKwhMonth + totalHvacKwhMonth);
   const daysInMonth = new Date(year, month, 0).getDate();
 
-  const powerAmount = Math.round(contract.contractedPowerKw * daysInMonth * contract.pricePerKwDay * 100) / 100;
-  const energyAmount = Math.round(totalKwh * contract.pricePerKwh * 100) / 100;
-  const equipmentRental = 0.85;
+  const contractDate = new Date(contract.contractDate || Date.now());
+  const cYear = contractDate.getFullYear();
+  const cMonth = contractDate.getMonth() + 1; // 1-indexed
+
+  // Do not generate bills for periods prior to the month/year the contract was created!
+  if (year < cYear || (year === cYear && month < cMonth)) {
+    return null;
+  }
+
+  let startDay = 1;
+  if (year === cYear && month === cMonth) {
+    startDay = contractDate.getDate();
+  }
+
+  const activeDays = Math.max(1, daysInMonth - startDay + 1);
+  const daysFactor = activeDays / daysInMonth;
+
+  const totalKwhBill = Math.round(totalKwh * daysFactor);
+  const powerAmount = Math.round(contract.contractedPowerKw * activeDays * contract.pricePerKwDay * 100) / 100;
+  const energyAmount = Math.round(totalKwhBill * contract.pricePerKwh * 100) / 100;
+  const equipmentRental = Math.round(0.85 * daysFactor * 100) / 100;
 
   const taxableBase = Math.round((powerAmount + energyAmount + equipmentRental) * 100) / 100;
   const electricityTax = Math.round((taxableBase * 0.0511269632) * 100) / 100;
@@ -1909,6 +1927,9 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
 
   const billNumber = `IBL-${year}-${month < 10 ? '0' + month : month}-${studentId.slice(-4).toUpperCase()}`;
 
+  const startDayStr = startDay < 10 ? '0' + startDay : `${startDay}`;
+  const monthStr = month < 10 ? '0' + month : `${month}`;
+
   return {
     id: generateId('elec_bill'),
     studentId: student.id,
@@ -1917,13 +1938,13 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
     billNumber,
     periodMonth: month,
     periodYear: year,
-    startDate: `${year}-${month < 10 ? '0' + month : month}-01`,
-    endDate: `${year}-${month < 10 ? '0' + month : month}-${daysInMonth}`,
-    daysCount: daysInMonth,
+    startDate: `${year}-${monthStr}-${startDayStr}`,
+    endDate: `${year}-${monthStr}-${daysInMonth}`,
+    daysCount: activeDays,
     contractedPowerKw: contract.contractedPowerKw,
     pricePerKwDay: contract.pricePerKwDay,
     powerAmount,
-    totalKwh,
+    totalKwh: totalKwhBill,
     pricePerKwh: contract.pricePerKwh,
     energyAmount,
     equipmentRental,
@@ -1946,6 +1967,32 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
 function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   if (!db.electricityContracts) db.electricityContracts = [];
   if (!db.electricityBills) db.electricityBills = [];
+
+  // Filter out any erroneous bills for period months prior to contract creation, and refund if paid
+  const validBills: ElectricityBill[] = [];
+  for (const bill of db.electricityBills) {
+    const contract = db.electricityContracts.find(c => c.studentId === bill.studentId && c.status === 'active');
+    if (contract) {
+      const cDate = new Date(contract.contractDate || Date.now());
+      const cYear = cDate.getFullYear();
+      const cMonth = cDate.getMonth() + 1;
+      if (bill.periodYear < cYear || (bill.periodYear === cYear && bill.periodMonth < cMonth)) {
+        if (bill.status === 'pagado') {
+          const student = db.users.find(u => u.id === bill.studentId);
+          if (student) {
+            student.balance = Math.round((student.balance + bill.totalAmount) * 100) / 100;
+            syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+          }
+          if (db.transfers) {
+            db.transfers = db.transfers.filter(t => !t.concept.includes(`factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear}`));
+          }
+        }
+        continue; // Skip invalid bill
+      }
+    }
+    validBills.push(bill);
+  }
+  db.electricityBills = validBills;
 
   const now = new Date();
   const currentDay = now.getDate();
@@ -5117,32 +5164,63 @@ app.put('/api/loans/:id', (req, res) => {
 });
 
 // ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
-app.get('/api/electricity/contract', (req, res) => {
+app.get('/api/electricity/contracts', (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  const contract = (db.electricityContracts || []).find(c => c.studentId === studentId && c.status === 'active');
-  res.json({ success: true, contract: contract || null });
+  const contracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  res.json({ success: true, contracts });
+});
+
+app.get('/api/electricity/contract', (req, res) => {
+  const { studentId, propertyId } = req.query;
+  const db = readDb();
+  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  let contract = null;
+  if (propertyId) {
+    contract = allContracts.find(c => c.propertyId === propertyId || c.id === propertyId) || null;
+  } else {
+    contract = allContracts[0] || null;
+  }
+  res.json({ success: true, contract: contract || null, contracts: allContracts });
 });
 
 app.post('/api/electricity/contract', (req, res) => {
-  const { studentId, contractedPowerKw, powerKw } = req.body;
+  const { studentId, propertyId, acquisitionId, propertyTitle, contractedPowerKw, powerKw } = req.body;
   const db = readDb();
   const student = db.users.find(u => u.id === studentId);
   if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
 
   if (!db.electricityContracts) db.electricityContracts = [];
 
-  let contract = db.electricityContracts.find(c => c.studentId === studentId && c.status === 'active');
+  const targetPropId = propertyId || acquisitionId || '';
+  const targetPropTitle = propertyTitle || '';
   const pKw = Number(contractedPowerKw || powerKw) || 30;
+
+  // Find existing active contract for this student and property
+  let contract = db.electricityContracts.find(c =>
+    c.studentId === studentId && c.status === 'active' && (
+      (targetPropId && (c.propertyId === targetPropId || c.id === targetPropId)) ||
+      (targetPropTitle && c.propertyTitle && c.propertyTitle.toLowerCase().trim() === targetPropTitle.toLowerCase().trim())
+    )
+  );
+
+  // Fallback: If no property-specific contract found, but there's a contract without propertyId and targetPropId is provided
+  if (!contract && targetPropId) {
+    contract = db.electricityContracts.find(c => c.studentId === studentId && c.status === 'active' && !c.propertyId);
+  }
 
   if (contract) {
     contract.contractedPowerKw = pKw;
+    if (targetPropId) contract.propertyId = targetPropId;
+    if (targetPropTitle) contract.propertyTitle = targetPropTitle;
   } else {
     const cups = `ES003140${Math.floor(1000000000 + Math.random() * 9000000000)}F`;
     contract = {
       id: generateId('elec_contract'),
       studentId: student.id,
       studentName: student.name,
+      propertyId: targetPropId,
+      propertyTitle: targetPropTitle,
       contractedPowerKw: pKw,
       tariffName: 'IberLuz 3.0TD Industrial',
       pricePerKwDay: 0.11,
@@ -5156,11 +5234,16 @@ app.post('/api/electricity/contract', (req, res) => {
 
   // Unblock machinery that was waiting for electricity/power
   const studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
+  // Calculate total contracted power across all properties
+  const totalContractedPower = db.electricityContracts
+    .filter(c => c.studentId === studentId && c.status === 'active')
+    .reduce((sum, c) => sum + (c.contractedPowerKw || 0), 0);
+
   const totalMachineryPowerNeeded = studentMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0);
   const totalPowerNeeded = totalMachineryPowerNeeded + 10;
 
   let unblockedCount = 0;
-  if (pKw >= totalPowerNeeded) {
+  if (totalContractedPower >= totalPowerNeeded) {
     const now = new Date();
     const finishDate = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
     for (const m of studentMachinery) {

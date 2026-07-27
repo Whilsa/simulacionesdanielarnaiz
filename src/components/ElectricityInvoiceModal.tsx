@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ElectricityBill } from '../types';
-import { FileText, Download, Printer, X, Zap, Building2, Calendar, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Printer, X, Zap, ShieldCheck } from 'lucide-react';
 
 interface Props {
   bill: ElectricityBill;
@@ -15,39 +16,21 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
     window.print();
   };
 
-  const periodStr = `01/${bill.periodMonth < 10 ? '0' + bill.periodMonth : bill.periodMonth}/${bill.periodYear} - ${bill.daysCount}/${bill.periodMonth < 10 ? '0' + bill.periodMonth : bill.periodMonth}/${bill.periodYear}`;
+  const startStr = bill.startDate
+    ? new Date(bill.startDate + 'T00:00:00').toLocaleDateString('es-ES')
+    : `01/${bill.periodMonth < 10 ? '0' + bill.periodMonth : bill.periodMonth}/${bill.periodYear}`;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      {/* Print styles */}
-      <style>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          #electricity-invoice-printable, #electricity-invoice-printable * {
-            visibility: visible;
-          }
-          #electricity-invoice-printable {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            background: white !important;
-            color: black !important;
-            padding: 20px !important;
-            margin: 0 !important;
-            box-shadow: none !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
+  const endStr = bill.endDate
+    ? new Date(bill.endDate + 'T00:00:00').toLocaleDateString('es-ES')
+    : `${bill.daysCount}/${bill.periodMonth < 10 ? '0' + bill.periodMonth : bill.periodMonth}/${bill.periodYear}`;
 
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto text-slate-100 shadow-2xl flex flex-col">
+  const periodStr = `${startStr} - ${endStr}`;
+
+  return createPortal(
+    <div className="printable-modal-backdrop fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto print:static print:p-0 print:bg-white print:block">
+      <div className="printable-document-modal bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto text-slate-100 shadow-2xl flex flex-col print:bg-white print:border-none print:shadow-none print:max-h-none print:w-full print:rounded-none">
         {/* Action Header - Modal only */}
-        <div className="no-print p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between sticky top-0 z-10">
+        <div className="no-print print:hidden p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between sticky top-0 z-10">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/30">
               <Zap className="w-5 h-5" />
@@ -61,14 +44,14 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           <div className="flex items-center space-x-2">
             <button
               onClick={handlePrint}
-              className="flex items-center space-x-2 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition shadow-md"
+              className="flex items-center space-x-2 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition shadow-md cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>Imprimir / Descargar PDF</span>
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -76,7 +59,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
         </div>
 
         {/* Printable Invoice Container */}
-        <div id="electricity-invoice-printable" ref={printRef} className="p-8 bg-white text-slate-900 space-y-8 font-sans">
+        <div id="electricity-invoice-printable" ref={printRef} className="p-8 bg-white text-slate-900 space-y-8 font-sans print:p-0">
           {/* Header & Logo */}
           <div className="flex justify-between items-start border-b-2 border-amber-500 pb-6">
             <div>
@@ -280,6 +263,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

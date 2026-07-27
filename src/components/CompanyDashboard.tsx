@@ -19,6 +19,7 @@ import { ElectricityAssetTab } from './ElectricityAssetTab.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
+  initialTab?: 'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia';
   onBackToHub: () => void;
   onGoToBank?: () => void;
   onUserBalanceUpdated?: (newBalance: number) => void;
@@ -61,7 +62,7 @@ interface CompanyDataResponse {
   taxObligations?: TaxObligation[];
 }
 
-export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank, onUserBalanceUpdated }: CompanyDashboardProps) {
+export default function CompanyDashboard({ currentUser, initialTab = 'owned', onBackToHub, onGoToBank, onUserBalanceUpdated }: CompanyDashboardProps) {
   const [data, setData] = useState<CompanyDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
   const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
   const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia'>('owned');
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia'>(initialTab);
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -80,6 +81,7 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
 
   // Electricity & Floor Plan State
   const [selectedNaveForFloorPlan, setSelectedNaveForFloorPlan] = useState<PropertyAcquisition | null>(null);
+  const [electricityContracts, setElectricityContracts] = useState<ElectricityContract[]>([]);
   const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
   const [electricityBills, setElectricityBills] = useState<ElectricityBill[]>([]);
   const [naveFloorPlans, setNaveFloorPlans] = useState<NaveFloorPlan[]>([]);
@@ -87,13 +89,17 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
   const fetchElectricityData = async () => {
     try {
       const [cRes, bRes, fRes] = await Promise.all([
-        fetch(`/api/electricity/contract?studentId=${currentUser.id}`),
+        fetch(`/api/electricity/contracts?studentId=${currentUser.id}`),
         fetch(`/api/electricity/bills?studentId=${currentUser.id}`),
         fetch(`/api/electricity/floor-plans?studentId=${currentUser.id}`)
       ]);
       if (cRes.ok) {
         const cJson = await cRes.json();
-        setElectricityContract(cJson.contract);
+        const contracts = cJson.contracts || [];
+        setElectricityContracts(contracts);
+        if (contracts.length > 0) {
+          setElectricityContract(contracts[0]);
+        }
       }
       if (bRes.ok) {
         const bJson = await bRes.json();
@@ -141,11 +147,16 @@ export default function CompanyDashboard({ currentUser, onBackToHub, onGoToBank,
     }
   };
 
-  const handleContractElectricity = async (powerKw: number) => {
+  const handleContractElectricity = async (propertyId: string, propertyTitle: string, powerKw: number) => {
     const res = await fetch('/api/electricity/contract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: currentUser.id, contractedPowerKw: powerKw })
+      body: JSON.stringify({
+        studentId: currentUser.id,
+        propertyId,
+        propertyTitle,
+        contractedPowerKw: powerKw
+      })
     });
     if (res.ok) {
       await fetchElectricityData();
@@ -1139,6 +1150,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   machinery={data.machineryAcquisitions || []}
                   employees={data.hiredEmployees || []}
                   floorPlans={naveFloorPlans}
+                  contracts={electricityContracts}
                   currentContract={electricityContract}
                   onContractSupply={handleContractElectricity}
                 />
@@ -1146,6 +1158,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 <ElectricityAssetTab
                   acquisitions={data.acquisitions}
                   contract={electricityContract}
+                  contracts={electricityContracts}
                   bills={electricityBills}
                   studentName={currentUser.name}
                   onOpenContractCard={() => {}}

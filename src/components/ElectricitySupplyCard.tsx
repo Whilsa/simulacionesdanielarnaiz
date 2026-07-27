@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types';
-import { Zap, HelpCircle, CheckCircle2, Shield, Lightbulb, Monitor, Thermometer, Factory, Building2, Sliders, Plus, Minus, Info } from 'lucide-react';
+import { Zap, HelpCircle, CheckCircle2, Shield, Lightbulb, Monitor, Thermometer, Factory, Building2, Sliders, Plus, Minus, Info, AlertCircle, ArrowRight } from 'lucide-react';
 
 interface Props {
   acquisitions: PropertyAcquisition[];
   machinery: MachineryAcquisition[];
   employees: HiredEmployee[];
   floorPlans?: NaveFloorPlan[];
+  contracts?: ElectricityContract[];
   currentContract?: ElectricityContract;
-  onContractSupply: (powerKw: number) => Promise<void>;
+  onContractSupply: (propertyId: string, propertyTitle: string, powerKw: number) => Promise<void>;
 }
 
 export const ElectricitySupplyCard: React.FC<Props> = ({
@@ -16,16 +17,20 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
   machinery = [],
   employees = [],
   floorPlans = [],
+  contracts = [],
   currentContract,
   onContractSupply
 }) => {
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [contracting, setContracting] = useState(false);
+  const [contractingPropId, setContractingPropId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState('');
 
   // Interactive Student Projections
   const [selectedShifts, setSelectedShifts] = useState<number>(1);
   const [customPcCount, setCustomPcCount] = useState<number | null>(null);
+
+  // Per-property selected power states map: propertyId -> powerKw
+  const [propPowerMap, setPropPowerMap] = useState<{ [propId: string]: number }>({});
 
   // Derive employee-based shifts if employees assigned to machinery
   let activeEmpShifts = 0;
@@ -41,150 +46,155 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
   const effectiveShifts = Math.max(selectedShifts, activeEmpShifts || 1);
 
-  // 1. Calculate Machinery Power & Monthly Energy
-  let totalMachineryKw = 0;
-  machinery.forEach(m => {
-    const mKw = Number(m.requiredPowerKW || m.powerKw || m.potencia || m.power) || (m.category === 'metal_hierro' ? 35 : 25);
-    totalMachineryKw += mKw;
-  });
-  const totalMachineryKwhMonth = totalMachineryKw * effectiveShifts * 160;
+  // All contracts list (fallback to currentContract if contracts array empty)
+  const activeContracts = contracts.length > 0 
+    ? contracts.filter(c => c.status === 'active')
+    : (currentContract ? [currentContract] : []);
 
-  // 2. Calculate Properties, Lighting, HVAC & Area Distribution
-  let totalLightingKw = 0;
-  let totalLightingKwhMonth = 0;
-
-  let totalHvacKw = 0;
-  let totalHvacKwhMonth = 0;
-
-  let naveSurfaceTotal = 0;
-  let localSurfaceTotal = 0;
-  let almacenSurfaceTotal = 0;
-  let adminSurfaceTotal = 0;
-
-  acquisitions.forEach(prop => {
+  // Compute breakdown per property
+  const propertyCalculations = acquisitions.map(prop => {
+    const pId = String(prop.id || prop.propertyId || '');
+    const pTitle = String(prop.propertyTitle || prop.title || 'Inmueble');
     const pType = String(prop.propertyType || prop.type || prop.inmueble_tipo || prop.property_type || '').toLowerCase();
-    const pTitle = String(prop.propertyTitle || prop.title || prop.inmueble_titulo || '').toLowerCase();
     
-    let isNave = pType === 'nave_industrial' || pType.includes('nave') || pTitle.includes('nave');
-    let isLocal = pType === 'local_comercial' || pType.includes('local') || pTitle.includes('local');
-    let isAlmacen = pType === 'almacen' || pType.includes('almacen') || pType.includes('almacén') || pTitle.includes('almacén') || pTitle.includes('almacen');
+    let isNave = pType === 'nave_industrial' || pType.includes('nave') || pTitle.toLowerCase().includes('nave');
+    let isLocal = pType === 'local_comercial' || pType.includes('local') || pTitle.toLowerCase().includes('local');
+    let isAlmacen = pType === 'almacen' || pType.includes('almacen') || pType.includes('almacén') || pTitle.toLowerCase().includes('almacén') || pTitle.toLowerCase().includes('almacen');
 
-    // Fallback if property exists but type is unassigned or generic
     if (!isNave && !isLocal && !isAlmacen) {
       isNave = true;
     }
 
     const surface = Number(prop.surfaceM2 || prop.superficie_m2 || prop.surface || prop.superficie) || 500;
 
-    if (isNave) {
-      naveSurfaceTotal += surface;
+    // Floor plan
+    const plan = floorPlans.find(fp => 
+      (fp.propertyId && (String(fp.propertyId) === pId)) ||
+      (fp.acquisitionId && String(fp.acquisitionId) === pId) ||
+      (fp.propertyTitle && pTitle && fp.propertyTitle.toLowerCase().trim() === pTitle.toLowerCase().trim())
+    );
 
-      // Find matching floor plan
-      const plan = floorPlans.find(fp => 
-        (fp.propertyId && (String(fp.propertyId) === String(prop.propertyId) || String(fp.propertyId) === String(prop.id))) ||
-        (fp.acquisitionId && String(fp.acquisitionId) === String(prop.id)) ||
-        (fp.propertyTitle && pTitle && fp.propertyTitle.toLowerCase().trim() === pTitle.trim())
-      );
+    let adminM2 = 0;
+    let machineryM2 = 0;
+    let storageM2 = 0;
+    let freeM2 = 0;
 
-      let adminM2 = 0;
-      let machineryM2 = 0;
-      let storageM2 = 0;
-      let freeM2 = 0;
-
-      if (plan) {
-        adminM2 = Number(plan.adminZoneM2) || 0;
-        machineryM2 = Number(plan.machineryZoneM2) || 0;
-        storageM2 = Number(plan.storageZoneM2) || 0;
-        freeM2 = Number(plan.freeZoneM2) || 0;
-      } else {
-        // Default architectural distribution before custom floor plan is saved
-        adminM2 = Math.round(surface * 0.10);
-        machineryM2 = Math.round(surface * 0.50);
-        storageM2 = Math.round(surface * 0.25);
-        freeM2 = Math.max(0, surface - adminM2 - machineryM2 - storageM2);
-      }
-
-      adminSurfaceTotal += adminM2;
-
-      // Lighting in Nave: Machinery (8 W/m²), Storage (5 W/m²), Admin (10 W/m²), Free (3 W/m²)
-      const lightKwNave = (machineryM2 * 0.008) + (storageM2 * 0.005) + (adminM2 * 0.010) + (freeM2 * 0.003);
-      totalLightingKw += lightKwNave;
-      totalLightingKwhMonth += lightKwNave * effectiveShifts * 160;
-
-      // HVAC in Admin Zone of Nave: 60 W/m² = 0.060 kW/m² (160h/mes)
-      const hvacKwNaveAdmin = adminM2 * 0.060;
-      totalHvacKw += hvacKwNaveAdmin;
-      totalHvacKwhMonth += hvacKwNaveAdmin * 160;
-
-    } else if (isLocal) {
-      localSurfaceTotal += surface;
-      adminSurfaceTotal += surface;
-
-      // Local Comercial Lighting (15 W/m²) & HVAC (60 W/m²)
-      const lightKwLocal = surface * 0.015;
-      totalLightingKw += lightKwLocal;
-      totalLightingKwhMonth += lightKwLocal * 160;
-
-      const hvacKwLocal = surface * 0.060;
-      totalHvacKw += hvacKwLocal;
-      totalHvacKwhMonth += hvacKwLocal * 160;
-
-    } else if (isAlmacen) {
-      almacenSurfaceTotal += surface;
-      // Almacen Lighting (6 W/m²)
-      const lightKwAlm = surface * 0.006;
-      totalLightingKw += lightKwAlm;
-      totalLightingKwhMonth += lightKwAlm * 160;
+    if (plan) {
+      adminM2 = Number(plan.adminZoneM2) || 0;
+      machineryM2 = Number(plan.machineryZoneM2) || 0;
+      storageM2 = Number(plan.storageZoneM2) || 0;
+      freeM2 = Number(plan.freeZoneM2) || 0;
+    } else {
+      adminM2 = Math.round(surface * 0.10);
+      machineryM2 = Math.round(surface * 0.50);
+      storageM2 = Math.round(surface * 0.25);
+      freeM2 = Math.max(0, surface - adminM2 - machineryM2 - storageM2);
     }
+
+    // Machinery for this property (if nave, takes total machinery)
+    let propMachineryKw = 0;
+    if (isNave) {
+      machinery.forEach(m => {
+        propMachineryKw += Number(m.requiredPowerKW || m.powerKw || m.potencia || m.power) || (m.category === 'metal_hierro' ? 35 : 25);
+      });
+    }
+    const propMachineryKwhMonth = propMachineryKw * effectiveShifts * 160;
+
+    // Lighting
+    let propLightingKw = 0;
+    if (isNave) {
+      propLightingKw = (machineryM2 * 0.008) + (storageM2 * 0.005) + (adminM2 * 0.010) + (freeM2 * 0.003);
+    } else if (isLocal) {
+      propLightingKw = surface * 0.015;
+    } else {
+      propLightingKw = surface * 0.006;
+    }
+    const propLightingKwhMonth = propLightingKw * (isNave ? effectiveShifts : 1) * 160;
+
+    // HVAC
+    let propHvacKw = 0;
+    if (isNave) {
+      propHvacKw = adminM2 * 0.060;
+    } else if (isLocal) {
+      propHvacKw = surface * 0.060;
+    }
+    const propHvacKwhMonth = propHvacKw * 160;
+
+    // PCs
+    const defaultPcsForProp = Math.max(2, Math.round(adminM2 / 20) || 2);
+    const propPcCount = customPcCount !== null ? customPcCount : defaultPcsForProp;
+    const propPcKw = propPcCount * 0.10;
+    const propPcKwhMonth = propPcKw * 160;
+
+    // Total Kw & kWh
+    const propTotalRawKw = propMachineryKw + propLightingKw + propHvacKw + propPcKw;
+    const propRecommendedPower = propTotalRawKw > 0 ? Math.max(15, Math.ceil((propTotalRawKw * 1.15) / 5) * 5) : 15;
+    const propEstimatedMonthlyKwh = Math.round(propMachineryKwhMonth + propLightingKwhMonth + propHvacKwhMonth + propPcKwhMonth);
+
+    // Matching contract
+    const contract = activeContracts.find(c => 
+      c.propertyId === pId || 
+      (c.propertyTitle && c.propertyTitle.toLowerCase().trim() === pTitle.toLowerCase().trim()) ||
+      (!c.propertyId && activeContracts.length === 1 && acquisitions.length === 1)
+    );
+
+    return {
+      property: prop,
+      propId: pId,
+      propTitle: pTitle,
+      isNave,
+      isLocal,
+      isAlmacen,
+      surface,
+      adminM2,
+      machineryKw: propMachineryKw,
+      machineryKwhMonth: propMachineryKwhMonth,
+      lightingKw: propLightingKw,
+      lightingKwhMonth: propLightingKwhMonth,
+      hvacKw: propHvacKw,
+      hvacKwhMonth: propHvacKwhMonth,
+      pcCount: propPcCount,
+      pcKw: propPcKw,
+      pcKwhMonth: propPcKwhMonth,
+      totalRawKw: propTotalRawKw,
+      recommendedPower: propRecommendedPower,
+      estimatedMonthlyKwh: propEstimatedMonthlyKwh,
+      contract
+    };
   });
 
-  // 3. Computers Calculation (0.10 kW per PC, 160h/month)
-  const defaultCalculatedPcs = acquisitions.length > 0 
-    ? Math.max(2, Math.round(adminSurfaceTotal / 20) || (acquisitions.length * 2))
-    : 2;
-  
-  const pcCount = customPcCount !== null ? customPcCount : defaultCalculatedPcs;
-  const totalComputersKw = pcCount * 0.10;
-  const totalComputersKwhMonth = pcCount * 0.10 * 160;
+  // Global Totals
+  const totalGlobalMachineryKw = propertyCalculations.reduce((sum, p) => sum + p.machineryKw, 0);
+  const totalGlobalLightingKw = propertyCalculations.reduce((sum, p) => sum + p.lightingKw, 0);
+  const totalGlobalHvacKw = propertyCalculations.reduce((sum, p) => sum + p.hvacKw, 0);
+  const totalGlobalPcKw = propertyCalculations.reduce((sum, p) => sum + p.pcKw, 0);
+  const totalGlobalEstKwh = propertyCalculations.reduce((sum, p) => sum + p.estimatedMonthlyKwh, 0);
 
-  // 4. Totals & Recommendation
-  const totalRawKw = totalMachineryKw + totalLightingKw + totalComputersKw + totalHvacKw;
-  const recommendedPowerKw = totalRawKw > 0 ? Math.max(15, Math.ceil((totalRawKw * 1.15) / 5) * 5) : 0;
-
-  const [selectedPowerKw, setSelectedPowerKw] = useState<number>(currentContract?.contractedPowerKw || recommendedPowerKw || 15);
-
-  const estimatedMonthlyKwh = Math.round(
-    totalMachineryKwhMonth + totalLightingKwhMonth + totalComputersKwhMonth + totalHvacKwhMonth
-  );
-
-  // Sync selected power on contract or recommendation change
+  // Initialize selected power map
   useEffect(() => {
-    if (currentContract?.contractedPowerKw) {
-      setSelectedPowerKw(currentContract.contractedPowerKw);
-    } else if (recommendedPowerKw > 0) {
-      setSelectedPowerKw(recommendedPowerKw);
-    }
-  }, [currentContract?.contractedPowerKw, recommendedPowerKw]);
+    const newMap: { [propId: string]: number } = {};
+    propertyCalculations.forEach(calc => {
+      if (calc.contract?.contractedPowerKw) {
+        newMap[calc.propId] = calc.contract.contractedPowerKw;
+      } else {
+        newMap[calc.propId] = calc.recommendedPower;
+      }
+    });
+    setPropPowerMap(prev => ({ ...newMap, ...prev }));
+  }, [acquisitions.length, activeContracts.length]);
 
-  // Financial Estimates (3.0TD Tarifa Industrial)
-  const powerCostEst = (selectedPowerKw || recommendedPowerKw) * 30.4 * 0.11;
-  const energyCostEst = estimatedMonthlyKwh * 0.14;
-  const subtotalEst = powerCostEst + energyCostEst + 0.85;
-  const ieeEst = subtotalEst * 0.0511269632;
-  const ivaEst = (subtotalEst + ieeEst) * 0.21;
-  const totalCostEst = Math.round((subtotalEst + ieeEst + ivaEst) * 100) / 100;
-
-  const handleContract = async () => {
-    setContracting(true);
+  const handleContractForProperty = async (propId: string, propTitle: string) => {
+    const pKw = propPowerMap[propId] || 15;
+    setContractingPropId(propId);
     setSuccessMsg('');
     try {
-      await onContractSupply(selectedPowerKw || recommendedPowerKw);
-      setSuccessMsg('Suministro eléctrico contratado correctamente con IberLuz Comercializadora');
-      setTimeout(() => setSuccessMsg(''), 4000);
+      await onContractSupply(propId, propTitle, pKw);
+      setSuccessMsg(`Suministro eléctrico contratado correctamente para "${propTitle}" (${pKw} kW)`);
+      setTimeout(() => setSuccessMsg(''), 5000);
     } catch (e) {
       console.error(e);
     } finally {
-      setContracting(false);
+      setContractingPropId(null);
     }
   };
 
@@ -203,248 +213,234 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
             <div className="flex items-center space-x-2">
               <h3 className="text-xl font-black text-white tracking-tight">IberLuz Comercializadora</h3>
               <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
-                Asesoría de Potencia Eléctrica
+                Contratación Individual por Inmueble
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Cálculo y recomendación en tiempo real según naves, maquinaria, planos y ordenadores
+              Gestiona el suministro eléctrico de forma independiente para cada uno de los inmuebles en propiedad o alquiler
             </p>
           </div>
         </div>
 
-        {currentContract && (
-          <div className="flex items-center space-x-2 bg-emerald-950/80 border border-emerald-800/80 px-3 py-1.5 rounded-lg shadow-sm">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs text-emerald-300 font-medium">Contrato Activo ({currentContract.contractedPowerKw} kW)</span>
-          </div>
-        )}
+        <div className="flex items-center space-x-2">
+          <span className="text-xs font-semibold px-3 py-1 bg-slate-800 text-amber-300 border border-slate-700 rounded-lg">
+            {activeContracts.length} / {acquisitions.length} Inmuebles Contratados
+          </span>
+        </div>
       </div>
 
-      {/* Student Interactive Simulation Controls */}
-      <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-          <div className="flex items-center space-x-2">
-            <Sliders className="w-4 h-4 text-amber-400" />
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Parámetros de Producción y Previsión de la Empresa</h4>
-          </div>
-          <span className="text-[10px] text-slate-400">Ajusta los valores para simular el consumo eléctrico</span>
+      {/* Notice if user has no properties */}
+      {acquisitions.length === 0 ? (
+        <div className="bg-slate-950/90 border border-amber-500/30 rounded-xl p-8 text-center space-y-3">
+          <Building2 className="w-12 h-12 text-amber-400/60 mx-auto" />
+          <h4 className="text-base font-bold text-white">No dispones de inmuebles en propiedad o alquiler</h4>
+          <p className="text-xs text-slate-400 max-w-md mx-auto">
+            La contratación de energía eléctrica se realiza de manera individual para cada inmueble. Accede al Portal Inmobiliario para alquilar o adquirir una Nave Industrial, Local Comercial o Almacén.
+          </p>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Shift Selector */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg flex flex-col justify-between space-y-2">
-            <div>
-              <span className="text-xs font-semibold text-slate-200 block">Turnos de Trabajo Previstos (Maquinaria)</span>
-              <span className="text-[10px] text-slate-400 block">
-                {activeEmpShifts > 0 ? `Turnos actuales con plantilla: ${activeEmpShifts}` : 'Sin empleados contratados todavía (Puedes proyectar turnos futuros)'}
+      ) : (
+        <>
+          {/* Global Summary Metric Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
+            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
+                <Building2 className="w-3 h-3 text-amber-400" /> Inmuebles Activos
               </span>
+              <p className="text-lg font-bold text-white mt-0.5">{acquisitions.length} Inmuebles</p>
             </div>
-            <div className="flex items-center gap-2 pt-1">
-              {[1, 2, 3].map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSelectedShifts(s)}
-                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition border ${
-                    effectiveShifts === s
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
-                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                  }`}
-                >
-                  {s} {s === 1 ? 'Turno (8h)' : 'Turnos'}
-                </button>
-              ))}
+            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
+                <Factory className="w-3 h-3 text-blue-400" /> Maquinaria Instalada
+              </span>
+              <p className="text-lg font-bold text-blue-300 mt-0.5">{totalGlobalMachineryKw} kW</p>
+            </div>
+            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
+                <Lightbulb className="w-3 h-3 text-amber-400" /> Iluminación + Clima
+              </span>
+              <p className="text-lg font-bold text-amber-300 mt-0.5">{(totalGlobalLightingKw + totalGlobalHvacKw).toFixed(1)} kW</p>
+            </div>
+            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
+                <Zap className="w-3 h-3 text-emerald-400" /> Consumo Total Est.
+              </span>
+              <p className="text-lg font-bold text-emerald-300 mt-0.5">{totalGlobalEstKwh.toLocaleString()} kWh/mes</p>
             </div>
           </div>
 
-          {/* PC Count Selector */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg flex flex-col justify-between space-y-2">
-            <div>
-              <span className="text-xs font-semibold text-slate-200 block">Ordenadores Previstos (Oficinas / Puestos)</span>
-              <span className="text-[10px] text-slate-400 block">
-                Estimado en zona admin: {defaultCalculatedPcs} PCs (0,10 kW por equipo encendido)
-              </span>
-            </div>
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={() => setCustomPcCount(Math.max(0, pcCount - 1))}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition"
-              >
-                <Minus className="w-4 h-4" />
-              </button>
-              <div className="px-4 py-1 bg-slate-950 border border-amber-500/40 rounded-lg text-center font-mono font-bold text-amber-400 text-base min-w-[3rem]">
-                {pcCount} <span className="text-[10px] font-normal text-slate-400">PCs</span>
-              </div>
-              <button
-                onClick={() => setCustomPcCount(pcCount + 1)}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-              {customPcCount !== null && (
-                <button
-                  onClick={() => setCustomPcCount(null)}
-                  className="text-[10px] text-amber-400 underline hover:text-amber-300 ml-auto"
-                >
-                  Restablecer
-                </button>
+          {/* Individual Property Contracting Grid */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-amber-400" />
+                <span>Configuración de Potencia y Contratación por Inmueble</span>
+              </h4>
+              {successMsg && (
+                <span className="text-xs text-emerald-400 bg-emerald-950/90 border border-emerald-800 px-3 py-1 rounded-lg font-medium animate-fadeIn">
+                  {successMsg}
+                </span>
               )}
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Power Advisor Real-Time Breakdown */}
-      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Lightbulb className="w-5 h-5 text-amber-400" />
-            <h4 className="font-bold text-white text-sm">Asesor de Potencia y Consumo Recomendado</h4>
-          </div>
-          <button
-            onClick={() => setShowDetailModal(!showDetailModal)}
-            className="text-xs text-amber-400 hover:text-amber-300 font-medium flex items-center space-x-1 hover:underline"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>{showDetailModal ? 'Ocultar Criterios' : 'Ver Criterios de Cálculo'}</span>
-          </button>
-        </div>
+            <div className="grid grid-cols-1 gap-6">
+              {propertyCalculations.map((calc) => {
+                const isContracted = !!calc.contract;
+                const currentPower = propPowerMap[calc.propId] !== undefined 
+                  ? propPowerMap[calc.propId] 
+                  : (calc.contract?.contractedPowerKw || calc.recommendedPower);
 
-        {/* Breakdown Metric Badges */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Machinery Badge */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
-            <span className="text-[10px] uppercase text-slate-400 font-semibold flex items-center gap-1">
-              <Factory className="w-3 h-3 text-blue-400" /> Maquinaria
-            </span>
-            <p className="text-lg font-bold text-blue-300 mt-1">{totalMachineryKw} kW</p>
-            <p className="text-[10px] text-slate-500">
-              {totalMachineryKwhMonth.toLocaleString()} kWh/mes ({effectiveShifts} turno{effectiveShifts > 1 ? 's' : ''})
-            </p>
-          </div>
+                // Tariff calculation
+                const powerCostEst = currentPower * 30.4 * 0.11;
+                const energyCostEst = calc.estimatedMonthlyKwh * 0.14;
+                const subtotalEst = powerCostEst + energyCostEst + 0.85;
+                const ieeEst = subtotalEst * 0.0511269632;
+                const ivaEst = (subtotalEst + ieeEst) * 0.21;
+                const totalCostEst = Math.round((subtotalEst + ieeEst + ivaEst) * 100) / 100;
 
-          {/* Lighting Badge */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
-            <span className="text-[10px] uppercase text-slate-400 font-semibold flex items-center gap-1">
-              <Lightbulb className="w-3 h-3 text-amber-400" /> Iluminación
-            </span>
-            <p className="text-lg font-bold text-amber-300 mt-1">{totalLightingKw.toFixed(1)} kW</p>
-            <p className="text-[10px] text-slate-500">
-              {Math.round(totalLightingKwhMonth).toLocaleString()} kWh/mes ({naveSurfaceTotal + localSurfaceTotal + almacenSurfaceTotal} m²)
-            </p>
-          </div>
+                return (
+                  <div 
+                    key={calc.propId}
+                    className={`bg-slate-950/90 border-2 rounded-2xl p-5 space-y-4 transition-all duration-300 ${
+                      isContracted 
+                        ? 'border-emerald-500/40 shadow-lg shadow-emerald-950/20' 
+                        : 'border-amber-500/30 hover:border-amber-500/60'
+                    }`}
+                  >
+                    {/* Property Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2.5 rounded-xl border ${
+                          isContracted 
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                            : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                        }`}>
+                          <Building2 className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h5 className="text-base font-bold text-white">{calc.propTitle}</h5>
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                              {calc.isNave ? 'Nave Industrial' : calc.isLocal ? 'Local Comercial' : 'Almacén'} • {calc.surface} m²
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400">
+                            Estimación de consumo: <span className="text-amber-300 font-bold">{calc.estimatedMonthlyKwh} kWh/mes</span>
+                          </p>
+                        </div>
+                      </div>
 
-          {/* Computers Badge */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
-            <span className="text-[10px] uppercase text-slate-400 font-semibold flex items-center gap-1">
-              <Monitor className="w-3 h-3 text-emerald-400" /> Ordenadores
-            </span>
-            <p className="text-lg font-bold text-emerald-300 mt-1">{totalComputersKw.toFixed(2)} kW</p>
-            <p className="text-[10px] text-slate-500">
-              {Math.round(totalComputersKwhMonth)} kWh/mes ({pcCount} PCs @ 0,10 kW)
-            </p>
-          </div>
+                      {isContracted ? (
+                        <div className="flex items-center gap-2 bg-emerald-950/90 border border-emerald-800/90 px-3 py-1.5 rounded-xl">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span className="text-xs font-bold text-emerald-300">
+                            Suministro Contratado ({calc.contract?.contractedPowerKw} kW)
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-900/60 px-2 py-0.5 rounded ml-1">
+                            CUPS: {calc.contract?.cupsCode}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 bg-amber-950/80 border border-amber-800/80 px-3 py-1.5 rounded-xl">
+                          <AlertCircle className="w-4 h-4 text-amber-400" />
+                          <span className="text-xs font-bold text-amber-300">
+                            Sin Contrato Activo para este Inmueble
+                          </span>
+                        </div>
+                      )}
+                    </div>
 
-          {/* HVAC Badge */}
-          <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
-            <span className="text-[10px] uppercase text-slate-400 font-semibold flex items-center gap-1">
-              <Thermometer className="w-3 h-3 text-purple-400" /> Climatización
-            </span>
-            <p className="text-lg font-bold text-purple-300 mt-1">{totalHvacKw.toFixed(1)} kW</p>
-            <p className="text-[10px] text-slate-500">
-              {Math.round(totalHvacKwhMonth).toLocaleString()} kWh/mes ({adminSurfaceTotal} m² de oficina/local)
-            </p>
-          </div>
-        </div>
+                    {/* Breakdown Badges for this Property */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block font-semibold">Maquinaria</span>
+                        <span className="text-sm font-bold text-blue-300 font-mono">{calc.machineryKw} kW</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block font-semibold">Iluminación</span>
+                        <span className="text-sm font-bold text-amber-300 font-mono">{calc.lightingKw.toFixed(1)} kW</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block font-semibold">Climatización</span>
+                        <span className="text-sm font-bold text-purple-300 font-mono">{calc.hvacKw.toFixed(1)} kW</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block font-semibold">Ordenadores ({calc.pcCount} PCs)</span>
+                        <span className="text-sm font-bold text-emerald-300 font-mono">{calc.pcKw.toFixed(2)} kW</span>
+                      </div>
+                    </div>
 
-        {/* Calculation Criteria Details Modal / Collapsible */}
-        {showDetailModal && (
-          <div className="bg-slate-900 border border-amber-500/30 rounded-lg p-4 text-xs text-slate-300 space-y-2 mt-3 animate-fadeIn">
-            <h5 className="font-bold text-amber-400 text-sm mb-2">Normativa de Cálculo IberLuz Comercializadora:</h5>
-            <ul className="list-disc list-inside space-y-1.5 text-slate-300">
-              <li>
-                <strong className="text-white">1. Maquinaria:</strong> Potencia acumulada de la maquinaria adquirida ({totalMachineryKw} kW). Consumo mensual calculado a según turnos seleccionados ({effectiveShifts} turno(s) = {effectiveShifts * 160}h/mes).
-              </li>
-              <li>
-                <strong className="text-white">2. Iluminación:</strong> Según el plano de distribución de cada nave (Producción: 8 W/m², Almacén: 5 W/m², Administración: 10 W/m², Zona Libre: 3 W/m²). Locales comerciales (15 W/m²), Almacenes (6 W/m²).
-              </li>
-              <li>
-                <strong className="text-white">3. Ordenadores:</strong> 0,10 kW por equipo informático encendido ({pcCount} ordenadores seleccionados = {totalComputersKw.toFixed(2)} kW).
-              </li>
-              <li>
-                <strong className="text-white">4. Climatización:</strong> Climatización de zonas de administración de naves industriales ({adminSurfaceTotal} m²) y locales comerciales (60 W/m² = 0,06 kW/m²).
-              </li>
-            </ul>
-          </div>
-        )}
-      </div>
+                    {/* Power Controls & Action for this property */}
+                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="flex items-center gap-4 w-full sm:w-auto">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                            Potencia Contratada (kW)
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={10}
+                              max={500}
+                              step={5}
+                              value={currentPower}
+                              onChange={e => {
+                                const val = Math.max(10, parseInt(e.target.value) || 10);
+                                setPropPowerMap(prev => ({ ...prev, [calc.propId]: val }));
+                              }}
+                              className="w-28 bg-slate-950 border-2 border-amber-500/60 rounded-xl px-3 py-1.5 text-lg font-bold font-mono text-amber-400 text-center focus:outline-none focus:border-amber-400"
+                            />
+                            <div className="text-[11px] text-slate-400">
+                              <span className="text-amber-400 font-semibold block">Recomendado: {calc.recommendedPower} kW</span>
+                              <span className="text-slate-500">IberLuz 3.0TD Industrial</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-      {/* Contract Form Controls */}
-      <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-        <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-            Potencia a Contratar (kW)
-          </label>
-          <div className="flex items-center space-x-3">
-            <input
-              type="number"
-              min={10}
-              max={500}
-              step={5}
-              value={selectedPowerKw || recommendedPowerKw || 15}
-              onChange={e => setSelectedPowerKw(Math.max(10, parseInt(e.target.value) || 10))}
-              className="w-32 bg-slate-900 border-2 border-amber-500/60 rounded-xl px-4 py-2 text-xl font-bold font-mono text-amber-400 focus:outline-none focus:border-amber-400 text-center"
-            />
-            <div className="text-xs text-slate-400">
-              <p className="text-amber-400 font-semibold">Recomendado: {recommendedPowerKw} kW</p>
-              <p>Margen de seguridad: ~15%</p>
+                      <div className="text-right flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Factura Estimada:</span>
+                          <span className="text-xl font-black text-amber-400 font-mono">{totalCostEst.toFixed(2)} €/mes</span>
+                        </div>
+
+                        <button
+                          onClick={() => handleContractForProperty(calc.propId, calc.propTitle)}
+                          disabled={contractingPropId === calc.propId}
+                          className={`py-2.5 px-4 font-extrabold text-xs rounded-xl transition shadow-md flex items-center gap-2 cursor-pointer ${
+                            isContracted
+                              ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                              : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20'
+                          }`}
+                        >
+                          <Zap className="w-4 h-4 fill-current" />
+                          <span>
+                            {contractingPropId === calc.propId
+                              ? 'Guardando...'
+                              : isContracted
+                              ? 'Modificar Potencia'
+                              : 'Contratar para este Inmueble'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </div>
+        </>
+      )}
 
-        <div className="space-y-1 text-xs text-slate-300 border-l border-slate-800 pl-4">
-          <p className="font-bold text-white text-sm mb-1">Tarifa IberLuz 3.0TD Industrial</p>
-          <p>• Término de Potencia: <span className="font-mono text-amber-300 font-semibold">0,11 €/kW/día</span></p>
-          <p>• Término de Energía: <span className="font-mono text-amber-300 font-semibold">0,14 €/kWh</span></p>
-          <p>• Alquiler contador: <span className="font-mono text-slate-400">0,85 €/mes</span></p>
-        </div>
-
-        <div className="space-y-2 text-right">
-          <div className="text-xs text-slate-400">
-            <span>Estimación Factura Mensual:</span>
-            <p className="text-2xl font-black text-amber-400 font-mono">{totalCostEst.toFixed(2)} €/mes</p>
-            <p className="text-[10px] text-slate-500">(Incluye IEE 5.11% e IVA 21%)</p>
-          </div>
-
-          <button
-            onClick={handleContract}
-            disabled={contracting}
-            className="w-full py-3 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-50 text-slate-950 font-black text-sm rounded-xl transition shadow-lg shadow-amber-500/20 flex items-center justify-center space-x-2 cursor-pointer"
-          >
-            <Zap className="w-4 h-4 fill-current" />
-            <span>{currentContract ? 'Actualizar Potencia Contratada' : 'Contratar Suministro Eléctrico'}</span>
-          </button>
-
-          {successMsg && (
-            <p className="text-xs text-emerald-400 font-medium text-center bg-emerald-950/80 border border-emerald-800 p-2 rounded-lg">
-              {successMsg}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Nota Aclaratoria sobre Pago de Potencia */}
+      {/* Nota Aclaratoria sobre Domiciliación e Impuestos */}
       <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-200/90 flex items-start gap-3 mt-4">
         <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
         <div className="space-y-1">
-          <strong className="text-amber-300 font-bold block text-sm">Nota Aclaratoria: ¿Cuándo se realizan los pagos de la potencia eléctrica contratada?</strong>
+          <strong className="text-amber-300 font-bold block text-sm">Información sobre la Contratación Individual de Electricidad:</strong>
           <p className="leading-relaxed">
-            • <strong>Devengo diario continuo:</strong> El coste por término de potencia contratada (<span className="font-mono text-amber-300">0,11 €/kW/día</span>) y el consumo de energía (<span className="font-mono text-amber-300">0,14 €/kWh</span>) se acumulan día a día a partir del momento de la contratación.
+            • <strong>Contratación por Inmueble:</strong> Cada propiedad dispone de su propio código CUPS y su término de potencia ajustado de forma independiente según el uso real del inmueble.
           </p>
           <p className="leading-relaxed">
-            • <strong>Emisión de factura:</strong> La comercializadora <strong>IberLuz</strong> liquida y emite la factura del mes transcurrido el <strong>día 1 de cada mes</strong>.
-          </p>
-          <p className="leading-relaxed">
-            • <strong>Cobro automático por domiciliación:</strong> El importe total de la factura se cobra automáticamente por domiciliación bancaria el <strong>día 5 de cada mes</strong>, descontándose directamente del saldo de la cuenta corriente de la empresa.
+            • <strong>Facturación y cobro:</strong> IberLuz liquida el consumo el día 1 de cada mes y cobra la factura por domiciliación bancaria el <strong>día 5 de cada mes</strong>.
           </p>
         </div>
       </div>
