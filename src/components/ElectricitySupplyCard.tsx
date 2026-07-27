@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types';
-import { Zap, HelpCircle, CheckCircle2, Shield, Lightbulb, Monitor, Thermometer, Factory, Building2, Sliders, Plus, Minus } from 'lucide-react';
+import { Zap, HelpCircle, CheckCircle2, Shield, Lightbulb, Monitor, Thermometer, Factory, Building2, Sliders, Plus, Minus, Info } from 'lucide-react';
 
 interface Props {
   acquisitions: PropertyAcquisition[];
@@ -429,6 +429,23 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
               {successMsg}
             </p>
           )}
+        </div>
+      </div>
+
+      {/* Nota Aclaratoria sobre Pago de Potencia */}
+      <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-200/90 flex items-start gap-3 mt-4">
+        <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <strong className="text-amber-300 font-bold block text-sm">Nota Aclaratoria: ¿Cuándo se realizan los pagos de la potencia eléctrica contratada?</strong>
+          <p className="leading-relaxed">
+            • <strong>Devengo diario continuo:</strong> El coste por término de potencia contratada (<span className="font-mono text-amber-300">0,11 €/kW/día</span>) y el consumo de energía (<span className="font-mono text-amber-300">0,14 €/kWh</span>) se acumulan día a día a partir del momento de la contratación.
+          </p>
+          <p className="leading-relaxed">
+            • <strong>Emisión de factura:</strong> La comercializadora <strong>IberLuz</strong> liquida y emite la factura del mes transcurrido el <strong>día 1 de cada mes</strong>.
+          </p>
+          <p className="leading-relaxed">
+            • <strong>Cobro automático por domiciliación:</strong> El importe total de la factura se cobra automáticamente por domiciliación bancaria el <strong>día 5 de cada mes</strong>, descontándose directamente del saldo de la cuenta corriente de la empresa.
+          </p>
         </div>
       </div>
     </div>

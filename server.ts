@@ -288,6 +288,31 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         fecha_pago TIMESTAMPTZ,
         nomina_id VARCHAR(255)
       );
+
+      CREATE TABLE IF NOT EXISTS contratos_electricos (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        potencia_contratada_kw NUMERIC(10, 2) NOT NULL,
+        nombre_tarifa TEXT NOT NULL,
+        precio_kw_dia NUMERIC(10, 4) NOT NULL,
+        precio_kwh NUMERIC(10, 4) NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'active',
+        fecha_contrato TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        cups_code TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS planos_distribucion_naves (
+        id VARCHAR(255) PRIMARY KEY,
+        inmueble_id VARCHAR(255) NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        zona_maquinaria_m2 NUMERIC(10, 2) NOT NULL DEFAULT 0,
+        zona_almacen_m2 NUMERIC(10, 2) NOT NULL DEFAULT 0,
+        zona_admin_m2 NUMERIC(10, 2) NOT NULL DEFAULT 0,
+        zona_libre_m2 NUMERIC(10, 2) NOT NULL DEFAULT 0,
+        num_almacenes INT NOT NULL DEFAULT 2,
+        fecha_actualizacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     console.log('[Supabase DB] Tables verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
@@ -548,7 +573,8 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
       ON CONFLICT (id) DO UPDATE SET
         saldo_pendiente = EXCLUDED.saldo_pendiente,
-        estado = EXCLUDED.estado`,
+        estado = EXCLUDED.estado,
+        fecha_fin_montaje = EXCLUDED.fecha_fin_montaje`,
       [
         mac.id,
         mac.machineryId || 'machinery',
@@ -659,6 +685,69 @@ async function syncTaxObligationToSupabase(to: TaxObligation) {
   }
 }
 
+async function syncElectricityContractToSupabase(contract: ElectricityContract) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO contratos_electricos (
+        id, alumno_id, alumno_nombre, potencia_contratada_kw, nombre_tarifa,
+        precio_kw_dia, precio_kwh, estado, fecha_contrato, cups_code
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO UPDATE SET
+        potencia_contratada_kw = EXCLUDED.potencia_contratada_kw,
+        estado = EXCLUDED.estado`,
+      [
+        contract.id,
+        contract.studentId,
+        contract.studentName || 'Estudiante',
+        contract.contractedPowerKw,
+        contract.tariffName || 'IberLuz 3.0TD Industrial',
+        contract.pricePerKwDay || 0.11,
+        contract.pricePerKwh || 0.14,
+        contract.status || 'active',
+        contract.contractDate ? new Date(contract.contractDate) : new Date(),
+        contract.cupsCode || ''
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing electricity contract to Supabase:', e);
+  }
+}
+
+async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO planos_distribucion_naves (
+        id, inmueble_id, alumno_id, zona_maquinaria_m2, zona_almacen_m2,
+        zona_admin_m2, zona_libre_m2, num_almacenes, fecha_actualizacion
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (id) DO UPDATE SET
+        zona_maquinaria_m2 = EXCLUDED.zona_maquinaria_m2,
+        zona_almacen_m2 = EXCLUDED.zona_almacen_m2,
+        zona_admin_m2 = EXCLUDED.zona_admin_m2,
+        zona_libre_m2 = EXCLUDED.zona_libre_m2,
+        num_almacenes = EXCLUDED.num_almacenes,
+        fecha_actualizacion = EXCLUDED.fecha_actualizacion`,
+      [
+        plan.id,
+        plan.propertyId || '',
+        plan.studentId,
+        plan.machineryZoneM2 || 0,
+        plan.storageZoneM2 || 0,
+        plan.adminZoneM2 || 0,
+        plan.freeZoneM2 || 0,
+        plan.warehousesCount || 2,
+        plan.updatedAt ? new Date(plan.updatedAt) : new Date()
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing floor plan to Supabase:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
@@ -714,6 +803,16 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     if (db.taxObligations) {
       for (const tax of db.taxObligations) {
         await syncTaxObligationToSupabase(tax);
+      }
+    }
+    if (db.electricityContracts) {
+      for (const c of db.electricityContracts) {
+        await syncElectricityContractToSupabase(c);
+      }
+    }
+    if (db.naveFloorPlans) {
+      for (const fp of db.naveFloorPlans) {
+        await syncFloorPlanToSupabase(fp);
       }
     }
   } catch (e) {
@@ -782,6 +881,20 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         resTaxes = await client.query('SELECT * FROM obligaciones_fiscales ORDER BY fecha_vencimiento ASC');
       } catch (e) {
         console.warn('[Supabase Restore] Obligaciones fiscales table select warning:', e);
+      }
+
+      let resContracts: any = { rows: [] };
+      try {
+        resContracts = await client.query('SELECT * FROM contratos_electricos ORDER BY fecha_contrato DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Contratos electricos table select warning:', e);
+      }
+
+      let resFloorPlans: any = { rows: [] };
+      try {
+        resFloorPlans = await client.query('SELECT * FROM planos_distribucion_naves ORDER BY fecha_actualizacion DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Planos distribucion naves table select warning:', e);
       }
 
       const db = readDb();
@@ -985,7 +1098,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             assemblyDays: Number(row.dias_montaje || 5),
             assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
             assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : 'operativa',
+            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa'),
             installedAtNaveId: String(row.nave_instalada_id),
             installedNaveId: String(row.nave_instalada_id),
             installationNaveId: String(row.nave_instalada_id),
@@ -1080,9 +1193,40 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }));
       }
 
+      // Reconstruct db.electricityContracts from Supabase "contratos_electricos"
+      if (resContracts.rows.length > 0) {
+        db.electricityContracts = resContracts.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          contractedPowerKw: Number(row.potencia_contratada_kw),
+          tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+          pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+          pricePerKwh: Number(row.precio_kwh || 0.14),
+          status: String(row.estado) as 'active' | 'cancelled',
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
+          cupsCode: String(row.cups_code || '')
+        }));
+      }
+
+      // Reconstruct db.naveFloorPlans from Supabase "planos_distribucion_naves"
+      if (resFloorPlans.rows.length > 0) {
+        db.naveFloorPlans = resFloorPlans.rows.map((row: any) => ({
+          id: String(row.id),
+          propertyId: String(row.inmueble_id),
+          studentId: String(row.alumno_id),
+          machineryZoneM2: Number(row.zona_maquinaria_m2),
+          storageZoneM2: Number(row.zona_almacen_m2),
+          adminZoneM2: Number(row.zona_admin_m2),
+          freeZoneM2: Number(row.zona_libre_m2),
+          warehousesCount: Number(row.num_almacenes || 2),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes from Supabase!`);
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes, ${resContracts.rows.length} electricity contracts, ${resFloorPlans.rows.length} floor plans from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
     } finally {
       client.release();
@@ -5030,6 +5174,7 @@ app.post('/api/electricity/contract', (req, res) => {
   }
 
   checkAndProcessAutomatedElectricity(db);
+  syncElectricityContractToSupabase(contract).catch(e => console.error(e));
   writeDb(db);
 
   const message = unblockedCount > 0 
@@ -5083,6 +5228,7 @@ app.post('/api/electricity/floor-plan', (req, res) => {
     db.naveFloorPlans.push(plan);
   }
 
+  syncFloorPlanToSupabase(plan).catch(e => console.error(e));
   writeDb(db);
   res.json({ success: true, floorPlan: plan });
 });
