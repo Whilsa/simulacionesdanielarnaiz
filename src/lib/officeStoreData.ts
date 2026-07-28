@@ -104,7 +104,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 290,
     description: 'Estantería de diseño para despacho de dirección con baldas reforzadas de nogal y protección antivuelco.',
     specs: ['Dimensiones: 195 x 110 x 38 cm', 'Madera maciza de nogal con barniz ecológico', 'Diseño elegante con baldas ajustables', 'Garantía corporativa de 5 años'],
-    imageUrl: 'https://images.unsplash.com/photo-1544816155-12df9643f363?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?auto=format&fit=crop&w=800&q=80'
   },
 
   // 2. MESAS (3 tipos)
@@ -148,7 +148,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 160,
     description: 'Silla de oficina ergonómica con respaldo en malla transpirable, soporte lumbar regulable y reposabrazos 3D.',
     specs: ['Mecanismo sincro con bloqueo en 3 posiciones', 'Soporte lumbar ajustable en altura y profundidad', 'Ruedas de goma aptas para parquet', 'Certificado ergonómico EN-1335'],
-    imageUrl: 'https://images.unsplash.com/photo-1580481072645-022f9a6d8310?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1688578735427-994ec3220464?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'sil-02',
@@ -264,7 +264,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 110,
     description: 'Cámara web profesional para videollamadas y reuniones corporativas en resolución 4K con cancelación de ruido.',
     specs: ['Resolución 4K a 30fps / 1080p a 60fps', 'Enfoque automático HDR y encuadre inteligente', 'Doble micrófono omnidireccional con filtro de ruido', 'Tapa física de privacidad integrada'],
-    imageUrl: 'https://images.unsplash.com/photo-1585060544812-6b45742d762f?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1587825140708-dfaf72ae4b04?auto=format&fit=crop&w=800&q=80'
   },
 
   // 7. IMPRESORAS (3 tipos)
@@ -286,7 +286,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 260,
     description: 'Impresora monocromo ultrarrápida para altos volúmenes de facturas, albaranes y contratos.',
     specs: ['Velocidad de impresión: 45 páginas por minuto', 'Bandeja de papel de 550 hojas ampliable', 'Impresión dúplex automática', 'Tóner de alta capacidad (12.000 páginas)'],
-    imageUrl: 'https://images.unsplash.com/photo-1562654501-a0ccc0fc3fb1?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1612815154858-60aa4c59eaa6?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'imp-03',
@@ -296,7 +296,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 890,
     description: 'Equipo profesional de impresión y digitalización de gran formato A3/A4 para planos, carteles y balances de empresa.',
     specs: ['Soporta formatos desde A6 hasta A3+', 'Impresión de alta precisión de planos y documentos', 'Doble bandeja de papel A4 y A3 independientes', 'Conectividad Cloud Print y gestión securizada'],
-    imageUrl: 'https://images.unsplash.com/photo-1589829085413-56de8ae18c73?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1588702547919-26089e690ecc?auto=format&fit=crop&w=800&q=80'
   },
 
   // 8. PROGRAMAS INFORMÁTICOS - PROCESADORES DE TEXTO / OFIMÁTICA (3 tipos)
@@ -308,7 +308,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 85,
     description: 'Licencia corporativa individual para procesador de textos profesional, hojas de cálculo y presentaciones.',
     specs: ['Licencia para 1 puesto de trabajo por 12 meses', 'Procesador de textos con corrector ortográfico avanzado', 'Formatos compatibles: .docx, .pdf, .rtf, .odt', 'Soporte técnico y actualizaciones incluidas'],
-    imageUrl: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'soft-txt-02',
@@ -318,7 +318,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 320,
     description: 'Pack de 5 licencias para equipo de oficina con almacenamiento cloud de documentos y edición colaborativa en tiempo real.',
     specs: ['5 Licencias corporativas independientes', '1 TB de almacenamiento en la nube por usuario', 'Colaboración en tiempo real en documentos de texto', 'Firma digital integrada de documentos PDF'],
-    imageUrl: 'https://images.unsplash.com/photo-1517842645767-c639042777db?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'soft-txt-03',
@@ -328,7 +328,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 190,
     description: 'Programa especializado en la redacción de contratos, informes técnicos, actas corporativas y plantillas legales automatizadas.',
     specs: ['Licencia permanente para 1 equipo', 'Biblioteca con más de 500 plantillas legales y comerciales', 'Indexación y búsqueda semántica de documentos', 'Exportación masiva a PDF/A securizado'],
-    imageUrl: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=800&q=80'
   },
 
   // 9. PROGRAMAS INFORMÁTICOS - CONTABILIDAD Y GESTIÓN (3 tipos)
@@ -340,7 +340,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 290,
     description: 'Software contable en la nube adaptado al Plan General Contable (PGC). Generación de Libro Diario, Mayor y Balances.',
     specs: ['Suscripción por 1 año con copias de seguridad automáticas', 'Plan General Contable de Pymes completo integrado', 'Presentación oficial de Cuentas Anuales e Impuestos (IVA/IS)', 'Generación de ficheros para AEAT'],
-    imageUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1554224154-26032ffc0d07?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'soft-cnt-02',
@@ -350,7 +350,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 450,
     description: 'Programa profesional de contabilidad financiera, analítica y gestión de facturación emitida y recibida.',
     specs: ['Licencia corporativa multi-usuario y multi-empresa', 'Conciliación bancaria automática con archivos N43', 'Gestión de amortizaciones de inmovilizado y patrimonio', 'Cuadro de mando e informes de liquidez en tiempo real'],
-    imageUrl: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'soft-cnt-03',
@@ -360,7 +360,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 890,
     description: 'Sistema ERP contable integral con gestión de tesorería, presupuestos, cobros, pagos, cartera de efectos y auditoría.',
     specs: ['Licencia ilimitada de servidor corporativo', 'Módulo de auditoría interna y trazabilidad de asientos', 'Automatización de remesas bancarias SEPA XML', 'Integración API con bancos e instituciones financieras'],
-    imageUrl: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=800&q=80'
   },
 
   // 10. TELÉFONOS FIJOS (3 tipos)
@@ -372,7 +372,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 95,
     description: 'Teléfono fijo VoIP con pantalla LCD a color de 2.8 pulgadas, audio HD de alta fidelidad y manos libres.',
     specs: ['4 Líneas SIP configurables', 'Doble puerto Gigabit Ethernet con alimentación PoE', 'Audio de alta definición HD Sound con altavoz', 'Agenda para 1.000 contactos corporativos'],
-    imageUrl: 'https://images.unsplash.com/photo-1580828343064-fde4fc206bc6?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1586105251261-72a756497a11?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'tel-fij-02',
@@ -382,7 +382,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 75,
     description: 'Teléfono inalámbrico de largo alcance con base de carga, vibración y clip de cinturón para libertad de movimiento.',
     specs: ['Alcance: 50m en interior / 300m en exterior', 'Pantalla a color de 1.8" resistente a caídas', 'Autonomía: 18 horas de conversación / 200h en espera', 'Conexión para auriculares Jack 3.5mm'],
-    imageUrl: 'https://images.unsplash.com/photo-1520923642038-b4259acecbd7?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1534536281715-e28d76689b4d?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'tel-fij-03',
@@ -392,7 +392,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 220,
     description: 'Consola telefónica para recepción y despacho ejecutivo con pantalla táctil de 7 pulgadas y cámara HD para videoconferencia.',
     specs: ['Pantalla táctil capacitiva 7" (1024x600)', 'Cámara HD de 5MP con obturador de privacidad', 'Bluetooth 4.2 y Wi-Fi doble banda integrado', '16 Teclas inteligentes virtuales con indicador LED'],
-    imageUrl: 'https://images.unsplash.com/photo-1596558450255-7c0b7be9d56a?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
   },
 
   // 11. TELÉFONOS MÓVILES (3 tipos)

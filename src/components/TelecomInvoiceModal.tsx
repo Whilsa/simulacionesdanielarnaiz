@@ -4,8 +4,9 @@
  */
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { TelecomInvoice } from '../types.js';
-import { X, Printer, Download, ShieldCheck, PhoneCall, Wifi, Building } from 'lucide-react';
+import { X, Printer, PhoneCall } from 'lucide-react';
 
 interface TelecomInvoiceModalProps {
   invoice: TelecomInvoice | null;
@@ -19,41 +20,44 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
     window.print();
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:static">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl overflow-hidden text-slate-900 print:shadow-none print:border-none print:w-full print:max-w-none">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm print:p-0 print:bg-white print:static print:block">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
         
-        {/* Modal Header Actions (Hidden when printing) */}
-        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between print:hidden">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+        {/* Modal Header Actions (Sticky top, hidden when printing) */}
+        <div className="bg-slate-900 text-white px-5 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0 z-20 print:hidden border-b border-slate-800">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
               <PhoneCall className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="font-bold text-sm text-white">Factura de Servicios Telecom</h3>
-              <p className="text-xs text-slate-400">Nº {invoice.invoiceNumber} | {invoice.periodMonth}/{invoice.periodYear}</p>
+            <div className="min-w-0">
+              <h3 className="font-bold text-sm sm:text-base text-white truncate">Factura de Servicios Telecom</h3>
+              <p className="text-xs text-slate-400 truncate">Nº {invoice.invoiceNumber} | {invoice.periodMonth}/{invoice.periodYear}</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={handlePrint}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+              className="flex items-center gap-2 px-3.5 sm:px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+              title="Imprimir o guardar en PDF"
             >
               <Printer className="w-4 h-4" />
-              <span>Descargar / Imprimir PDF</span>
+              <span className="hidden sm:inline">Descargar / Imprimir PDF</span>
+              <span className="sm:hidden">PDF</span>
             </button>
             <button
               onClick={onClose}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+              title="Cerrar"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Printable Invoice Body */}
-        <div className="p-8 sm:p-10 space-y-8 print:p-0">
+        {/* Printable Invoice Body (Scrollable inside modal) */}
+        <div className="p-6 sm:p-10 space-y-8 flex-1 overflow-y-auto print:overflow-visible print:p-0">
           
           {/* Header & Logo */}
           <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-200 pb-6">
@@ -155,8 +159,26 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
             Documento expedido electrónicamente en el Simulador de Negocios de Daniel Arnaiz Boluda. Validez legal como justificante de gasto deducible.
           </div>
 
+          {/* Bottom Action Footer (Hidden when printing) */}
+          <div className="pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 print:hidden">
+            <button
+              onClick={onClose}
+              className="w-full sm:w-auto px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+            >
+              Cerrar Ventana
+            </button>
+            <button
+              onClick={handlePrint}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Descargar / Imprimir Factura en PDF</span>
+            </button>
+          </div>
+
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
