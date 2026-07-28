@@ -7,6 +7,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { TelecomInvoice } from '../types.js';
 import { X, Printer, PhoneCall } from 'lucide-react';
+import { formatNumber } from '../lib/formatters.js';
 
 interface TelecomInvoiceModalProps {
   invoice: TelecomInvoice | null;
@@ -117,13 +118,13 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
                     invoice.items.map((it, i) => (
                       <tr key={i} className="hover:bg-slate-50">
                         <td className="p-3 font-medium">{it.concept}</td>
-                        <td className="p-3 text-right font-semibold">{it.amount.toFixed(2)} €</td>
+                        <td className="p-3 text-right font-semibold">{formatNumber(it.amount)} €</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
                       <td className="p-3 font-medium">Cuota Mensual {invoice.planName} (Fibra, Móviles y Centralita)</td>
-                      <td className="p-3 text-right font-semibold">{invoice.subtotal.toFixed(2)} €</td>
+                      <td className="p-3 text-right font-semibold">{formatNumber(invoice.subtotal)} €</td>
                     </tr>
                   )}
                 </tbody>
@@ -141,15 +142,15 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
             <div className="w-full sm:w-64 bg-slate-900 text-white p-5 rounded-xl space-y-2 text-xs">
               <div className="flex justify-between text-slate-300">
                 <span>Base Imponible:</span>
-                <span className="font-semibold">{invoice.subtotal.toFixed(2)} €</span>
+                <span className="font-semibold">{formatNumber(invoice.subtotal)} €</span>
               </div>
               <div className="flex justify-between text-slate-300">
                 <span>IVA ({invoice.ivaRate}%):</span>
-                <span className="font-semibold">{invoice.ivaAmount.toFixed(2)} €</span>
+                <span className="font-semibold">{formatNumber(invoice.ivaAmount)} €</span>
               </div>
               <div className="border-t border-slate-700 pt-2 mt-2 flex justify-between font-extrabold text-sm text-amber-400">
                 <span>TOTAL FACTURA:</span>
-                <span>{invoice.totalAmount.toFixed(2)} €</span>
+                <span>{formatNumber(invoice.totalAmount)} €</span>
               </div>
             </div>
           </div>

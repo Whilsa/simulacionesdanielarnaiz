@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { PropertyListing, User, PropertyType, OperationType, LocationScope, DeferredPaymentConfig } from '../types.js';
+import { formatNumber } from '../lib/formatters.js';
 import { SPANISH_REGIONS } from '../lib/realEstateData.js';
 import { 
   Building2, Store, Warehouse, Factory, Search, Filter, Plus, Trash2, 
@@ -309,7 +310,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             <div className="hidden sm:flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl border border-slate-700">
               <span className="text-xs text-slate-400">Saldo Empresa:</span>
               <span className="text-xs font-bold text-emerald-400">
-                {currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                {formatNumber(currentUser.balance)} €
               </span>
             </div>
 
@@ -500,7 +501,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                         </div>
                         <div>
                           <span className="text-[10px] text-slate-400 block uppercase font-medium">Precio por m²</span>
-                          <span className="font-bold text-slate-800">{prop.pricePerM2.toLocaleString('es-ES')} €/m²</span>
+                          <span className="font-bold text-slate-800">{formatNumber(prop.pricePerM2)} €/m²</span>
                         </div>
                       </div>
 
@@ -522,10 +523,10 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       </div>
                       <div className="flex items-baseline gap-1">
                         <span className="text-base font-black text-slate-900">
-                          {basePrice.toLocaleString('es-ES')} €
+                          {formatNumber(basePrice)} €
                         </span>
                         <span className="text-[10px] font-medium text-slate-500">
-                          {isRent ? '/mes' : `(+ ${(ivaAmount).toLocaleString('es-ES')} € IVA)`}
+                          {isRent ? '/mes' : `(+ ${formatNumber(ivaAmount)} € IVA)`}
                         </span>
                       </div>
                     </div>
@@ -588,16 +589,16 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Precio / Renta Base:</span>
-                  <span className="font-bold text-slate-900">{selectedPropertyForModal.price.toLocaleString('es-ES')} €</span>
+                  <span className="font-bold text-slate-900">{formatNumber(selectedPropertyForModal.price)} €</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
                   <span>Impuesto IVA (21%):</span>
-                  <span className="font-bold text-slate-900">{(selectedPropertyForModal.price * 0.21).toLocaleString('es-ES')} €</span>
+                  <span className="font-bold text-slate-900">{formatNumber(selectedPropertyForModal.price * 0.21)} €</span>
                 </div>
 
                 <div className="pt-2 border-t border-slate-200 flex justify-between text-sm font-black text-slate-900">
                   <span>Total Inmueble con IVA:</span>
-                  <span className="text-blue-700">{(selectedPropertyForModal.price * 1.21).toLocaleString('es-ES')} €</span>
+                  <span className="text-blue-700">{formatNumber(selectedPropertyForModal.price * 1.21)} €</span>
                 </div>
               </div>
 
@@ -611,14 +612,14 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   <div className="bg-white p-2.5 rounded-xl border border-blue-100">
                     <span className="text-[10px] text-slate-400 font-medium block">Terreno / Suelo ({selectedPropertyForModal.landPercentage}%)</span>
                     <span className="font-extrabold text-slate-900">
-                      {((selectedPropertyForModal.price * selectedPropertyForModal.landPercentage) / 100).toLocaleString('es-ES')} €
+                      {formatNumber((selectedPropertyForModal.price * selectedPropertyForModal.landPercentage) / 100)} €
                     </span>
                     <span className="text-[9px] text-slate-500 block mt-0.5">No Amortizable</span>
                   </div>
                   <div className="bg-white p-2.5 rounded-xl border border-blue-100">
                     <span className="text-[10px] text-slate-400 font-medium block">Edificación / Construcción ({100 - selectedPropertyForModal.landPercentage}%)</span>
                     <span className="font-extrabold text-slate-900">
-                      {((selectedPropertyForModal.price * (100 - selectedPropertyForModal.landPercentage)) / 100).toLocaleString('es-ES')} €
+                      {formatNumber((selectedPropertyForModal.price * (100 - selectedPropertyForModal.landPercentage)) / 100)} €
                     </span>
                     <span className="text-[9px] text-slate-500 block mt-0.5">Amortizable al 2%/año</span>
                   </div>
@@ -642,7 +643,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       <div>
                         <span className="text-xs font-bold text-slate-900 block">Pago al Contado (100%)</span>
                         <span className="text-[11px] text-slate-500">
-                          Se deducirá el total de {(selectedPropertyForModal.price * 1.21).toLocaleString('es-ES')} € en este momento.
+                          Se deducirá el total de {formatNumber(selectedPropertyForModal.price * 1.21)} € en este momento.
                         </span>
                       </div>
                     </label>
@@ -662,19 +663,19 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                         <span className="text-[11px] text-slate-600 block mt-0.5">
                           • Entrada inicial ({selectedPropertyForModal.deferredPaymentConfig.minDownPaymentPercent}%) + Total IVA: {' '}
                           <strong className="text-amber-900">
-                            {(
+                            {formatNumber(
                               (selectedPropertyForModal.price * (selectedPropertyForModal.deferredPaymentConfig.minDownPaymentPercent || 20) / 100) +
                               (selectedPropertyForModal.price * 0.21)
-                            ).toLocaleString('es-ES')} €
+                            )} €
                           </strong>
                         </span>
                         <span className="text-[11px] text-slate-500 block">
                           • Restante en {selectedPropertyForModal.deferredPaymentConfig.installmentsCount || 12} vencimientos mensuales de {' '}
                           <strong>
-                            {(
+                            {formatNumber(
                               (selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig.minDownPaymentPercent || 20)) / 100) /
                               (selectedPropertyForModal.deferredPaymentConfig.installmentsCount || 12)
-                            ).toLocaleString('es-ES')} €/mes
+                            )} €/mes
                           </strong>
                         </span>
                       </div>
@@ -688,13 +689,13 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
                   <span className="font-bold block">Condiciones del Contrato de Arrendamiento:</span>
                   <p>
-                    • Se abonará una fianza equivalente a 2 mensualidades ({ (selectedPropertyForModal.price * 2).toLocaleString('es-ES') } €) + 1er mes con IVA ({ (selectedPropertyForModal.price * 1.21).toLocaleString('es-ES') } €).
+                    • Se abonará una fianza equivalente a 2 mensualidades ({ formatNumber(selectedPropertyForModal.price * 2) } €) + 1er mes con IVA ({ formatNumber(selectedPropertyForModal.price * 1.21) } €).
                   </p>
                   <p className="font-semibold text-indigo-950">
-                    • Total a desembolsar hoy: { ((selectedPropertyForModal.price * 2) + (selectedPropertyForModal.price * 1.21)).toLocaleString('es-ES') } €
+                    • Total a desembolsar hoy: { formatNumber((selectedPropertyForModal.price * 2) + (selectedPropertyForModal.price * 1.21)) } €
                   </p>
                   <p className="text-[11px] text-indigo-800 font-bold mt-1 bg-indigo-100/80 p-2 rounded-xl border border-indigo-200">
-                    🔔 Aviso de Pagos Automáticos: Los 11 meses restantes ({ (selectedPropertyForModal.price * 1.21).toLocaleString('es-ES') } €/mes) se programarán automáticamente como cargos domiciliados en tu cuenta bancaria a 30 días vista.
+                    🔔 Aviso de Pagos Automáticos: Los 11 meses restantes ({ formatNumber(selectedPropertyForModal.price * 1.21) } €/mes) se programarán automáticamente como cargos domiciliados en tu cuenta bancaria a 30 días vista.
                   </p>
                 </div>
               )}
@@ -702,7 +703,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               {/* Deferred Payment Warning */}
               {selectedPropertyForModal.operation === 'compra' && useDeferredPayment && (
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-medium">
-                  🔔 <strong>Aviso de Pagos Automáticos Programados:</strong> Al aplazar el pago, los vencimientos mensuales ({ ((selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig?.minDownPaymentPercent || 20)) / 100) / (selectedPropertyForModal.deferredPaymentConfig?.installmentsCount || 12)).toLocaleString('es-ES') } €/mes) se domiciliarán automáticamente en tu cuenta. Recibirás avisos en tu panel para mantener fondos suficientes antes del vencimiento.
+                  🔔 <strong>Aviso de Pagos Automáticos Programados:</strong> Al aplazar el pago, los vencimientos mensuales ({ formatNumber(((selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig?.minDownPaymentPercent || 20)) / 100) / (selectedPropertyForModal.deferredPaymentConfig?.installmentsCount || 12))) } €/mes) se domiciliarán automáticamente en tu cuenta. Recibirás avisos en tu panel para mantener fondos suficientes antes del vencimiento.
                 </div>
               )}
             </div>

@@ -8,6 +8,7 @@ import { User, TelecomPlan, TelecomContract, TelecomInvoice, PropertyAcquisition
 import { TELECOM_PLANS } from '../lib/officeStoreData.js';
 import { TelecomInvoiceModal } from './TelecomInvoiceModal.js';
 import Footer from './Footer.js';
+import { formatNumber } from '../lib/formatters.js';
 import { 
   ArrowLeft, PhoneCall, Wifi, ShieldCheck, CheckCircle2, Zap, 
   Clock, FileText, Download, Building2, AlertCircle, RefreshCw
@@ -75,7 +76,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
   const activeContract = contracts.find(c => c.status === 'active');
 
   const handleContractPlan = async (plan: TelecomPlan) => {
-    if (!confirm(`¿Confirmas la contratación del "${plan.name}" por ${plan.monthlyPrice.toFixed(2)} €/mes (+ IVA)? El cobro se realizará automáticamente el 1 de cada mes.`)) {
+    if (!confirm(`¿Confirmas la contratación del "${plan.name}" por ${formatNumber(plan.monthlyPrice)} €/mes (+ IVA)? El cobro se realizará automáticamente el 1 de cada mes.`)) {
       return;
     }
 
@@ -141,7 +142,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
             <div className="text-right">
               <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo Banco</span>
               <span className="text-xs font-extrabold text-amber-400">
-                {currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                {formatNumber(currentUser.balance)} €
               </span>
             </div>
           </div>
@@ -174,7 +175,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                   <CheckCircle2 className="w-4 h-4" />
                   <span>{activeContract.planName}</span>
                 </p>
-                <p className="text-slate-400 mt-1">{activeContract.monthlyPrice.toFixed(2)} €/mes (+ IVA)</p>
+                <p className="text-slate-400 mt-1">{formatNumber(activeContract.monthlyPrice)} €/mes (+ IVA)</p>
               </div>
             ) : (
               <p className="font-bold text-amber-400 flex items-center gap-1.5">
@@ -274,7 +275,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                     {/* Price & Features */}
                     <div className="p-6 space-y-5">
                       <div className="flex items-baseline gap-1 border-b border-slate-100 pb-4">
-                        <span className="text-3xl font-black text-slate-900">{plan.monthlyPrice.toFixed(2)} €</span>
+                        <span className="text-3xl font-black text-slate-900">{formatNumber(plan.monthlyPrice)} €</span>
                         <span className="text-xs font-semibold text-slate-500">/ mes (+ IVA)</span>
                       </div>
 
@@ -371,9 +372,9 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                         <p className="font-bold text-slate-900">{inv.planName}</p>
                         <p className="text-[10px] text-slate-500">{inv.provider}</p>
                       </td>
-                      <td className="p-3 text-right font-medium">{inv.subtotal.toFixed(2)} €</td>
-                      <td className="p-3 text-right font-medium">{inv.ivaAmount.toFixed(2)} €</td>
-                      <td className="p-3 text-right font-black text-slate-900">{inv.totalAmount.toFixed(2)} €</td>
+                      <td className="p-3 text-right font-medium">{formatNumber(inv.subtotal)} €</td>
+                      <td className="p-3 text-right font-medium">{formatNumber(inv.ivaAmount)} €</td>
+                      <td className="p-3 text-right font-black text-slate-900">{formatNumber(inv.totalAmount)} €</td>
                       <td className="p-3 text-center">
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full">
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { PropertyAcquisition, ElectricityContract, ElectricityBill } from '../types';
+import { formatNumber } from '../lib/formatters';
 import { ElectricityInvoiceModal } from './ElectricityInvoiceModal';
 import { Zap, FileText, Download, CheckCircle2, Clock, Calendar, Building2, ShieldCheck, AlertCircle } from 'lucide-react';
 
@@ -212,13 +213,13 @@ export const ElectricityAssetTab: React.FC<Props> = ({
                       Mes {bill.periodMonth}/{bill.periodYear}
                     </td>
                     <td className="p-3 text-right font-mono text-slate-300">
-                      {bill.totalKwh.toLocaleString('es-ES')} kWh
+                      {formatNumber(bill.totalKwh)} kWh
                     </td>
                     <td className="p-3 text-right font-mono text-slate-400">
-                      {(bill.electricityTax + bill.ivaAmount).toFixed(2)} €
+                      {formatNumber(bill.electricityTax + bill.ivaAmount)} €
                     </td>
                     <td className="p-3 text-right font-mono font-bold text-amber-400 text-sm">
-                      {bill.totalAmount.toFixed(2)} €
+                      {formatNumber(bill.totalAmount)} €
                     </td>
                     <td className="p-3 text-center">
                       {bill.status === 'pagado' ? (

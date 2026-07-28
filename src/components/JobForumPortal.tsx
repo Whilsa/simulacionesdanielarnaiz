@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { User, JobListing, HiredEmployee, MachineryAcquisition } from '../types.js';
 import { Users, UserPlus, Trash2, ArrowLeft, Briefcase, Filter, Sparkles, CheckCircle2, AlertCircle, Wrench, Clock, ShieldCheck } from 'lucide-react';
 import Footer from './Footer.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface JobForumPortalProps {
   currentUser: User;
@@ -93,7 +94,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
 
       setMessage({
         type: 'success',
-        text: `¡Felicidades! Has contratado a ${job.employeeName} con un sueldo de ${job.grossSalaryMonthly.toLocaleString('es-ES')} €/mes.`
+        text: `¡Felicidades! Has contratado a ${job.employeeName} con un sueldo de ${formatNumber(job.grossSalaryMonthly)} €/mes.`
       });
 
       fetchJobs();
@@ -435,7 +436,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                         <div className="text-xs font-bold text-slate-800">{job.title}</div>
                         <div className="mt-2 text-[11px] font-medium text-slate-500 uppercase tracking-wider">Salario Bruto Mensual</div>
                         <div className="text-lg font-black text-violet-700">
-                          {job.grossSalaryMonthly.toLocaleString('es-ES')} € / mes
+                          {formatNumber(job.grossSalaryMonthly)} € / mes
                         </div>
                       </div>
                     </div>

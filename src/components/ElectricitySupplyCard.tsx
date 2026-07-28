@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types';
+import { formatNumber } from '../lib/formatters';
 import { 
   Zap, CheckCircle2, Factory, Building2, Sliders, Plus, Minus, Info, AlertCircle, 
   Monitor, Lightbulb, Thermometer, Clock, Calculator, ArrowRight, RefreshCw, Sparkles
@@ -337,7 +338,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                             <span>Ordenadores / PCs previstos a comprar:</span>
                           </label>
                           <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-2.5 py-0.5 rounded-lg">
-                            {(calc.plannedPcs * 0.10).toFixed(2)} kW
+                            {formatNumber(calc.plannedPcs * 0.10)} kW
                           </span>
                         </div>
 
@@ -489,7 +490,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                           </h6>
                         </div>
                         <p className="text-xs text-slate-300">
-                          Calculada sobre la carga técnica máxima ({calc.totalRawKw.toFixed(2)} kW) + 15% margen de seguridad.
+                          Calculada sobre la carga técnica máxima ({formatNumber(calc.totalRawKw)} kW) + 15% margen de seguridad.
                         </p>
                       </div>
 
@@ -514,19 +515,19 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-amber-500/20 text-xs">
                       <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
                         <span className="text-[10px] text-slate-400 block">Maquinaria</span>
-                        <span className="font-bold text-blue-300 font-mono">{calc.totalMachineryKw} kW</span>
+                        <span className="font-bold text-blue-300 font-mono">{formatNumber(calc.totalMachineryKw)} kW</span>
                       </div>
                       <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
                         <span className="text-[10px] text-slate-400 block">Iluminación</span>
-                        <span className="font-bold text-amber-300 font-mono">{calc.lightingKw.toFixed(2)} kW</span>
+                        <span className="font-bold text-amber-300 font-mono">{formatNumber(calc.lightingKw)} kW</span>
                       </div>
                       <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
                         <span className="text-[10px] text-slate-400 block">Climatización</span>
-                        <span className="font-bold text-purple-300 font-mono">{calc.hvacKw.toFixed(2)} kW</span>
+                        <span className="font-bold text-purple-300 font-mono">{formatNumber(calc.hvacKw)} kW</span>
                       </div>
                       <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
                         <span className="text-[10px] text-slate-400 block">Oficina ({calc.plannedPcs} PCs)</span>
-                        <span className="font-bold text-emerald-300 font-mono">{calc.pcKw.toFixed(2)} kW</span>
+                        <span className="font-bold text-emerald-300 font-mono">{formatNumber(calc.pcKw)} kW</span>
                       </div>
                     </div>
                   </div>
@@ -582,7 +583,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     <div className="text-right flex items-center justify-between sm:justify-end gap-5 w-full sm:w-auto">
                       <div>
                         <span className="text-[10px] text-slate-400 block">Factura Est. Mensual:</span>
-                        <span className="text-2xl font-black text-amber-400 font-mono">{totalCostEst.toFixed(2)} €/mes</span>
+                        <span className="text-2xl font-black text-amber-400 font-mono">{formatNumber(totalCostEst)} €/mes</span>
                       </div>
 
                       <button

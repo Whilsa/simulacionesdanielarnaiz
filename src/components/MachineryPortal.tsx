@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
 import Footer from './Footer.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface MachineryPortalProps {
   currentUser: User;
@@ -192,7 +193,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
               <div className="text-right">
                 <span className="text-[10px] text-slate-400 block font-medium leading-none">Saldo Banco</span>
                 <span className="text-sm font-extrabold text-amber-300 font-mono">
-                  {balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                  {formatNumber(balance)} €
                 </span>
               </div>
             </div>
@@ -332,7 +333,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                       <div className="text-xs text-slate-600 space-y-1 my-3 bg-white p-2.5 rounded-lg border border-slate-200/80">
                         <p>📍 <strong>Ubicación:</strong> {item.installationNaveTitle} ({item.installationSurfaceM2} m²)</p>
                         <p>⚡ <strong>Capacidad Producción:</strong> {item.productionCapacityUnitsPerHour} unidades / hora</p>
-                        <p>💶 <strong>Inversión Total:</strong> {item.totalPrice.toLocaleString('es-ES')} € (Forma de Pago: {item.paymentMethod === 'contado' ? 'Contado' : 'Aplazada en 24 Pagarés'})</p>
+                        <p>💶 <strong>Inversión Total:</strong> {formatNumber(item.totalPrice)} € (Forma de Pago: {item.paymentMethod === 'contado' ? 'Contado' : 'Aplazada en 24 Pagarés'})</p>
                       </div>
                     </div>
 
@@ -470,10 +471,10 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                               
                               <div className="text-[11px] text-slate-600 space-y-0.5 pt-1">
                                 <div>
-                                  💳 <strong>Al Contado:</strong> <span className="font-mono font-bold text-slate-900">{basePrice.toLocaleString('es-ES')} €</span> + IVA 21% = <strong className="font-mono text-emerald-700">{totalCash.toLocaleString('es-ES')} € Total</strong>
+                                  💳 <strong>Al Contado:</strong> <span className="font-mono font-bold text-slate-900">{formatNumber(basePrice)} €</span> + IVA 21% = <strong className="font-mono text-emerald-700">{formatNumber(totalCash)} € Total</strong>
                                 </div>
                                 <div>
-                                  📅 <strong>Pago Aplazado (+10%):</strong> Entrada de <strong className="font-mono text-slate-900">{downPayment.toLocaleString('es-ES')} €</strong> + 24 pagarés de <strong className="font-mono text-amber-800">{installment24.toLocaleString('es-ES')} €/mes</strong>
+                                  📅 <strong>Pago Aplazado (+10%):</strong> Entrada de <strong className="font-mono text-slate-900">{formatNumber(downPayment)} €</strong> + 24 pagarés de <strong className="font-mono text-amber-800">{formatNumber(installment24)} €/mes</strong>
                                 </div>
                               </div>
                             </div>
@@ -590,7 +591,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     </div>
 
                     <div className="mt-3 pt-2 border-t border-emerald-200/60 font-mono text-sm font-extrabold text-emerald-800">
-                      {((selectedOption.basePrice * 1.21)).toLocaleString('es-ES')} € Total
+                      {formatNumber(selectedOption.basePrice * 1.21)} € Total
                     </div>
                   </button>
 
@@ -615,7 +616,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     </div>
 
                     <div className="mt-3 pt-2 border-t border-amber-200/60 font-mono text-[11px] text-amber-900">
-                      Entrada: <strong className="text-slate-900">{(((selectedOption.basePrice * 1.10) * 0.40) + ((selectedOption.basePrice * 1.10) * 0.21)).toLocaleString('es-ES')} €</strong> + 24 pagarés de <strong className="text-amber-800">{((selectedOption.basePrice * 1.10 * 0.60) / 24).toLocaleString('es-ES')} €/m</strong>
+                      Entrada: <strong className="text-slate-900">{formatNumber(((selectedOption.basePrice * 1.10) * 0.40) + ((selectedOption.basePrice * 1.10) * 0.21))} €</strong> + 24 pagarés de <strong className="text-amber-800">{formatNumber((selectedOption.basePrice * 1.10 * 0.60) / 24)} €/m</strong>
                     </div>
                   </button>
                 </div>
@@ -625,27 +626,27 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
               <div className="bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono">
                 <div className="flex justify-between border-b border-slate-800 pb-1 text-[11px]">
                   <span className="text-slate-400 font-sans">Precio Base:</span>
-                  <span>{(paymentMethod === 'contado' ? selectedOption.basePrice : selectedOption.basePrice * 1.10).toLocaleString('es-ES')} €</span>
+                  <span>{formatNumber(paymentMethod === 'contado' ? selectedOption.basePrice : selectedOption.basePrice * 1.10)} €</span>
                 </div>
                 <div className="flex justify-between border-b border-slate-800 pb-1 text-[11px]">
                   <span className="text-slate-400 font-sans">IVA 21%:</span>
-                  <span>{((paymentMethod === 'contado' ? selectedOption.basePrice : selectedOption.basePrice * 1.10) * 0.21).toLocaleString('es-ES')} €</span>
+                  <span>{formatNumber((paymentMethod === 'contado' ? selectedOption.basePrice : selectedOption.basePrice * 1.10) * 0.21)} €</span>
                 </div>
                 {paymentMethod === 'aplazado_pagares' ? (
                   <>
                     <div className="flex justify-between border-b border-slate-800 pb-1 text-[11px] text-amber-300">
                       <span className="font-sans">Entrada a pagar hoy (40% + 100% IVA):</span>
-                      <span className="font-bold">{(((selectedOption.basePrice * 1.10) * 0.40) + ((selectedOption.basePrice * 1.10) * 0.21)).toLocaleString('es-ES')} €</span>
+                      <span className="font-bold">{formatNumber(((selectedOption.basePrice * 1.10) * 0.40) + ((selectedOption.basePrice * 1.10) * 0.21))} €</span>
                     </div>
                     <div className="flex justify-between text-[11px] text-slate-300">
                       <span className="font-sans">24 Pagarés Mensuales Domiciliados:</span>
-                      <span className="font-bold text-amber-400">{((selectedOption.basePrice * 1.10 * 0.60) / 24).toLocaleString('es-ES')} € / mes</span>
+                      <span className="font-bold text-amber-400">{formatNumber((selectedOption.basePrice * 1.10 * 0.60) / 24)} € / mes</span>
                     </div>
                   </>
                 ) : (
                   <div className="flex justify-between text-xs text-emerald-400 pt-1 font-bold">
                     <span className="font-sans">Total a Deducir de Cuenta hoy:</span>
-                    <span>{(selectedOption.basePrice * 1.21).toLocaleString('es-ES')} €</span>
+                    <span>{formatNumber(selectedOption.basePrice * 1.21)} €</span>
                   </div>
                 )}
               </div>

@@ -8,6 +8,7 @@ import { User, OfficeStoreItem, OfficeStoreCategory, OfficePurchaseOrder } from 
 import { OFFICE_STORE_CATALOG } from '../lib/officeStoreData.js';
 import { OfficeInvoiceModal } from './OfficeInvoiceModal.js';
 import Footer from './Footer.js';
+import { formatNumber } from '../lib/formatters.js';
 import { 
   ArrowLeft, ShoppingBag, ShoppingCart, Search, Filter, CheckCircle2, 
   AlertCircle, Trash2, Plus, Minus, CreditCard, Euro, Download, Layers, RefreshCw
@@ -119,11 +120,11 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
     if (cart.length === 0) return;
 
     if (currentUser.balance < cartTotal) {
-      setError(`Saldo insuficiente en el banco. Necesitas ${cartTotal.toFixed(2)} € y tu saldo actual es de ${currentUser.balance.toFixed(2)} €.`);
+      setError(`Saldo insuficiente en el banco. Necesitas ${formatNumber(cartTotal)} € y tu saldo actual es de ${formatNumber(currentUser.balance)} €.`);
       return;
     }
 
-    if (!confirm(`¿Confirmas la compra por un importe total de ${cartTotal.toFixed(2)} € (IVA incl.)? El importe se cargará inmediatamente en tu cuenta bancaria.`)) {
+    if (!confirm(`¿Confirmas la compra por un importe total de ${formatNumber(cartTotal)} € (IVA incl.)? El importe se cargará inmediatamente en tu cuenta bancaria.`)) {
       return;
     }
 
@@ -195,7 +196,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
             <div className="text-right hidden sm:block">
               <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo Disponible</span>
               <span className="text-xs font-extrabold text-amber-400">
-                {currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                {formatNumber(currentUser.balance)} €
               </span>
             </div>
 
@@ -338,7 +339,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               <div className="p-5 pt-0 flex items-center justify-between gap-4 border-t border-slate-100 mt-2">
                 <div>
                   <span className="text-xs text-slate-400 block font-semibold">Precio Unid.</span>
-                  <span className="text-xl font-black text-slate-900">{item.price.toFixed(2)} €</span>
+                  <span className="text-xl font-black text-slate-900">{formatNumber(item.price)} €</span>
                 </div>
 
                 <button
@@ -392,7 +393,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                     />
                     <div className="flex-1 min-w-0">
                       <h4 className="font-bold text-xs text-slate-900 truncate">{item.name}</h4>
-                      <p className="text-[11px] text-slate-500">{item.price.toFixed(2)} € / unid.</p>
+                      <p className="text-[11px] text-slate-500">{formatNumber(item.price)} € / unid.</p>
                       
                       <div className="flex items-center gap-2 mt-2">
                         <button
@@ -412,7 +413,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                     </div>
 
                     <div className="text-right">
-                      <span className="font-black text-xs text-slate-900 block">{(item.price * quantity).toFixed(2)} €</span>
+                      <span className="font-black text-xs text-slate-900 block">{formatNumber(item.price * quantity)} €</span>
                       <button
                         onClick={() => removeFromCart(item.id)}
                         className="text-red-500 hover:text-red-700 text-[10px] font-bold mt-1"
@@ -431,15 +432,15 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                 <div className="space-y-1.5 text-xs text-slate-600">
                   <div className="flex justify-between">
                     <span>Base Imponible:</span>
-                    <span className="font-semibold">{cartSubtotal.toFixed(2)} €</span>
+                    <span className="font-semibold">{formatNumber(cartSubtotal)} €</span>
                   </div>
                   <div className="flex justify-between">
                     <span>IVA (21%):</span>
-                    <span className="font-semibold">{cartIva.toFixed(2)} €</span>
+                    <span className="font-semibold">{formatNumber(cartIva)} €</span>
                   </div>
                   <div className="flex justify-between font-black text-sm text-slate-900 pt-2 border-t border-slate-200">
                     <span>Total a Pagar:</span>
-                    <span className="text-amber-600 text-base">{cartTotal.toFixed(2)} €</span>
+                    <span className="text-amber-600 text-base">{formatNumber(cartTotal)} €</span>
                   </div>
                 </div>
 
@@ -456,7 +457,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      <span>Completar Compra y Pagar ({cartTotal.toFixed(2)} €)</span>
+                      <span>Completar Compra y Pagar ({formatNumber(cartTotal)} €)</span>
                     </>
                   )}
                 </button>

@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { X, Calendar, CheckCircle2, Clock, Calculator, Receipt } from 'lucide-react';
 import { BankLoan, AmortizationRow } from '../types.js';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface LoanAmortizationTableProps {
   loan: BankLoan;
@@ -54,25 +55,25 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
           <div>
             <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Capital Concedido / Ofrecido</span>
             <span className="font-bold text-slate-900 text-sm font-mono">
-              {(loan.approvedAmount || loan.offeredAmount).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+              {formatNumber(loan.approvedAmount || loan.offeredAmount)} €
             </span>
           </div>
           <div>
             <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Tipo de Interés Anual (TIN)</span>
             <span className="font-bold text-emerald-700 text-sm font-mono">
-              {loan.annualInterestRate.toFixed(2)} % <span className="text-[10px] text-slate-500 font-normal">(Euribor {loan.euriborRate}% + 1%)</span>
+              {formatNumber(loan.annualInterestRate, 2)} % <span className="text-[10px] text-slate-500 font-normal">(Euribor {formatNumber(loan.euriborRate)}% + 1%)</span>
             </span>
           </div>
           <div>
             <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Plazo de Devolución</span>
             <span className="font-bold text-slate-900 text-sm">
-              {loan.termMonths} meses ({Math.round((loan.termMonths / 12) * 10) / 10} años)
+              {loan.termMonths} meses ({formatNumber(loan.termMonths / 12, 1)} años)
             </span>
           </div>
           <div>
             <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Cuota Mensual Constante</span>
             <span className="font-bold text-amber-800 text-sm font-mono">
-              {loan.monthlyPayment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € / mes
+              {formatNumber(loan.monthlyPayment)} € / mes
             </span>
           </div>
         </div>
@@ -117,19 +118,19 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-amber-900">
-                      {row.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(row.payment)} €
                     </td>
                     <td className="py-2.5 px-3 text-right text-rose-600">
-                      {row.interest.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(row.interest)} €
                     </td>
                     <td className="py-2.5 px-3 text-right text-emerald-700 font-medium">
-                      {row.principal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(row.principal)} €
                     </td>
                     <td className="py-2.5 px-3 text-right text-slate-600">
-                      {row.totalAmortized.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(row.totalAmortized)} €
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                      {row.pendingBalance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(row.pendingBalance)} €
                     </td>
                     <td className="py-2.5 px-3 text-center font-sans">
                       {row.paid ? (

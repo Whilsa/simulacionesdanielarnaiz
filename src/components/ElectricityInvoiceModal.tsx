@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ElectricityBill } from '../types';
 import { Printer, X, Zap, ShieldCheck } from 'lucide-react';
+import { formatNumber } from '../lib/formatters';
 
 interface Props {
   bill: ElectricityBill;
@@ -118,12 +119,12 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
             <div>
               <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Resumen de Consumo Eléctrico</span>
               <p className="text-2xl font-black text-slate-900 mt-0.5">
-                {bill.totalKwh.toLocaleString('es-ES')} <span className="text-sm font-normal text-slate-600">kWh consumidos</span>
+                {formatNumber(bill.totalKwh, 0)} <span className="text-sm font-normal text-slate-600">kWh consumidos</span>
               </p>
             </div>
             <div className="text-right">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Importe Total a Pagar</span>
-              <p className="text-3xl font-black text-amber-600">{bill.totalAmount.toFixed(2)} €</p>
+              <p className="text-3xl font-black text-amber-600">{formatNumber(bill.totalAmount)} €</p>
             </div>
           </div>
 
@@ -148,17 +149,17 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
                     1. Término de Potencia ({bill.contractedPowerKw} kW)
                   </td>
                   <td className="p-2.5 text-right font-mono">{bill.contractedPowerKw} kW × {bill.daysCount} días</td>
-                  <td className="p-2.5 text-right font-mono">{bill.pricePerKwDay} €/kW/día</td>
-                  <td className="p-2.5 text-right font-mono font-semibold">{bill.powerAmount.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono">{formatNumber(bill.pricePerKwDay, 4)} €/kW/día</td>
+                  <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.powerAmount)} €</td>
                 </tr>
 
                 <tr>
                   <td className="p-2.5 font-medium">
                     2. Término de Energía Consumida
                   </td>
-                  <td className="p-2.5 text-right font-mono">{bill.totalKwh.toLocaleString('es-ES')} kWh</td>
-                  <td className="p-2.5 text-right font-mono">{bill.pricePerKwh} €/kWh</td>
-                  <td className="p-2.5 text-right font-mono font-semibold">{bill.energyAmount.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono">{formatNumber(bill.totalKwh, 0)} kWh</td>
+                  <td className="p-2.5 text-right font-mono">{formatNumber(bill.pricePerKwh, 4)} €/kWh</td>
+                  <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.energyAmount)} €</td>
                 </tr>
 
                 <tr>
@@ -166,41 +167,41 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
                     3. Alquiler de Equipo de Medida / Contador
                   </td>
                   <td className="p-2.5 text-right font-mono text-slate-600">1 Mes</td>
-                  <td className="p-2.5 text-right font-mono text-slate-600">0.85 €/mes</td>
-                  <td className="p-2.5 text-right font-mono font-semibold">{bill.equipmentRental.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono text-slate-600">0,85 €/mes</td>
+                  <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.equipmentRental)} €</td>
                 </tr>
 
                 <tr className="bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-300">
                   <td className="p-2.5" colSpan={3}>Base Imponible de Suministro</td>
-                  <td className="p-2.5 text-right font-mono">{bill.taxableBase.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono">{formatNumber(bill.taxableBase)} €</td>
                 </tr>
 
                 <tr>
                   <td className="p-2.5 text-slate-700">
                     4. Impuesto sobre la Electricidad (IEE 5,11269632%)
                   </td>
-                  <td className="p-2.5 text-right font-mono text-slate-600">s/ Base {bill.taxableBase.toFixed(2)} €</td>
-                  <td className="p-2.5 text-right font-mono text-slate-600">5.1127%</td>
-                  <td className="p-2.5 text-right font-mono font-semibold">{bill.electricityTax.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono text-slate-600">s/ Base {formatNumber(bill.taxableBase)} €</td>
+                  <td className="p-2.5 text-right font-mono text-slate-600">5,1127%</td>
+                  <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.electricityTax)} €</td>
                 </tr>
 
                 <tr className="bg-slate-50 font-semibold text-slate-900">
                   <td className="p-2.5" colSpan={3}>Subtotal sujeto a IVA</td>
-                  <td className="p-2.5 text-right font-mono">{bill.subtotalWithTax.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono">{formatNumber(bill.subtotalWithTax)} €</td>
                 </tr>
 
                 <tr>
                   <td className="p-2.5 text-slate-700">
                     5. Impuesto sobre el Valor Añadido (IVA 21%)
                   </td>
-                  <td className="p-2.5 text-right font-mono text-slate-600">s/ Subtotal {bill.subtotalWithTax.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono text-slate-600">s/ Subtotal {formatNumber(bill.subtotalWithTax)} €</td>
                   <td className="p-2.5 text-right font-mono text-slate-600">21,00%</td>
-                  <td className="p-2.5 text-right font-mono font-semibold">{bill.ivaAmount.toFixed(2)} €</td>
+                  <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.ivaAmount)} €</td>
                 </tr>
 
                 <tr className="bg-slate-900 text-white font-black text-sm border-t-2 border-slate-900">
                   <td className="p-3" colSpan={3}>TOTAL FACTURA A PAGAR</td>
-                  <td className="p-3 text-right font-mono text-amber-400 text-base">{bill.totalAmount.toFixed(2)} €</td>
+                  <td className="p-3 text-right font-mono text-amber-400 text-base">{formatNumber(bill.totalAmount)} €</td>
                 </tr>
               </tbody>
             </table>

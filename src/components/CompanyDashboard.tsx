@@ -18,6 +18,7 @@ import { ElectricitySupplyCard } from './ElectricitySupplyCard.js';
 import { ElectricityAssetTab } from './ElectricityAssetTab.js';
 import { TelecomInvoiceModal } from './TelecomInvoiceModal.js';
 import { OfficeInvoiceModal } from './OfficeInvoiceModal.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
@@ -790,7 +791,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     </div>
                   </div>
                   <div className="text-2xl font-black text-slate-900">
-                    {data.summary.bankBalance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    {formatNumber(data.summary.bankBalance)} €
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 block">Tesorería disponible en el Banco Simulado</span>
                 </div>
@@ -816,7 +817,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   </div>
                 </div>
                 <div className="text-2xl font-black text-slate-900">
-                  {data.summary.totalRealEstateAssetsValue.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                  {formatNumber(data.summary.totalRealEstateAssetsValue)} €
                 </div>
                 <span className="text-[10px] text-blue-700 font-medium mt-1 block">
                   {data.summary.ownedPropertiesCount} Inmueble(s) en Propiedad
@@ -834,11 +835,11 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 <div className="text-xs space-y-1">
                   <div className="flex justify-between">
                     <span className="text-slate-500">Terreno (No Amort.):</span>
-                    <span className="font-bold text-slate-900">{data.summary.totalLandValue.toLocaleString('es-ES')} €</span>
+                    <span className="font-bold text-slate-900">{formatNumber(data.summary.totalLandValue)} €</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-500">Construcción (2%/año):</span>
-                    <span className="font-bold text-slate-900">{data.summary.totalBuildingValue.toLocaleString('es-ES')} €</span>
+                    <span className="font-bold text-slate-900">{formatNumber(data.summary.totalBuildingValue)} €</span>
                   </div>
                 </div>
               </div>
@@ -862,7 +863,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                     </div>
                   </div>
                   <div className="text-2xl font-black text-red-700">
-                    {data.summary.totalPendingObligations.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    {formatNumber(data.summary.totalPendingObligations)} €
                   </div>
                 </div>
 
@@ -870,13 +871,13 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   <div className="flex justify-between items-center">
                     <span>Pagarés / Letras:</span>
                     <span className="font-bold text-slate-800">
-                      {(data.summary.totalObligationsPendingAmount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(data.summary.totalObligationsPendingAmount || 0)} €
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span>Préstamos Hipotecarios:</span>
                     <span className="font-bold text-slate-800">
-                      {(data.summary.totalLoansPendingAmount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(data.summary.totalLoansPendingAmount || 0)} €
                     </span>
                   </div>
                   <div className="pt-1.5 flex items-center justify-between text-red-600 font-bold text-[11px] group-hover:translate-x-0.5 transition-transform">
@@ -1054,15 +1055,15 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                 </td>
                                 <td className="p-3.5 text-slate-600">{acq.location}</td>
                                 <td className="p-3.5 font-bold">{acq.surfaceM2} m²</td>
-                                <td className="p-3.5 font-bold text-slate-900">{acq.basePrice.toLocaleString('es-ES')} €</td>
-                                <td className="p-3.5 text-slate-600">{acq.ivaAmount.toLocaleString('es-ES')} €</td>
+                                <td className="p-3.5 font-bold text-slate-900">{formatNumber(acq.basePrice)} €</td>
+                                <td className="p-3.5 text-slate-600">{formatNumber(acq.ivaAmount)} €</td>
                                 <td className="p-3.5">
                                   <div className="text-[11px] space-y-0.5">
                                     <span className="block text-slate-700">
-                                      Suelo ({acq.landPercentage}%): <strong>{landVal.toLocaleString('es-ES')} €</strong>
+                                      Suelo ({acq.landPercentage}%): <strong>{formatNumber(landVal)} €</strong>
                                     </span>
                                     <span className="block text-slate-500">
-                                      Edificación ({100 - acq.landPercentage}%): <strong>{buildVal.toLocaleString('es-ES')} €</strong>
+                                      Edificación ({100 - acq.landPercentage}%): <strong>{formatNumber(buildVal)} €</strong>
                                     </span>
                                   </div>
                                 </td>
@@ -1158,9 +1159,9 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                 </td>
                                 <td className="p-3.5 text-slate-600">{acq.location}</td>
                                 <td className="p-3.5 font-bold">{acq.surfaceM2} m²</td>
-                                <td className="p-3.5 font-bold text-slate-900">{baseRent.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/mes</td>
-                                <td className="p-3.5 text-slate-600">{ivaRent.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/mes</td>
-                                <td className="p-3.5 font-bold text-amber-900">{deposit.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                                <td className="p-3.5 font-bold text-slate-900">{formatNumber(baseRent)} €/mes</td>
+                                <td className="p-3.5 text-slate-600">{formatNumber(ivaRent)} €/mes</td>
+                                <td className="p-3.5 font-bold text-amber-900">{formatNumber(deposit)} €</td>
                                 <td className="p-3.5">
                                   <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
                                     Domiciliación bancaria
@@ -1278,10 +1279,10 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   {mac.productionCapacityUnitsPerHour} unid / hora
                                 </td>
                                 <td className="p-3.5 font-bold text-slate-900">
-                                  {baseVal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                  {formatNumber(baseVal)} €
                                 </td>
                                 <td className="p-3.5 text-slate-600">
-                                  {ivaVal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                  {formatNumber(ivaVal)} €
                                 </td>
                                 <td className="p-3.5">
                                   {isPendingEnergy ? (
@@ -1412,7 +1413,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               Sueldo Bruto Total Mes
                             </span>
                             <div className="text-lg font-black text-slate-900">
-                              {totalGrossMonthly.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(totalGrossMonthly)} €
                             </div>
                             <span className="text-[10px] text-slate-500 mt-1 block font-medium">Suma devengada este mes</span>
                           </div>
@@ -1423,7 +1424,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               IRPF a Retener (17%)
                             </span>
                             <div className="text-lg font-black text-amber-900">
-                              {totalIRPFWithholding.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(totalIRPFWithholding)} €
                             </div>
                             <span className="text-[10px] text-amber-800/80 mt-1 block font-medium">A ingresar en Hacienda (AEAT)</span>
                           </div>
@@ -1434,7 +1435,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               SS Empleado (6,48%)
                             </span>
                             <div className="text-lg font-black text-indigo-900">
-                              {totalEmployeeSS.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(totalEmployeeSS)} €
                             </div>
                             <span className="text-[10px] text-indigo-800/80 mt-1 block font-medium">A ingresar en TGSS</span>
                           </div>
@@ -1445,7 +1446,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               SS Empresa (75%)
                             </span>
                             <div className="text-lg font-black text-violet-900">
-                              {totalCompanySS.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(totalCompanySS)} €
                             </div>
                             <span className="text-[10px] text-violet-800/80 mt-1 block font-medium">Gasto patronal en TGSS</span>
                           </div>
@@ -1456,10 +1457,10 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               Gasto Total Empresa
                             </span>
                             <div className="text-lg font-black text-emerald-950">
-                              {totalCompanyStaffExpense.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(totalCompanyStaffExpense)} €
                             </div>
                             <span className="text-[10px] text-emerald-800/80 mt-1 block font-medium">
-                              Sueldo Neto: {totalNetSalaries.toLocaleString('es-ES')} €
+                              Sueldo Neto: {formatNumber(totalNetSalaries)} €
                             </span>
                           </div>
                         </div>
@@ -1586,19 +1587,19 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4 text-xs space-y-2">
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Sueldo Bruto (Mes):</span>
-                                      <strong className="text-slate-900 font-mono">{grossForMonth.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</strong>
+                                      <strong className="text-slate-900 font-mono">{formatNumber(grossForMonth)} €</strong>
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">IRPF Retenido (17%):</span>
-                                      <span className="text-amber-800 font-semibold font-mono">{irpfForMonth.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                      <span className="text-amber-800 font-semibold font-mono">{formatNumber(irpfForMonth)} €</span>
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">SS Empleado (6,48%):</span>
-                                      <span className="text-indigo-800 font-semibold font-mono">{ssEmpForMonth.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                      <span className="text-indigo-800 font-semibold font-mono">{formatNumber(ssEmpForMonth)} €</span>
                                     </div>
                                     <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
                                       <span className="text-slate-700">Sueldo Neto a Percibir:</span>
-                                      <span className="text-emerald-700 font-mono">{netForMonth.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                      <span className="text-emerald-700 font-mono">{formatNumber(netForMonth)} €</span>
                                     </div>
                                   </div>
 
@@ -1737,7 +1738,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                   </span>
                                 </td>
                                 <td className="p-3.5 text-right font-black text-slate-900 text-sm">
-                                  {item.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                  {formatNumber(item.amount)} €
                                 </td>
                                 <td className="p-3.5">
                                   {isPaid ? (
@@ -1832,19 +1833,19 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               <div className="mt-3 grid grid-cols-2 gap-2 text-xs border-y border-slate-200/80 py-3 my-2">
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital otorgado</span>
-                                  <span className="font-extrabold text-slate-800">{loan.offeredAmount.toLocaleString('es-ES')} €</span>
+                                  <span className="font-extrabold text-slate-800">{formatNumber(loan.offeredAmount)} €</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuotas pendientes</span>
-                                  <span className="font-extrabold text-rose-700">{unpaidSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                  <span className="font-extrabold text-rose-700">{formatNumber(unpaidSum)} €</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital vivo (principal)</span>
-                                  <span className="font-extrabold text-slate-800">{unpaidPrincipal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                  <span className="font-extrabold text-slate-800">{formatNumber(unpaidPrincipal)} €</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuota mensual</span>
-                                  <span className="font-extrabold text-slate-900">{loan.monthlyPayment.toLocaleString('es-ES')} €/mes</span>
+                                  <span className="font-extrabold text-slate-900">{formatNumber(loan.monthlyPayment)} €/mes</span>
                                 </div>
                               </div>
 
@@ -1911,7 +1912,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                           <div className="text-xs space-y-1 text-slate-600 border-y border-slate-200/80 py-3">
                             <div className="flex justify-between">
                               <span>Cuota mensual:</span>
-                              <span className="font-extrabold text-slate-900">{c.monthlyPrice.toFixed(2)} €/mes (+ IVA)</span>
+                              <span className="font-extrabold text-slate-900">{formatNumber(c.monthlyPrice)} €/mes (+ IVA)</span>
                             </div>
                             <div className="flex justify-between">
                               <span>Fecha de contratación:</span>
@@ -1951,7 +1952,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                 <td className="p-3 font-bold text-slate-900">{inv.invoiceNumber}</td>
                                 <td className="p-3 font-medium text-slate-600">{inv.periodMonth}/{inv.periodYear}</td>
                                 <td className="p-3 font-medium">{inv.planName}</td>
-                                <td className="p-3 text-right font-black text-slate-900">{inv.totalAmount.toFixed(2)} €</td>
+                                <td className="p-3 text-right font-black text-slate-900">{formatNumber(inv.totalAmount)} €</td>
                                 <td className="p-3 text-center">
                                   <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full">
                                     Pagado
@@ -2018,7 +2019,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                             </div>
 
                             <div className="flex items-center gap-3">
-                              <span className="text-sm font-black text-slate-900">{order.totalAmount.toFixed(2)} € (IVA incl.)</span>
+                              <span className="text-sm font-black text-slate-900">{formatNumber(order.totalAmount)} € (IVA incl.)</span>
                               <button
                                 onClick={() => setSelectedOfficeOrderModal(order)}
                                 className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs rounded-xl transition cursor-pointer shadow-xs inline-flex items-center gap-1.5"
@@ -2047,8 +2048,8 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     <td className="p-2.5 font-semibold text-slate-500">{it.categoryLabel}</td>
                                     <td className="p-2.5 font-bold text-slate-900">{it.itemName}</td>
                                     <td className="p-2.5 text-center font-bold">{it.quantity}</td>
-                                    <td className="p-2.5 text-right">{it.unitPrice.toFixed(2)} €</td>
-                                    <td className="p-2.5 text-right font-black text-slate-900">{it.totalPrice.toFixed(2)} €</td>
+                                    <td className="p-2.5 text-right">{formatNumber(it.unitPrice)} €</td>
+                                    <td className="p-2.5 text-right font-black text-slate-900">{formatNumber(it.totalPrice)} €</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2111,7 +2112,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-red-900">
                   <span className="text-[10px] font-extrabold uppercase text-red-600 block mb-1">Deuda Total Pendiente</span>
                   <div className="text-xl font-black text-red-700">
-                    {data.summary.totalPendingObligations.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    {formatNumber(data.summary.totalPendingObligations)} €
                   </div>
                   <span className="text-[11px] text-red-600/80 mt-1 block">
                     Pagarés + Préstamos Bancarios
@@ -2121,7 +2122,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-900">
                   <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Préstamos Hipotecarios</span>
                   <div className="text-xl font-black text-emerald-800">
-                    {(data.summary.totalLoansPendingAmount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    {formatNumber(data.summary.totalLoansPendingAmount || 0)} €
                   </div>
                   <span className="text-[11px] text-emerald-700/80 mt-1 block">
                     {data.summary.activeLoansCount || 0} operación(es) con Banco Simulado
@@ -2131,7 +2132,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900">
                   <span className="text-[10px] font-extrabold uppercase text-amber-800 block mb-1">Pagarés / Letras de Cambio</span>
                   <div className="text-xl font-black text-amber-900">
-                    {(data.summary.totalObligationsPendingAmount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                    {formatNumber(data.summary.totalObligationsPendingAmount || 0)} €
                   </div>
                   <span className="text-[11px] text-amber-800/80 mt-1 block">
                     {data.obligations.filter(o => o.status === 'pendiente').length} cuota(s) por vencer
@@ -2216,14 +2217,14 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     {loan.collateral.propertyTitle || 'Garantía Inmobiliaria'}
                                   </h4>
                                   <p className="text-xs text-slate-500">
-                                    Superficie: {loan.collateral.surfaceM2 || '—'} m² • Valor de Tasación: {loan.collateral.appraisalValue.toLocaleString('es-ES')} €
+                                    Superficie: {loan.collateral.surfaceM2 || '—'} m² • Valor de Tasación: {formatNumber(loan.collateral.appraisalValue)} €
                                   </p>
                                 </div>
 
                                 <div className="text-right">
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Deuda Pendiente en Cuotas</span>
                                   <div className="text-lg font-black text-red-700">
-                                    {unpaidSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                    {formatNumber(unpaidSum)} €
                                   </div>
                                 </div>
                               </div>
@@ -2231,15 +2232,15 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl text-xs">
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital Otorgado</span>
-                                  <span className="font-extrabold text-slate-900">{loan.offeredAmount.toLocaleString('es-ES')} €</span>
+                                  <span className="font-extrabold text-slate-900">{formatNumber(loan.offeredAmount)} €</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Capital Vivo Pendiente</span>
-                                  <span className="font-extrabold text-slate-900">{unpaidPrincipal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span>
+                                  <span className="font-extrabold text-slate-900">{formatNumber(unpaidPrincipal)} €</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Cuota Mensual</span>
-                                  <span className="font-extrabold text-slate-900">{loan.monthlyPayment.toLocaleString('es-ES')} €/mes</span>
+                                  <span className="font-extrabold text-slate-900">{formatNumber(loan.monthlyPayment)} €/mes</span>
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Interés y Plazo</span>
@@ -2317,7 +2318,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     Cuota {ob.installmentNumber || 1} / {ob.totalInstallments || 12}
                                   </td>
                                   <td className="p-3 font-black text-slate-900 text-sm">
-                                    {ob.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                    {formatNumber(ob.amount)} €
                                   </td>
                                   <td className="p-3 font-mono text-slate-700">
                                     {new Date(ob.dueDate).toLocaleDateString('es-ES')}
@@ -2400,7 +2401,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                     Cuota {ob.installmentNumber || 1} / {ob.totalInstallments || 12}
                                   </td>
                                   <td className="p-3 font-black text-slate-900 text-sm">
-                                    {ob.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                    {formatNumber(ob.amount)} €
                                   </td>
                                   <td className="p-3 font-mono text-slate-700">
                                     {new Date(ob.dueDate).toLocaleDateString('es-ES')}
@@ -2521,8 +2522,8 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                         <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Importe / Inversión</span>
                         <div className="text-lg font-black text-slate-900">
                           {item.operation === 'alquiler'
-                            ? `${(item.monthlyRent || item.totalPrice || 0).toLocaleString('es-ES')} €/mes`
-                            : `${(item.totalPrice || item.basePrice || 0).toLocaleString('es-ES')} €`}
+                            ? `${formatNumber(item.monthlyRent || item.totalPrice || 0)} €/mes`
+                            : `${formatNumber(item.totalPrice || item.basePrice || 0)} €`}
                         </div>
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
                           {item.operation === 'alquiler' ? 'Renta mensual de alquiler' : 'Inversión total de adquisición'}
@@ -2532,7 +2533,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                       <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-900 shadow-2xs">
                         <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Pagos realizados</span>
                         <div className="text-lg font-black text-emerald-800">
-                          {totalPaid.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                          {formatNumber(totalPaid)} €
                         </div>
                         <span className="text-[10px] text-emerald-700 mt-0.5 block">
                           {item.paymentMethod === 'contado' ? '100% abonado al contado' : `${paidObs.length} cuota(s) abonadas`}
@@ -2542,7 +2543,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 shadow-2xs">
                         <span className="text-[10px] font-extrabold uppercase text-amber-800 block mb-1">Pagos pendientes</span>
                         <div className="text-lg font-black text-amber-900">
-                          {totalPending.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                          {formatNumber(totalPending)} €
                         </div>
                         <span className="text-[10px] text-amber-800 mt-0.5 block">
                           {pendingObs.length} cuota(s) pendientes
@@ -2589,7 +2590,7 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                                       </span>
                                     </td>
                                     <td className="p-3 font-bold text-slate-900 font-mono">
-                                      {ob.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                      {formatNumber(ob.amount)} €
                                     </td>
                                     <td className="p-3 text-slate-600 font-mono">
                                       {new Date(ob.dueDate).toLocaleDateString('es-ES')}

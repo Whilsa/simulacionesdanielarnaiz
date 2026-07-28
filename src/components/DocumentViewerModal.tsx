@@ -10,6 +10,7 @@ import {
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock
 } from 'lucide-react';
 import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord } from '../types.js';
+import { formatNumber } from '../lib/formatters.js';
 
 export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip';
 
@@ -89,13 +90,13 @@ DESGLOSE DEL INMUEBLE:
 Inmueble: ${title}
 Superficie: ${acq?.surfaceM2 || 'N/A'} m² | Ubicación: ${acq?.location || 'España'}
 
-Base Imponible: ${basePrice.toLocaleString('es-ES')} €
-IVA (21%): ${ivaAmount.toLocaleString('es-ES')} €
-TOTAL FACTURA: ${totalPrice.toLocaleString('es-ES')} €
+Base Imponible: ${formatNumber(basePrice)} €
+IVA (21%): ${formatNumber(ivaAmount)} €
+TOTAL FACTURA: ${formatNumber(totalPrice)} €
 ------------------------------------------------
 CONDICIONES DE PAGO:
-- Parte Pagada al Contado (Entrada / Inicial): ${downPayment.toLocaleString('es-ES')} €
-- Parte Pendiente de Pago (Saldo Aplazado): ${pendingBalance.toLocaleString('es-ES')} €
+- Parte Pagada al Contado (Entrada / Inicial): ${formatNumber(downPayment)} €
+- Parte Pendiente de Pago (Saldo Aplazado): ${formatNumber(pendingBalance)} €
 Forma de Pago: ${acq?.paymentMethod === 'contado' ? 'Al Contado' : 'Pago Aplazado (Letras / Pagarés)'}
 ================================================`;
     } else if (data.type === 'machinery_invoice') {
@@ -125,13 +126,13 @@ Ubicación Instalada: ${mac?.installationNaveTitle || 'Nave Industrial'}
 Capacidad Producción: ${mac?.productionCapacityUnitsPerHour || 60} unid/hora
 Plazo de Montaje: 5 Días Reales (Estado: ${mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento'})
 
-Base Imponible (Llave en mano): ${basePrice.toLocaleString('es-ES')} €
-IVA (21%): ${ivaAmount.toLocaleString('es-ES')} €
-TOTAL FACTURA: ${totalPrice.toLocaleString('es-ES')} €
+Base Imponible (Llave en mano): ${formatNumber(basePrice)} €
+IVA (21%): ${formatNumber(ivaAmount)} €
+TOTAL FACTURA: ${formatNumber(totalPrice)} €
 ------------------------------------------------
 CONDICIONES DE PAGO:
-- Parte Pagada al Contado (Entrada + IVA): ${downPayment.toLocaleString('es-ES')} €
-- Parte Pendiente de Pago (Saldo Aplazado en Pagarés): ${pendingBalance.toLocaleString('es-ES')} €
+- Parte Pagada al Contado (Entrada + IVA): ${formatNumber(downPayment)} €
+- Parte Pendiente de Pago (Saldo Aplazado en Pagarés): ${formatNumber(pendingBalance)} €
 Forma de Pago: ${mac?.paymentMethod === 'contado' ? 'Al Contado' : 'Pago Aplazado (24 Pagarés Mensuales)'}
 ================================================`;
     } else if (data.type === 'obligation_statement') {
@@ -154,7 +155,7 @@ Tipo de Efecto: ${instrumentName} (${ob?.installmentNumber || 1}/${ob?.totalInst
 Vencimiento: ${new Date(ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
 ------------------------------------------------
 LIQUIDACIÓN DEL VENCIMIENTO:
-Importe del Vencimiento: ${(ob?.amount || 0).toLocaleString('es-ES')} €
+Importe del Vencimiento: ${formatNumber(ob?.amount || 0)} €
 Estado: ${isPaid ? `PAGADO Y ABONADO el ${new Date(ob?.paidDate || Date.now()).toLocaleDateString('es-ES')}` : 'PENDIENTE DE COBRO / VENCIMIENTO'}
 ================================================`;
     } else if (data.type === 'loan_statement') {
@@ -164,7 +165,7 @@ Estado: ${isPaid ? `PAGADO Y ABONADO el ${new Date(ob?.paidDate || Date.now()).t
       const annualRate = (loan?.annualInterestRate || 4.50);
 
       const scheduleText = (loan?.schedule || []).map(s => 
-        `Mes ${s.period} [${new Date(s.dueDate).toLocaleDateString('es-ES')}]: Cuota: ${s.payment} € | Capital: ${s.principal} € | Interés: ${s.interest} € | Cap. Pendiente: ${s.pendingBalance} €`
+        `Mes ${s.period} [${new Date(s.dueDate).toLocaleDateString('es-ES')}]: Cuota: ${formatNumber(s.payment)} € | Capital: ${formatNumber(s.principal)} € | Interés: ${formatNumber(s.interest)} € | Cap. Pendiente: ${formatNumber(s.pendingBalance)} €`
       ).join('\n');
 
       textContent = `================================================
@@ -178,18 +179,18 @@ ${loan?.studentName || 'Estudiante'}
 IBAN de Cuenta: ${loan?.studentAccount || 'ES21...'}
 
 CONDICIONES FINANCIERAS:
-Capital Concedido: ${principal.toLocaleString('es-ES')} €
-Tipo de Interés: ${annualRate.toFixed(2)}% TIN
+Capital Concedido: ${formatNumber(principal)} €
+Tipo de Interés: ${formatNumber(annualRate, 2)}% TIN
 Plazo: ${loan?.termMonths || 36} Meses
-Comisión Apertura (0.10%): ${(principal * 0.001).toLocaleString('es-ES')} €
+Comisión Apertura (0.10%): ${formatNumber(principal * 0.001)} €
 
 ${row ? `
 LIQUIDACIÓN DE CUOTA Nº ${row.period}:
 Vencimiento: ${new Date(row.dueDate).toLocaleDateString('es-ES')}
-- Amortización Capital: ${row.principal.toLocaleString('es-ES')} €
-- Intereses Periodo: ${row.interest.toLocaleString('es-ES')} €
-- TOTAL CUOTA: ${row.payment.toLocaleString('es-ES')} €
-- Capital Pendiente tras Cuota: ${row.pendingBalance.toLocaleString('es-ES')} €
+- Amortización Capital: ${formatNumber(row.principal)} €
+- Intereses Periodo: ${formatNumber(row.interest)} €
+- TOTAL CUOTA: ${formatNumber(row.payment)} €
+- Capital Pendiente tras Cuota: ${formatNumber(row.pendingBalance)} €
 ` : ''}
 ------------------------------------------------
 CUADRO COMPLETO DE AMORTIZACIÓN:
@@ -215,7 +216,7 @@ IBAN: ${tx?.receiverAccount || 'ES...'}
 ------------------------------------------------
 DETALLES DE LA TRANSACCIÓN:
 Concepto: ${tx?.concept || 'Transferencia Bancaria'}
-Importe Operación: ${(tx?.amount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Importe Operación: ${formatNumber(tx?.amount || 0)} €
 Estado Contable: EJECUTADO Y ABONADO
 ================================================`;
     }
@@ -362,9 +363,9 @@ Estado Contable: EJECUTADO Y ABONADO
                           </span>
                         </td>
                         <td className="p-3 text-center font-bold">{acq?.surfaceM2 || 150} m²</td>
-                        <td className="p-3 text-right font-medium">{basePrice.toLocaleString('es-ES')} €</td>
-                        <td className="p-3 text-right font-medium text-slate-600">{ivaAmount.toLocaleString('es-ES')} €</td>
-                        <td className="p-3 text-right font-bold text-slate-900">{totalPrice.toLocaleString('es-ES')} €</td>
+                        <td className="p-3 text-right font-medium">{formatNumber(basePrice)} €</td>
+                        <td className="p-3 text-right font-medium text-slate-600">{formatNumber(ivaAmount)} €</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{formatNumber(totalPrice)} €</td>
                       </tr>
                     </tbody>
                   </table>
@@ -380,13 +381,13 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-sans">
                     <div className="p-3.5 bg-white rounded-lg border border-amber-200">
                       <span className="text-[10px] font-bold text-emerald-800 uppercase block mb-1">Parte Pagada al Contado (Entrada)</span>
-                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{downPayment.toLocaleString('es-ES')} €</span>
+                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{formatNumber(downPayment)} €</span>
                       <span className="text-[11px] text-slate-500 block mt-0.5">Abonado mediante transferencia bancaria inicial</span>
                     </div>
 
                     <div className="p-3.5 bg-white rounded-lg border border-amber-200">
                       <span className="text-[10px] font-bold text-amber-800 uppercase block mb-1">Parte Pendiente de Pago (Saldo Aplazado)</span>
-                      <span className="text-base font-extrabold text-amber-900 block font-mono">{pendingBalance.toLocaleString('es-ES')} €</span>
+                      <span className="text-base font-extrabold text-amber-900 block font-mono">{formatNumber(pendingBalance)} €</span>
                       <span className="text-[11px] text-slate-500 block mt-0.5">
                         {pendingBalance > 0 ? 'Financiado mediante efectos mercantiles / pagarés pendientes' : 'Operación 100% abonada al contado'}
                       </span>
@@ -405,14 +406,14 @@ Estado Contable: EJECUTADO Y ABONADO
                     <div className="grid grid-cols-2 gap-4 pt-1 font-mono text-xs">
                       <div className="p-3 bg-white rounded-lg border border-slate-200">
                         <span className="text-[10px] font-bold text-slate-500 uppercase block">Subcuenta (210) Terrenos ({landPct}%)</span>
-                        <span className="text-sm font-bold text-slate-900 block">{landValue.toLocaleString('es-ES')} €</span>
+                        <span className="text-sm font-bold text-slate-900 block">{formatNumber(landValue)} €</span>
                         <span className="text-[10px] text-slate-500 font-sans">Bien NO amortizable</span>
                       </div>
 
                       <div className="p-3 bg-white rounded-lg border border-slate-200">
                         <span className="text-[10px] font-bold text-slate-500 uppercase block">Subcuenta (211) Construcciones ({100 - landPct}%)</span>
-                        <span className="text-sm font-bold text-slate-900 block">{buildingValue.toLocaleString('es-ES')} €</span>
-                        <span className="text-[10px] text-slate-500 font-sans">Amortizable linealmente (2.00% anual)</span>
+                        <span className="text-sm font-bold text-slate-900 block">{formatNumber(buildingValue)} €</span>
+                        <span className="text-[10px] text-slate-500 font-sans">Amortizable linealmente (2,00% anual)</span>
                       </div>
                     </div>
                   </div>
@@ -423,15 +424,15 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
                     <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
                       <span>Base Imponible:</span>
-                      <span>{basePrice.toLocaleString('es-ES')} €</span>
+                      <span>{formatNumber(basePrice)} €</span>
                     </div>
                     <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
-                      <span>21.00% IVA Soportado:</span>
-                      <span>+{ivaAmount.toLocaleString('es-ES')} €</span>
+                      <span>21,00% IVA Soportado:</span>
+                      <span>+{formatNumber(ivaAmount)} €</span>
                     </div>
                     <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
                       <span>TOTAL FACTURA:</span>
-                      <span>{totalPrice.toLocaleString('es-ES')} €</span>
+                      <span>{formatNumber(totalPrice)} €</span>
                     </div>
                   </div>
                 </div>
@@ -532,9 +533,9 @@ Estado Contable: EJECUTADO Y ABONADO
                           </span>
                         </td>
                         <td className="p-3 text-center font-bold text-slate-800">{mac?.productionCapacityUnitsPerHour || 60} u/h</td>
-                        <td className="p-3 text-right font-medium">{basePrice.toLocaleString('es-ES')} €</td>
-                        <td className="p-3 text-right font-medium text-slate-600">{ivaAmount.toLocaleString('es-ES')} €</td>
-                        <td className="p-3 text-right font-bold text-slate-900">{totalPrice.toLocaleString('es-ES')} €</td>
+                        <td className="p-3 text-right font-medium">{formatNumber(basePrice)} €</td>
+                        <td className="p-3 text-right font-medium text-slate-600">{formatNumber(ivaAmount)} €</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{formatNumber(totalPrice)} €</td>
                       </tr>
                     </tbody>
                   </table>
@@ -559,13 +560,13 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-sans">
                     <div className="p-3.5 bg-white rounded-lg border border-slate-200">
                       <span className="text-[10px] font-bold text-emerald-800 uppercase block mb-1">Parte Pagada al Contado (Entrada + IVA)</span>
-                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{downPayment.toLocaleString('es-ES')} €</span>
+                      <span className="text-base font-extrabold text-emerald-900 block font-mono">{formatNumber(downPayment)} €</span>
                       <span className="text-[11px] text-slate-500 block mt-0.5">Abonado en cuenta al formalizar la compra</span>
                     </div>
 
                     <div className="p-3.5 bg-white rounded-lg border border-slate-200">
                       <span className="text-[10px] font-bold text-amber-800 uppercase block mb-1">Parte Pendiente de Pago (Saldo Aplazado en Pagarés)</span>
-                      <span className="text-base font-extrabold text-amber-900 block font-mono">{pendingBalance.toLocaleString('es-ES')} €</span>
+                      <span className="text-base font-extrabold text-amber-900 block font-mono">{formatNumber(pendingBalance)} €</span>
                       <span className="text-[11px] text-slate-500 block mt-0.5">
                         {pendingBalance > 0 ? 'Financiado en 24 pagarés mensuales de vencimiento automático' : 'Sin saldo pendiente / Pago al contado'}
                       </span>
@@ -578,15 +579,15 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
                     <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
                       <span>Base Imponible Llave en Mano:</span>
-                      <span>{basePrice.toLocaleString('es-ES')} €</span>
+                      <span>{formatNumber(basePrice)} €</span>
                     </div>
                     <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
-                      <span>21.00% IVA Soportado:</span>
-                      <span>+{ivaAmount.toLocaleString('es-ES')} €</span>
+                      <span>21,00% IVA Soportado:</span>
+                      <span>+{formatNumber(ivaAmount)} €</span>
                     </div>
                     <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
                       <span>TOTAL FACTURA:</span>
-                      <span>{totalPrice.toLocaleString('es-ES')} €</span>
+                      <span>{formatNumber(totalPrice)} €</span>
                     </div>
                   </div>
                 </div>
@@ -689,7 +690,7 @@ Estado Contable: EJECUTADO Y ABONADO
                       </span>
                     </div>
                     <span className={`text-lg font-extrabold px-3 py-1 rounded-lg border ${isPaid ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-900 bg-amber-50 border-amber-300'}`}>
-                      {(ob?.amount || 0).toLocaleString('es-ES')} €
+                      {formatNumber(ob?.amount || 0)} €
                     </span>
                   </div>
                 </div>
@@ -772,12 +773,12 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono text-xs">
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Capital Concedido</span>
-                      <span className="text-sm font-bold text-slate-900">{principal.toLocaleString('es-ES')} €</span>
+                      <span className="text-sm font-bold text-slate-900">{formatNumber(principal)} €</span>
                     </div>
 
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Tipo de Interés (TIN)</span>
-                      <span className="text-sm font-bold text-slate-900">{annualRate.toFixed(2)}%</span>
+                      <span className="text-sm font-bold text-slate-900">{formatNumber(annualRate, 2)}%</span>
                     </div>
 
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
@@ -787,7 +788,7 @@ Estado Contable: EJECUTADO Y ABONADO
 
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Comisión Apertura</span>
-                      <span className="text-sm font-bold text-slate-900">{openingFee.toLocaleString('es-ES')} €</span>
+                      <span className="text-sm font-bold text-slate-900">{formatNumber(openingFee)} €</span>
                     </div>
                   </div>
                 </div>
@@ -821,10 +822,10 @@ Estado Contable: EJECUTADO Y ABONADO
                           <tr key={sRow.period} className={sRow.period % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'}>
                             <td className="py-1.5 px-2 text-center font-bold text-slate-600">{sRow.period}</td>
                             <td className="py-1.5 px-2.5 font-sans">{new Date(sRow.dueDate).toLocaleDateString('es-ES')}</td>
-                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.payment.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                            <td className="py-1.5 px-2.5 text-right text-emerald-800 font-medium">{sRow.principal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                            <td className="py-1.5 px-2.5 text-right text-amber-800">{sRow.interest.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
-                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{sRow.pendingBalance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{formatNumber(sRow.payment)} €</td>
+                            <td className="py-1.5 px-2.5 text-right text-emerald-800 font-medium">{formatNumber(sRow.principal)} €</td>
+                            <td className="py-1.5 px-2.5 text-right text-amber-800">{formatNumber(sRow.interest)} €</td>
+                            <td className="py-1.5 px-2.5 text-right font-bold text-slate-900">{formatNumber(sRow.pendingBalance)} €</td>
                             <td className="py-1.5 px-2 text-center font-sans text-[9.5px]">
                               {sRow.paid ? (
                                 <span className="inline-block px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold">PAGADO</span>
@@ -917,7 +918,7 @@ Estado Contable: EJECUTADO Y ABONADO
                       <span className="text-[10px] text-slate-500 font-sans">Movimiento bancario procesado correctamente</span>
                     </div>
                     <span className="text-xl font-extrabold px-3 py-1.5 rounded-lg border text-emerald-800 bg-emerald-50 border-emerald-300">
-                      {(tx?.amount || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                      {formatNumber(tx?.amount || 0)} €
                     </span>
                   </div>
                 </div>
@@ -1025,14 +1026,14 @@ Estado Contable: EJECUTADO Y ABONADO
                       </tr>
                       <tr>
                         <td className="p-2.5 pl-6 font-sans text-slate-700">Salario Base del puesto / Turno asignado</td>
-                        <td className="p-2.5 text-right text-slate-900 font-bold">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{formatNumber(gross)} €</td>
                         <td className="p-2.5 text-right"></td>
                       </tr>
 
                       {/* TOTAL DEVENGADO */}
                       <tr className="bg-blue-50/50 font-bold border-t border-b border-blue-200">
                         <td className="p-2.5 font-sans text-blue-900 uppercase text-[10px]">A. TOTAL DEVENGADO (Sueldo Bruto)</td>
-                        <td className="p-2.5 text-right text-blue-900">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-blue-900">{formatNumber(gross)} €</td>
                         <td className="p-2.5 text-right"></td>
                       </tr>
 
@@ -1045,34 +1046,34 @@ Estado Contable: EJECUTADO Y ABONADO
                       <tr>
                         <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Contingencias Comunes (4,70%)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.047 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-800">{formatNumber(Math.round(gross * 0.047 * 100) / 100)} €</td>
                       </tr>
                       <tr>
                         <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Desempleo (1,55%)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.0155 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-800">{formatNumber(Math.round(gross * 0.0155 * 100) / 100)} €</td>
                       </tr>
                       <tr>
                         <td className="p-2.5 pl-6 font-sans text-slate-700">Aportación Seg. Social - Formación Profesional (0,10%)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-slate-800">{(Math.round(gross * 0.001 * 100) / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-800">{formatNumber(Math.round(gross * 0.001 * 100) / 100)} €</td>
                       </tr>
                       <tr className="bg-slate-50/50">
                         <td className="p-2.5 pl-6 font-sans text-slate-800 font-bold">Subtotal Aportaciones Seguridad Social Trabajador (6,48%)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-slate-900 font-bold">{ssEmp.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{formatNumber(ssEmp)} €</td>
                       </tr>
                       <tr>
                         <td className="p-2.5 pl-6 font-sans text-slate-700">Retención a cuenta del I.R.P.F. (17,00%)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-slate-900 font-bold">{irpf.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-slate-900 font-bold">{formatNumber(irpf)} €</td>
                       </tr>
 
                       {/* TOTAL DEDUCCIONES */}
                       <tr className="bg-amber-50/50 font-bold border-t border-b border-amber-200">
                         <td className="p-2.5 font-sans text-amber-900 uppercase text-[10px]">B. TOTAL DEDUCCIONES (SS + IRPF)</td>
                         <td className="p-2.5 text-right"></td>
-                        <td className="p-2.5 text-right text-amber-900">{(ssEmp + irpf).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</td>
+                        <td className="p-2.5 text-right text-amber-900">{formatNumber(ssEmp + irpf)} €</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1085,7 +1086,7 @@ Estado Contable: EJECUTADO Y ABONADO
                     <span className="text-[11px] text-emerald-800 font-sans">Abonado por transferencia bancaria el día 26 de cada mes</span>
                   </div>
                   <span className="text-2xl font-black px-4 py-1.5 rounded-lg border text-emerald-900 bg-white border-emerald-400 shadow-xs">
-                    {net.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                    {formatNumber(net)} €
                   </span>
                 </div>
 
@@ -1097,15 +1098,15 @@ Estado Contable: EJECUTADO Y ABONADO
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-xs">
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans block">Base Cotización Contingencias</span>
-                      <span className="font-bold text-slate-900">{gross.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                      <span className="font-bold text-slate-900">{formatNumber(gross)} €</span>
                     </div>
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans block">Aportación Empresa SS (75,00%)</span>
-                      <span className="font-bold text-indigo-900">{ssComp.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                      <span className="font-bold text-indigo-900">{formatNumber(ssComp)} €</span>
                     </div>
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans block">COSTE TOTAL EMPRESA</span>
-                      <span className="font-bold text-slate-900">{totalCost.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                      <span className="font-bold text-slate-900">{formatNumber(totalCost)} €</span>
                     </div>
                   </div>
                 </div>

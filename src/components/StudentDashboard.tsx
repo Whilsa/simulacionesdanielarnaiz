@@ -10,6 +10,7 @@ import {
   Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText
 } from 'lucide-react';
 import { User, Transfer } from '../types.js';
+import { formatNumber } from '../lib/formatters.js';
 import StudentLoanSection from './StudentLoanSection.js';
 import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
 import DocumentViewerModal from './DocumentViewerModal.js';
@@ -312,7 +313,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   </span>
                 </h3>
                 <p className="text-xs text-rose-100 mt-1 leading-relaxed">
-                  Tienes <strong>{paymentStatus.totalOverdueAmount.toLocaleString('es-ES')} €</strong> en vencimientos impagados acumulados. Tu cuenta no permite saldo negativo. Las transferencias y compras manuales están bloqueadas.
+                  Tienes <strong>{formatNumber(paymentStatus.totalOverdueAmount)} €</strong> en vencimientos impagados acumulados. Tu cuenta no permite saldo negativo. Las transferencias y compras manuales están bloqueadas.
                 </p>
               </div>
             </div>
@@ -333,14 +334,14 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   </span>
                 </div>
                 <p className="text-xs text-amber-900 mt-1 leading-relaxed">
-                  Se realizarán cobros automáticos domiciliados en tu cuenta bancaria por un total de <strong>{paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €</strong> en los próximos 30 días. {paymentStatus.insufficientProjectedBalance ? '⚠️ Revisa tu saldo para evitar recargos del 5% de mora.' : '✅ Cuentas con saldo suficiente para cubrirlos.'}
+                  Se realizarán cobros automáticos domiciliados en tu cuenta bancaria por un total de <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en los próximos 30 días. {paymentStatus.insufficientProjectedBalance ? '⚠️ Revisa tu saldo para evitar recargos del 5% de mora.' : '✅ Cuentas con saldo suficiente para cubrirlos.'}
                 </p>
               </div>
             </div>
             <div className="text-right shrink-0">
               <span className="text-xs text-amber-800 font-medium block">Total Compromisos 30d:</span>
               <span className="text-lg font-black font-mono text-amber-950 bg-amber-200/80 px-3 py-1 rounded-xl border border-amber-300">
-                {paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €
+                {formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €
               </span>
             </div>
           </div>
@@ -360,7 +361,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   Saldo Disponible Total
                 </p>
                 <h2 className="text-4xl sm:text-5xl font-extrabold font-display tracking-tight font-mono">
-                  {balance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} <span className="text-2xl font-semibold">€</span>
+                  {formatNumber(balance)} <span className="text-2xl font-semibold">€</span>
                 </h2>
               </div>
               <span className="bg-white/10 border border-white/10 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider text-amber-100 flex items-center">
@@ -456,7 +457,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                     <span>Aviso de Cobros Domiciliados a 30 días:</span>
                   </span>
                   <p>
-                    Tienes <strong>{paymentStatus.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
+                    Tienes <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
                   </p>
                 </div>
               )}
@@ -591,7 +592,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                           <p className={`text-base font-bold font-mono ${
                             isOutbound ? 'text-rose-600' : 'text-emerald-600'
                           }`}>
-                            {isOutbound ? '-' : '+'}{tx.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                            {isOutbound ? '-' : '+'}{formatNumber(tx.amount)} €
                           </p>
                           <button
                             onClick={() => setSelectedExtractTx(tx)}

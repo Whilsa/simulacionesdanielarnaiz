@@ -7,6 +7,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { OfficePurchaseOrder } from '../types.js';
 import { X, Printer, ShoppingBag, CheckCircle2 } from 'lucide-react';
+import { formatNumber } from '../lib/formatters.js';
 
 interface OfficeInvoiceModalProps {
   order: OfficePurchaseOrder | null;
@@ -21,18 +22,20 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm print:p-0 print:bg-white print:static print:block">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:static print:block">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden text-slate-900 my-auto print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
         
         {/* Modal Header Actions (Sticky top, hidden when printing) */}
-        <div className="bg-slate-900 text-white px-5 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0 z-20 print:hidden border-b border-slate-800">
+        <div className="bg-slate-900 text-white px-4 sm:px-6 py-3 flex items-center justify-between shrink-0 z-20 print:hidden border-b border-slate-800">
           <div className="flex items-center gap-3 min-w-0">
             <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
               <ShoppingBag className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-sm sm:text-base text-white truncate">Factura de Adquisición de Muebles e Informática</h3>
-              <p className="text-xs text-slate-400 truncate">Pedido Nº {order.orderNumber} | {new Date(order.purchaseDate).toLocaleString('es-ES')}</p>
+              <h3 className="font-bold text-xs sm:text-sm md:text-base text-white truncate">Factura de Adquisición de Muebles e Informática</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Pedido Nº {order.orderNumber} | {new Date(order.purchaseDate).toLocaleDateString('es-ES')} {new Date(order.purchaseDate).toLocaleTimeString('es-ES')}
+              </p>
             </div>
           </div>
 
@@ -43,8 +46,7 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
               title="Imprimir o guardar en PDF"
             >
               <Printer className="w-4 h-4" />
-              <span className="hidden sm:inline">Descargar / Imprimir PDF</span>
-              <span className="sm:hidden">PDF</span>
+              <span>Imprimir / PDF</span>
             </button>
             <button
               onClick={onClose}
@@ -57,7 +59,7 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
         </div>
 
         {/* Printable Invoice Body (Scrollable inside modal) */}
-        <div className="p-6 sm:p-10 space-y-8 flex-1 overflow-y-auto print:overflow-visible print:p-0">
+        <div className="p-4 sm:p-8 space-y-6 flex-1 overflow-y-auto print:overflow-visible print:p-0">
           
           {/* Header & Seller Logo */}
           <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-200 pb-6">
@@ -124,8 +126,8 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
                       <td className="p-3 font-semibold text-slate-500">{it.categoryLabel}</td>
                       <td className="p-3 font-medium text-slate-900">{it.itemName}</td>
                       <td className="p-3 text-center font-bold">{it.quantity}</td>
-                      <td className="p-3 text-right font-medium">{it.unitPrice.toFixed(2)} €</td>
-                      <td className="p-3 text-right font-bold text-slate-900">{it.totalPrice.toFixed(2)} €</td>
+                      <td className="p-3 text-right font-medium">{formatNumber(it.unitPrice)} €</td>
+                      <td className="p-3 text-right font-bold text-slate-900">{formatNumber(it.totalPrice)} €</td>
                     </tr>
                   ))}
                 </tbody>
@@ -143,15 +145,15 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
             <div className="w-full sm:w-64 bg-slate-900 text-white p-5 rounded-xl space-y-2 text-xs">
               <div className="flex justify-between text-slate-300">
                 <span>Subtotal (Base Imponible):</span>
-                <span className="font-semibold">{order.subtotal.toFixed(2)} €</span>
+                <span className="font-semibold">{formatNumber(order.subtotal)} €</span>
               </div>
               <div className="flex justify-between text-slate-300">
                 <span>IVA ({order.ivaRate}%):</span>
-                <span className="font-semibold">{order.ivaAmount.toFixed(2)} €</span>
+                <span className="font-semibold">{formatNumber(order.ivaAmount)} €</span>
               </div>
               <div className="border-t border-slate-700 pt-2 mt-2 flex justify-between font-extrabold text-sm text-amber-400">
                 <span>TOTAL FACTURA:</span>
-                <span>{order.totalAmount.toFixed(2)} €</span>
+                <span>{formatNumber(order.totalAmount)} €</span>
               </div>
             </div>
           </div>
@@ -161,24 +163,25 @@ export function OfficeInvoiceModal({ order, onClose }: OfficeInvoiceModalProps) 
             Documento expedido electrónicamente en el Simulador de Negocios de Daniel Arnaiz Boluda. Validez oficial para justificación de inversión de capital y deducción fiscal.
           </div>
 
-          {/* Bottom Action Footer (Hidden when printing) */}
-          <div className="pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 print:hidden">
-            <button
-              onClick={onClose}
-              className="w-full sm:w-auto px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
-            >
-              Cerrar Ventana
-            </button>
-            <button
-              onClick={handlePrint}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Descargar / Imprimir Factura en PDF</span>
-            </button>
-          </div>
-
         </div>
+
+        {/* Fixed Pinned Bottom Action Bar (Hidden when printing) */}
+        <div className="p-3 sm:p-4 bg-slate-100 border-t border-slate-200 flex flex-row items-center justify-between gap-3 shrink-0 print:hidden z-20">
+          <button
+            onClick={onClose}
+            className="px-4 py-2.5 bg-white hover:bg-slate-200 text-slate-700 border border-slate-300 font-bold rounded-xl text-xs transition cursor-pointer"
+          >
+            Cerrar
+          </button>
+          <button
+            onClick={handlePrint}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Descargar / Imprimir Factura en PDF</span>
+          </button>
+        </div>
+
       </div>
     </div>,
     document.body
