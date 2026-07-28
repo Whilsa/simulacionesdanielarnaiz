@@ -254,7 +254,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 240,
     description: 'Monitor ergonómico de 27 pulgadas con resolución QHD (2560x1440), altavoces integrados y puerto USB-C con carga 65W.',
     specs: ['Panel IPS 27" QHD (2560 x 1440 px)', 'Conexión USB-C (Power Delivery 65W + vídeo)', 'Soporte pivotante (giratorio, inclinable, regulable)', 'Filtro Eye Care anti-parpadeo y luz azul'],
-    imageUrl: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1547082299-de196ea013d6?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'per-03',
@@ -264,7 +264,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 110,
     description: 'Cámara web profesional para videollamadas y reuniones corporativas en resolución 4K con cancelación de ruido.',
     specs: ['Resolución 4K a 30fps / 1080p a 60fps', 'Enfoque automático HDR y encuadre inteligente', 'Doble micrófono omnidireccional con filtro de ruido', 'Tapa física de privacidad integrada'],
-    imageUrl: 'https://images.unsplash.com/photo-1587825140708-dfaf72ae4b04?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1585060544812-6b45742d762f?auto=format&fit=crop&w=800&q=80'
   },
 
   // 7. IMPRESORAS (3 tipos)
@@ -286,7 +286,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 260,
     description: 'Impresora monocromo ultrarrápida para altos volúmenes de facturas, albaranes y contratos.',
     specs: ['Velocidad de impresión: 45 páginas por minuto', 'Bandeja de papel de 550 hojas ampliable', 'Impresión dúplex automática', 'Tóner de alta capacidad (12.000 páginas)'],
-    imageUrl: 'https://images.unsplash.com/photo-1563986768609-322da13575f3?auto=format&fit=crop&w=800&q=80'
+    imageUrl: 'https://images.unsplash.com/photo-1562654501-a0ccc0fc3fb1?auto=format&fit=crop&w=800&q=80'
   },
   {
     id: 'imp-03',

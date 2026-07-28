@@ -281,6 +281,9 @@ export interface DatabaseSchema {
   electricityContracts?: ElectricityContract[];
   electricityBills?: ElectricityBill[];
   naveFloorPlans?: NaveFloorPlan[];
+  telecomContracts?: TelecomContract[];
+  telecomInvoices?: TelecomInvoice[];
+  officeOrders?: OfficePurchaseOrder[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }

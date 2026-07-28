@@ -8,8 +8,9 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
+import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 
 const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
@@ -2064,6 +2065,94 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   }
 }
 
+function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
+  if (!db.telecomContracts) db.telecomContracts = [];
+  if (!db.telecomInvoices) db.telecomInvoices = [];
+
+  const now = new Date();
+  const currentDay = now.getDate();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
+  if (currentDay >= 1) {
+    const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
+    for (const contract of activeContracts) {
+      const student = db.users.find(u => u.id === contract.studentId && u.role === 'student');
+      if (!student) continue;
+
+      const existingInvoice = db.telecomInvoices.find(
+        inv => inv.contractId === contract.id && inv.periodMonth === currentMonth && inv.periodYear === currentYear
+      );
+
+      if (!existingInvoice) {
+        const baseAmount = contract.monthlyPrice;
+        const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+        const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+        const invoiceNumber = `TEL-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const invoice: TelecomInvoice = {
+          id: generateId('tel_inv'),
+          invoiceNumber,
+          studentId: student.id,
+          studentName: student.name,
+          companyName: student.name,
+          nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+          contractId: contract.id,
+          planName: contract.planName,
+          provider: contract.provider,
+          periodMonth: currentMonth,
+          periodYear: currentYear,
+          issueDate: now.toISOString(),
+          dueDate: now.toISOString(),
+          subtotal: baseAmount,
+          ivaRate: 21,
+          ivaAmount,
+          totalAmount,
+          status: 'pagado',
+          paidDate: now.toISOString(),
+          items: [
+            {
+              concept: `Cuota Mensual de Servicio ${contract.planName} (Fibra, Teléfono e Internet)`,
+              amount: baseAmount
+            }
+          ],
+          paymentMethod: 'Adeudo directo automático en cuenta (1 de mes)'
+        };
+
+        db.telecomInvoices.unshift(invoice);
+
+        student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+        const txId = generateId('tx');
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'telecom-provider',
+          receiverName: contract.provider,
+          receiverAccount: 'ES880004000199223344',
+          amount: totalAmount,
+          concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${currentMonth}/${currentYear})`,
+          timestamp: now.toISOString()
+        };
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'TELECOM_AUTOMATED_PAYMENT',
+          details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+      }
+    }
+  }
+}
+
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
@@ -2142,9 +2231,13 @@ function readDb(): DatabaseSchema {
     if (!db.electricityContracts) db.electricityContracts = [];
     if (!db.electricityBills) db.electricityBills = [];
     if (!db.naveFloorPlans) db.naveFloorPlans = [];
+    if (!db.telecomContracts) db.telecomContracts = [];
+    if (!db.telecomInvoices) db.telecomInvoices = [];
+    if (!db.officeOrders) db.officeOrders = [];
 
     checkAndProcessAutomatedPayrollAndTaxes(db);
     checkAndProcessAutomatedElectricity(db);
+    checkAndProcessAutomatedTelecom(db);
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
@@ -5329,6 +5422,253 @@ app.post('/api/electricity/floor-plan', (req, res) => {
   syncFloorPlanToSupabase(plan).catch(e => console.error(e));
   writeDb(db);
   res.json({ success: true, floorPlan: plan });
+});
+
+// ================= TELECOM & OFFICE STORE ENDPOINTS =================
+
+// TELECOM API ENDPOINTS
+app.get('/api/telecom/plans', (req, res) => {
+  res.json({ success: true, plans: TELECOM_PLANS });
+});
+
+app.get('/api/telecom/contracts', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const contracts = (db.telecomContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  res.json({ success: true, contracts });
+});
+
+app.get('/api/telecom/invoices', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const invoices = (db.telecomInvoices || []).filter(i => i.studentId === studentId);
+  invoices.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
+  res.json({ success: true, invoices });
+});
+
+app.post('/api/telecom/contract', (req, res) => {
+  const { studentId, planId, propertyId, propertyTitle } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  const plan = TELECOM_PLANS.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ error: 'Plan de telecomunicaciones no encontrado' });
+
+  if (!db.telecomContracts) db.telecomContracts = [];
+  if (!db.telecomInvoices) db.telecomInvoices = [];
+
+  const baseAmount = plan.monthlyPrice;
+  const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+  const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+  if (student.balance < totalAmount) {
+    return res.status(400).json({
+      error: `Saldo insuficiente para contratar el plan. Requiere ${totalAmount.toFixed(2)} € (primera cuota con IVA) y dispones de ${student.balance.toFixed(2)} €.`
+    });
+  }
+
+  // Deactivate any existing active telecom contracts for this student
+  db.telecomContracts.forEach(c => {
+    if (c.studentId === studentId) {
+      c.status = 'cancelled';
+    }
+  });
+
+  const contract: TelecomContract = {
+    id: generateId('tel_contract'),
+    studentId: student.id,
+    studentName: student.name,
+    planId: plan.id,
+    planName: plan.name,
+    provider: plan.provider,
+    monthlyPrice: plan.monthlyPrice,
+    speedMbps: plan.speedMbps,
+    mobileLinesCount: plan.mobileLinesCount,
+    propertyId: propertyId || '',
+    propertyTitle: propertyTitle || '',
+    status: 'active',
+    contractDate: new Date().toISOString()
+  };
+
+  db.telecomContracts.push(contract);
+
+  // Generate initial invoice immediately
+  const now = new Date();
+  const periodMonth = now.getMonth() + 1;
+  const periodYear = now.getFullYear();
+  const invoiceNumber = `TEL-${periodYear}-${String(periodMonth).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  const invoice: TelecomInvoice = {
+    id: generateId('tel_inv'),
+    invoiceNumber,
+    studentId: student.id,
+    studentName: student.name,
+    companyName: student.name,
+    nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+    contractId: contract.id,
+    planName: plan.name,
+    provider: plan.provider,
+    periodMonth,
+    periodYear,
+    issueDate: now.toISOString(),
+    dueDate: now.toISOString(),
+    subtotal: baseAmount,
+    ivaRate: 21,
+    ivaAmount,
+    totalAmount,
+    status: 'pagado',
+    paidDate: now.toISOString(),
+    items: [
+      {
+        concept: `Alta y Cuota Mensual de Servicio ${plan.name} (${plan.speedMbps} Mbps, ${plan.mobileLinesCount} líneas 5G)`,
+        amount: baseAmount
+      }
+    ],
+    paymentMethod: 'Transferencia Bancaria Directa'
+  };
+
+  db.telecomInvoices.unshift(invoice);
+
+  // Deduct balance
+  student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'telecom-provider',
+    receiverName: plan.provider,
+    receiverAccount: 'ES880004000199223344',
+    amount: totalAmount,
+    concept: `Contratación y primera cuota servicio ${plan.name} (${invoiceNumber})`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    contract,
+    invoice,
+    newBalance: student.balance,
+    message: `Servicio ${plan.name} contratado con éxito. Se han cargado ${totalAmount.toFixed(2)} € (IVA incl.) en tu cuenta bancaria.`
+  });
+});
+
+// OFFICE STORE API ENDPOINTS
+app.get('/api/office-store/orders', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const orders = (db.officeOrders || []).filter(o => o.studentId === studentId);
+  orders.sort((a, b) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime());
+  res.json({ success: true, orders });
+});
+
+app.post('/api/office-store/checkout', (req, res) => {
+  const { studentId, cartItems } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0) {
+    return res.status(400).json({ error: 'La cesta de la compra está vacía' });
+  }
+
+  const detailedItems: OfficePurchaseOrderItem[] = [];
+  let subtotal = 0;
+
+  for (const ci of cartItems) {
+    const catalogItem = OFFICE_STORE_CATALOG.find(i => i.id === ci.itemId);
+    if (!catalogItem) continue;
+    const qty = Number(ci.quantity) || 1;
+    const itemTotal = catalogItem.price * qty;
+    subtotal += itemTotal;
+
+    detailedItems.push({
+      itemId: catalogItem.id,
+      itemName: catalogItem.name,
+      category: catalogItem.category,
+      categoryLabel: catalogItem.categoryLabel,
+      unitPrice: catalogItem.price,
+      quantity: qty,
+      totalPrice: itemTotal,
+      imageUrl: catalogItem.imageUrl
+    });
+  }
+
+  if (detailedItems.length === 0) {
+    return res.status(400).json({ error: 'No se encontraron los productos especificados' });
+  }
+
+  const ivaAmount = Math.round((subtotal * 0.21) * 100) / 100;
+  const totalAmount = Math.round((subtotal + ivaAmount) * 100) / 100;
+
+  if (student.balance < totalAmount) {
+    return res.status(400).json({
+      error: `Saldo insuficiente para realizar el pedido. Total pedido: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${student.balance.toFixed(2)} €.`
+    });
+  }
+
+  if (!db.officeOrders) db.officeOrders = [];
+
+  const now = new Date();
+  const orderNumber = `OFF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+  const order: OfficePurchaseOrder = {
+    id: generateId('off_ord'),
+    orderNumber,
+    studentId: student.id,
+    studentName: student.name,
+    companyName: student.name,
+    nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+    purchaseDate: now.toISOString(),
+    items: detailedItems,
+    subtotal,
+    ivaRate: 21,
+    ivaAmount,
+    totalAmount,
+    status: 'completado_pagado',
+    paymentMethod: 'banco'
+  };
+
+  db.officeOrders.unshift(order);
+
+  // Deduct from student balance
+  student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'ofimatica-suministros',
+    receiverName: 'Suministros OfiTech S.L.',
+    receiverAccount: 'ES910002000588776655',
+    amount: totalAmount,
+    concept: `Compra de mobiliario/informática - Pedido Nº ${orderNumber}`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    newBalance: student.balance,
+    message: `Pedido Nº ${orderNumber} realizado con éxito. Cargados ${totalAmount.toFixed(2)} € (IVA incl.) en cuenta.`
+  });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
