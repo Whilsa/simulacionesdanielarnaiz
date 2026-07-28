@@ -425,3 +425,121 @@ export interface TaxObligation {
   paidDate?: string;
   payrollRecordId?: string;
 }
+
+// Telecom / Phone & Internet Types
+export interface TelecomPlan {
+  id: string;
+  name: string;
+  provider: string;
+  monthlyPrice: number;
+  speedMbps: number;
+  mobileLinesCount: number;
+  includesStaticIP: boolean;
+  includesSwitchboard: boolean;
+  includes5G: boolean;
+  slaHours: number;
+  description: string;
+  features: string[];
+  imageUrl?: string;
+}
+
+export interface TelecomContract {
+  id: string;
+  studentId: string;
+  studentName: string;
+  planId: string;
+  planName: string;
+  provider: string;
+  propertyId?: string;
+  propertyTitle?: string;
+  monthlyPrice: number;
+  contractDate: string;
+  phoneNumber?: string;
+  status: 'active' | 'cancelled';
+  speedMbps?: number;
+  mobileLinesCount?: number;
+}
+
+export interface TelecomInvoiceItem {
+  concept: string;
+  amount: number;
+}
+
+export interface TelecomInvoice {
+  id: string;
+  invoiceNumber: string;
+  studentId: string;
+  studentName: string;
+  companyName?: string;
+  nifCif?: string;
+  contractId: string;
+  planName: string;
+  provider: string;
+  periodMonth: number;
+  periodYear: number;
+  issueDate: string;
+  dueDate: string;
+  subtotal: number;
+  ivaRate: number;
+  ivaAmount: number;
+  totalAmount: number;
+  status: 'pagado' | 'pendiente';
+  paidDate?: string;
+  items: TelecomInvoiceItem[];
+  paymentMethod?: string;
+}
+
+// Office Supplies & Equipment Store Types ("Muebles e Informática")
+export type OfficeStoreCategory = 
+  | 'estanterias' 
+  | 'mesas' 
+  | 'sillas' 
+  | 'sobremesa' 
+  | 'portatiles' 
+  | 'perifericos' 
+  | 'impresoras' 
+  | 'software_texto' 
+  | 'software_conta' 
+  | 'telefonos_fijos' 
+  | 'telefonos_moviles';
+
+export interface OfficeStoreItem {
+  id: string;
+  name: string;
+  category: OfficeStoreCategory;
+  categoryLabel: string;
+  price: number;
+  description: string;
+  specs: string[];
+  imageUrl: string;
+  stock?: number;
+}
+
+export interface OfficePurchaseOrderItem {
+  itemId: string;
+  itemName: string;
+  category: OfficeStoreCategory;
+  categoryLabel: string;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+  imageUrl?: string;
+}
+
+export interface OfficePurchaseOrder {
+  id: string;
+  orderNumber: string;
+  studentId: string;
+  studentName: string;
+  companyName?: string;
+  nifCif?: string;
+  purchaseDate: string;
+  items: OfficePurchaseOrderItem[];
+  subtotal: number;
+  ivaRate: number;
+  ivaAmount: number;
+  totalAmount: number;
+  status: 'completado_pagado';
+  paymentMethod: 'banco' | string;
+}
+

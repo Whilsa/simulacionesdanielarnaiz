@@ -43,7 +43,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
   // Single Publication Form
   const [singleForm, setSingleForm] = useState({
     title: '',
-    type: 'local_comercial' as PropertyType,
+    type: 'oficina' as PropertyType,
     operation: 'compra' as OperationType,
     surfaceM2: 150,
     price: 200000,
@@ -61,7 +61,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
   // Batch Publication Form
   const [batchForm, setBatchForm] = useState({
     count: 3,
-    type: 'local_comercial' as PropertyType,
+    type: 'oficina' as PropertyType,
     operation: 'compra' as OperationType,
     surfaceMin: 100,
     surfaceMax: 300,
@@ -265,7 +265,9 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
     switch (type) {
       case 'nave_industrial': return 'Nave Industrial';
       case 'almacen': return 'Almacén Logístico';
-      case 'local_comercial': return 'Local Comercial';
+      case 'oficina': return 'Oficina';
+      case 'local_comercial': return 'Oficina';
+      default: return 'Oficina';
     }
   };
 
@@ -273,7 +275,9 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
     switch (type) {
       case 'nave_industrial': return <Factory className="w-4 h-4" />;
       case 'almacen': return <Warehouse className="w-4 h-4" />;
-      case 'local_comercial': return <Store className="w-4 h-4" />;
+      case 'oficina':
+      case 'local_comercial':
+      default: return <Building2 className="w-4 h-4" />;
     }
   };
 
@@ -367,10 +371,10 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 onChange={(e) => setSelectedType(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
               >
-                <option value="all">Todos los Tipos (Naves, Almacenes, Locales)</option>
+                <option value="all">Todos los Tipos (Naves, Almacenes, Oficinas)</option>
                 <option value="nave_industrial">Naves Industriales</option>
                 <option value="almacen">Almacenes Logísticos</option>
-                <option value="local_comercial">Locales Comerciales</option>
+                <option value="oficina">Oficinas</option>
               </select>
             </div>
 
@@ -792,7 +796,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       onChange={(e) => setSingleForm({ ...singleForm, type: e.target.value as PropertyType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="local_comercial">Local Comercial</option>
+                      <option value="oficina">Oficina</option>
                       <option value="nave_industrial">Nave Industrial</option>
                       <option value="almacen">Almacén Logístico</option>
                     </select>
@@ -979,7 +983,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       onChange={(e) => setBatchForm({ ...batchForm, type: e.target.value as PropertyType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="local_comercial">Local Comercial</option>
+                      <option value="oficina">Oficina</option>
                       <option value="nave_industrial">Nave Industrial</option>
                       <option value="almacen">Almacén Logístico</option>
                     </select>

@@ -1,0 +1,162 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React from 'react';
+import { TelecomInvoice } from '../types.js';
+import { X, Printer, Download, ShieldCheck, PhoneCall, Wifi, Building } from 'lucide-react';
+
+interface TelecomInvoiceModalProps {
+  invoice: TelecomInvoice | null;
+  onClose: () => void;
+}
+
+export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalProps) {
+  if (!invoice) return null;
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:static">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl overflow-hidden text-slate-900 print:shadow-none print:border-none print:w-full print:max-w-none">
+        
+        {/* Modal Header Actions (Hidden when printing) */}
+        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between print:hidden">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+              <PhoneCall className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-white">Factura de Servicios Telecom</h3>
+              <p className="text-xs text-slate-400">Nº {invoice.invoiceNumber} | {invoice.periodMonth}/{invoice.periodYear}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePrint}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Descargar / Imprimir PDF</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Printable Invoice Body */}
+        <div className="p-8 sm:p-10 space-y-8 print:p-0">
+          
+          {/* Header & Logo */}
+          <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-200 pb-6">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-9 h-9 rounded-xl bg-slate-900 text-amber-400 flex items-center justify-center font-black text-lg">
+                  T
+                </div>
+                <span className="text-xl font-black tracking-tight text-slate-900">{invoice.provider}</span>
+              </div>
+              <p className="text-xs text-slate-500">Servicios de Telecomunicaciones e Internet Pyme S.L.</p>
+              <p className="text-xs text-slate-500">CIF: B-88776655 | Reg. Mercantil de Madrid</p>
+              <p className="text-xs text-slate-500">Gran Vía 48, Planta 6, 28013 Madrid</p>
+            </div>
+
+            <div className="text-left sm:text-right bg-slate-50 p-4 rounded-xl border border-slate-200 min-w-[220px]">
+              <span className="inline-block px-2.5 py-1 bg-emerald-100 text-emerald-800 text-[11px] font-extrabold uppercase rounded-full mb-2">
+                FACTURA OFICIAL
+              </span>
+              <p className="text-sm font-bold text-slate-900">Nº {invoice.invoiceNumber}</p>
+              <p className="text-xs text-slate-600">Fecha Emisión: {new Date(invoice.issueDate).toLocaleDateString('es-ES')}</p>
+              <p className="text-xs text-slate-600">Periodo: {invoice.periodMonth}/{invoice.periodYear}</p>
+              <p className="text-xs font-semibold text-emerald-700 mt-1">Estado: PAGADO (Domiciliación)</p>
+            </div>
+          </div>
+
+          {/* Client Details */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-slate-50/80 p-5 rounded-xl border border-slate-200 text-xs">
+            <div>
+              <h4 className="font-extrabold text-slate-500 uppercase tracking-wider mb-2">DATOS DEL CLIENTE / TITULAR</h4>
+              <p className="font-bold text-sm text-slate-900">{invoice.companyName || invoice.studentName}</p>
+              <p className="text-slate-600 mt-0.5">CIF/NIF: <span className="font-medium text-slate-800">{invoice.nifCif || 'B-98765432'}</span></p>
+              <p className="text-slate-600">Representante: {invoice.studentName}</p>
+            </div>
+
+            <div>
+              <h4 className="font-extrabold text-slate-500 uppercase tracking-wider mb-2">DATOS DEL CONTRATO Y PAGO</h4>
+              <p className="text-slate-700">Contrato: <span className="font-bold text-slate-900">{invoice.planName}</span></p>
+              <p className="text-slate-700">Forma de Pago: <span className="font-bold text-slate-900">{invoice.paymentMethod || 'Cargo automático en cuenta (1 de mes)'}</span></p>
+              <p className="text-slate-700">Fecha de Cobro: <span className="font-bold text-emerald-700">{new Date(invoice.paidDate || invoice.dueDate).toLocaleDateString('es-ES')}</span></p>
+            </div>
+          </div>
+
+          {/* Itemized Table */}
+          <div>
+            <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 mb-3">DESGLOSE DE SERVICIOS CONTRATADOS</h4>
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                    <th className="p-3">Concepto / Servicio</th>
+                    <th className="p-3 text-right">Importe (€)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-slate-800">
+                  {invoice.items && invoice.items.length > 0 ? (
+                    invoice.items.map((it, i) => (
+                      <tr key={i} className="hover:bg-slate-50">
+                        <td className="p-3 font-medium">{it.concept}</td>
+                        <td className="p-3 text-right font-semibold">{it.amount.toFixed(2)} €</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="p-3 font-medium">Cuota Mensual {invoice.planName} (Fibra, Móviles y Centralita)</td>
+                      <td className="p-3 text-right font-semibold">{invoice.subtotal.toFixed(2)} €</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Totals Box */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 pt-2">
+            <div className="text-xs text-slate-500 max-w-md space-y-1">
+              <p className="font-bold text-slate-700">Información fiscal e impositiva:</p>
+              <p>El cobro de esta factura se ha efectuado mediante transferencia bancaria / adeudo directo automático en la cuenta corporativa el día 1 del mes correspondiente.</p>
+            </div>
+
+            <div className="w-full sm:w-64 bg-slate-900 text-white p-5 rounded-xl space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>Base Imponible:</span>
+                <span className="font-semibold">{invoice.subtotal.toFixed(2)} €</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>IVA ({invoice.ivaRate}%):</span>
+                <span className="font-semibold">{invoice.ivaAmount.toFixed(2)} €</span>
+              </div>
+              <div className="border-t border-slate-700 pt-2 mt-2 flex justify-between font-extrabold text-sm text-amber-400">
+                <span>TOTAL FACTURA:</span>
+                <span>{invoice.totalAmount.toFixed(2)} €</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer note */}
+          <div className="border-t border-slate-200 pt-4 text-center text-[10px] text-slate-400 print:mt-10">
+            Documento expedido electrónicamente en el Simulador de Negocios de Daniel Arnaiz Boluda. Validez legal como justificante de gasto deducible.
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}

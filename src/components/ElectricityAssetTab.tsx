@@ -115,7 +115,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
               const pTitle = String(prop.propertyTitle || prop.title || 'Inmueble');
               const pType = String(prop.propertyType || prop.type || '');
               const isNave = pType === 'nave_industrial' || pTitle.toLowerCase().includes('nave');
-              const isLocal = pType === 'local_comercial' || pTitle.toLowerCase().includes('local');
+              const isLocal = pType === 'oficina' || pType === 'local_comercial' || pTitle.toLowerCase().includes('oficina') || pTitle.toLowerCase().includes('local');
               const isAlmacen = pType === 'almacen' || pTitle.toLowerCase().includes('almacén');
 
               // Find contract for this property

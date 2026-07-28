@@ -4,11 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan } from '../types.js';
+import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, TelecomContract, TelecomInvoice, OfficePurchaseOrder } from '../types.js';
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid, PhoneCall, ShoppingBag, ShoppingCart
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -16,10 +16,12 @@ import Footer from './Footer.js';
 import { NaveFloorPlanViewer } from './NaveFloorPlanViewer.js';
 import { ElectricitySupplyCard } from './ElectricitySupplyCard.js';
 import { ElectricityAssetTab } from './ElectricityAssetTab.js';
+import { TelecomInvoiceModal } from './TelecomInvoiceModal.js';
+import { OfficeInvoiceModal } from './OfficeInvoiceModal.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
-  initialTab?: 'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia';
+  initialTab?: 'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica';
   onBackToHub: () => void;
   onGoToBank?: () => void;
   onUserBalanceUpdated?: (newBalance: number) => void;
@@ -70,7 +72,7 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
   const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
   const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica'>(initialTab);
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
   
   // Modal for detailed breakdown of debts by operation origin
@@ -85,6 +87,37 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
   const [electricityContract, setElectricityContract] = useState<ElectricityContract | undefined>(undefined);
   const [electricityBills, setElectricityBills] = useState<ElectricityBill[]>([]);
   const [naveFloorPlans, setNaveFloorPlans] = useState<NaveFloorPlan[]>([]);
+
+  // Telecom & Office Store State
+  const [telecomContracts, setTelecomContracts] = useState<TelecomContract[]>([]);
+  const [telecomInvoices, setTelecomInvoices] = useState<TelecomInvoice[]>([]);
+  const [officeOrders, setOfficeOrders] = useState<OfficePurchaseOrder[]>([]);
+  const [selectedTelecomInvoiceModal, setSelectedTelecomInvoiceModal] = useState<TelecomInvoice | null>(null);
+  const [selectedOfficeOrderModal, setSelectedOfficeOrderModal] = useState<OfficePurchaseOrder | null>(null);
+
+  const fetchTelecomAndOfficeData = async () => {
+    try {
+      const [tcRes, tiRes, ordRes] = await Promise.all([
+        fetch(`/api/telecom/contracts?studentId=${currentUser.id}`),
+        fetch(`/api/telecom/invoices?studentId=${currentUser.id}`),
+        fetch(`/api/office-store/orders?studentId=${currentUser.id}`)
+      ]);
+      if (tcRes.ok) {
+        const tcData = await tcRes.json();
+        setTelecomContracts(tcData.contracts || []);
+      }
+      if (tiRes.ok) {
+        const tiData = await tiRes.json();
+        setTelecomInvoices(tiData.invoices || []);
+      }
+      if (ordRes.ok) {
+        const ordData = await ordRes.json();
+        setOfficeOrders(ordData.orders || []);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchElectricityData = async () => {
     try {
@@ -134,6 +167,7 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
   useEffect(() => {
     fetchCompanyData();
     fetchElectricityData();
+    fetchTelecomAndOfficeData();
   }, [currentUser.id]);
 
   const handleSaveFloorPlan = async (plan: Partial<NaveFloorPlan>) => {
@@ -946,6 +980,34 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                   </span>
                 </button>
               )}
+
+              <button
+                onClick={() => setActiveTab('telecom')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'telecom'
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <PhoneCall className="w-4 h-4 text-blue-500" />
+                <span>
+                  Teléfono e Internet ({telecomContracts.length})
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('muebles_informatica')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'muebles_informatica'
+                    ? 'border-amber-600 text-amber-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <ShoppingBag className="w-4 h-4 text-amber-500" />
+                <span>
+                  Muebles e Informática ({officeOrders.length})
+                </span>
+              </button>
             </div>
 
             {/* TAB 1: OWNED PROPERTIES */}
@@ -1807,11 +1869,215 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
                 </div>
               </div>
             )}
+            {/* TAB 8: TELÉFONO E INTERNET */}
+            {activeTab === 'telecom' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <PhoneCall className="w-5 h-5 text-blue-600" />
+                        <span>Servicios de Teléfono e Internet Contratados</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Líneas corporativas, fibra óptica simétrica y centralitas IP con facturación mensual automática el día 1 de cada mes.
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono font-bold bg-blue-50 text-blue-900 border border-blue-200 px-3 py-1 rounded-full">
+                      {telecomContracts.length} servicio(s) activo(s)
+                    </span>
+                  </div>
+
+                  {telecomContracts.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-500">
+                      Tu empresa no tiene contratado ningún servicio de teléfono o internet. Puedes contratar planes empresariales desde la tarjeta de Servicios de Teléfono e Internet.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {telecomContracts.map((c) => (
+                        <div key={c.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-3">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="inline-block px-2.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-black uppercase rounded-full">
+                                {c.provider}
+                              </span>
+                              <h4 className="font-extrabold text-sm text-slate-900 mt-1">{c.planName}</h4>
+                            </div>
+                            <span className="text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full text-[10px] font-bold">
+                              Activo
+                            </span>
+                          </div>
+
+                          <div className="text-xs space-y-1 text-slate-600 border-y border-slate-200/80 py-3">
+                            <div className="flex justify-between">
+                              <span>Cuota mensual:</span>
+                              <span className="font-extrabold text-slate-900">{c.monthlyPrice.toFixed(2)} €/mes (+ IVA)</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Fecha de contratación:</span>
+                              <span className="font-medium text-slate-800">{new Date(c.contractDate).toLocaleDateString('es-ES')}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Próxima facturación:</span>
+                              <span className="font-bold text-blue-700">1 de cada mes (Cobro automático)</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Telecom Invoices Table */}
+                  <div className="pt-4 border-t border-slate-100 space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Facturas de Telecomunicaciones Emitidas</h4>
+                    {telecomInvoices.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">No hay facturas emitidas todavía.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                              <th className="p-3">Nº Factura</th>
+                              <th className="p-3">Periodo</th>
+                              <th className="p-3">Servicio</th>
+                              <th className="p-3 text-right">Total Factura</th>
+                              <th className="p-3 text-center">Estado</th>
+                              <th className="p-3 text-right">Factura PDF</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 text-slate-800">
+                            {telecomInvoices.map((inv) => (
+                              <tr key={inv.id} className="hover:bg-slate-50">
+                                <td className="p-3 font-bold text-slate-900">{inv.invoiceNumber}</td>
+                                <td className="p-3 font-medium text-slate-600">{inv.periodMonth}/{inv.periodYear}</td>
+                                <td className="p-3 font-medium">{inv.planName}</td>
+                                <td className="p-3 text-right font-black text-slate-900">{inv.totalAmount.toFixed(2)} €</td>
+                                <td className="p-3 text-center">
+                                  <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full">
+                                    Pagado
+                                  </span>
+                                </td>
+                                <td className="p-3 text-right">
+                                  <button
+                                    onClick={() => setSelectedTelecomInvoiceModal(inv)}
+                                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-[11px] rounded-xl transition cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>Descargar / Imprimir PDF</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 9: MUEBLES E INFORMÁTICA */}
+            {activeTab === 'muebles_informatica' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <ShoppingBag className="w-5 h-5 text-amber-600" />
+                        <span>Inventario de Muebles e Equipos Informáticos</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Relación de adquisiciones de estanterías, mesas, sillas, ordenadores, impresoras, software y telefonía integrados en el patrimonio de la empresa.
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono font-bold bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-full">
+                      {officeOrders.length} pedido(s) registrado(s)
+                    </span>
+                  </div>
+
+                  {officeOrders.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-500">
+                      No hay registros en el inventario de muebles e informática. Puedes realizar adquisiciones desde la Tienda de Cosas de Oficina.
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {officeOrders.map((order) => (
+                        <div key={order.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-4">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200/80 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="px-2.5 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black uppercase rounded-full">
+                                  Inmovilizado / Equipamiento
+                                </span>
+                                <span className="text-xs font-bold text-slate-900">Pedido Nº {order.orderNumber}</span>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">
+                                Fecha y hora de compra: <strong className="text-slate-800">{new Date(order.purchaseDate).toLocaleString('es-ES')}</strong>
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-black text-slate-900">{order.totalAmount.toFixed(2)} € (IVA incl.)</span>
+                              <button
+                                onClick={() => setSelectedOfficeOrderModal(order)}
+                                className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs rounded-xl transition cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Factura / Descargar PDF</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Itemized List */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-white text-slate-500 font-bold border-b border-slate-200">
+                                  <th className="p-2.5">Categoría</th>
+                                  <th className="p-2.5">Producto</th>
+                                  <th className="p-2.5 text-center">Cantidad</th>
+                                  <th className="p-2.5 text-right">Precio Unid.</th>
+                                  <th className="p-2.5 text-right">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200/80 text-slate-800">
+                                {order.items.map((it, iIdx) => (
+                                  <tr key={iIdx}>
+                                    <td className="p-2.5 font-semibold text-slate-500">{it.categoryLabel}</td>
+                                    <td className="p-2.5 font-bold text-slate-900">{it.itemName}</td>
+                                    <td className="p-2.5 text-center font-bold">{it.quantity}</td>
+                                    <td className="p-2.5 text-right">{it.unitPrice.toFixed(2)} €</td>
+                                    <td className="p-2.5 text-right font-black text-slate-900">{it.totalPrice.toFixed(2)} €</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
 
       <Footer />
+
+      {/* TELECOM INVOICE MODAL */}
+      <TelecomInvoiceModal
+        invoice={selectedTelecomInvoiceModal}
+        onClose={() => setSelectedTelecomInvoiceModal(null)}
+      />
+
+      {/* OFFICE ORDER INVOICE MODAL */}
+      <OfficeInvoiceModal
+        order={selectedOfficeOrderModal}
+        onClose={() => setSelectedOfficeOrderModal(null)}
+      />
 
       {/* DETAILED DEBT BREAKDOWN MODAL BY OPERATION ORIGIN */}
       {showDebtDetailsModal && data && (

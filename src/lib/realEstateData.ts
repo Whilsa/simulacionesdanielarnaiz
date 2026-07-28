@@ -78,19 +78,27 @@ export const PROPERTY_IMAGES: Record<PropertyType, string[]> = {
     'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80', // Distribution center
     'https://images.unsplash.com/photo-1590247819200-16176cd17755?auto=format&fit=crop&w=800&q=80', // Modern bay doors
   ],
+  oficina: [
+    'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=800&q=80', // Modern office interior
+    'https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=800&q=80', // Office workspace
+    'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=800&q=80', // Executive office
+    'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80', // Business center exterior
+  ],
   local_comercial: [
-    'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=800&q=80', // Retail storefront
-    'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80', // Commercial space
-    'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?auto=format&fit=crop&w=800&q=80', // Store interior
-    'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=800&q=80', // Corner retail unit
+    'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80',
   ],
 };
 
 export const REAL_ESTATE_PRICE_RANGES: Record<PropertyType, { buyM2Min: number; buyM2Max: number; rentM2Min: number; rentM2Max: number }> = {
   nave_industrial: { buyM2Min: 650, buyM2Max: 1350, rentM2Min: 4.5, rentM2Max: 9.5 },
   almacen: { buyM2Min: 500, buyM2Max: 1100, rentM2Min: 3.8, rentM2Max: 8.0 },
-  local_comercial: { buyM2Min: 1200, buyM2Max: 3200, rentM2Min: 8.0, rentM2Max: 26.0 },
+  oficina: { buyM2Min: 1400, buyM2Max: 3500, rentM2Min: 9.0, rentM2Max: 28.0 },
+  local_comercial: { buyM2Min: 1400, buyM2Max: 3500, rentM2Min: 9.0, rentM2Max: 28.0 },
 };
+
 
 export function getRandomElement<T>(array: T[]): T {
   return array[Math.floor(Math.random() * array.length)];

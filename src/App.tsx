@@ -13,11 +13,13 @@ import RealEstatePortal from './components/RealEstatePortal.js';
 import CompanyDashboard from './components/CompanyDashboard.js';
 import MachineryPortal from './components/MachineryPortal.js';
 import JobForumPortal from './components/JobForumPortal.js';
+import TelecomPortal from './components/TelecomPortal.js';
+import OfficeStorePortal from './components/OfficeStorePortal.js';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity'>('hub');
+  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store'>('hub');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   useEffect(() => {
@@ -168,6 +170,26 @@ export default function App() {
         initialTab="energia"
         onBackToHub={() => setActiveModule('hub')}
         onGoToBank={() => setActiveModule('bank')}
+        onUserBalanceUpdated={handleUserBalanceUpdated}
+      />
+    );
+  }
+
+  if (activeModule === 'telecom') {
+    return (
+      <TelecomPortal
+        currentUser={currentUser}
+        onBackToHub={() => setActiveModule('hub')}
+        onUserBalanceUpdated={handleUserBalanceUpdated}
+      />
+    );
+  }
+
+  if (activeModule === 'office_store') {
+    return (
+      <OfficeStorePortal
+        currentUser={currentUser}
+        onBackToHub={() => setActiveModule('hub')}
         onUserBalanceUpdated={handleUserBalanceUpdated}
       />
     );

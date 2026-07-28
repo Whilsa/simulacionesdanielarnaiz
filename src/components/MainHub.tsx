@@ -7,19 +7,19 @@ import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
 
 interface MainHubProps {
   currentUser: User;
-  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity') => void;
+  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store') => void;
   onLogout: () => void;
   availablePropertiesCount?: number;
 }
 
-type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity';
+type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store';
 
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
@@ -64,7 +64,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
     }
   }, [currentUser.id, isTeacher]);
 
-  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity'];
+  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity', 'telecom', 'office_store'];
 
   const [cardOrder, setCardOrder] = useState<ModuleType[]>(() => {
     try {
@@ -72,10 +72,9 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Ensure 'electricity' is present in order
-          if (!parsed.includes('electricity')) {
-            parsed.push('electricity');
-          }
+          if (!parsed.includes('electricity')) parsed.push('electricity');
+          if (!parsed.includes('telecom')) parsed.push('telecom');
+          if (!parsed.includes('office_store')) parsed.push('office_store');
           return parsed;
         }
       }
@@ -221,6 +220,36 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           statValue: electricityContracts.length > 0 
             ? `${electricityContracts.length} ${electricityContracts.length === 1 ? 'Contrato Activo' : 'Contratos Activos'}`
             : 'Contratación Activa'
+        };
+      case 'telecom':
+        return {
+          id: 'telecom' as ModuleType,
+          title: 'Servicios de Teléfono e Internet',
+          badge: 'Telecom',
+          badgeStyle: 'bg-blue-50 text-blue-800 border-blue-200/80',
+          hoverBorder: 'hover:border-blue-500',
+          hoverBg: 'group-hover:bg-blue-600',
+          hoverText: 'group-hover:text-blue-600',
+          iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
+          Icon: PhoneCall,
+          description: 'Contratación de ofertas realistas de teléfono, fibra simétrica de alta velocidad y centralitas para empresas. Pago automático el 1 de cada mes con facturas descargables en PDF.',
+          statLabel: 'Comunicaciones Pyme',
+          statValue: 'Fibra & Teléfono'
+        };
+      case 'office_store':
+        return {
+          id: 'office_store' as ModuleType,
+          title: 'Tienda de Equipamiento e Informática',
+          badge: 'Mobiliario & IT',
+          badgeStyle: 'bg-amber-50 text-amber-900 border-amber-200/80',
+          hoverBorder: 'hover:border-amber-500',
+          hoverBg: 'group-hover:bg-amber-500',
+          hoverText: 'group-hover:text-amber-600',
+          iconBg: 'bg-amber-50 text-amber-800 border-amber-200',
+          Icon: ShoppingBag,
+          description: 'Tienda en línea corporativa con estanterías, mesas, sillas, ordenadores de sobremesa y portátiles, periféricos, impresoras, software contable y de texto, y teléfonos.',
+          statLabel: 'Muebles e Informática',
+          statValue: 'Catálogo de Oficina'
         };
     }
   };
