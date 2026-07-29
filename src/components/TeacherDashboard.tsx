@@ -15,6 +15,7 @@ import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition } 
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
 import Footer from './Footer.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -1378,7 +1379,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                   </div>
                   <div className="text-right">
                     <p className="text-xs font-bold text-slate-400 uppercase">Saldo Actual</p>
-                    <p className="font-mono font-bold text-slate-900 text-base">{selectedUser.balance.toLocaleString('es-ES')} €</p>
+                    <p className="font-mono font-bold text-slate-900 text-base">{formatNumber(selectedUser.balance)} €</p>
                   </div>
                 </div>
 
@@ -1603,7 +1604,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl space-y-2">
                   <h4 className="text-xs font-bold text-rose-800 uppercase tracking-wider">¡Atención! Operación Irreversible</h4>
                   <p className="text-xs text-rose-700 leading-relaxed">
-                    Estás a punto de eliminar permanentemente la cuenta de <strong className="font-bold">{deleteTarget.name}</strong>. Se destruirá su saldo disponible de <strong className="font-bold">{deleteTarget.balance.toLocaleString('es-ES')} €</strong> y no podrá volver a iniciar sesión.
+                    Estás a punto de eliminar permanentemente la cuenta de <strong className="font-bold">{deleteTarget.name}</strong>. Se destruirá su saldo disponible de <strong className="font-bold">{formatNumber(deleteTarget.balance)} €</strong> y no podrá volver a iniciar sesión.
                   </p>
                 </div>
 

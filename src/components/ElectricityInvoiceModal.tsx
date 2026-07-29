@@ -235,7 +235,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
                     </div>
                     <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1">
                       <span>Subtotal Consumo:</span>
-                      <span className="font-mono text-amber-700">{item.totalKwh} kWh (~{item.costEstimate.toFixed(2)} €)</span>
+                      <span className="font-mono text-amber-700">{formatNumber(item.totalKwh, 0)} kWh (~{formatNumber(item.costEstimate)} €)</span>
                     </div>
                   </div>
                 ))}

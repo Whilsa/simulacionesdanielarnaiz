@@ -246,16 +246,9 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                 >
                   <div>
                     {/* Card Header */}
-                    <div className="relative h-40 overflow-hidden bg-slate-900">
-                      <img
-                        src={plan.imageUrl || 'https://images.unsplash.com/photo-1544197150-b99a580bb7a8?auto=format&fit=crop&w=800&q=80'}
-                        alt={plan.name}
-                        className="w-full h-full object-cover opacity-60"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
-                      
-                      <div className="absolute top-3 left-3 right-3 flex justify-between items-start">
-                        <span className="px-2.5 py-1 bg-slate-900/80 backdrop-blur-md text-amber-400 border border-slate-700 text-[10px] font-extrabold uppercase rounded-full">
+                    <div className="relative p-5 bg-gradient-to-br from-slate-900 via-slate-850 to-blue-950 text-white border-b border-slate-800 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <span className="px-2.5 py-1 bg-slate-800/80 text-amber-400 border border-slate-700 text-[10px] font-extrabold uppercase rounded-full">
                           {plan.provider}
                         </span>
                         {isCurrent && (
@@ -266,7 +259,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                         )}
                       </div>
 
-                      <div className="absolute bottom-3 left-3 right-3 text-white">
+                      <div>
                         <h4 className="font-extrabold text-base leading-snug">{plan.name}</h4>
                         <p className="text-xs text-slate-300">{plan.speedMbps >= 1000 ? `${plan.speedMbps / 1000} Gbps` : `${plan.speedMbps} Mbps`} Fibra Simétrica</p>
                       </div>

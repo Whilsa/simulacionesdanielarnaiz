@@ -302,14 +302,9 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md transition-all duration-200 hover:border-amber-300"
             >
               <div>
-                {/* Product Image */}
-                <div className="relative h-48 bg-slate-900 overflow-hidden">
-                  <img
-                    src={item.imageUrl}
-                    alt={item.name}
-                    className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
-                  />
-                  <span className="absolute top-3 left-3 px-2.5 py-1 bg-slate-900/80 backdrop-blur-md text-amber-300 text-[10px] font-extrabold uppercase rounded-full border border-slate-700">
+                {/* Product Header Badge */}
+                <div className="p-4 pb-2 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                  <span className="px-2.5 py-1 bg-slate-900 text-amber-300 text-[10px] font-extrabold uppercase rounded-full border border-slate-700">
                     {item.categoryLabel}
                   </span>
                 </div>
@@ -386,11 +381,6 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               ) : (
                 cart.map(({ item, quantity }) => (
                   <div key={item.id} className="pt-4 first:pt-0 flex items-center gap-3">
-                    <img
-                      src={item.imageUrl}
-                      alt={item.name}
-                      className="w-14 h-14 rounded-xl object-cover bg-slate-100 shrink-0"
-                    />
                     <div className="flex-1 min-w-0">
                       <h4 className="font-bold text-xs text-slate-900 truncate">{item.name}</h4>
                       <p className="text-[11px] text-slate-500">{formatNumber(item.price)} € / unid.</p>

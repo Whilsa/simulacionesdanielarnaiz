@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { BankLoan } from '../types.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
+import { formatNumber } from '../lib/formatters.js';
 
 export default function TeacherLoanManagement() {
   const [loans, setLoans] = useState<BankLoan[]>([]);
@@ -281,7 +282,7 @@ export default function TeacherLoanManagement() {
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Interés TIN</span>
                     <span className="text-xs font-bold font-mono text-emerald-700">
-                      {loan.annualInterestRate.toFixed(2)} %
+                      {formatNumber(loan.annualInterestRate)} %
                     </span>
                   </div>
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">

@@ -676,12 +676,12 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
         `"${new Date(e.hireDate).toLocaleDateString('es-ES')}"`,
         `"${macTitle}"`,
         `"${shiftText}"`,
-        gross.toFixed(2),
-        irpf.toFixed(2),
-        ssEmp.toFixed(2),
-        net.toFixed(2),
-        ssComp.toFixed(2),
-        cost.toFixed(2)
+        formatNumber(gross),
+        formatNumber(irpf),
+        formatNumber(ssEmp),
+        formatNumber(net),
+        formatNumber(ssComp),
+        formatNumber(cost)
       ];
       csvContent += row.join(';') + '\n';
     });
@@ -694,12 +694,12 @@ Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLo
       '""',
       '""',
       '""',
-      totalGross.toFixed(2),
-      totalIrpf.toFixed(2),
-      totalSsEmp.toFixed(2),
-      totalNet.toFixed(2),
-      totalSsComp.toFixed(2),
-      totalCost.toFixed(2)
+      formatNumber(totalGross),
+      formatNumber(totalIrpf),
+      formatNumber(totalSsEmp),
+      formatNumber(totalNet),
+      formatNumber(totalSsComp),
+      formatNumber(totalCost)
     ];
     csvContent += totalsRow.join(';') + '\n';
 

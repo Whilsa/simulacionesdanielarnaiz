@@ -314,6 +314,64 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         num_almacenes INT NOT NULL DEFAULT 2,
         fecha_actualizacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS contratos_telecom (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        plan_id VARCHAR(255) NOT NULL,
+        plan_nombre TEXT NOT NULL,
+        proveedor TEXT NOT NULL,
+        inmueble_id VARCHAR(255),
+        inmueble_titulo TEXT,
+        precio_mensual NUMERIC(12, 2) NOT NULL,
+        fecha_contrato TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        numero_telefono TEXT,
+        estado VARCHAR(50) NOT NULL DEFAULT 'active',
+        velocidad_mbps INT,
+        lineas_moviles INT
+      );
+
+      CREATE TABLE IF NOT EXISTS facturas_telecom (
+        id VARCHAR(255) PRIMARY KEY,
+        numero_factura TEXT NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        empresa_nombre TEXT,
+        nif_cif TEXT,
+        contrato_id VARCHAR(255) NOT NULL,
+        plan_nombre TEXT NOT NULL,
+        proveedor TEXT NOT NULL,
+        mes INT NOT NULL,
+        anio INT NOT NULL,
+        fecha_emision TIMESTAMPTZ NOT NULL,
+        fecha_vencimiento TIMESTAMPTZ NOT NULL,
+        subtotal NUMERIC(12, 2) NOT NULL,
+        tipo_iva NUMERIC(5, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        importe_total NUMERIC(12, 2) NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'pagado',
+        fecha_pago TIMESTAMPTZ,
+        conceptos JSONB,
+        metodo_pago TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS pedidos_oficina (
+        id VARCHAR(255) PRIMARY KEY,
+        numero_pedido TEXT NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        empresa_nombre TEXT,
+        nif_cif TEXT,
+        fecha_compra TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        items JSONB NOT NULL,
+        subtotal NUMERIC(12, 2) NOT NULL,
+        tipo_iva NUMERIC(5, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        importe_total NUMERIC(12, 2) NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'completado_pagado',
+        metodo_pago TEXT
+      );
     `);
     console.log('[Supabase DB] Tables verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
@@ -364,6 +422,11 @@ async function deleteAccountFromSupabase(id: string, username?: string, name?: s
     await dbPool.query('DELETE FROM empleados_contratados WHERE alumno_id = $1', [id]);
     await dbPool.query('DELETE FROM registros_nomina WHERE alumno_id = $1', [id]);
     await dbPool.query('DELETE FROM obligaciones_fiscales WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM contratos_electricos WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM contratos_telecom WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM facturas_telecom WHERE alumno_id = $1', [id]);
+    await dbPool.query('DELETE FROM pedidos_oficina WHERE alumno_id = $1', [id]);
   } catch (e) {
     console.error('[Supabase DB] Error deleting account and related data from Supabase:', e);
   }
@@ -750,6 +813,119 @@ async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
   }
 }
 
+async function syncTelecomContractToSupabase(contract: TelecomContract) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO contratos_telecom (
+        id, alumno_id, alumno_nombre, plan_id, plan_nombre, proveedor,
+        inmueble_id, inmueble_titulo, precio_mensual, fecha_contrato,
+        numero_telefono, estado, velocidad_mbps, lineas_moviles
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ON CONFLICT (id) DO UPDATE SET
+        estado = EXCLUDED.estado,
+        inmueble_id = EXCLUDED.inmueble_id,
+        inmueble_titulo = EXCLUDED.inmueble_titulo`,
+      [
+        contract.id,
+        contract.studentId,
+        contract.studentName || 'Estudiante',
+        contract.planId,
+        contract.planName,
+        contract.provider,
+        contract.propertyId || null,
+        contract.propertyTitle || null,
+        contract.monthlyPrice,
+        contract.contractDate ? new Date(contract.contractDate) : new Date(),
+        contract.phoneNumber || null,
+        contract.status || 'active',
+        contract.speedMbps || null,
+        contract.mobileLinesCount || null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing telecom contract to Supabase:', e);
+  }
+}
+
+async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO facturas_telecom (
+        id, numero_factura, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
+        contrato_id, plan_nombre, proveedor, mes, anio, fecha_emision,
+        fecha_vencimiento, subtotal, tipo_iva, importe_iva, importe_total,
+        estado, fecha_pago, conceptos, metodo_pago
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      ON CONFLICT (id) DO UPDATE SET
+        estado = EXCLUDED.estado,
+        fecha_pago = EXCLUDED.fecha_pago`,
+      [
+        invoice.id,
+        invoice.invoiceNumber,
+        invoice.studentId,
+        invoice.studentName,
+        invoice.companyName || invoice.studentName,
+        invoice.nifCif || null,
+        invoice.contractId,
+        invoice.planName,
+        invoice.provider,
+        invoice.periodMonth,
+        invoice.periodYear,
+        new Date(invoice.issueDate),
+        new Date(invoice.dueDate),
+        invoice.subtotal,
+        invoice.ivaRate || 21,
+        invoice.ivaAmount,
+        invoice.totalAmount,
+        invoice.status || 'pagado',
+        invoice.paidDate ? new Date(invoice.paidDate) : null,
+        JSON.stringify(invoice.items || []),
+        invoice.paymentMethod || null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing telecom invoice to Supabase:', e);
+  }
+}
+
+async function syncOfficeOrderToSupabase(order: OfficePurchaseOrder) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO pedidos_oficina (
+        id, numero_pedido, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
+        fecha_compra, items, subtotal, tipo_iva, importe_iva, importe_total,
+        estado, metodo_pago
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ON CONFLICT (id) DO UPDATE SET
+        estado = EXCLUDED.estado`,
+      [
+        order.id,
+        order.orderNumber,
+        order.studentId,
+        order.studentName,
+        order.companyName || order.studentName,
+        order.nifCif || null,
+        new Date(order.purchaseDate),
+        JSON.stringify(order.items || []),
+        order.subtotal,
+        order.ivaRate || 21,
+        order.ivaAmount,
+        order.totalAmount,
+        order.status || 'completado_pagado',
+        order.paymentMethod || 'banco'
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing office order to Supabase:', e);
+  }
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
@@ -815,6 +991,21 @@ async function syncAllToSupabase(db: DatabaseSchema) {
     if (db.naveFloorPlans) {
       for (const fp of db.naveFloorPlans) {
         await syncFloorPlanToSupabase(fp);
+      }
+    }
+    if (db.telecomContracts) {
+      for (const tc of db.telecomContracts) {
+        await syncTelecomContractToSupabase(tc);
+      }
+    }
+    if (db.telecomInvoices) {
+      for (const ti of db.telecomInvoices) {
+        await syncTelecomInvoiceToSupabase(ti);
+      }
+    }
+    if (db.officeOrders) {
+      for (const oo of db.officeOrders) {
+        await syncOfficeOrderToSupabase(oo);
       }
     }
   } catch (e) {
@@ -899,9 +1090,43 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         console.warn('[Supabase Restore] Planos distribucion naves table select warning:', e);
       }
 
+      let resTelContracts: any = { rows: [] };
+      try {
+        resTelContracts = await client.query('SELECT * FROM contratos_telecom ORDER BY fecha_contrato DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Contratos telecom table select warning:', e);
+      }
+
+      let resTelInvoices: any = { rows: [] };
+      try {
+        resTelInvoices = await client.query('SELECT * FROM facturas_telecom ORDER BY fecha_emision DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Facturas telecom table select warning:', e);
+      }
+
+      let resOfficeOrders: any = { rows: [] };
+      try {
+        resOfficeOrders = await client.query('SELECT * FROM pedidos_oficina ORDER BY fecha_compra DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Pedidos oficina table select warning:', e);
+      }
+
       const db = readDb();
 
-      // Synchronize students and balances from Supabase "cuentas"
+      // Synchronize students and balances from Supabase "cuentas" (Supabase is source of truth)
+      const restoredUsers: User[] = [];
+      const existingTeacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
+      const teacherUser: User = existingTeacher || {
+        id: 'profesor-1',
+        username: 'pupdaniel',
+        password: '1987',
+        role: 'teacher',
+        name: 'Profesor de Contabilidad',
+        accountNumber: 'ES000000000000000000',
+        balance: 0
+      };
+      restoredUsers.push(teacherUser);
+
       for (const row of resCuentas.rows) {
         const rowId = String(row.id);
         const rowAlumno = String(row.alumno);
@@ -911,28 +1136,23 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         const rowAccount = row.account_number ? String(row.account_number) : undefined;
         const rowRole = row.role ? String(row.role) : 'student';
 
-        let user = db.users.find(u => u.id === rowId || u.name.toLowerCase() === rowAlumno.toLowerCase());
-        if (user) {
-          user.balance = rowSaldo;
-          user.name = rowAlumno;
-          if (rowUsuario) user.username = rowUsuario;
-          if (rowPassword) user.password = rowPassword;
-          if (rowAccount) user.accountNumber = rowAccount;
-          if (rowRole) user.role = rowRole as any;
+        if (rowRole === 'teacher' || rowId === teacherUser.id) {
+          teacherUser.balance = rowSaldo;
+          if (rowUsuario) teacherUser.username = rowUsuario;
+          if (rowPassword) teacherUser.password = rowPassword;
         } else {
-          // Add student if missing locally
-          const newUser: User = {
+          restoredUsers.push({
             id: rowId,
             username: rowUsuario || rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
             password: rowPassword || '123',
-            role: (rowRole as any) || 'student',
+            role: 'student',
             name: rowAlumno,
             accountNumber: rowAccount || generateIBAN(),
             balance: rowSaldo
-          };
-          db.users.push(newUser);
+          });
         }
       }
+      db.users = restoredUsers;
 
       // Reconstruct db.transfers from "movimientos"
       const outMovs = resMov.rows.filter(r => r.tipo === 'TRANSFER_OUT');
@@ -1223,6 +1443,73 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           freeZoneM2: Number(row.zona_libre_m2),
           warehousesCount: Number(row.num_almacenes || 2),
           updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.telecomContracts from Supabase "contratos_telecom"
+      if (resTelContracts.rows.length > 0) {
+        db.telecomContracts = resTelContracts.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          planId: String(row.plan_id),
+          planName: String(row.plan_nombre),
+          provider: String(row.proveedor),
+          monthlyPrice: Number(row.precio_mensual),
+          speedMbps: Number(row.velocidad_mbps || 0),
+          mobileLinesCount: Number(row.lineas_moviles || 0),
+          propertyId: row.inmueble_id ? String(row.inmueble_id) : '',
+          propertyTitle: row.inmueble_titulo ? String(row.inmueble_titulo) : '',
+          phoneNumber: row.numero_telefono ? String(row.numero_telefono) : undefined,
+          status: String(row.estado) as 'active' | 'cancelled',
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.telecomInvoices from Supabase "facturas_telecom"
+      if (resTelInvoices.rows.length > 0) {
+        db.telecomInvoices = resTelInvoices.rows.map((row: any) => ({
+          id: String(row.id),
+          invoiceNumber: String(row.numero_factura),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          companyName: String(row.empresa_nombre || row.alumno_nombre),
+          nifCif: String(row.nif_cif || ''),
+          contractId: String(row.contrato_id),
+          planName: String(row.plan_nombre),
+          provider: String(row.proveedor),
+          periodMonth: Number(row.mes),
+          periodYear: Number(row.anio),
+          issueDate: new Date(row.fecha_emision).toISOString(),
+          dueDate: new Date(row.fecha_vencimiento).toISOString(),
+          subtotal: Number(row.subtotal),
+          ivaRate: Number(row.tipo_iva || 21),
+          ivaAmount: Number(row.importe_iva),
+          totalAmount: Number(row.importe_total),
+          status: String(row.estado) as 'pagado' | 'pendiente',
+          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+          items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia Bancaria Directa'
+        }));
+      }
+
+      // Reconstruct db.officeOrders from Supabase "pedidos_oficina"
+      if (resOfficeOrders.rows.length > 0) {
+        db.officeOrders = resOfficeOrders.rows.map((row: any) => ({
+          id: String(row.id),
+          orderNumber: String(row.numero_pedido),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          companyName: String(row.empresa_nombre || row.alumno_nombre),
+          nifCif: String(row.nif_cif || ''),
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : [],
+          subtotal: Number(row.subtotal),
+          ivaRate: Number(row.tipo_iva || 21),
+          ivaAmount: Number(row.importe_iva),
+          totalAmount: Number(row.importe_total),
+          status: String(row.estado) as 'completado_pagado',
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'banco'
         }));
       }
 
@@ -2121,6 +2408,8 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
 
         db.telecomInvoices.unshift(invoice);
 
+        syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+
         student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
         syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
@@ -2655,7 +2944,7 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
 });
 
 // Delete user account (Teacher only)
-app.delete('/api/users/:id', (req, res) => {
+app.delete('/api/users/:id', async (req, res) => {
   const { id } = req.params;
 
   const db = readDb();
@@ -2679,6 +2968,11 @@ app.delete('/api/users/:id', (req, res) => {
   if (db.hiredEmployees) db.hiredEmployees = db.hiredEmployees.filter(e => e.studentId !== id);
   if (db.payrollRecords) db.payrollRecords = db.payrollRecords.filter(p => p.studentId !== id);
   if (db.taxObligations) db.taxObligations = db.taxObligations.filter(t => t.studentId !== id);
+  if (db.electricityContracts) db.electricityContracts = db.electricityContracts.filter(c => c.studentId !== id);
+  if (db.naveFloorPlans) db.naveFloorPlans = db.naveFloorPlans.filter(fp => fp.studentId !== id);
+  if (db.telecomContracts) db.telecomContracts = db.telecomContracts.filter(tc => tc.studentId !== id);
+  if (db.telecomInvoices) db.telecomInvoices = db.telecomInvoices.filter(ti => ti.studentId !== id);
+  if (db.officeOrders) db.officeOrders = db.officeOrders.filter(oo => oo.studentId !== id);
   if (db.jobListings) {
     db.jobListings = db.jobListings.map(j => {
       if (j.hiredByStudentId === id) {
@@ -2688,7 +2982,7 @@ app.delete('/api/users/:id', (req, res) => {
     });
   }
 
-  deleteAccountFromSupabase(id, user.username, user.name).catch(e => console.error(e));
+  await deleteAccountFromSupabase(id, user.username, user.name);
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -5531,6 +5825,9 @@ app.post('/api/telecom/contract', (req, res) => {
 
   db.telecomInvoices.unshift(invoice);
 
+  syncTelecomContractToSupabase(contract).catch(e => console.error(e));
+  syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+
   // Deduct balance
   student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
   syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
@@ -5640,6 +5937,8 @@ app.post('/api/office-store/checkout', (req, res) => {
   };
 
   db.officeOrders.unshift(order);
+
+  syncOfficeOrderToSupabase(order).catch(e => console.error(e));
 
   // Deduct from student balance
   student.balance = Math.round((student.balance - totalAmount) * 100) / 100;

@@ -11,6 +11,7 @@ import {
 import { User, BankLoan, PropertyAcquisition } from '../types.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface StudentLoanSectionProps {
   currentUser: User;
@@ -408,7 +409,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Tipo de Interés Anual</span>
                     <span className="text-sm font-bold font-mono text-emerald-700">
-                      {loan.annualInterestRate.toFixed(2)} % <span className="text-[9px] text-slate-400 font-normal">(Euribor + 1%)</span>
+                      {formatNumber(loan.annualInterestRate)} % <span className="text-[9px] text-slate-400 font-normal">(Euribor + 1%)</span>
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
