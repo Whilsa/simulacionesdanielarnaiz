@@ -19,6 +19,7 @@ import { ElectricityAssetTab } from './ElectricityAssetTab.js';
 import { TelecomInvoiceModal } from './TelecomInvoiceModal.js';
 import { OfficeInvoiceModal } from './OfficeInvoiceModal.js';
 import { formatNumber } from '../lib/formatters.js';
+import { OFFICE_STORE_CATALOG } from '../lib/officeStoreData.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
@@ -2043,15 +2044,33 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-200/80 text-slate-800">
-                                {order.items.map((it, iIdx) => (
-                                  <tr key={iIdx}>
-                                    <td className="p-2.5 font-semibold text-slate-500">{it.categoryLabel}</td>
-                                    <td className="p-2.5 font-bold text-slate-900">{it.itemName}</td>
-                                    <td className="p-2.5 text-center font-bold">{it.quantity}</td>
-                                    <td className="p-2.5 text-right">{formatNumber(it.unitPrice)} €</td>
-                                    <td className="p-2.5 text-right font-black text-slate-900">{formatNumber(it.totalPrice)} €</td>
-                                  </tr>
-                                ))}
+                                {order.items.map((it, iIdx) => {
+                                  const imgUrl = it.imageUrl || OFFICE_STORE_CATALOG.find(c => c.id === it.itemId)?.imageUrl;
+                                  return (
+                                    <tr key={iIdx}>
+                                      <td className="p-2.5 font-semibold text-slate-500">{it.categoryLabel}</td>
+                                      <td className="p-2.5 font-bold text-slate-900">
+                                        <div className="flex items-center gap-2.5">
+                                          {imgUrl && (
+                                            <img
+                                              src={imgUrl}
+                                              alt={it.itemName}
+                                              referrerPolicy="no-referrer"
+                                              className="w-9 h-9 rounded-lg object-cover bg-slate-200 border border-slate-300 shrink-0"
+                                              onError={(e) => {
+                                                (e.target as HTMLElement).style.display = 'none';
+                                              }}
+                                            />
+                                          )}
+                                          <span>{it.itemName}</span>
+                                        </div>
+                                      </td>
+                                      <td className="p-2.5 text-center font-bold">{it.quantity}</td>
+                                      <td className="p-2.5 text-right">{formatNumber(it.unitPrice)} €</td>
+                                      <td className="p-2.5 text-right font-black text-slate-900">{formatNumber(it.totalPrice)} €</td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>

@@ -94,7 +94,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 120,
     description: 'Estantería ligera y estilizada de paneles MDF y estructura de acero para carpetas AZ y documentación.',
     specs: ['Dimensiones: 180 x 90 x 40 cm', '5 estantes para carpetas de archivo', 'Acabado en roble claro y metal blanco', 'Montaje sin tornillos'],
-    imageUrl: 'https://images.unsplash.com/photo-1589939705384-5185137a7f0f?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/estanteria_archivo.jpg'
   },
   {
     id: 'est-03',
@@ -104,7 +104,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 290,
     description: 'Estantería de diseño para despacho de dirección con baldas reforzadas de nogal y protección antivuelco.',
     specs: ['Dimensiones: 195 x 110 x 38 cm', 'Madera maciza de nogal con barniz ecológico', 'Diseño elegante con baldas ajustables', 'Garantía corporativa de 5 años'],
-    imageUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/estanteria_madera.jpg'
   },
 
   // 2. MESAS (3 tipos)
@@ -116,7 +116,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 210,
     description: 'Mesa de trabajo individual con pasacables integrado y estructura de acero reforzado.',
     specs: ['Medidas: 140 x 80 x 74 cm', 'Tablero de melamina anti-rayaduras de 25mm', 'Patas metálicas en T con niveladores', 'Grommets doble pasacables'],
-    imageUrl: 'https://images.unsplash.com/photo-1518455027359-f3f8164ba6bd?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/escritorio_operativo.jpg'
   },
   {
     id: 'mes-02',
@@ -126,7 +126,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 650,
     description: 'Mesa de conferencias espaciosa con caja de conexiones integrada (HDMI, USB-C y tomas schuko).',
     specs: ['Medidas: 240 x 120 x 75 cm', 'Capacidad para 8 personas holgadamente', 'Estructura central electrification-ready', 'Acabado melamínico roble/grafito'],
-    imageUrl: 'https://images.unsplash.com/photo-1497215842964-222b430dc094?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/mesa_reuniones.jpg'
   },
   {
     id: 'mes-03',
@@ -136,7 +136,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 420,
     description: 'Mesa regulable en altura mediante motor eléctrico silencioso y memorias de posición ergométricas.',
     specs: ['Rango de altura: 62 cm a 128 cm', 'Motor dual ultra-silencioso (<45dB)', 'Panel digital con 4 memorias de altura', 'Carga máxima: 120 kg'],
-    imageUrl: 'https://images.unsplash.com/photo-1595515106969-1ce29566ff1c?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/escritorio_elevable.jpg'
   },
 
   // 3. SILLAS (3 tipos)
@@ -148,7 +148,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 160,
     description: 'Silla de oficina ergonómica con respaldo en malla transpirable, soporte lumbar regulable y reposabrazos 3D.',
     specs: ['Mecanismo sincro con bloqueo en 3 posiciones', 'Soporte lumbar ajustable en altura y profundidad', 'Ruedas de goma aptas para parquet', 'Certificado ergonómico EN-1335'],
-    imageUrl: 'https://images.unsplash.com/photo-1580481072645-022f9a6d8310?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/silla_ergonomica.jpg'
   },
   {
     id: 'sil-02',
@@ -168,7 +168,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 85,
     description: 'Silla de patín cromado para salas de visitas y reuniones, confortable y fácil de almacenar.',
     specs: ['Estructura de tubo de acero cromado', 'Respaldo y asiento tapizados en tela ignífuga', 'Apilable hasta 5 unidades', 'Topes antideslizantes de protección'],
-    imageUrl: 'https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/silla_confidente.jpg'
   },
 
   // 4. ORDENADORES DE SOBREMESA (3 tipos)
@@ -264,7 +264,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 110,
     description: 'Cámara web profesional para videollamadas y reuniones corporativas en resolución 4K con cancelación de ruido.',
     specs: ['Resolución 4K a 30fps / 1080p a 60fps', 'Enfoque automático HDR y encuadre inteligente', 'Doble micrófono omnidireccional con filtro de ruido', 'Tapa física de privacidad integrada'],
-    imageUrl: 'https://images.unsplash.com/photo-1616469829941-c7200edec809?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/webcam_4k.jpg'
   },
 
   // 7. IMPRESORAS (3 tipos)
@@ -286,7 +286,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 260,
     description: 'Impresora monocromo ultrarrápida para altos volúmenes de facturas, albaranes y contratos.',
     specs: ['Velocidad de impresión: 45 páginas por minuto', 'Bandeja de papel de 550 hojas ampliable', 'Impresión dúplex automática', 'Tóner de alta capacidad (12.000 páginas)'],
-    imageUrl: 'https://images.unsplash.com/photo-1563986768609-322da13575f3?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/impresora_laser_monocromo.jpg'
   },
   {
     id: 'imp-03',
@@ -296,7 +296,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 890,
     description: 'Equipo profesional de impresión y digitalización de gran formato A3/A4 para planos, carteles y balances de empresa.',
     specs: ['Soporta formatos desde A6 hasta A3+', 'Impresión de alta precisión de planos y documentos', 'Doble bandeja de papel A4 y A3 independientes', 'Conectividad Cloud Print y gestión securizada'],
-    imageUrl: 'https://images.unsplash.com/photo-1612815154858-60aa4c59eaa6?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/plotter_profesional.jpg'
   },
 
   // 8. PROGRAMAS INFORMÁTICOS - PROCESADORES DE TEXTO / OFIMÁTICA (3 tipos)
@@ -308,7 +308,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 85,
     description: 'Licencia corporativa individual para procesador de textos profesional, hojas de cálculo y presentaciones.',
     specs: ['Licencia para 1 puesto de trabajo por 12 meses', 'Procesador de textos con corrector ortográfico avanzado', 'Formatos compatibles: .docx, .pdf, .rtf, .odt', 'Soporte técnico y actualizaciones incluidas'],
-    imageUrl: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/licencia_ofimatica_estandar.jpg'
   },
   {
     id: 'soft-txt-02',
@@ -318,7 +318,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 320,
     description: 'Pack de 5 licencias para equipo de oficina con almacenamiento cloud de documentos y edición colaborativa en tiempo real.',
     specs: ['5 Licencias corporativas independientes', '1 TB de almacenamiento en la nube por usuario', 'Colaboración en tiempo real en documentos de texto', 'Firma digital integrada de documentos PDF'],
-    imageUrl: 'https://images.unsplash.com/photo-1517842645767-c639042777db?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/licencia_ofimatica_profesional.jpg'
   },
   {
     id: 'soft-txt-03',
@@ -328,7 +328,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 190,
     description: 'Programa especializado en la redacción de contratos, informes técnicos, actas corporativas y plantillas legales automatizadas.',
     specs: ['Licencia permanente para 1 equipo', 'Biblioteca con más de 500 plantillas legales y comerciales', 'Indexación y búsqueda semántica de documentos', 'Exportación masiva a PDF/A securizado'],
-    imageUrl: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/software_gestion_documental.jpg'
   },
 
   // 9. PROGRAMAS INFORMÁTICOS - CONTABILIDAD Y GESTIÓN (3 tipos)
@@ -372,7 +372,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 95,
     description: 'Teléfono fijo VoIP con pantalla LCD a color de 2.8 pulgadas, audio HD de alta fidelidad y manos libres.',
     specs: ['4 Líneas SIP configurables', 'Doble puerto Gigabit Ethernet con alimentación PoE', 'Audio de alta definición HD Sound con altavoz', 'Agenda para 1.000 contactos corporativos'],
-    imageUrl: 'https://images.unsplash.com/photo-1520923642038-b4259acecbd7?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_fijo_ip_ejecutivo.jpg'
   },
   {
     id: 'tel-fij-02',
@@ -382,7 +382,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 75,
     description: 'Teléfono inalámbrico de largo alcance con base de carga, vibración y clip de cinturón para libertad de movimiento.',
     specs: ['Alcance: 50m en interior / 300m en exterior', 'Pantalla a color de 1.8" resistente a caídas', 'Autonomía: 18 horas de conversación / 200h en espera', 'Conexión para auriculares Jack 3.5mm'],
-    imageUrl: 'https://images.unsplash.com/photo-1580828343064-fde4fc206bc6?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_inalambrico_dect.jpg'
   },
   {
     id: 'tel-fij-03',
@@ -392,7 +392,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 220,
     description: 'Consola telefónica para recepción y despacho ejecutivo con pantalla táctil de 7 pulgadas y cámara HD para videoconferencia.',
     specs: ['Pantalla táctil capacitiva 7" (1024x600)', 'Cámara HD de 5MP con obturador de privacidad', 'Bluetooth 4.2 y Wi-Fi doble banda integrado', '16 Teclas inteligentes virtuales con indicador LED'],
-    imageUrl: 'https://images.unsplash.com/photo-1577563908411-5077b6dc7624?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/centralita_telefono_conferencia.jpg'
   },
 
   // 11. TELÉFONOS MÓVILES (3 tipos)

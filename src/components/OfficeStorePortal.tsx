@@ -299,12 +299,23 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
           {filteredItems.map((item) => (
             <div
               key={item.id}
-              className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md transition-all duration-200 hover:border-amber-300"
+              className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md transition-all duration-200 hover:border-amber-300 group"
             >
               <div>
-                {/* Product Header Badge */}
-                <div className="p-4 pb-2 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                  <span className="px-2.5 py-1 bg-slate-900 text-amber-300 text-[10px] font-extrabold uppercase rounded-full border border-slate-700">
+                {/* Product Image Container */}
+                <div className="relative w-full h-48 bg-slate-100 overflow-hidden border-b border-slate-100">
+                  <img
+                    src={item.imageUrl}
+                    alt={item.name}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-300"
+                    onError={(e) => {
+                      // Fallback gracefully if image fails
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                  <span className="absolute top-3 left-3 bg-slate-900/90 text-amber-300 backdrop-blur-xs text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full border border-slate-700/60 shadow-xs">
                     {item.categoryLabel}
                   </span>
                 </div>
@@ -319,10 +330,10 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                     {item.description}
                   </p>
 
-                  <ul className="space-y-1 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                  <ul className="space-y-1 text-[11px] text-slate-500 pt-2 border-t border-slate-100">
                     {item.specs.map((spec, sIdx) => (
                       <li key={sIdx} className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
                         <span className="truncate">{spec}</span>
                       </li>
                     ))}
@@ -381,6 +392,15 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               ) : (
                 cart.map(({ item, quantity }) => (
                   <div key={item.id} className="pt-4 first:pt-0 flex items-center gap-3">
+                    <img
+                      src={item.imageUrl}
+                      alt={item.name}
+                      referrerPolicy="no-referrer"
+                      className="w-12 h-12 rounded-lg object-cover bg-slate-100 border border-slate-200 shrink-0"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
                     <div className="flex-1 min-w-0">
                       <h4 className="font-bold text-xs text-slate-900 truncate">{item.name}</h4>
                       <p className="text-[11px] text-slate-500">{formatNumber(item.price)} € / unid.</p>
