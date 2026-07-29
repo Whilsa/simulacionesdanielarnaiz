@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -142,7 +143,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           Icon: Landmark,
           description: 'Acceso al simulador bancario corporativo. Realiza transferencias, gestiona tu IBAN, consulta extractos de movimientos e historial de cobros y pagos.',
           statLabel: 'Saldo Disponible',
-          statValue: `${currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`
+          statValue: `${formatNumber(currentUser.balance)} €`
         };
       case 'company':
         return {

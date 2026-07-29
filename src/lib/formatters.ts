@@ -11,15 +11,15 @@
 
 export function formatNumber(val: number | null | undefined, decimals: number = 2): string {
   if (val === null || val === undefined || isNaN(val)) {
-    return (0).toLocaleString('es-ES', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    });
+    return (0).toFixed(decimals).replace('.', ',');
   }
-  return val.toLocaleString('es-ES', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+  const isNegative = val < 0;
+  const absVal = Math.abs(val);
+  const fixed = absVal.toFixed(decimals);
+  const [integerPart, decimalPart] = fixed.split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const result = decimalPart !== undefined ? `${formattedInteger},${decimalPart}` : formattedInteger;
+  return isNegative ? `-${result}` : result;
 }
 
 export function formatCurrency(val: number | null | undefined): string {

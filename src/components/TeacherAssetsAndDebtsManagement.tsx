@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User } from '../types.js';
+import { formatNumber } from '../lib/formatters.js';
 import { Building2, Wrench, Landmark, Trash2, Edit3, ShieldAlert, CheckCircle2, AlertTriangle, FileText, Search, RefreshCw, X } from 'lucide-react';
 
 interface TeacherAssetsAndDebtsManagementProps {
@@ -286,7 +287,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                           <td className="py-3 px-2 font-bold">{ob.propertyTitle || 'Obligación Pendiente'}</td>
                           <td className="py-3 px-2 uppercase font-mono text-[11px] text-amber-800">{ob.type}</td>
                           <td className="py-3 px-2">{new Date(ob.dueDate).toLocaleDateString('es-ES')}</td>
-                          <td className="py-3 px-2 text-right font-bold text-slate-900">{ob.amount?.toLocaleString('es-ES')} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(ob.amount)} €</td>
                           <td className="py-3 px-2">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                               ob.status === 'pagado' ? 'bg-emerald-100 text-emerald-800' : ob.status === 'vencido' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
@@ -334,8 +335,8 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                         <tr key={acq.id} className="hover:bg-slate-50 text-slate-700">
                           <td className="py-3 px-2 font-bold">{acq.propertyTitle}</td>
                           <td className="py-3 px-2 uppercase font-mono text-[11px] text-blue-800">{acq.operation}</td>
-                          <td className="py-3 px-2 text-right font-bold text-slate-900">{(acq.basePrice || acq.totalPrice)?.toLocaleString('es-ES')} €</td>
-                          <td className="py-3 px-2 text-right font-bold text-amber-800">{(acq.pendingBalance || 0)?.toLocaleString('es-ES')} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(acq.basePrice || acq.totalPrice)} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-amber-800">{formatNumber(acq.pendingBalance || 0)} €</td>
                           <td className="py-3 px-2 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <button
@@ -385,8 +386,8 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                         <tr key={mac.id} className="hover:bg-slate-50 text-slate-700">
                           <td className="py-3 px-2 font-bold">{mac.lineTitle || mac.title}</td>
                           <td className="py-3 px-2 text-slate-500">{mac.installedNaveTitle || 'Nave Industrial'}</td>
-                          <td className="py-3 px-2 text-right font-bold text-slate-900">{(mac.totalPrice || mac.basePrice)?.toLocaleString('es-ES')} €</td>
-                          <td className="py-3 px-2 text-right font-bold text-amber-800">{(mac.pendingBalance || 0)?.toLocaleString('es-ES')} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(mac.totalPrice || mac.basePrice)} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-amber-800">{formatNumber(mac.pendingBalance || 0)} €</td>
                           <td className="py-3 px-2 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <button
@@ -436,7 +437,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                         <tr key={loan.id} className="hover:bg-slate-50 text-slate-700">
                           <td className="py-3 px-2 font-bold font-mono">{loan.id}</td>
                           <td className="py-3 px-2">{loan.annualInterestRate}% • {loan.termMonths} meses</td>
-                          <td className="py-3 px-2 text-right font-bold text-slate-900">{(loan.offeredAmount || loan.requestedAmount)?.toLocaleString('es-ES')} €</td>
+                          <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(loan.offeredAmount || loan.requestedAmount)} €</td>
                           <td className="py-3 px-2">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">
                               {loan.status}

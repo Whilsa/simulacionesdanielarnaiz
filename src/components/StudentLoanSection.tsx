@@ -318,7 +318,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                         {loan.collateral.type === 'property' 
                           ? (loan.collateral.propertyTitle || 'Inmueble Comercial') 
                           : `Vivienda Privada (${loan.collateral.surfaceM2} m²)`}
-                      </span> • Tasación: <span className="font-mono">{loan.collateral.appraisalValue.toLocaleString('es-ES')} €</span>
+                      </span> • Tasación: <span className="font-mono">{formatNumber(loan.collateral.appraisalValue)} €</span>
                     </p>
                   </div>
 
@@ -344,9 +344,9 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                 {isOffered && (
                   <div className="bg-gradient-to-r from-amber-600 to-amber-800 text-white rounded-xl p-4 mb-4 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="space-y-1">
-                      <p className="font-bold text-sm">¡El banco te ofrece {loan.offeredAmount.toLocaleString('es-ES')} €!</p>
+                      <p className="font-bold text-sm">¡El banco te ofrece {formatNumber(loan.offeredAmount)} €!</p>
                       <p className="text-xs text-amber-100">
-                        Cuota mensual: <strong className="font-mono text-white">{loan.monthlyPayment.toLocaleString('es-ES')} €</strong> • TIN: <strong className="font-mono text-white">{loan.annualInterestRate}%</strong> • Comisión apertura (1‰): <strong className="font-mono text-white">{loan.openingFee.toLocaleString('es-ES')} €</strong>
+                        Cuota mensual: <strong className="font-mono text-white">{formatNumber(loan.monthlyPayment)} €</strong> • TIN: <strong className="font-mono text-white">{loan.annualInterestRate}%</strong> • Comisión apertura (1‰): <strong className="font-mono text-white">{formatNumber(loan.openingFee)} €</strong>
                       </p>
                     </div>
                     <div className="flex items-center space-x-2 shrink-0">
@@ -397,13 +397,13 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Capital Ofrecido / Concedido</span>
                     <span className="text-sm font-bold font-mono text-slate-900">
-                      {(loan.approvedAmount || loan.offeredAmount).toLocaleString('es-ES')} €
+                      {formatNumber(loan.approvedAmount || loan.offeredAmount)} €
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota Mensual</span>
                     <span className="text-sm font-bold font-mono text-amber-800">
-                      {loan.monthlyPayment.toLocaleString('es-ES')} € / mes
+                      {formatNumber(loan.monthlyPayment)} € / mes
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -415,7 +415,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Comisión Apertura (1‰)</span>
                     <span className="text-sm font-bold font-mono text-slate-700">
-                      {loan.openingFee.toLocaleString('es-ES')} €
+                      {formatNumber(loan.openingFee)} €
                     </span>
                   </div>
                 </div>
@@ -533,7 +533,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                       >
                         {acquisitions.map(a => (
                           <option key={a.id} value={a.id}>
-                            {a.propertyTitle} ({a.surfaceM2} m²) - Tasación: {a.totalPrice.toLocaleString('es-ES')} €
+                            {a.propertyTitle} ({a.surfaceM2} m²) - Tasación: {formatNumber(a.totalPrice)} €
                           </option>
                         ))}
                       </select>
@@ -580,11 +580,11 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
               <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-2 font-mono">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                   <span className="text-[11px] text-slate-400 font-sans">Límite Máximo Aprobado (80% Tasación):</span>
-                  <span className="font-bold text-amber-300">{maxLtvAutoApproved.toLocaleString('es-ES')} €</span>
+                  <span className="font-bold text-amber-300">{formatNumber(maxLtvAutoApproved)} €</span>
                 </div>
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                   <span className="text-[11px] text-slate-400 font-sans">Importe a Conceder:</span>
-                  <span className="font-bold text-emerald-400">{estimatedOfferedAmount.toLocaleString('es-ES')} €</span>
+                  <span className="font-bold text-emerald-400">{formatNumber(estimatedOfferedAmount)} €</span>
                 </div>
                 <div className="flex justify-between items-center text-[11px] border-b border-slate-800 pb-2">
                   <span className="text-slate-400 font-sans">Interés Anual (Euribor 3,5% + 1%):</span>
@@ -592,11 +592,11 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                 </div>
                 <div className="flex justify-between items-center text-[11px] border-b border-slate-800 pb-2">
                   <span className="text-slate-400 font-sans">Comisión Bancaria de Apertura (1‰):</span>
-                  <span className="text-rose-300">{openingFeeAmt.toLocaleString('es-ES')} €</span>
+                  <span className="text-rose-300">{formatNumber(openingFeeAmt)} €</span>
                 </div>
                 <div className="flex justify-between items-center pt-1 text-xs">
                   <span className="font-sans font-bold text-slate-200">Cuota Mensual Estimada (Francés):</span>
-                  <span className="font-extrabold text-amber-400 text-sm">{estimatedMonthlyPayment.toLocaleString('es-ES')} € / mes</span>
+                  <span className="font-extrabold text-amber-400 text-sm">{formatNumber(estimatedMonthlyPayment)} € / mes</span>
                 </div>
               </div>
 

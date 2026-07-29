@@ -93,6 +93,23 @@ function maskDbUrl(url: string | undefined): string {
   }
 }
 
+function formatNumber(val: number | null | undefined, decimals: number = 2): string {
+  if (val === null || val === undefined || isNaN(val)) {
+    return (0).toFixed(decimals).replace('.', ',');
+  }
+  const isNegative = val < 0;
+  const absVal = Math.abs(val);
+  const fixed = absVal.toFixed(decimals);
+  const [integerPart, decimalPart] = fixed.split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const result = decimalPart !== undefined ? `${formattedInteger},${decimalPart}` : formattedInteger;
+  return isNegative ? `-${result}` : result;
+}
+
+function formatCurrency(val: number | null | undefined): string {
+  return `${formatNumber(val, 2)} €`;
+}
+
 // Realistic corporate real estate vendors & financial creditors
 export const REALISTIC_CORPORATE_SELLERS = [
   { id: 'corp-1', name: 'Inmobiliaria Polígonos de España S.A.', account: 'ES210001000299887711' },
@@ -3087,7 +3104,7 @@ app.post('/api/transfers', (req, res) => {
   const senderStatus = getStudentPaymentStatus(db, senderId);
   if (senderStatus.isBlocked) {
     return res.status(400).json({
-      error: `Operación denegada: Tu cuenta tiene pagos vencidos impagados por un total de ${senderStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+      error: `Operación denegada: Tu cuenta tiene pagos vencidos impagados por un total de ${formatCurrency(senderStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
     });
   }
 
@@ -3437,7 +3454,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
   const studentStatus = getStudentPaymentStatus(db, studentId);
   if (studentStatus.isBlocked) {
     return res.status(400).json({
-      error: `Operación de compra/alquiler bloqueada: Tienes vencimientos impagados pendientes por un total de ${studentStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+      error: `Operación de compra/alquiler bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
     });
   }
 
@@ -3463,7 +3480,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
 
     if (student.balance < initialPaymentTotal) {
       return res.status(400).json({
-        error: `Saldo insuficiente. Se requieren ${initialPaymentTotal.toLocaleString('es-ES')} € (Fianza de 2 meses: ${depositAmount.toLocaleString('es-ES')} € + 1er Mes con IVA: ${monthlyRentTotal.toLocaleString('es-ES')} €)`
+        error: `Saldo insuficiente. Se requieren ${formatCurrency(initialPaymentTotal)} (Fianza de 2 meses: ${formatCurrency(depositAmount)} + 1er Mes con IVA: ${formatCurrency(monthlyRentTotal)})`
       });
     }
 
@@ -3549,7 +3566,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
 
     return res.json({
       success: true,
-      message: `¡Contrato de alquiler formalizado con éxito! Se han deducido ${initialPaymentTotal.toLocaleString('es-ES')} € de fianza y primer mes de alquiler (IVA incl.).`,
+      message: `¡Contrato de alquiler formalizado con éxito! Se han deducido ${formatCurrency(initialPaymentTotal)} de fianza y primer mes de alquiler (IVA incl.).`,
       acquisition,
       updatedBalance: student.balance
     });
@@ -3563,7 +3580,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
       // CASH PURCHASE (AL CONTADO)
       if (student.balance < totalPrice) {
         return res.status(400).json({
-          error: `Saldo insuficiente para la compra al contado. Se requieren ${totalPrice.toLocaleString('es-ES')} € (Precio Base: ${basePrice.toLocaleString('es-ES')} € + IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+          error: `Saldo insuficiente para la compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`
         });
       }
 
@@ -3619,7 +3636,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
 
       return res.json({
         success: true,
-        message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${totalPrice.toLocaleString('es-ES')} € (IVA 21% incl.).`,
+        message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${formatCurrency(totalPrice)} (IVA 21% incl.).`,
         acquisition,
         updatedBalance: student.balance
       });
@@ -3632,7 +3649,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
 
       if (student.balance < initialCashRequired) {
         return res.status(400).json({
-          error: `Saldo insuficiente para la entrada inicial y liquidación de IVA. Se requieren ${initialCashRequired.toLocaleString('es-ES')} € (Entrada ${downPaymentPercent}%: ${downPaymentBase.toLocaleString('es-ES')} € + IVA Total 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+          error: `Saldo insuficiente para la entrada inicial y liquidación de IVA. Se requieren ${formatCurrency(initialCashRequired)} (Entrada ${downPaymentPercent}%: ${formatCurrency(downPaymentBase)} + IVA Total 21%: ${formatCurrency(ivaAmount)})`
         });
       }
 
@@ -3725,7 +3742,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
 
       return res.json({
         success: true,
-        message: `¡Compra aplazada formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido ${count} ${instrumentLabel}s de ${installmentAmount.toLocaleString('es-ES')} €/mes.`,
+        message: `¡Compra aplazada formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido ${count} ${instrumentLabel}s de ${formatNumber(installmentAmount)} €/mes.`,
         acquisition,
         updatedBalance: student.balance
       });
@@ -3827,7 +3844,7 @@ app.post('/api/machinery/buy', (req, res) => {
   const studentStatus = getStudentPaymentStatus(db, studentId);
   if (studentStatus.isBlocked) {
     return res.status(400).json({
-      error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${studentStatus.totalOverdueAmount.toLocaleString('es-ES')} € (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+      error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
     });
   }
 
@@ -3904,7 +3921,7 @@ app.post('/api/machinery/buy', (req, res) => {
 
     if (student.balance < totalPrice) {
       return res.status(400).json({
-        error: `Saldo insuficiente para compra al contado. Se requieren ${totalPrice.toLocaleString('es-ES')} € (Precio Base Llave en Mano: ${basePrice.toLocaleString('es-ES')} € + IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+        error: `Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`
       });
     }
 
@@ -3979,8 +3996,8 @@ app.post('/api/machinery/buy', (req, res) => {
     syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept).catch(e => console.error(e));
 
     const statusMsg = isPowerContracted
-      ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 5 días en ${targetAcquisition.propertyTitle}.`
-      : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${totalPrice.toLocaleString('es-ES')} € (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
+      ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 5 días en ${targetAcquisition.propertyTitle}.`
+      : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
 
     return res.json({
       success: true,
@@ -4000,7 +4017,7 @@ app.post('/api/machinery/buy', (req, res) => {
 
     if (student.balance < initialCashRequired) {
       return res.status(400).json({
-        error: `Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${initialCashRequired.toLocaleString('es-ES')} € (Entrada del 40%: ${downPaymentBase.toLocaleString('es-ES')} € + Total IVA 21%: ${ivaAmount.toLocaleString('es-ES')} €)`
+        error: `Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`
       });
     }
 
@@ -4108,8 +4125,8 @@ app.post('/api/machinery/buy', (req, res) => {
     }
 
     const defStatusMsg = isPowerContracted
-      ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y se han emitido 24 pagarés mensuales de ${installmentAmount.toLocaleString('es-ES')} €/mes. El montaje de 5 días ha comenzado en ${targetAcquisition.propertyTitle}.`
-      : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${initialCashRequired.toLocaleString('es-ES')} € de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
+      ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 5 días ha comenzado en ${targetAcquisition.propertyTitle}.`
+      : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
 
     return res.json({
       success: true,
@@ -4277,7 +4294,7 @@ app.post('/api/obligations/pay', (req, res) => {
 
   if (student.balance < obligation.amount) {
     return res.status(400).json({
-      error: `Saldo insuficiente para atender el vencimiento. Saldo actual: ${student.balance.toLocaleString('es-ES')} €, Vencimiento: ${obligation.amount.toLocaleString('es-ES')} €`
+      error: `Saldo insuficiente para atender el vencimiento. Saldo actual: ${formatCurrency(student.balance)}, Vencimiento: ${formatCurrency(obligation.amount)}`
     });
   }
 
@@ -4336,7 +4353,7 @@ app.post('/api/obligations/pay', (req, res) => {
 
   res.json({
     success: true,
-    message: `¡Atención al vencimiento completada con éxito! Se han abonado ${obligation.amount.toLocaleString('es-ES')} € correspondiente al ${instrumentName}.`,
+    message: `¡Atención al vencimiento completada con éxito! Se han abonado ${formatCurrency(obligation.amount)} correspondiente al ${instrumentName}.`,
     updatedBalance: student.balance,
     paidObligation: obligation
   });
@@ -4364,7 +4381,7 @@ app.post('/api/taxes/pay', (req, res) => {
 
   if (student.balance < tax.amount) {
     return res.status(400).json({
-      error: `Saldo insuficiente para liquidar este impuesto. Saldo actual: ${student.balance.toLocaleString('es-ES')} €, Importe a ingresar: ${tax.amount.toLocaleString('es-ES')} €`
+      error: `Saldo insuficiente para liquidar este impuesto. Saldo actual: ${formatCurrency(student.balance)}, Importe a ingresar: ${formatCurrency(tax.amount)}`
     });
   }
 
@@ -4406,7 +4423,7 @@ app.post('/api/taxes/pay', (req, res) => {
 
   return res.json({
     success: true,
-    message: `¡Liquidación tributaria completada con éxito! Se han abonado ${tax.amount.toLocaleString('es-ES')} € a ${receiverName}.`,
+    message: `¡Liquidación tributaria completada con éxito! Se han abonado ${formatCurrency(tax.amount)} a ${receiverName}.`,
     tax,
     updatedBalance: student.balance
   });
@@ -5173,9 +5190,9 @@ app.post('/api/loans/request', (req, res) => {
   let responseMessage = '';
   if (status === 'offered') {
     if (offeredAmount < reqAmt) {
-      responseMessage = `El banco ha concedido automáticamente una oferta por ${offeredAmount.toLocaleString('es-ES')} € (máximo 80% del valor de tasación de la garantía de ${apprVal.toLocaleString('es-ES')} €). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
+      responseMessage = `El banco ha concedido automáticamente una oferta por ${formatCurrency(offeredAmount)} (máximo 80% del valor de tasación de la garantía de ${formatCurrency(apprVal)}). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
     } else {
-      responseMessage = `¡Tu solicitud de préstamo por ${offeredAmount.toLocaleString('es-ES')} € ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
+      responseMessage = `¡Tu solicitud de préstamo por ${formatCurrency(offeredAmount)} ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
     }
   } else {
     responseMessage = `Solicitud registrada. Al disponer ya de un préstamo previo concedido, esta segunda solicitud requiere la revisión y aprobación manual del Profesor.`;
@@ -5210,7 +5227,7 @@ app.post('/api/loans/:id/accept', (req, res) => {
 
   if (student.balance < loan.openingFee) {
     return res.status(400).json({
-      error: `Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${loan.openingFee.toLocaleString('es-ES')} €). Saldo disponible actual: ${student.balance.toLocaleString('es-ES')} €.`
+      error: `Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${formatCurrency(loan.openingFee)}). Saldo disponible actual: ${formatCurrency(student.balance)}.`
     });
   }
 
@@ -5261,7 +5278,7 @@ app.post('/api/loans/:id/accept', (req, res) => {
 
   res.json({
     success: true,
-    message: `¡Préstamo de ${loan.offeredAmount.toLocaleString('es-ES')} € formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${loan.openingFee.toLocaleString('es-ES')} € de comisión de apertura (1‰).`,
+    message: `¡Préstamo de ${formatCurrency(loan.offeredAmount)} formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${formatCurrency(loan.openingFee)} de comisión de apertura (1‰).`,
     updatedBalance: student.balance,
     loan
   });

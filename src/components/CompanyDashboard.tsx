@@ -239,11 +239,11 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
       return `${i + 1}. ${emp.employeeName} (Edad: ${emp.age} años)
    Fecha de contratación: ${emp.hireDate ? emp.hireDate.split('T')[0] : 'N/A'}
    Días computados en mes: ${daysWorked} días ${isFirstMonth ? '(Proporcional primer mes)' : '(100% Mes completo)'}
-   Sueldo bruto: ${gross.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-   Retención IRPF (17%): ${irpf.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-   Seguridad Social empleado (6,48%): ${ssEmp.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-   Sueldo líquido / neto a cobrar: ${net.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-   Aportación Seguridad Social empresa (75%): ${ssComp.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
+   Sueldo bruto: ${formatNumber(gross)} €
+   Retención IRPF (17%): ${formatNumber(irpf)} €
+   Seguridad Social empleado (6,48%): ${formatNumber(ssEmp)} €
+   Sueldo líquido / neto a cobrar: ${formatNumber(net)} €
+   Aportación Seguridad Social empresa (75%): ${formatNumber(ssComp)} €`;
     }).join('\n\n');
 
     const textContent = `===================================================================
@@ -262,12 +262,12 @@ ${empLines}
 -------------------------------------------------------------------
 RESUMEN TOTAL DE LA EMPRESA (${employees.length} empleados):
 -------------------------------------------------------------------
-Total sueldos brutos: ${totalGrossSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-Total IRPF a retener e ingresar en Hacienda (AEAT): ${totalIRPFSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-Total Seguridad Social a retener empleados (TGSS): ${totalSSEmpSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-Total sueldos líquidos a abonar a los empleados: ${totalNetSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-Total gasto en Seguridad Social a cargo de la empresa (75%): ${totalSSCompSum.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-Gasto total de personal para la empresa: ${(totalGrossSum + totalSSCompSum).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+Total sueldos brutos: ${formatNumber(totalGrossSum)} €
+Total IRPF a retener e ingresar en Hacienda (AEAT): ${formatNumber(totalIRPFSum)} €
+Total Seguridad Social a retener empleados (TGSS): ${formatNumber(totalSSEmpSum)} €
+Total sueldos líquidos a abonar a los empleados: ${formatNumber(totalNetSum)} €
+Total gasto en Seguridad Social a cargo de la empresa (75%): ${formatNumber(totalSSCompSum)} €
+Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSCompSum)} €
 ===================================================================`;
 
     const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });

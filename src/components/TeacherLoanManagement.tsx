@@ -240,7 +240,7 @@ export default function TeacherLoanManagement() {
                         {loan.collateral.type === 'property' 
                           ? (loan.collateral.propertyTitle || 'Inmueble Comercial') 
                           : `Vivienda Privada (${loan.collateral.surfaceM2} m²)`}
-                      </strong> • Valor Tasación: <strong className="font-mono text-slate-800">{loan.collateral.appraisalValue.toLocaleString('es-ES')} €</strong>
+                      </strong> • Valor Tasación: <strong className="font-mono text-slate-800">{formatNumber(loan.collateral.appraisalValue)} €</strong>
                     </p>
                   </div>
 
@@ -270,13 +270,13 @@ export default function TeacherLoanManagement() {
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Solicitado</span>
                     <span className="text-xs font-bold font-mono text-slate-900">
-                      {loan.requestedAmount.toLocaleString('es-ES')} €
+                      {formatNumber(loan.requestedAmount)} €
                     </span>
                   </div>
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Ofrecido (80% LTV)</span>
                     <span className="text-xs font-bold font-mono text-amber-900">
-                      {loan.offeredAmount.toLocaleString('es-ES')} €
+                      {formatNumber(loan.offeredAmount)} €
                     </span>
                   </div>
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -294,7 +294,7 @@ export default function TeacherLoanManagement() {
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota Mensual</span>
                     <span className="text-xs font-bold font-mono text-amber-800">
-                      {loan.monthlyPayment.toLocaleString('es-ES')} €
+                      {formatNumber(loan.monthlyPayment)} €
                     </span>
                   </div>
                 </div>
@@ -330,7 +330,7 @@ export default function TeacherLoanManagement() {
               <div className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-amber-900 text-xs">
                 <p className="font-bold">Garantía Hipotecaria presentada:</p>
                 <p className="mt-0.5">
-                  Tasación de <strong className="font-mono">{reviewLoan.collateral.appraisalValue.toLocaleString('es-ES')} €</strong>. El importe solicitado es de {reviewLoan.requestedAmount.toLocaleString('es-ES')} €.
+                  Tasación de <strong className="font-mono">{formatNumber(reviewLoan.collateral.appraisalValue)} €</strong>. El importe solicitado es de {formatNumber(reviewLoan.requestedAmount)} €.
                 </p>
               </div>
 

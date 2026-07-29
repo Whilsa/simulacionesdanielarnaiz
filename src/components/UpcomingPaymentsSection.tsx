@@ -9,6 +9,7 @@ import {
   Building, FileText, Landmark, RefreshCw, ArrowUpRight, Info, PhoneCall
 } from 'lucide-react';
 import { User, UpcomingPaymentItem } from '../types.js';
+import { formatNumber } from '../lib/formatters.js';
 
 interface UpcomingPaymentsSectionProps {
   currentUser: User;
@@ -180,9 +181,9 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                     <td className="p-2.5 text-rose-700 font-bold font-sans">
                       {new Date(item.dueDate).toLocaleDateString('es-ES')}
                     </td>
-                    <td className="p-2.5 text-right">{item.principalAmount.toLocaleString('es-ES')} €</td>
-                    <td className="p-2.5 text-right text-rose-600 font-bold">+{item.penaltyInterest.toLocaleString('es-ES')} €</td>
-                    <td className="p-2.5 text-right font-bold text-rose-900">{item.totalAmount.toLocaleString('es-ES')} €</td>
+                    <td className="p-2.5 text-right">{formatNumber(item.principalAmount)} €</td>
+                    <td className="p-2.5 text-right text-rose-600 font-bold">+{formatNumber(item.penaltyInterest)} €</td>
+                    <td className="p-2.5 text-right font-bold text-rose-900">{formatNumber(item.totalAmount)} €</td>
                   </tr>
                 ))}
               </tbody>
@@ -195,11 +196,11 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
               <span>Importe total acumulado necesario para desbloquear la cuenta:</span>
             </div>
             <span className="font-mono font-bold text-sm bg-rose-200 px-3 py-1 rounded-lg border border-rose-300">
-              {data.totalOverdueAmount.toLocaleString('es-ES')} €
+              {formatNumber(data.totalOverdueAmount)} €
             </span>
           </div>
           <p className="text-[11px] text-rose-800 text-center italic">
-            💡 En cuanto tu saldo bancario alcance los {data.totalOverdueAmount.toLocaleString('es-ES')} €, el cobro se ejecutará automáticamente y tu cuenta volverá a estar libre de restricciones.
+            💡 En cuanto tu saldo bancario alcance los {formatNumber(data.totalOverdueAmount)} €, el cobro se ejecutará automáticamente y tu cuenta volverá a estar libre de restricciones.
           </p>
         </div>
       )}
@@ -213,7 +214,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
               <div>
                 <p className="font-bold">⚠️ Atención: Alerta de cobertura de saldo a 30 días</p>
                 <p className="mt-0.5 leading-relaxed text-amber-800">
-                  Tu saldo disponible actual (<strong>{data.currentBalance.toLocaleString('es-ES')} €</strong>) es inferior al importe total de pagos previstos en los próximos 30 días (<strong>{data.projected30DaysTotal.toLocaleString('es-ES')} €</strong>). Te faltan <strong>{(data.projected30DaysTotal - data.currentBalance).toLocaleString('es-ES')} €</strong>. Ingresa fondos antes de las fechas de vencimiento para evitar entrar en mora.
+                  Tu saldo disponible actual (<strong>{formatNumber(data.currentBalance)} €</strong>) es inferior al importe total de pagos previstos en los próximos 30 días (<strong>{formatNumber(data.projected30DaysTotal)} €</strong>). Te faltan <strong>{formatNumber(data.projected30DaysTotal - data.currentBalance)} €</strong>. Ingresa fondos antes de las fechas de vencimiento para evitar entrar en mora.
                 </p>
               </div>
             </div>
@@ -224,7 +225,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                 <span>Cobertura suficiente para los compromisos automáticos a 30 días.</span>
               </div>
               <span className="font-mono font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-lg">
-                Previsto: {data.totalUpcoming30DaysAmount.toLocaleString('es-ES')} €
+                Previsto: {formatNumber(data.totalUpcoming30DaysAmount)} €
               </span>
             </div>
           )}
@@ -263,7 +264,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                   </div>
 
                   <span className="text-xs font-mono font-bold text-slate-900 bg-white px-2 py-1 rounded-lg border border-slate-200/80">
-                    {item.principalAmount.toLocaleString('es-ES')} €
+                    {formatNumber(item.principalAmount)} €
                   </span>
                 </div>
 

@@ -607,7 +607,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Masa Monetaria Total</p>
-              <p className="text-2xl font-bold text-slate-900 font-display mt-0.5 font-mono">{totalMoneySupply.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</p>
+              <p className="text-2xl font-bold text-slate-900 font-display mt-0.5 font-mono">{formatNumber(totalMoneySupply)} €</p>
             </div>
           </div>
 
@@ -779,7 +779,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                             </td>
                             <td className="py-4 px-2 text-right">
                               <span className="font-mono font-bold text-slate-900 text-base">
-                                {student.balance.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                {formatNumber(student.balance)} €
                               </span>
                             </td>
                             <td className="py-4 px-2">
@@ -886,7 +886,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                               {tx.concept}
                             </td>
                             <td className="py-4 px-2 text-right font-mono font-bold text-rose-600 whitespace-nowrap">
-                              {tx.amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              {formatNumber(tx.amount)} €
                             </td>
                           </tr>
                         ))}
