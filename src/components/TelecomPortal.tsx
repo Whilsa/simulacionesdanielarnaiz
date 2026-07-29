@@ -76,7 +76,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
   const activeContract = contracts.find(c => c.status === 'active');
 
   const handleContractPlan = async (plan: TelecomPlan) => {
-    if (!confirm(`¿Confirmas la contratación del "${plan.name}" por ${formatNumber(plan.monthlyPrice)} €/mes (+ IVA)? El cobro se realizará automáticamente el 1 de cada mes.`)) {
+    if (!confirm(`¿Confirmas la contratación del "${plan.name}" por ${formatNumber(plan.monthlyPrice)} €/mes (+ IVA)? El servicio quedará activo inmediatamente. El cobro se domiciliará el día 1 del mes siguiente (calculando la parte proporcional según el día de alta).`)) {
       return;
     }
 

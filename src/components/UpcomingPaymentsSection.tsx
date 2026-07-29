@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CalendarClock, AlertTriangle, CheckCircle2, ShieldAlert, Lock, Clock, 
-  Building, FileText, Landmark, RefreshCw, ArrowUpRight, Info
+  Building, FileText, Landmark, RefreshCw, ArrowUpRight, Info, PhoneCall
 } from 'lucide-react';
 import { User, UpcomingPaymentItem } from '../types.js';
 
@@ -63,6 +63,8 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
         return <FileText className="w-4 h-4 text-blue-700" />;
       case 'cuota_prestamo':
         return <Landmark className="w-4 h-4 text-emerald-700" />;
+      case 'cuota_telecom':
+        return <PhoneCall className="w-4 h-4 text-sky-700" />;
       default:
         return <CalendarClock className="w-4 h-4 text-slate-700" />;
     }
@@ -75,6 +77,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
       case 'pagare': return 'Pagaré comercial';
       case 'letra_cambio': return 'Letra de cambio';
       case 'cuota_prestamo': return 'Préstamo hipotecario';
+      case 'cuota_telecom': return 'Servicios de Telecomunicaciones';
       case 'cuota_nomina': return 'Nóminas del personal';
       case 'impuesto_ss_emp': return 'Cuotas SS Trabajador (6,48%)';
       case 'impuesto_ss_comp': return 'Aportación Patronal SS (75%)';

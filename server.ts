@@ -2357,86 +2357,141 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
   if (!db.telecomInvoices) db.telecomInvoices = [];
 
   const now = new Date();
-  const currentDay = now.getDate();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
+  const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
 
-  if (currentDay >= 1) {
-    const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
-    for (const contract of activeContracts) {
-      const student = db.users.find(u => u.id === contract.studentId && u.role === 'student');
-      if (!student) continue;
+  for (const contract of activeContracts) {
+    const student = db.users.find(u => u.id === contract.studentId && u.role === 'student');
+    if (!student) continue;
 
-      const existingInvoice = db.telecomInvoices.find(
-        inv => inv.contractId === contract.id && inv.periodMonth === currentMonth && inv.periodYear === currentYear
-      );
+    const cDate = new Date(contract.contractDate);
+    const startYear = cDate.getFullYear();
+    const startMonth = cDate.getMonth() + 1; // 1-indexed
 
-      if (!existingInvoice) {
-        const baseAmount = contract.monthlyPrice;
-        const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
-        const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+    // 1. Clean up any premature invoices created on contract sign-up date before the 1st of the following month
+    const prematureInvoices = db.telecomInvoices.filter(inv => {
+      if (inv.contractId !== contract.id) return false;
+      const invDate = new Date(inv.issueDate);
+      const firstDueOfContract = new Date(startYear, startMonth, 1, 0, 0, 0); // 1st of month following contract month
+      return invDate < firstDueOfContract;
+    });
 
-        const invoiceNumber = `TEL-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
-        const invoice: TelecomInvoice = {
-          id: generateId('tel_inv'),
-          invoiceNumber,
-          studentId: student.id,
-          studentName: student.name,
-          companyName: student.name,
-          nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
-          contractId: contract.id,
-          planName: contract.planName,
-          provider: contract.provider,
-          periodMonth: currentMonth,
-          periodYear: currentYear,
-          issueDate: now.toISOString(),
-          dueDate: now.toISOString(),
-          subtotal: baseAmount,
-          ivaRate: 21,
-          ivaAmount,
-          totalAmount,
-          status: 'pagado',
-          paidDate: now.toISOString(),
-          items: [
-            {
-              concept: `Cuota Mensual de Servicio ${contract.planName} (Fibra, Teléfono e Internet)`,
-              amount: baseAmount
-            }
-          ],
-          paymentMethod: 'Adeudo directo automático en cuenta (1 de mes)'
-        };
+    for (const premInv of prematureInvoices) {
+      student.balance = Math.round((student.balance + premInv.totalAmount) * 100) / 100;
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
-        db.telecomInvoices.unshift(invoice);
+      db.telecomInvoices = db.telecomInvoices.filter(i => i.id !== premInv.id);
 
-        syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+      if (db.transfers) {
+        db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && t.concept.includes(premInv.invoiceNumber)));
+      }
+    }
 
-        student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+    // 2. Process billing for any completed month where payment is due (due on 1st of month M+1)
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth() + 1;
 
-        const txId = generateId('tx');
-        const transfer: Transfer = {
-          id: txId,
-          senderId: student.id,
-          senderName: student.name,
-          senderAccount: student.accountNumber,
-          receiverId: 'telecom-provider',
-          receiverName: contract.provider,
-          receiverAccount: 'ES880004000199223344',
-          amount: totalAmount,
-          concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${currentMonth}/${currentYear})`,
-          timestamp: now.toISOString()
-        };
-        db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+    let curY = startYear;
+    let curM = startMonth;
 
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'TELECOM_AUTOMATED_PAYMENT',
-          details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
-          timestamp: now.toISOString(),
-          studentId: student.id,
-          studentName: student.name
-        });
+    while (curY < nowYear || (curY === nowYear && curM <= nowMonth)) {
+      // Due date for service month (curY, curM) is 1st of month (curM + 1)
+      const paymentDueDate = new Date(curY, curM, 1, 9, 0, 0);
+
+      // Only process if paymentDueDate is on or before now
+      if (now >= paymentDueDate) {
+        const existingInvoice = db.telecomInvoices.find(
+          inv => inv.contractId === contract.id && inv.periodMonth === curM && inv.periodYear === curY
+        );
+
+        if (!existingInvoice) {
+          const daysInMonth = new Date(curY, curM, 0).getDate();
+          let baseAmount = contract.monthlyPrice;
+          let isProrated = false;
+          let activeDays = daysInMonth;
+
+          if (curY === startYear && curM === startMonth) {
+            const startDay = cDate.getDate();
+            activeDays = Math.max(1, daysInMonth - startDay + 1);
+            baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+            isProrated = true;
+          }
+
+          const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+          const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+          const invoiceNumber = `TEL-${curY}-${String(curM).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+          const invoiceConcept = isProrated
+            ? `Cuota proporcional de Servicio ${contract.planName} (${activeDays}/${daysInMonth} días del mes de alta ${curM}/${curY})`
+            : `Cuota Mensual de Servicio ${contract.planName} (Mes ${curM}/${curY})`;
+
+          const invoice: TelecomInvoice = {
+            id: generateId('tel_inv'),
+            invoiceNumber,
+            studentId: student.id,
+            studentName: student.name,
+            companyName: student.name,
+            nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+            contractId: contract.id,
+            planName: contract.planName,
+            provider: contract.provider,
+            periodMonth: curM,
+            periodYear: curY,
+            issueDate: paymentDueDate.toISOString(),
+            dueDate: paymentDueDate.toISOString(),
+            subtotal: baseAmount,
+            ivaRate: 21,
+            ivaAmount,
+            totalAmount,
+            status: 'pagado',
+            paidDate: paymentDueDate.toISOString(),
+            items: [
+              {
+                concept: invoiceConcept,
+                amount: baseAmount
+              }
+            ],
+            paymentMethod: 'Adeudo directo automático en cuenta (1 de mes)'
+          };
+
+          db.telecomInvoices.unshift(invoice);
+          syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+
+          student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+          const txId = generateId('tx');
+          const transfer: Transfer = {
+            id: txId,
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'telecom-provider',
+            receiverName: contract.provider,
+            receiverAccount: 'ES880004000199223344',
+            amount: totalAmount,
+            concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
+            timestamp: paymentDueDate.toISOString()
+          };
+          if (!db.transfers) db.transfers = [];
+          db.transfers.unshift(transfer);
+          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept).catch(e => console.error(e));
+
+          if (!db.systemLogs) db.systemLogs = [];
+          db.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'TELECOM_AUTOMATED_PAYMENT',
+            details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
+            timestamp: paymentDueDate.toISOString(),
+            studentId: student.id,
+            studentName: student.name
+          });
+        }
+      }
+
+      curM++;
+      if (curM > 12) {
+        curM = 1;
+        curY++;
       }
     }
   }
@@ -4892,6 +4947,72 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     }
   }
 
+  // 5. Active Telecom Contracts (Adeudo directo el día 1 del mes siguiente)
+  if (db.telecomContracts) {
+    const activeContracts = db.telecomContracts.filter(c => c.studentId === studentId && c.status === 'active');
+    for (const contract of activeContracts) {
+      const cDate = new Date(contract.contractDate);
+      const startYear = cDate.getFullYear();
+      const startMonth = cDate.getMonth() + 1; // 1-indexed
+
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth() + 1; // 1-indexed
+
+      // Check current month and next month
+      for (let mOffset = 0; mOffset <= 1; mOffset++) {
+        const targetRef = new Date(curYear, (curMonth - 1) + mOffset, 1);
+        const targetYear = targetRef.getFullYear();
+        const targetMonth = targetRef.getMonth() + 1;
+
+        if (targetYear < startYear || (targetYear === startYear && targetMonth < startMonth)) {
+          continue; // Contract not started yet in targetMonth/targetYear
+        }
+
+        const hasInvoice = (db.telecomInvoices || []).some(
+          inv => inv.contractId === contract.id && inv.periodMonth === targetMonth && inv.periodYear === targetYear
+        );
+
+        if (!hasInvoice) {
+          const dueDate = new Date(targetYear, targetMonth, 1, 9, 0, 0); // 1st of month following targetMonth
+          if (dueDate >= now && dueDate <= thirtyFiveDaysLater) {
+            const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+            let baseAmount = contract.monthlyPrice;
+            let isProrated = false;
+            let activeDays = daysInMonth;
+
+            if (targetYear === startYear && targetMonth === startMonth) {
+              const startDay = cDate.getDate();
+              activeDays = Math.max(1, daysInMonth - startDay + 1);
+              baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+              isProrated = true;
+            }
+
+            const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+            const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+            const daysRem = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+
+            upcoming30DaysItems.push({
+              id: `telecom-${contract.id}-${targetYear}-${targetMonth}`,
+              sourceType: 'telecom' as any,
+              type: 'cuota_telecom' as any,
+              title: `Fibra y Teléfono (${contract.planName})`,
+              concept: isProrated 
+                ? `Cuota proporcional de telecomunicaciones (${activeDays}/${daysInMonth} días) - ${contract.planName}`
+                : `Cuota mensual de telecomunicaciones - ${contract.planName} (Mes ${targetMonth}/${targetYear})`,
+              dueDate: dueDate.toISOString(),
+              principalAmount: totalAmount,
+              penaltyInterest: 0,
+              totalAmount: totalAmount,
+              isOverdue: false,
+              daysRemaining: daysRem,
+              installmentInfo: 'Día 1 del mes siguiente'
+            });
+          }
+        }
+      }
+    }
+  }
+
   upcoming30DaysItems.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
   overdueItems.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
@@ -5753,16 +5874,6 @@ app.post('/api/telecom/contract', (req, res) => {
   if (!db.telecomContracts) db.telecomContracts = [];
   if (!db.telecomInvoices) db.telecomInvoices = [];
 
-  const baseAmount = plan.monthlyPrice;
-  const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
-  const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
-
-  if (student.balance < totalAmount) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para contratar el plan. Requiere ${totalAmount.toFixed(2)} € (primera cuota con IVA) y dispones de ${student.balance.toFixed(2)} €.`
-    });
-  }
-
   // Deactivate any existing active telecom contracts for this student
   db.telecomContracts.forEach(c => {
     if (c.studentId === studentId) {
@@ -5770,6 +5881,7 @@ app.post('/api/telecom/contract', (req, res) => {
     }
   });
 
+  const now = new Date();
   const contract: TelecomContract = {
     id: generateId('tel_contract'),
     studentId: student.id,
@@ -5783,79 +5895,31 @@ app.post('/api/telecom/contract', (req, res) => {
     propertyId: propertyId || '',
     propertyTitle: propertyTitle || '',
     status: 'active',
-    contractDate: new Date().toISOString()
+    contractDate: now.toISOString()
   };
 
   db.telecomContracts.push(contract);
-
-  // Generate initial invoice immediately
-  const now = new Date();
-  const periodMonth = now.getMonth() + 1;
-  const periodYear = now.getFullYear();
-  const invoiceNumber = `TEL-${periodYear}-${String(periodMonth).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-  const invoice: TelecomInvoice = {
-    id: generateId('tel_inv'),
-    invoiceNumber,
-    studentId: student.id,
-    studentName: student.name,
-    companyName: student.name,
-    nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
-    contractId: contract.id,
-    planName: plan.name,
-    provider: plan.provider,
-    periodMonth,
-    periodYear,
-    issueDate: now.toISOString(),
-    dueDate: now.toISOString(),
-    subtotal: baseAmount,
-    ivaRate: 21,
-    ivaAmount,
-    totalAmount,
-    status: 'pagado',
-    paidDate: now.toISOString(),
-    items: [
-      {
-        concept: `Alta y Cuota Mensual de Servicio ${plan.name} (${plan.speedMbps} Mbps, ${plan.mobileLinesCount} líneas 5G)`,
-        amount: baseAmount
-      }
-    ],
-    paymentMethod: 'Transferencia Bancaria Directa'
-  };
-
-  db.telecomInvoices.unshift(invoice);
-
   syncTelecomContractToSupabase(contract).catch(e => console.error(e));
-  syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
-
-  // Deduct balance
-  student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'telecom-provider',
-    receiverName: plan.provider,
-    receiverAccount: 'ES880004000199223344',
-    amount: totalAmount,
-    concept: `Contratación y primera cuota servicio ${plan.name} (${invoiceNumber})`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
 
   writeDb(db);
+
+  const cMonth = now.getMonth() + 1;
+  const cYear = now.getFullYear();
+  const daysInMonth = new Date(cYear, cMonth, 0).getDate();
+  const startDay = now.getDate();
+  const activeDays = Math.max(1, daysInMonth - startDay + 1);
+  const baseAmount = Math.round((plan.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+  const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+  const totalProrated = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+  const nextMonthRef = new Date(cYear, cMonth, 1);
+  const nextMonthStr = nextMonthRef.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
 
   res.json({
     success: true,
     contract,
-    invoice,
     newBalance: student.balance,
-    message: `Servicio ${plan.name} contratado con éxito. Se han cargado ${totalAmount.toFixed(2)} € (IVA incl.) en tu cuenta bancaria.`
+    message: `Servicio ${plan.name} contratado con éxito. El servicio queda activo inmediatamente. La primera cuota proporcional (${activeDays}/${daysInMonth} días: ${totalProrated.toFixed(2)} € IVA incl.) se cargará automáticamente en tu cuenta el 1 de ${nextMonthStr}.`
   });
 });
 
