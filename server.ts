@@ -29,7 +29,7 @@ let dbPool: pg.Pool | null = null;
 function initPgPool(url: string) {
   if (dbPool) {
     try {
-      dbPool.end();
+      dbPool.end().catch(() => {});
     } catch (e) {}
   }
 
@@ -41,8 +41,8 @@ function initPgPool(url: string) {
       checkServerIdentity: () => undefined
     },
     connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 30000,
-    max: 10
+    idleTimeoutMillis: 5000,
+    max: 3
   });
 
   process.env.DATABASE_URL = url;
@@ -54,6 +54,23 @@ function initPgPool(url: string) {
       restoreFromSupabase().catch(e => console.error('[Supabase Auto Restore Error]', e));
     }
   }).catch(e => console.error('[Supabase Table Init Error]', e));
+}
+
+async function safeDbQuery(text: string, params?: any[], retries = 3): Promise<pg.QueryResult<any> | null> {
+  if (!dbPool) return null;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await dbPool.query(text, params);
+    } catch (err: any) {
+      const isConnError = err?.message?.includes('EMAXCONNSESSION') || err?.message?.includes('max clients') || err?.code === '57P01';
+      if (isConnError && attempt < retries) {
+        await new Promise(r => setTimeout(r, 250 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  return null;
 }
 
 const initialDbUrl = process.env.DATABASE_URL || DEFAULT_SUPABASE_URL;
@@ -389,7 +406,7 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
 async function syncAccountToSupabase(id: string, alumno: string, saldo: number, usuario?: string, password?: string, accountNumber?: string, role?: string) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (id) DO UPDATE SET 
@@ -412,21 +429,21 @@ async function deleteAccountFromSupabase(id: string, username?: string, name?: s
     const uname = (username || id).toLowerCase();
     const studentName = (name || id).toLowerCase();
 
-    await dbPool.query('DELETE FROM cuentas WHERE id = $1 OR LOWER(usuario) = $2 OR LOWER(alumno) = $3', [id, uname, studentName]);
-    await dbPool.query('DELETE FROM movimientos WHERE cuenta_id = $1', [id]);
-    await dbPool.query('DELETE FROM adquisiciones WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM obligaciones_pago WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM prestamos WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM maquinaria_adquisiciones WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM ofertas_empleo WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM empleados_contratados WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM registros_nomina WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM obligaciones_fiscales WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM contratos_electricos WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM contratos_telecom WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM facturas_telecom WHERE alumno_id = $1', [id]);
-    await dbPool.query('DELETE FROM pedidos_oficina WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM cuentas WHERE id = $1 OR LOWER(usuario) = $2 OR LOWER(alumno) = $3', [id, uname, studentName]);
+    await safeDbQuery('DELETE FROM movimientos WHERE cuenta_id = $1', [id]);
+    await safeDbQuery('DELETE FROM adquisiciones WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM obligaciones_pago WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM prestamos WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM maquinaria_adquisiciones WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM ofertas_empleo WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM empleados_contratados WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM registros_nomina WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM obligaciones_fiscales WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM contratos_electricos WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM contratos_telecom WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM facturas_telecom WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM pedidos_oficina WHERE alumno_id = $1', [id]);
   } catch (e) {
     console.error('[Supabase DB] Error deleting account and related data from Supabase:', e);
   }
@@ -435,7 +452,7 @@ async function deleteAccountFromSupabase(id: string, username?: string, name?: s
 async function syncMovimientoToSupabase(id: string, cuentaId: string, tipo: string, importe: number, fecha: string, concepto: string) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (id) DO NOTHING`,
@@ -449,7 +466,7 @@ async function syncMovimientoToSupabase(id: string, cuentaId: string, tipo: stri
 async function syncPropertyToSupabase(prop: PropertyListing) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO inmuebles (id, titulo, tipo, operacion, superficie_m2, precio, precio_m2, porcentaje_suelo, comunidad, municipio, direccion, imagen_url, estado, propietario_id, propietario_nombre, config_pago_aplazado)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (id) DO UPDATE SET 
@@ -484,7 +501,7 @@ async function syncPropertyToSupabase(prop: PropertyListing) {
 async function deletePropertyFromSupabase(id: string) {
   if (!dbPool) return;
   try {
-    await dbPool.query('DELETE FROM inmuebles WHERE id = $1', [id]);
+    await safeDbQuery('DELETE FROM inmuebles WHERE id = $1', [id]);
   } catch (e) {
     console.error('[Supabase DB] Error deleting property from Supabase:', e);
   }
@@ -493,7 +510,7 @@ async function deletePropertyFromSupabase(id: string) {
 async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, alquiler_mensual, proximo_pago_alquiler, entrada_pagada, saldo_pendiente)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        ON CONFLICT (id) DO UPDATE SET 
@@ -530,7 +547,7 @@ async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
 async function syncObligationToSupabase(ob: PaymentObligation) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (id) DO UPDATE SET 
@@ -559,7 +576,7 @@ async function syncObligationToSupabase(ob: PaymentObligation) {
 async function syncLoanToSupabase(loan: BankLoan) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO prestamos (
         id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
         plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual,
@@ -626,7 +643,7 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
     const capacityVal = mac.productionCapacityUnitsPerHour || 60;
     const equipmentVal = JSON.stringify(mac.equipmentList || mac.equipment || []);
 
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO maquinaria_adquisiciones (
         id, maquinaria_id, linea_titulo, categoria, alumno_id, alumno_nombre,
         precio_base, precio_financiado, importe_iva, precio_total, entrada_pagada, saldo_pendiente,
@@ -674,7 +691,7 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
 async function syncJobListingToSupabase(job: JobListing) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO ofertas_empleo (id, titulo, nombre_empleado, genero, sueldo_bruto_mensual, edad, estado, alumno_id, alumno_nombre, fecha_contratacion, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id) DO UPDATE SET
@@ -698,7 +715,7 @@ async function syncJobListingToSupabase(job: JobListing) {
 async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO empleados_contratados (id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, genero, sueldo_bruto_mensual, edad, fecha_contratacion, maquinaria_asignada_id, turno, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (id) DO UPDATE SET
@@ -722,7 +739,7 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
 async function syncPayrollRecordToSupabase(pr: PayrollRecord) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO registros_nomina (id, alumno_id, alumno_nombre, fecha_nomina, mes, anio, num_empleados, total_bruto, total_ss_empleado, total_irpf, total_liquido, total_ss_empresa, es_proporcional)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (id) DO NOTHING`,
@@ -736,7 +753,7 @@ async function syncPayrollRecordToSupabase(pr: PayrollRecord) {
 async function syncTaxObligationToSupabase(to: TaxObligation) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO obligaciones_fiscales (id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, fecha_pago, nomina_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (id) DO UPDATE SET
@@ -752,7 +769,7 @@ async function syncTaxObligationToSupabase(to: TaxObligation) {
 async function syncElectricityContractToSupabase(contract: ElectricityContract) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO contratos_electricos (
         id, alumno_id, alumno_nombre, potencia_contratada_kw, nombre_tarifa,
         precio_kw_dia, precio_kwh, estado, fecha_contrato, cups_code
@@ -782,7 +799,7 @@ async function syncElectricityContractToSupabase(contract: ElectricityContract) 
 async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO planos_distribucion_naves (
         id, inmueble_id, alumno_id, zona_maquinaria_m2, zona_almacen_m2,
         zona_admin_m2, zona_libre_m2, num_almacenes, fecha_actualizacion
@@ -816,7 +833,7 @@ async function syncFloorPlanToSupabase(plan: NaveFloorPlan) {
 async function syncTelecomContractToSupabase(contract: TelecomContract) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO contratos_telecom (
         id, alumno_id, alumno_nombre, plan_id, plan_nombre, proveedor,
         inmueble_id, inmueble_titulo, precio_mensual, fecha_contrato,
@@ -852,7 +869,7 @@ async function syncTelecomContractToSupabase(contract: TelecomContract) {
 async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO facturas_telecom (
         id, numero_factura, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
         contrato_id, plan_nombre, proveedor, mes, anio, fecha_emision,
@@ -895,7 +912,7 @@ async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice) {
 async function syncOfficeOrderToSupabase(order: OfficePurchaseOrder) {
   if (!dbPool) return;
   try {
-    await dbPool.query(
+    await safeDbQuery(
       `INSERT INTO pedidos_oficina (
         id, numero_pedido, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
         fecha_compra, items, subtotal, tipo_iva, importe_iva, importe_total,
