@@ -15,11 +15,12 @@ import MachineryPortal from './components/MachineryPortal.js';
 import JobForumPortal from './components/JobForumPortal.js';
 import TelecomPortal from './components/TelecomPortal.js';
 import OfficeStorePortal from './components/OfficeStorePortal.js';
+import VehicleDealershipPortal from './components/VehicleDealershipPortal.js';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store'>('hub');
+  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles'>('hub');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   useEffect(() => {
@@ -188,6 +189,16 @@ export default function App() {
   if (activeModule === 'office_store') {
     return (
       <OfficeStorePortal
+        currentUser={currentUser}
+        onBackToHub={() => setActiveModule('hub')}
+        onUserBalanceUpdated={handleUserBalanceUpdated}
+      />
+    );
+  }
+
+  if (activeModule === 'vehicles') {
+    return (
+      <VehicleDealershipPortal
         currentUser={currentUser}
         onBackToHub={() => setActiveModule('hub')}
         onUserBalanceUpdated={handleUserBalanceUpdated}

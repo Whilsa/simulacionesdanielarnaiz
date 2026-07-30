@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
@@ -15,12 +15,12 @@ import { formatNumber } from '../lib/formatters.js';
 
 interface MainHubProps {
   currentUser: User;
-  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store') => void;
+  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles') => void;
   onLogout: () => void;
   availablePropertiesCount?: number;
 }
 
-type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store';
+type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store' | 'vehicles';
 
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
@@ -65,7 +65,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
     }
   }, [currentUser.id, isTeacher]);
 
-  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity', 'telecom', 'office_store'];
+  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity', 'telecom', 'office_store', 'vehicles'];
 
   const [cardOrder, setCardOrder] = useState<ModuleType[]>(() => {
     try {
@@ -76,6 +76,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           if (!parsed.includes('electricity')) parsed.push('electricity');
           if (!parsed.includes('telecom')) parsed.push('telecom');
           if (!parsed.includes('office_store')) parsed.push('office_store');
+          if (!parsed.includes('vehicles')) parsed.push('vehicles');
           return parsed;
         }
       }
@@ -251,6 +252,21 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           description: 'Tienda en línea corporativa con estanterías, mesas, sillas, ordenadores de sobremesa y portátiles, periféricos, impresoras, software contable y de texto, y teléfonos.',
           statLabel: 'Muebles e Informática',
           statValue: 'Catálogo de Oficina'
+        };
+      case 'vehicles':
+        return {
+          id: 'vehicles' as ModuleType,
+          title: 'Concesionario de Vehículos',
+          badge: 'Automoción & Flota',
+          badgeStyle: 'bg-blue-50 text-blue-900 border-blue-200/80',
+          hoverBorder: 'hover:border-blue-500',
+          hoverBg: 'group-hover:bg-blue-600',
+          hoverText: 'group-hover:text-blue-600',
+          iconBg: 'bg-blue-50 text-blue-700 border-blue-200',
+          Icon: Truck,
+          description: 'Venta de vehículos corporativos e industriales: camiones con tráiler para logística, carretillas elevadoras contrapesadas para almacenes y coches de empresa.',
+          statLabel: 'Concesionario',
+          statValue: '3 Categorías'
         };
     }
   };

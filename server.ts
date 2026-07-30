@@ -2612,6 +2612,7 @@ function readDb(): DatabaseSchema {
     if (!db.telecomContracts) db.telecomContracts = [];
     if (!db.telecomInvoices) db.telecomInvoices = [];
     if (!db.officeOrders) db.officeOrders = [];
+    if (!db.purchasedVehicles) db.purchasedVehicles = [];
 
     checkAndProcessAutomatedPayrollAndTaxes(db);
     checkAndProcessAutomatedElectricity(db);
@@ -4256,13 +4257,15 @@ app.get('/api/company/:studentId', (req, res) => {
       totalMonthlyRentCommitments,
       activeLoansCount: loans.length,
       machineryCount: machineryAcquisitions.length,
-      hiredEmployeesCount: studentHiredEmployees.length
+      hiredEmployeesCount: studentHiredEmployees.length,
+      purchasedVehiclesCount: (db.purchasedVehicles || []).filter(v => v.studentId === studentId).length
     },
     acquisitions,
     obligations,
     loans,
     machineryAcquisitions,
     hiredEmployees: studentHiredEmployees,
+    purchasedVehicles: (db.purchasedVehicles || []).filter(v => v.studentId === studentId),
     payrollRecords: studentPayrollRecords,
     taxObligations: studentTaxObligations
   });
@@ -5386,7 +5389,7 @@ app.get('/api/job-listings', (req, res) => {
 });
 
 app.post('/api/teacher/job-listings/batch', (req, res) => {
-  const { count, gender, minSalary, maxSalary, minAge, maxAge } = req.body;
+  const { count, gender, minSalary, maxSalary, minAge, maxAge, role } = req.body;
 
   const numCount = Math.max(1, Math.min(Number(count) || 5, 50));
   const numMinSalary = Math.max(800, Number(minSalary) || 1200);
@@ -5426,9 +5429,24 @@ app.post('/api/teacher/job-listings/batch', (req, res) => {
     const salary = Math.floor(Math.random() * (numMaxSalary - numMinSalary + 1)) + numMinSalary;
     const age = Math.floor(Math.random() * (numMaxAge - numMinAge + 1)) + numMinAge;
 
+    let chosenRole: 'operario' | 'camionero' | 'carretillero' = 'operario';
+    if (role === 'camionero' || role === 'carretillero' || role === 'operario') {
+      chosenRole = role;
+    } else {
+      const rand = Math.random();
+      if (rand < 0.6) chosenRole = 'operario';
+      else if (rand < 0.8) chosenRole = 'camionero';
+      else chosenRole = 'carretillero';
+    }
+
+    let jobTitle = 'Operario Industrial';
+    if (chosenRole === 'camionero') jobTitle = 'Camionero / Conductor Logístico';
+    if (chosenRole === 'carretillero') jobTitle = 'Carretillero / Operador de Almacén';
+
     const newJob: JobListing = {
       id: generateId('job'),
-      title: 'Operario Industrial',
+      title: jobTitle,
+      role: chosenRole,
       employeeName: fullName,
       gender: chosenGender,
       grossSalaryMonthly: salary,
@@ -5503,6 +5521,7 @@ app.post('/api/jobs/:id/hire', (req, res) => {
     studentId: student.id,
     studentName: student.name,
     employeeName: job.employeeName,
+    role: job.role || 'operario',
     gender: job.gender,
     grossSalaryMonthly: job.grossSalaryMonthly,
     age: job.age,
@@ -6066,6 +6085,127 @@ app.post('/api/office-store/checkout', (req, res) => {
     newBalance: student.balance,
     message: `Pedido Nº ${orderNumber} realizado con éxito. Cargados ${totalAmount.toFixed(2)} € (IVA incl.) en cuenta.`
   });
+});
+
+// ================= VEHICLE DEALERSHIP ENDPOINTS =================
+app.get('/api/student/vehicles', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  const list = (db.purchasedVehicles || []).filter(v => v.studentId === studentId);
+  res.json({ success: true, vehicles: list });
+});
+
+app.post('/api/vehicles/buy', (req, res) => {
+  const { studentId, vehicleType, title, basePrice, paymentMethod } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  const bPrice = Number(basePrice) || 0;
+  if (bPrice <= 0) return res.status(400).json({ error: 'Precio inválido' });
+
+  const ivaAmount = Math.round((bPrice * 0.21) * 100) / 100;
+  const totalPrice = Math.round((bPrice + ivaAmount) * 100) / 100;
+
+  if (student.balance < totalPrice) {
+    return res.status(400).json({
+      error: `Saldo insuficiente. Total con IVA (21%): ${totalPrice.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`
+    });
+  }
+
+  if (!db.purchasedVehicles) db.purchasedVehicles = [];
+
+  const now = new Date();
+  let img = '/images/vehicles/carretilla_elevadora.jpg';
+  if (vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
+  if (vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
+
+  const vehicle: any = {
+    id: generateId('veh'),
+    studentId: student.id,
+    studentName: student.name,
+    vehicleType: vehicleType || 'carretilla_elevadora',
+    title: title || 'Vehículo Corporativo',
+    basePrice: bPrice,
+    ivaAmount,
+    totalPrice,
+    paymentMethod: paymentMethod || 'contado',
+    purchaseDate: now.toISOString(),
+    status: 'activo',
+    imageUrl: img
+  };
+
+  db.purchasedVehicles.unshift(vehicle);
+
+  // Deduct balance
+  student.balance = Math.round((student.balance - totalPrice) * 100) / 100;
+  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'concesionario-vehiculos',
+    receiverName: 'Concesionario Industrial AutoCorp S.L.',
+    receiverAccount: 'ES880004000998877661',
+    amount: totalPrice,
+    concept: `Adquisición de vehículo (${title}) - Pago al contado`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalPrice, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'BUY_VEHICLE',
+    details: `El alumno ${student.name} ha comprado un vehículo "${title}" por ${totalPrice.toFixed(2)}€ (IVA incl.)`,
+    timestamp: now.toISOString(),
+    studentId: student.id,
+    studentName: student.name
+  });
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    vehicle,
+    newBalance: student.balance,
+    message: `Vehículo "${title}" adquirido con éxito por ${totalPrice.toFixed(2)} € (IVA incl.).`
+  });
+});
+
+app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
+  const { id } = req.params;
+  const { vehicleId, warehouseIndex, shift } = req.body;
+
+  const db = readDb();
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+
+  const emp = db.hiredEmployees.find(e => e.id === id);
+  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+  if (vehicleId) {
+    const veh = (db.purchasedVehicles || []).find(v => v.id === vehicleId);
+    emp.assignedVehicleId = veh ? veh.id : vehicleId;
+    emp.assignedVehicleTitle = veh ? veh.title : undefined;
+  } else {
+    emp.assignedVehicleId = undefined;
+    emp.assignedVehicleTitle = undefined;
+  }
+
+  if (warehouseIndex !== undefined) {
+    emp.assignedWarehouseIndex = Number(warehouseIndex) || undefined;
+  }
+
+  if (shift !== undefined) {
+    emp.shift = Number(shift) || 1;
+  }
+
+  writeDb(db);
+  res.json({ success: true, employee: emp });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------

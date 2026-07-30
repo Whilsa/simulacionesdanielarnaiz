@@ -28,6 +28,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   // Teacher generator state
   const [batchCount, setBatchCount] = useState<number>(10);
   const [batchGender, setBatchGender] = useState<'indiferente' | 'hombre' | 'mujer'>('indiferente');
+  const [batchRole, setBatchRole] = useState<'mixto' | 'operario' | 'camionero' | 'carretillero'>('mixto');
   const [batchMinSalary, setBatchMinSalary] = useState<number>(1200);
   const [batchMaxSalary, setBatchMaxSalary] = useState<number>(2200);
   const [batchMinAge, setBatchMinAge] = useState<number>(20);
@@ -36,6 +37,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
 
   // Filter state for students
   const [genderFilter, setGenderFilter] = useState<'todos' | 'hombre' | 'mujer'>('todos');
+  const [roleFilter, setRoleFilter] = useState<'todos' | 'operario' | 'camionero' | 'carretillero'>('todos');
   const [maxSalaryFilter, setMaxSalaryFilter] = useState<number>(3000);
 
   const fetchJobs = async () => {
@@ -116,6 +118,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
         body: JSON.stringify({
           count: batchCount,
           gender: batchGender,
+          role: batchRole,
           minSalary: batchMinSalary,
           maxSalary: batchMaxSalary,
           minAge: batchMinAge,
@@ -183,6 +186,10 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   const availableJobs = jobListings.filter(j => j.status === 'disponible');
   const filteredJobs = availableJobs.filter(j => {
     if (genderFilter !== 'todos' && j.gender !== genderFilter) return false;
+    if (roleFilter !== 'todos') {
+      const jRole = j.role || 'operario';
+      if (jRole !== roleFilter) return false;
+    }
     if (j.grossSalaryMonthly > maxSalaryFilter) return false;
     return true;
   });
@@ -254,7 +261,21 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
               </div>
             </div>
 
-            <form onSubmit={handleCreateBatch} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 bg-slate-800/80 p-5 rounded-2xl border border-slate-700/80">
+            <form onSubmit={handleCreateBatch} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 bg-slate-800/80 p-5 rounded-2xl border border-slate-700/80">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Puesto / Rol</label>
+                <select
+                  value={batchRole}
+                  onChange={e => setBatchRole(e.target.value as any)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                >
+                  <option value="mixto">Mezcla de Roles</option>
+                  <option value="operario">Operario Industrial</option>
+                  <option value="camionero">Camionero / Conductor</option>
+                  <option value="carretillero">Carretillero de Almacén</option>
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Nº Candidatos</label>
                 <input
@@ -368,6 +389,17 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 <Filter className="w-3.5 h-3.5" />
                 <span>Filtros:</span>
               </div>
+
+              <select
+                value={roleFilter}
+                onChange={e => setRoleFilter(e.target.value as any)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none"
+              >
+                <option value="todos">Todos los puestos</option>
+                <option value="operario">Operarios Industriales</option>
+                <option value="camionero">Camioneros / Conductores</option>
+                <option value="carretillero">Carretilleros de Almacén</option>
+              </select>
 
               <select
                 value={genderFilter}

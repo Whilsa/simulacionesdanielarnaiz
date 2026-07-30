@@ -284,6 +284,7 @@ export interface DatabaseSchema {
   telecomContracts?: TelecomContract[];
   telecomInvoices?: TelecomInvoice[];
   officeOrders?: OfficePurchaseOrder[];
+  purchasedVehicles?: PurchasedVehicle[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }
@@ -367,9 +368,12 @@ export interface NaveFloorPlan {
   updatedAt: string;
 }
 
+export type JobRole = 'operario' | 'camionero' | 'carretillero';
+
 export interface JobListing {
   id: string;
   title: string;
+  role?: JobRole;
   employeeName: string;
   gender: 'hombre' | 'mujer';
   grossSalaryMonthly: number;
@@ -388,14 +392,37 @@ export interface HiredEmployee {
   studentId: string;
   studentName: string;
   employeeName: string;
+  role?: JobRole;
   gender: 'hombre' | 'mujer';
   grossSalaryMonthly: number;
   age: number;
   hireDate: string;
   assignedMachineryId?: string;
   assignedMachineryTitle?: string;
+  assignedVehicleId?: string;
+  assignedVehicleTitle?: string;
+  assignedWarehouseIndex?: number;
   shift?: number;
   avatarUrl?: string;
+}
+
+export interface PurchasedVehicle {
+  id: string;
+  studentId: string;
+  studentName: string;
+  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa';
+  title: string;
+  basePrice: number;
+  ivaAmount: number;
+  totalPrice: number;
+  paymentMethod: 'contado' | 'aplazado';
+  purchaseDate: string;
+  assignedDriverId?: string;
+  assignedDriverName?: string;
+  assignedShift?: number;
+  assignedWarehouseIndex?: number;
+  status: 'activo' | 'mantenimiento';
+  imageUrl: string;
 }
 
 export interface PayrollRecord {

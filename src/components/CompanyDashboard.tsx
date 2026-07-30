@@ -4,11 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, TelecomContract, TelecomInvoice, OfficePurchaseOrder } from '../types.js';
+import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquisition, PurchasedVehicle, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, TelecomContract, TelecomInvoice, OfficePurchaseOrder } from '../types.js';
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid, PhoneCall, ShoppingBag, ShoppingCart
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid, PhoneCall, ShoppingBag, ShoppingCart, Truck
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -61,6 +61,7 @@ interface CompanyDataResponse {
   obligations: PaymentObligation[];
   loans?: BankLoan[];
   machineryAcquisitions?: MachineryAcquisition[];
+  purchasedVehicles?: PurchasedVehicle[];
   hiredEmployees?: HiredEmployee[];
   payrollRecords?: PayrollRecord[];
   taxObligations?: TaxObligation[];
@@ -608,6 +609,24 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ machineryId, shift })
+      });
+      if (!res.ok) throw new Error('Error al actualizar asignación del empleado');
+      fetchCompanyData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setUpdatingEmpId(null);
+    }
+  };
+
+  const handleAssignEmployeeVehicle = async (employeeId: string, vehicleId?: string, warehouseIndex?: number, shift?: number) => {
+    setUpdatingEmpId(employeeId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/student/employees/${employeeId}/assign-vehicle`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId, warehouseIndex, shift })
       });
       if (!res.ok) throw new Error('Error al actualizar asignación del empleado');
       fetchCompanyData();
@@ -1469,56 +1488,119 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                       {/* MACHINERY SHIFT COVERAGE SUMMARY */}
                       {data.machineryAcquisitions && data.machineryAcquisitions.length > 0 && (
-                        <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                              <Wrench className="w-4 h-4 text-amber-600" />
-                              <span>Cobertura de Operarios por Máquina y Turno</span>
-                            </h3>
-                            <span className="text-xs text-slate-500 font-medium">Requisito: 5 operarios / turno / máquina</span>
-                          </div>
+                        <div className="space-y-4">
+                          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                <Wrench className="w-4 h-4 text-amber-600" />
+                                <span>Cobertura de Operarios por Máquina y Turno</span>
+                              </h3>
+                              <span className="text-xs text-slate-500 font-medium">Requisito: 5 operarios / turno / máquina</span>
+                            </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {data.machineryAcquisitions.map(m => {
-                              const assignedToThisMachine = hiredList.filter(e => e.assignedMachineryId === m.id);
-                              const countMorning = assignedToThisMachine.filter(e => e.shift === 1).length;
-                              const countAfternoon = assignedToThisMachine.filter(e => e.shift === 2).length;
-                              const countNight = assignedToThisMachine.filter(e => e.shift === 3).length;
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {data.machineryAcquisitions.map(m => {
+                                const assignedToThisMachine = hiredList.filter(e => e.assignedMachineryId === m.id);
+                                const countMorning = assignedToThisMachine.filter(e => e.shift === 1).length;
+                                const countAfternoon = assignedToThisMachine.filter(e => e.shift === 2).length;
+                                const countNight = assignedToThisMachine.filter(e => e.shift === 3).length;
 
-                              return (
-                                <div key={m.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs">
-                                  <div className="font-bold text-slate-900 text-sm mb-1">{m.title || m.lineTitle}</div>
-                                  <p className="text-[11px] text-slate-500 mb-3">Ubicación: {m.installationNaveTitle}</p>
+                                return (
+                                  <div key={m.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs">
+                                    <div className="font-bold text-slate-900 text-sm mb-1">{m.title || m.lineTitle}</div>
+                                    <p className="text-[11px] text-slate-500 mb-3">Ubicación: {m.installationNaveTitle}</p>
 
-                                  <div className="grid grid-cols-3 gap-2">
-                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                                      countMorning >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                                    }`}>
-                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Mañana</span>
-                                      <span className="text-base font-extrabold my-0.5">{countMorning} / 5</span>
-                                      <span className="text-[9px] font-semibold">{countMorning >= 5 ? '✅ Cubierto' : `Faltan ${5 - countMorning}`}</span>
-                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                        countMorning >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                      }`}>
+                                        <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Mañana</span>
+                                        <span className="text-base font-extrabold my-0.5">{countMorning} / 5</span>
+                                        <span className="text-[9px] font-semibold">{countMorning >= 5 ? '✅ Cubierto' : `Faltan ${5 - countMorning}`}</span>
+                                      </div>
 
-                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                                      countAfternoon >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                                    }`}>
-                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Tarde</span>
-                                      <span className="text-base font-extrabold my-0.5">{countAfternoon} / 5</span>
-                                      <span className="text-[9px] font-semibold">{countAfternoon >= 5 ? '✅ Cubierto' : `Faltan ${5 - countAfternoon}`}</span>
-                                    </div>
+                                      <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                        countAfternoon >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                      }`}>
+                                        <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Tarde</span>
+                                        <span className="text-base font-extrabold my-0.5">{countAfternoon} / 5</span>
+                                        <span className="text-[9px] font-semibold">{countAfternoon >= 5 ? '✅ Cubierto' : `Faltan ${5 - countAfternoon}`}</span>
+                                      </div>
 
-                                    <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
-                                      countNight >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
-                                    }`}>
-                                      <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Noche</span>
-                                      <span className="text-base font-extrabold my-0.5">{countNight} / 5</span>
-                                      <span className="text-[9px] font-semibold">{countNight >= 5 ? '✅ Cubierto' : `Faltan ${5 - countNight}`}</span>
+                                      <div className={`p-2.5 rounded-xl border flex flex-col items-center text-center ${
+                                        countNight >= 5 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                      }`}>
+                                        <span className="font-bold text-[10px] uppercase tracking-wider block">Turno Noche</span>
+                                        <span className="text-base font-extrabold my-0.5">{countNight} / 5</span>
+                                        <span className="text-[9px] font-semibold">{countNight >= 5 ? '✅ Cubierto' : `Faltan ${5 - countNight}`}</span>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              })}
+                            </div>
                           </div>
+
+                          {/* FORKLIFT & CARRETILLEROS REQUIREMENTS BY WAREHOUSE */}
+                          {(() => {
+                            const numMachinery = data.machineryAcquisitions.length;
+                            const reqWarehouses = numMachinery === 1 ? 2 : 3;
+                            const reqForklifts = reqWarehouses;
+                            const ownedForklifts = (data.purchasedVehicles || []).filter(v => v.vehicleType === 'carretilla_elevadora').length;
+                            const carretillerosList = hiredList.filter(e => e.role === 'carretillero');
+
+                            return (
+                              <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+                                  <div>
+                                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                      <Truck className="w-4 h-4 text-amber-600" />
+                                      <span>Requisitos de Almacenes, Carretillas Elevadoras y Carretilleros</span>
+                                    </h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">
+                                      Para que la maquinaria funcione, se requieren <strong>{reqWarehouses} almacenes</strong>, tener en propiedad <strong>{reqForklifts} carretillas elevadoras contrapesadas</strong> y asignarle 1 carretillero por almacén en cada turno activo.
+                                    </p>
+                                  </div>
+                                  <div className={`px-3 py-1.5 rounded-xl text-xs font-bold border shrink-0 ${
+                                    ownedForklifts >= reqForklifts ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-900'
+                                  }`}>
+                                    Carretillas Compradas: {ownedForklifts} / {reqForklifts} {ownedForklifts >= reqForklifts ? '✅' : '⚠️ Insuficientes'}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  {[1, 2, 3].slice(0, reqWarehouses).map(whIdx => {
+                                    const whName = whIdx === 1 ? 'Almacén 1 (Materias Primas)' : (whIdx === 2 && reqWarehouses === 3 ? 'Almacén 2 (Semiterminados)' : `Almacén ${whIdx} (Producto Terminado)`);
+                                    const assignedWh = carretillerosList.filter(e => e.assignedWarehouseIndex === whIdx);
+                                    const mCount = assignedWh.filter(e => (e.shift || 1) === 1).length;
+                                    const aCount = assignedWh.filter(e => e.shift === 2).length;
+                                    const nCount = assignedWh.filter(e => e.shift === 3).length;
+
+                                    return (
+                                      <div key={whIdx} className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs space-y-2">
+                                        <div className="font-bold text-slate-900">{whName}</div>
+                                        <div className="text-[11px] text-slate-500 font-medium">Carretilleros Asignados:</div>
+                                        <div className="grid grid-cols-3 gap-1.5 text-center">
+                                          <div className={`p-2 rounded-xl border ${mCount >= 1 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>
+                                            <span className="block text-[9px] font-bold">Mañana</span>
+                                            <span className="font-extrabold">{mCount} / 1</span>
+                                          </div>
+                                          <div className={`p-2 rounded-xl border ${aCount >= 1 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>
+                                            <span className="block text-[9px] font-bold">Tarde</span>
+                                            <span className="font-extrabold">{aCount} / 1</span>
+                                          </div>
+                                          <div className={`p-2 rounded-xl border ${nCount >= 1 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>
+                                            <span className="block text-[9px] font-bold">Noche</span>
+                                            <span className="font-extrabold">{nCount} / 1</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
 
@@ -1566,7 +1648,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       className="w-12 h-12 rounded-2xl object-cover border border-slate-200"
                                     />
                                     <div>
-                                      <h4 className="font-bold text-slate-900 text-sm">{emp.employeeName}</h4>
+                                      <div className="flex items-center gap-2">
+                                        <h4 className="font-bold text-slate-900 text-sm">{emp.employeeName}</h4>
+                                        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                          emp.role === 'camionero'
+                                            ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                            : emp.role === 'carretillero'
+                                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                            : 'bg-blue-50 text-blue-800 border-blue-200'
+                                        }`}>
+                                          {emp.role === 'camionero' ? 'Camionero' : emp.role === 'carretillero' ? 'Carretillero' : 'Operario'}
+                                        </span>
+                                      </div>
                                       <span className="text-[11px] text-slate-500 block">
                                         Alta: <strong className="font-mono">{emp.hireDate ? emp.hireDate.split('T')[0] : 'N/A'}</strong>
                                       </span>
@@ -1604,49 +1697,122 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     </div>
                                   </div>
 
-                                  {/* Machinery & Shift Assignment Controls */}
+                                  {/* Role Assignment Controls */}
                                   <div className="space-y-2.5 mb-4">
-                                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                                      Asignación de Maquinaria
-                                    </label>
-                                    <select
-                                      value={emp.assignedMachineryId || ''}
-                                      disabled={updatingEmpId === emp.id}
-                                      onChange={e => handleAssignEmployeeMachineryShift(emp.id, e.target.value, emp.shift || 1)}
-                                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
-                                    >
-                                      <option value="">-- Sin máquina asignada --</option>
-                                      {(data.machineryAcquisitions || []).map(m => (
-                                        <option key={m.id} value={m.id}>
-                                          {m.title || m.lineTitle} ({m.installationNaveTitle})
-                                        </option>
-                                      ))}
-                                    </select>
-
-                                    {emp.assignedMachineryId && (
-                                      <div className="flex items-center justify-between pt-1">
-                                        <span className="text-xs text-slate-500 font-medium">Turno Asignado:</span>
-                                        <div className="flex gap-1">
-                                          {[
-                                            { shiftNum: 1, label: 'Mañana' },
-                                            { shiftNum: 2, label: 'Tarde' },
-                                            { shiftNum: 3, label: 'Noche' }
-                                          ].map(({ shiftNum, label }) => (
-                                            <button
-                                              key={shiftNum}
-                                              disabled={updatingEmpId === emp.id}
-                                              onClick={() => handleAssignEmployeeMachineryShift(emp.id, emp.assignedMachineryId!, shiftNum)}
-                                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
-                                                emp.shift === shiftNum
-                                                  ? 'bg-blue-600 text-white border-blue-600'
-                                                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                                              }`}
-                                            >
-                                              {label}
-                                            </button>
+                                    {/* OPERARIO */}
+                                    {(!emp.role || emp.role === 'operario') && (
+                                      <>
+                                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                                          Asignación de Maquinaria
+                                        </label>
+                                        <select
+                                          value={emp.assignedMachineryId || ''}
+                                          disabled={updatingEmpId === emp.id}
+                                          onChange={e => handleAssignEmployeeMachineryShift(emp.id, e.target.value, emp.shift || 1)}
+                                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+                                        >
+                                          <option value="">-- Sin máquina asignada --</option>
+                                          {(data.machineryAcquisitions || []).map(m => (
+                                            <option key={m.id} value={m.id}>
+                                              {m.title || m.lineTitle} ({m.installationNaveTitle})
+                                            </option>
                                           ))}
-                                        </div>
-                                      </div>
+                                        </select>
+
+                                        {emp.assignedMachineryId && (
+                                          <div className="flex items-center justify-between pt-1">
+                                            <span className="text-xs text-slate-500 font-medium">Turno Asignado:</span>
+                                            <div className="flex gap-1">
+                                              {[
+                                                { shiftNum: 1, label: 'Mañana' },
+                                                { shiftNum: 2, label: 'Tarde' },
+                                                { shiftNum: 3, label: 'Noche' }
+                                              ].map(({ shiftNum, label }) => (
+                                                <button
+                                                  key={shiftNum}
+                                                  disabled={updatingEmpId === emp.id}
+                                                  onClick={() => handleAssignEmployeeMachineryShift(emp.id, emp.assignedMachineryId!, shiftNum)}
+                                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                                    emp.shift === shiftNum
+                                                      ? 'bg-blue-600 text-white border-blue-600'
+                                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                                  }`}
+                                                >
+                                                  {label}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </>
+                                    )}
+
+                                    {/* CAMIONERO */}
+                                    {emp.role === 'camionero' && (
+                                      <>
+                                        <label className="block text-[11px] font-bold uppercase tracking-wider text-indigo-700">
+                                          Asignación de Camión / Tráiler
+                                        </label>
+                                        <select
+                                          value={emp.assignedVehicleId || ''}
+                                          disabled={updatingEmpId === emp.id}
+                                          onChange={e => handleAssignEmployeeVehicle(emp.id, e.target.value, emp.assignedWarehouseIndex, emp.shift || 1)}
+                                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Sin camión asignado --</option>
+                                          {(data.purchasedVehicles || []).filter(v => v.vehicleType === 'camion_trailer').map(v => (
+                                            <option key={v.id} value={v.id}>
+                                              🚛 {v.title} ({v.paymentMethod === 'contado' ? 'Propiedad' : 'Renting'})
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </>
+                                    )}
+
+                                    {/* CARRETILLERO */}
+                                    {emp.role === 'carretillero' && (
+                                      <>
+                                        <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                                          Asignación de Almacén y Turno
+                                        </label>
+                                        <select
+                                          value={emp.assignedWarehouseIndex || ''}
+                                          disabled={updatingEmpId === emp.id}
+                                          onChange={e => handleAssignEmployeeVehicle(emp.id, emp.assignedVehicleId, Number(e.target.value) || undefined, emp.shift || 1)}
+                                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                                        >
+                                          <option value="">-- Sin almacén asignado --</option>
+                                          <option value="1">Almacén 1 (Materias Primas)</option>
+                                          <option value="2">Almacén 2 (Semiterminados / Productos)</option>
+                                          <option value="3">Almacén 3 (Productos Terminados)</option>
+                                        </select>
+
+                                        {emp.assignedWarehouseIndex && (
+                                          <div className="flex items-center justify-between pt-1">
+                                            <span className="text-xs text-slate-500 font-medium">Turno Asignado:</span>
+                                            <div className="flex gap-1">
+                                              {[
+                                                { shiftNum: 1, label: 'Mañana' },
+                                                { shiftNum: 2, label: 'Tarde' },
+                                                { shiftNum: 3, label: 'Noche' }
+                                              ].map(({ shiftNum, label }) => (
+                                                <button
+                                                  key={shiftNum}
+                                                  disabled={updatingEmpId === emp.id}
+                                                  onClick={() => handleAssignEmployeeVehicle(emp.id, emp.assignedVehicleId, emp.assignedWarehouseIndex, shiftNum)}
+                                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                                    emp.shift === shiftNum
+                                                      ? 'bg-amber-600 text-white border-amber-600'
+                                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                                  }`}
+                                                >
+                                                  {label}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 </div>
