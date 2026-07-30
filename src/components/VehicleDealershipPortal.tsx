@@ -17,7 +17,12 @@ import {
   Sparkles,
   Users,
   Building2,
-  Car
+  Car,
+  ShoppingCart,
+  Plus,
+  Minus,
+  Trash2,
+  X
 } from 'lucide-react';
 
 interface VehicleDealershipPortalProps {
@@ -35,6 +40,14 @@ interface VehicleCatalogItem {
   description: string;
   specs: string[];
   requirementNotes: string;
+  imageUrl: string;
+}
+
+interface CartItem {
+  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa';
+  title: string;
+  basePrice: number;
+  quantity: number;
   imageUrl: string;
 }
 
@@ -99,7 +112,14 @@ export default function VehicleDealershipPortal({
   const [hiredEmployees, setHiredEmployees] = useState<HiredEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Purchase modal state
+  // Cart state
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isBuyingCart, setIsBuyingCart] = useState(false);
+  const [cartError, setCartError] = useState<string | null>(null);
+  const [cartSuccess, setCartSuccess] = useState<string | null>(null);
+
+  // Single Purchase modal state
   const [selectedVehicle, setSelectedVehicle] = useState<VehicleCatalogItem | null>(null);
   const [isBuying, setIsBuying] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
@@ -134,6 +154,91 @@ export default function VehicleDealershipPortal({
   useEffect(() => {
     fetchFleetData();
   }, [currentUser.id]);
+
+  const addToCart = (item: VehicleCatalogItem, qty: number = 1) => {
+    setCart(prev => {
+      const existingIndex = prev.findIndex(c => c.vehicleType === item.type);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex].quantity += qty;
+        return updated;
+      } else {
+        return [...prev, {
+          vehicleType: item.type,
+          title: item.title,
+          basePrice: item.basePrice,
+          quantity: qty,
+          imageUrl: item.imageUrl
+        }];
+      }
+    });
+  };
+
+  const updateCartQuantity = (vehicleType: string, delta: number) => {
+    setCart(prev => {
+      return prev.map(item => {
+        if (item.vehicleType === vehicleType) {
+          const newQty = item.quantity + delta;
+          return newQty > 0 ? { ...item, quantity: newQty } : null;
+        }
+        return item;
+      }).filter(Boolean) as CartItem[];
+    });
+  };
+
+  const removeFromCart = (vehicleType: string) => {
+    setCart(prev => prev.filter(item => item.vehicleType !== vehicleType));
+  };
+
+  const cartBaseSubtotal = cart.reduce((sum, item) => sum + (item.basePrice * item.quantity), 0);
+  const cartIvaTotal = cartBaseSubtotal * 0.21;
+  const cartGrandTotal = cartBaseSubtotal + cartIvaTotal;
+  const cartTotalItemsCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const handleBuyCart = async () => {
+    if (cart.length === 0) return;
+    setIsBuyingCart(true);
+    setCartError(null);
+    setCartSuccess(null);
+
+    if (currentUser.balance < cartGrandTotal) {
+      setCartError(`Saldo insuficiente en cuenta bancaria (${formatNumber(currentUser.balance)} €). La cesta requiere ${formatNumber(cartGrandTotal)} € (IVA incl.).`);
+      setIsBuyingCart(false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/vehicles/buy-cart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: currentUser.id,
+          cartItems: cart
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setCartError(data.error || 'No se pudo procesar la compra de la cesta.');
+      } else {
+        setCartSuccess(`¡Compra combinada completada! Se han añadido ${data.createdCount} vehículo(s) a tu flota por ${formatNumber(cartGrandTotal)} € (IVA incl.).`);
+        if (data.newBalance !== undefined) {
+          onUserBalanceUpdated(data.newBalance);
+        }
+        setCart([]);
+        await fetchFleetData();
+        setTimeout(() => {
+          setIsCartOpen(false);
+          setCartSuccess(null);
+          setActiveTab('my_fleet');
+        }, 1800);
+      }
+    } catch (err: any) {
+      setCartError(err.message || 'Error de conexión con el concesionario.');
+    } finally {
+      setIsBuyingCart(false);
+    }
+  };
 
   const handleBuyVehicle = async () => {
     if (!selectedVehicle) return;
@@ -218,6 +323,20 @@ export default function VehicleDealershipPortal({
                 {formatNumber(currentUser.balance)} €
               </span>
             </div>
+
+            {/* Shopping Cart Trigger */}
+            <button
+              onClick={() => setIsCartOpen(true)}
+              className="relative px-3.5 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition flex items-center gap-2 text-xs font-bold shadow-xs"
+            >
+              <ShoppingCart className="w-4 h-4 text-amber-400" />
+              <span className="hidden sm:inline">Cesta</span>
+              {cartTotalItemsCount > 0 && (
+                <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-1.5 py-0.5 rounded-full">
+                  {cartTotalItemsCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </header>
@@ -266,7 +385,7 @@ export default function VehicleDealershipPortal({
                   Equipa tu Empresa con Logística, Maquinaria y Movilidad
                 </h2>
                 <p className="text-xs sm:text-sm text-blue-100 leading-relaxed">
-                  Adquiere camiones con tráiler para el transporte de mercancías, carretillas elevadoras contrapesadas obligatorias para la operativa de tus almacenes y coches de empresa para la representación comercial.
+                  Adquiere camiones con tráiler para el transporte de mercancías, carretillas elevadoras contrapesadas obligatorias para la operativa de tus almacenes y coches de empresa para la representación comercial. Puedes comprar unidades sueltas o añadirlas a tu cesta de la compra.
                 </p>
               </div>
             </div>
@@ -276,6 +395,7 @@ export default function VehicleDealershipPortal({
               {VEHICLE_CATALOG.map(item => {
                 const iva = item.basePrice * 0.21;
                 const total = item.basePrice + iva;
+                const inCartItem = cart.find(c => c.vehicleType === item.type);
 
                 return (
                   <div key={item.type} className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden flex flex-col justify-between hover:border-blue-300 transition group">
@@ -286,10 +406,15 @@ export default function VehicleDealershipPortal({
                           alt={item.title} 
                           className="w-full h-full object-cover group-hover:scale-105 transition duration-300" 
                         />
-                        <div className="absolute top-3 left-3">
+                        <div className="absolute top-3 left-3 flex items-center gap-2">
                           <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${item.badgeStyle}`}>
                             {item.categoryLabel}
                           </span>
+                          {inCartItem && (
+                            <span className="bg-slate-900 text-amber-400 font-extrabold text-[10px] px-2 py-0.5 rounded-md border border-slate-700">
+                              En Cesta ({inCartItem.quantity})
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -324,21 +449,34 @@ export default function VehicleDealershipPortal({
                         </div>
                         <div className="text-right">
                           <span className="text-lg font-black text-slate-900 font-mono block">{formatNumber(total)} €</span>
-                          <span className="text-[9px] text-emerald-600 font-bold uppercase">Total Factura</span>
+                          <span className="text-[9px] text-emerald-600 font-bold uppercase">Total Unidad</span>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => {
-                          setSelectedVehicle(item);
-                          setPurchaseError(null);
-                          setPurchaseSuccess(null);
-                        }}
-                        className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs transition shadow-xs flex items-center justify-center gap-2"
-                      >
-                        <CreditCard className="w-4 h-4" />
-                        <span>Comprar Vehículo</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            addToCart(item, 1);
+                          }}
+                          className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-2xl font-extrabold text-xs transition shadow-xs flex items-center justify-center gap-1.5"
+                        >
+                          <ShoppingCart className="w-4 h-4" />
+                          <span>Añadir a la Cesta</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setSelectedVehicle(item);
+                            setPurchaseError(null);
+                            setPurchaseSuccess(null);
+                          }}
+                          className="py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs transition shadow-xs flex items-center justify-center gap-1"
+                          title="Comprar directamente 1 unidad"
+                        >
+                          <CreditCard className="w-4 h-4" />
+                          <span className="hidden lg:inline">Comprar Ya</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -423,7 +561,132 @@ export default function VehicleDealershipPortal({
           </div>
         )}
 
-        {/* PURCHASE CONFIRMATION MODAL */}
+        {/* SHOPPING CART MODAL / SLIDE-OVER */}
+        {isCartOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-end p-0 sm:p-4">
+            <div className="bg-white w-full max-w-md h-full sm:h-auto sm:max-h-[90vh] sm:rounded-3xl shadow-2xl flex flex-col justify-between overflow-hidden animate-in slide-in-from-right duration-200">
+              {/* Header */}
+              <div className="p-5 border-b border-slate-200 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5 text-amber-400" />
+                  <div>
+                    <h3 className="font-bold text-base text-white">Cesta de la Compra</h3>
+                    <p className="text-[11px] text-slate-300">Concesionario de Vehículos Industriales</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsCartOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Items List */}
+              <div className="p-5 space-y-4 overflow-y-auto flex-1">
+                {cart.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 space-y-2">
+                    <ShoppingCart className="w-10 h-10 text-slate-300 mx-auto" />
+                    <p className="text-xs font-semibold">Tu cesta de vehículos está vacía</p>
+                    <p className="text-[11px]">Añade camiones, carretillas o coches para comprarlos todos juntos en una sola operación.</p>
+                  </div>
+                ) : (
+                  cart.map(item => (
+                    <div key={item.vehicleType} className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <img src={item.imageUrl} alt={item.title} className="w-12 h-12 rounded-xl object-cover border border-slate-200" />
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-xs leading-snug">{item.title}</h4>
+                          <span className="text-[11px] text-slate-500 font-mono">{formatNumber(item.basePrice)} € / un. (+IVA)</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5">
+                          <button 
+                            onClick={() => updateCartQuantity(item.vehicleType, -1)}
+                            className="p-1 text-slate-500 hover:text-slate-900"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="px-2 text-xs font-extrabold font-mono text-slate-900">{item.quantity}</span>
+                          <button 
+                            onClick={() => updateCartQuantity(item.vehicleType, 1)}
+                            className="p-1 text-slate-500 hover:text-slate-900"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <button 
+                          onClick={() => removeFromCart(item.vehicleType)}
+                          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition"
+                          title="Eliminar de la cesta"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Checkout Footer */}
+              {cart.length > 0 && (
+                <div className="p-5 border-t border-slate-200 bg-slate-50 space-y-4">
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Base Imponible Total:</span>
+                      <span className="font-mono font-bold text-slate-900">{formatNumber(cartBaseSubtotal)} €</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>IVA Soportado (21%):</span>
+                      <span className="font-mono font-bold text-slate-900">{formatNumber(cartIvaTotal)} €</span>
+                    </div>
+                    <div className="flex justify-between text-sm pt-2 border-t border-slate-200 font-extrabold">
+                      <span className="text-slate-900">Total Operación Cesta:</span>
+                      <span className="font-mono text-blue-700 font-black text-base">{formatNumber(cartGrandTotal)} €</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] text-slate-500 pt-0.5">
+                      <span>Saldo Banco Disponible:</span>
+                      <span className="font-mono font-bold">{formatNumber(currentUser.balance)} €</span>
+                    </div>
+                  </div>
+
+                  {cartError && (
+                    <div className="bg-red-50 text-red-900 p-3 rounded-2xl border border-red-200 text-xs flex items-start gap-2 font-medium">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <span>{cartError}</span>
+                    </div>
+                  )}
+
+                  {cartSuccess && (
+                    <div className="bg-emerald-50 text-emerald-900 p-3 rounded-2xl border border-emerald-200 text-xs flex items-start gap-2 font-medium">
+                      <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{cartSuccess}</span>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleBuyCart}
+                    disabled={isBuyingCart || !!cartSuccess}
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs transition shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isBuyingCart ? (
+                      <span>Procesando compra de cesta...</span>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4 h-4" />
+                        <span>Comprar Todo en Una Sola Operación ({cartTotalItemsCount} u.)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* SINGLE PURCHASE CONFIRMATION MODAL */}
         {selectedVehicle && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in duration-200">

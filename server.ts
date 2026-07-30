@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialInventory } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialInventory } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 
@@ -290,9 +290,74 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         edad INT NOT NULL,
         fecha_contratacion TIMESTAMPTZ NOT NULL,
         maquinaria_asignada_id VARCHAR(255),
+        maquinaria_asignada_titulo TEXT,
+        vehiculo_asignado_id VARCHAR(255),
+        vehiculo_asignado_titulo TEXT,
+        almacen_asignado_index INT,
         turno INT DEFAULT 1,
         avatar_url TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS vehiculos_comprados (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        vehiculo_tipo VARCHAR(50) NOT NULL,
+        titulo TEXT NOT NULL,
+        precio_base NUMERIC(12, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        precio_total NUMERIC(12, 2) NOT NULL,
+        metodo_pago VARCHAR(50) NOT NULL,
+        fecha_compra TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        conductor_asignado_id VARCHAR(255),
+        conductor_asignado_nombre TEXT,
+        turno_asignado INT,
+        almacen_asignado_index INT,
+        estado VARCHAR(50) NOT NULL DEFAULT 'activo',
+        imagen_url TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS materias_primas_inventario (
+        alumno_id VARCHAR(255) PRIMARY KEY,
+        alumno_nombre TEXT,
+        fragmentos_hierro_kg NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        fragmentos_metal_kg NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        pellets_plastico_kg NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        pegamento_epoxi_kg NUMERIC(12, 2) NOT NULL DEFAULT 0,
+        varillas_punta INT NOT NULL DEFAULT 0,
+        productos_ensamblados INT NOT NULL DEFAULT 0,
+        ultima_calculada TIMESTAMPTZ,
+        fecha_actualizacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS materias_primas_pedidos (
+        id VARCHAR(255) PRIMARY KEY,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        announcement_id VARCHAR(255) NOT NULL,
+        materia_tipo VARCHAR(50) NOT NULL,
+        materia_titulo TEXT NOT NULL,
+        cantidad INT NOT NULL,
+        peso_unitario_kg NUMERIC(10, 2) NOT NULL,
+        peso_total_kg NUMERIC(10, 2) NOT NULL,
+        precio_base NUMERIC(12, 2) NOT NULL,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        coste_transporte NUMERIC(12, 2) NOT NULL,
+        importe_total NUMERIC(12, 2) NOT NULL,
+        necesita_transporte BOOLEAN NOT NULL DEFAULT TRUE,
+        direccion_entrega TEXT,
+        vehiculo_recogida_id VARCHAR(255),
+        estado VARCHAR(50) NOT NULL DEFAULT 'pendiente',
+        fecha_pedido TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        fecha_aprobado TIMESTAMPTZ,
+        fecha_estimada_entrega TIMESTAMPTZ,
+        fecha_entrega TIMESTAMPTZ
+      );
+
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS maquinaria_asignada_titulo TEXT;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS vehiculo_asignado_id VARCHAR(255);
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS vehiculo_asignado_titulo TEXT;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS almacen_asignado_index INT;
 
       CREATE TABLE IF NOT EXISTS registros_nomina (
         id VARCHAR(255) PRIMARY KEY,
@@ -733,8 +798,11 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
   if (!dbPool) return;
   try {
     await safeDbQuery(
-      `INSERT INTO empleados_contratados (id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, genero, sueldo_bruto_mensual, edad, fecha_contratacion, maquinaria_asignada_id, turno, avatar_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO empleados_contratados (
+        id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, genero, sueldo_bruto_mensual, edad, fecha_contratacion,
+        maquinaria_asignada_id, maquinaria_asignada_titulo, vehiculo_asignado_id, vehiculo_asignado_titulo, almacen_asignado_index, turno, avatar_url
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (id) DO UPDATE SET
          alumno_id = EXCLUDED.alumno_id,
          alumno_nombre = EXCLUDED.alumno_nombre,
@@ -744,12 +812,157 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
          edad = EXCLUDED.edad,
          fecha_contratacion = EXCLUDED.fecha_contratacion,
          maquinaria_asignada_id = EXCLUDED.maquinaria_asignada_id,
+         maquinaria_asignada_titulo = EXCLUDED.maquinaria_asignada_titulo,
+         vehiculo_asignado_id = EXCLUDED.vehiculo_asignado_id,
+         vehiculo_asignado_titulo = EXCLUDED.vehiculo_asignado_titulo,
+         almacen_asignado_index = EXCLUDED.almacen_asignado_index,
          turno = EXCLUDED.turno,
          avatar_url = EXCLUDED.avatar_url`,
-      [emp.id, emp.jobListingId, emp.studentId, emp.studentName, emp.employeeName, emp.gender, emp.grossSalaryMonthly, emp.age, emp.hireDate, emp.assignedMachineryId || null, emp.shift || 1, emp.avatarUrl || null]
+      [
+        emp.id,
+        emp.jobListingId,
+        emp.studentId,
+        emp.studentName,
+        emp.employeeName,
+        emp.gender,
+        emp.grossSalaryMonthly,
+        emp.age,
+        emp.hireDate,
+        emp.assignedMachineryId || null,
+        emp.assignedMachineryTitle || null,
+        emp.assignedVehicleId || null,
+        emp.assignedVehicleTitle || null,
+        emp.assignedWarehouseIndex !== undefined ? emp.assignedWarehouseIndex : null,
+        emp.shift || 1,
+        emp.avatarUrl || null
+      ]
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing hired employee:', e);
+  }
+}
+
+async function syncVehicleToSupabase(veh: PurchasedVehicle) {
+  if (!dbPool) return;
+  try {
+    await safeDbQuery(
+      `INSERT INTO vehiculos_comprados (
+        id, alumno_id, alumno_nombre, vehiculo_tipo, titulo,
+        precio_base, importe_iva, precio_total, metodo_pago, fecha_compra,
+        conductor_asignado_id, conductor_asignado_nombre, turno_asignado, almacen_asignado_index,
+        estado, imagen_url
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      ON CONFLICT (id) DO UPDATE SET
+        conductor_asignado_id = EXCLUDED.conductor_asignado_id,
+        conductor_asignado_nombre = EXCLUDED.conductor_asignado_nombre,
+        turno_asignado = EXCLUDED.turno_asignado,
+        almacen_asignado_index = EXCLUDED.almacen_asignado_index,
+        estado = EXCLUDED.estado`,
+      [
+        veh.id,
+        veh.studentId,
+        veh.studentName,
+        veh.vehicleType,
+        veh.title,
+        veh.basePrice,
+        veh.ivaAmount,
+        veh.totalPrice,
+        veh.paymentMethod,
+        veh.purchaseDate ? new Date(veh.purchaseDate) : new Date(),
+        veh.assignedDriverId || null,
+        veh.assignedDriverName || null,
+        veh.assignedShift || null,
+        veh.assignedWarehouseIndex !== undefined ? veh.assignedWarehouseIndex : null,
+        veh.status || 'activo',
+        veh.imageUrl || null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing vehicle to Supabase:', e);
+  }
+}
+
+async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: string) {
+  if (!dbPool) return;
+  try {
+    await safeDbQuery(
+      `INSERT INTO materias_primas_inventario (
+        alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+        pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta, productos_ensamblados,
+        ultima_calculada, fecha_actualizacion
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (alumno_id) DO UPDATE SET
+        alumno_nombre = COALESCE(EXCLUDED.alumno_nombre, materias_primas_inventario.alumno_nombre),
+        fragmentos_hierro_kg = EXCLUDED.fragmentos_hierro_kg,
+        fragmentos_metal_kg = EXCLUDED.fragmentos_metal_kg,
+        pellets_plastico_kg = EXCLUDED.pellets_plastico_kg,
+        pegamento_epoxi_kg = EXCLUDED.pegamento_epoxi_kg,
+        varillas_punta = EXCLUDED.varillas_punta,
+        productos_ensamblados = EXCLUDED.productos_ensamblados,
+        ultima_calculada = EXCLUDED.ultima_calculada,
+        fecha_actualizacion = EXCLUDED.fecha_actualizacion`,
+      [
+        inv.studentId,
+        studentName || 'Estudiante',
+        inv.ironKg || 0,
+        inv.metalKg || 0,
+        inv.plasticKg || 0,
+        inv.epoxiKg || 0,
+        inv.producedRodsUnits || 0,
+        inv.producedScrewdriversUnits || 0,
+        inv.lastCalculatedAt ? new Date(inv.lastCalculatedAt) : new Date(),
+        new Date()
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing raw material inventory to Supabase:', e);
+  }
+}
+
+async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
+  if (!dbPool) return;
+  try {
+    await safeDbQuery(
+      `INSERT INTO materias_primas_pedidos (
+        id, alumno_id, alumno_nombre, announcement_id, materia_tipo, materia_titulo,
+        cantidad, peso_unitario_kg, peso_total_kg, precio_base, importe_iva, coste_transporte,
+        importe_total, necesita_transporte, direccion_entrega, vehiculo_recogida_id,
+        estado, fecha_pedido, fecha_aprobado, fecha_estimada_entrega, fecha_entrega
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      ON CONFLICT (id) DO UPDATE SET
+        estado = EXCLUDED.estado,
+        fecha_aprobado = EXCLUDED.fecha_aprobado,
+        fecha_estimada_entrega = EXCLUDED.fecha_estimada_entrega,
+        fecha_entrega = EXCLUDED.fecha_entrega`,
+      [
+        ord.id,
+        ord.studentId,
+        ord.studentName,
+        ord.announcementId,
+        ord.materialType,
+        ord.materialTitle,
+        ord.quantity,
+        ord.unitWeightKg,
+        ord.totalKg,
+        ord.basePrice,
+        ord.ivaAmount,
+        ord.transportCost,
+        ord.totalAmount,
+        ord.needsTransport,
+        ord.deliveryAddress || null,
+        ord.pickupVehicleId || null,
+        ord.status,
+        ord.requestedAt ? new Date(ord.requestedAt) : new Date(),
+        ord.approvedAt ? new Date(ord.approvedAt) : null,
+        ord.estimatedDeliveryAt ? new Date(ord.estimatedDeliveryAt) : null,
+        ord.deliveredAt ? new Date(ord.deliveredAt) : null
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing raw material order to Supabase:', e);
   }
 }
 
@@ -1042,6 +1255,22 @@ async function syncAllToSupabase(db: DatabaseSchema) {
         await syncOfficeOrderToSupabase(oo);
       }
     }
+    if (db.purchasedVehicles) {
+      for (const veh of db.purchasedVehicles) {
+        await syncVehicleToSupabase(veh);
+      }
+    }
+    if (db.rawMaterialInventories) {
+      for (const inv of db.rawMaterialInventories) {
+        const student = db.users.find(u => u.id === inv.studentId);
+        await syncInventoryToSupabase(inv, student?.name);
+      }
+    }
+    if (db.rawMaterialOrders) {
+      for (const ord of db.rawMaterialOrders) {
+        await syncRawMaterialOrderToSupabase(ord);
+      }
+    }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
   }
@@ -1143,6 +1372,27 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         resOfficeOrders = await client.query('SELECT * FROM pedidos_oficina ORDER BY fecha_compra DESC');
       } catch (e) {
         console.warn('[Supabase Restore] Pedidos oficina table select warning:', e);
+      }
+
+      let resVehicles: any = { rows: [] };
+      try {
+        resVehicles = await client.query('SELECT * FROM vehiculos_comprados ORDER BY fecha_compra DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Vehiculos comprados table select warning:', e);
+      }
+
+      let resRawInventories: any = { rows: [] };
+      try {
+        resRawInventories = await client.query('SELECT * FROM materias_primas_inventario');
+      } catch (e) {
+        console.warn('[Supabase Restore] Materias primas inventario table select warning:', e);
+      }
+
+      let resRawOrders: any = { rows: [] };
+      try {
+        resRawOrders = await client.query('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Materias primas pedidos table select warning:', e);
       }
 
       const db = readDb();
@@ -1407,6 +1657,10 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           age: Number(row.edad),
           hireDate: new Date(row.fecha_contratacion).toISOString(),
           assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
+          assignedMachineryTitle: row.maquinaria_asignada_titulo ? String(row.maquinaria_asignada_titulo) : undefined,
+          assignedVehicleId: row.vehiculo_asignado_id ? String(row.vehiculo_asignado_id) : undefined,
+          assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
+          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
           shift: Number(row.turno || 1),
           avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
         }));
@@ -1544,6 +1798,70 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           totalAmount: Number(row.importe_total),
           status: String(row.estado) as 'completado_pagado',
           paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'banco'
+        }));
+      }
+
+      // Reconstruct db.purchasedVehicles from Supabase "vehiculos_comprados"
+      if (resVehicles.rows.length > 0) {
+        db.purchasedVehicles = resVehicles.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          vehicleType: String(row.vehiculo_tipo) as any,
+          title: String(row.titulo),
+          basePrice: Number(row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          totalPrice: Number(row.precio_total),
+          paymentMethod: String(row.metodo_pago) as any,
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          assignedDriverId: row.conductor_asignado_id ? String(row.conductor_asignado_id) : undefined,
+          assignedDriverName: row.conductor_asignado_nombre ? String(row.conductor_asignado_nombre) : undefined,
+          assignedShift: row.turno_asignado ? Number(row.turno_asignado) : undefined,
+          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
+          status: String(row.estado) as 'activo' | 'mantenimiento',
+          imageUrl: row.imagen_url ? String(row.imagen_url) : (row.vehiculo_tipo === 'camion_trailer' ? '/images/vehicles/camion_trailer.jpg' : row.vehiculo_tipo === 'coche_empresa' ? '/images/vehicles/coche_empresa.jpg' : '/images/vehicles/carretilla_elevadora.jpg')
+        }));
+      }
+
+      // Reconstruct db.rawMaterialInventories from Supabase "materias_primas_inventario"
+      if (resRawInventories.rows.length > 0) {
+        db.rawMaterialInventories = resRawInventories.rows.map((row: any) => ({
+          studentId: String(row.alumno_id),
+          ironKg: Number(row.fragmentos_hierro_kg || 0),
+          metalKg: Number(row.fragmentos_metal_kg || 0),
+          plasticKg: Number(row.pellets_plastico_kg || 0),
+          epoxiKg: Number(row.pegamento_epoxi_kg || 0),
+          producedRodsUnits: Number(row.varillas_punta || 0),
+          producedScrewdriversUnits: Number(row.productos_ensamblados || 0),
+          lastCalculatedAt: row.ultima_calculada ? new Date(row.ultima_calculada).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      // Reconstruct db.rawMaterialOrders from Supabase "materias_primas_pedidos"
+      if (resRawOrders.rows.length > 0) {
+        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          announcementId: String(row.announcement_id),
+          materialType: String(row.materia_tipo) as any,
+          materialTitle: String(row.materia_titulo),
+          quantity: Number(row.cantidad),
+          unitWeightKg: Number(row.peso_unitario_kg),
+          totalKg: Number(row.peso_total_kg),
+          basePrice: Number(row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          transportCost: Number(row.coste_transporte),
+          totalAmount: Number(row.importe_total),
+          needsTransport: Boolean(row.necesita_transporte),
+          deliveryAddress: String(row.direccion_entrega || ''),
+          pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+          status: String(row.estado) as 'pendiente' | 'aprobado' | 'rechazado' | 'entregado',
+          requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
+          approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+          estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+          deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined
         }));
       }
 
@@ -6338,6 +6656,7 @@ app.post('/api/vehicles/buy', (req, res) => {
   };
 
   db.purchasedVehicles.unshift(vehicle);
+  syncVehicleToSupabase(vehicle).catch(e => console.error(e));
 
   // Deduct balance
   student.balance = Math.round((student.balance - totalPrice) * 100) / 100;
@@ -6378,6 +6697,132 @@ app.post('/api/vehicles/buy', (req, res) => {
   });
 });
 
+app.post('/api/vehicles/buy-cart', (req, res) => {
+  const { studentId, cartItems } = req.body;
+  if (!studentId || !Array.isArray(cartItems) || cartItems.length === 0) {
+    return res.status(400).json({ error: 'Parámetros inválidos para la compra de la cesta de vehículos.' });
+  }
+
+  const db = readDb();
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  // Calculate total base price
+  let totalBasePrice = 0;
+  for (const item of cartItems) {
+    const qty = Number(item.quantity) || 1;
+    const bp = Number(item.basePrice) || 0;
+    totalBasePrice += bp * qty;
+  }
+
+  const totalIva = Math.round((totalBasePrice * 0.21) * 100) / 100;
+  const grandTotal = Math.round((totalBasePrice + totalIva) * 100) / 100;
+
+  if (student.balance < grandTotal) {
+    return res.status(400).json({
+      error: `Saldo insuficiente. Total con IVA (21%): ${grandTotal.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`
+    });
+  }
+
+  if (!db.purchasedVehicles) db.purchasedVehicles = [];
+
+  const now = new Date();
+  const createdVehicles: PurchasedVehicle[] = [];
+
+  for (const item of cartItems) {
+    const qty = Math.max(1, Number(item.quantity) || 1);
+    const bPrice = Number(item.basePrice) || 0;
+    const itemIva = Math.round((bPrice * 0.21) * 100) / 100;
+    const itemTotal = Math.round((bPrice + itemIva) * 100) / 100;
+
+    let img = '/images/vehicles/carretilla_elevadora.jpg';
+    if (item.vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
+    if (item.vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
+
+    for (let i = 0; i < qty; i++) {
+      const veh: PurchasedVehicle = {
+        id: generateId('veh'),
+        studentId: student.id,
+        studentName: student.name,
+        vehicleType: item.vehicleType || 'carretilla_elevadora',
+        title: item.title || 'Vehículo Corporativo',
+        basePrice: bPrice,
+        ivaAmount: itemIva,
+        totalPrice: itemTotal,
+        paymentMethod: 'contado',
+        purchaseDate: now.toISOString(),
+        status: 'activo',
+        imageUrl: img
+      };
+
+      db.purchasedVehicles.unshift(veh);
+      createdVehicles.push(veh);
+      syncVehicleToSupabase(veh).catch(e => console.error(e));
+    }
+  }
+
+  // Deduct balance
+  student.balance = Math.round((student.balance - grandTotal) * 100) / 100;
+  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'concesionario-vehiculos',
+    receiverName: 'Concesionario Industrial AutoCorp S.L.',
+    receiverAccount: 'ES880004000998877661',
+    amount: grandTotal,
+    concept: `Compra combinada de ${createdVehicles.length} vehículo(s) en la cesta`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', grandTotal, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'BUY_VEHICLES_CART',
+    details: `El alumno ${student.name} ha comprado ${createdVehicles.length} vehículo(s) en cesta por un total de ${grandTotal.toFixed(2)}€ (IVA incl.)`,
+    timestamp: now.toISOString(),
+    studentId: student.id,
+    studentName: student.name
+  });
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    createdCount: createdVehicles.length,
+    vehicles: createdVehicles,
+    newBalance: student.balance,
+    message: `Adquisición en cesta completada exitosamente. ${createdVehicles.length} vehículo(s) añadidos a tu flota corporativa.`
+  });
+});
+
+app.put('/api/student/vehicles/:id/assign-warehouse', (req, res) => {
+  const { id } = req.params;
+  const { warehouseIndex } = req.body;
+
+  const db = readDb();
+  if (!db.purchasedVehicles) db.purchasedVehicles = [];
+
+  const veh = db.purchasedVehicles.find(v => v.id === id);
+  if (!veh) return res.status(404).json({ error: 'Vehículo no encontrado' });
+
+  if (warehouseIndex !== undefined && warehouseIndex !== null && warehouseIndex !== '') {
+    veh.assignedWarehouseIndex = Number(warehouseIndex);
+  } else {
+    veh.assignedWarehouseIndex = undefined;
+  }
+
+  syncVehicleToSupabase(veh).catch(e => console.error(e));
+  writeDb(db);
+
+  res.json({ success: true, vehicle: veh });
+});
+
 app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
   const { id } = req.params;
   const { vehicleId, warehouseIndex, shift } = req.body;
@@ -6404,6 +6849,8 @@ app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
   if (shift !== undefined) {
     emp.shift = Number(shift) || 1;
   }
+
+  syncHiredEmployeeToSupabase(emp).catch(e => console.error(e));
 
   writeDb(db);
   res.json({ success: true, employee: emp });
@@ -6549,6 +6996,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
   };
 
   db.rawMaterialOrders.unshift(order);
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
 
   db.systemLogs.unshift({
     id: generateId('log'),
@@ -6590,11 +7038,13 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
   }
 
   student.balance = Math.round((student.balance - order.totalAmount) * 100) / 100;
+  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
   const now = new Date();
   order.status = 'aprobado';
   order.approvedAt = now.toISOString();
   order.estimatedDeliveryAt = new Date(now.getTime() + 2 * 60 * 1000).toISOString();
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
 
   const txId = generateId('tx');
   const transfer: Transfer = {
@@ -6639,6 +7089,7 @@ app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
   if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
   order.status = 'rechazado';
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
   writeDb(db);
 
   res.json({ success: true, order, message: 'Solicitud de materia prima rechazada.' });
@@ -6655,6 +7106,7 @@ app.post('/api/raw-materials/orders/:id/deliver', (req, res) => {
   const now = new Date();
   order.status = 'entregado';
   order.deliveredAt = now.toISOString();
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
 
   if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
   let inv = db.rawMaterialInventories.find(i => i.studentId === order.studentId);
@@ -6679,6 +7131,9 @@ app.post('/api/raw-materials/orders/:id/deliver', (req, res) => {
   if (order.materialType === 'epoxi') inv.epoxiKg += order.totalKg;
   inv.updatedAt = now.toISOString();
 
+  const student = db.users.find(u => u.id === order.studentId);
+  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
+
   writeDb(db);
 
   res.json({ success: true, order, inventory: inv, message: 'Materia prima entregada y registrada en almacén.' });
@@ -6689,6 +7144,8 @@ app.get('/api/raw-materials/inventory/:studentId', (req, res) => {
   const db = readDb();
 
   const inv = checkAndCalculateProduction(db, studentId);
+  const student = db.users.find(u => u.id === studentId);
+  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
   writeDb(db);
 
   res.json({ success: true, inventory: inv });

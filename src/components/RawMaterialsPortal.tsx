@@ -22,12 +22,22 @@ import {
   ShoppingBag,
   ArrowRight,
   Sparkles,
-  ChevronRight
+  ChevronRight,
+  ShoppingCart,
+  Plus,
+  Minus,
+  Trash2,
+  X
 } from 'lucide-react';
 
 interface RawMaterialsPortalProps {
   currentUser: User;
   onRefreshUser?: () => void;
+}
+
+interface RawMaterialCartItem {
+  announcement: RawMaterialAnnouncement;
+  quantity: number;
 }
 
 export default function RawMaterialsPortal({ currentUser, onRefreshUser }: RawMaterialsPortalProps) {
@@ -40,7 +50,12 @@ export default function RawMaterialsPortal({ currentUser, onRefreshUser }: RawMa
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Selected announcement for order modal
+  // Cart State
+  const [cart, setCart] = useState<RawMaterialCartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartNeedsTransport, setCartNeedsTransport] = useState(true);
+
+  // Selected announcement for single order modal
   const [selectedAnn, setSelectedAnn] = useState<RawMaterialAnnouncement | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
   const [needsTransport, setNeedsTransport] = useState<boolean>(true);
@@ -101,6 +116,86 @@ export default function RawMaterialsPortal({ currentUser, onRefreshUser }: RawMa
   const ownedTruck = vehicles.find(v => v.vehicleType === 'camion_trailer');
   const hiredDriver = employees.find(e => e.role === 'camionero');
   const canPickupWithoutTransport = Boolean(ownedTruck && hiredDriver);
+
+  // Cart operations
+  const addToCart = (ann: RawMaterialAnnouncement, qty: number = 1) => {
+    setCart(prev => {
+      const idx = prev.findIndex(item => item.announcement.id === ann.id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx].quantity += qty;
+        return updated;
+      } else {
+        return [...prev, { announcement: ann, quantity: qty }];
+      }
+    });
+  };
+
+  const updateCartQty = (annId: string, delta: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.announcement.id === annId) {
+        const newQty = item.quantity + delta;
+        return newQty > 0 ? { ...item, quantity: newQty } : null;
+      }
+      return item;
+    }).filter(Boolean) as RawMaterialCartItem[]);
+  };
+
+  const removeFromCart = (annId: string) => {
+    setCart(prev => prev.filter(item => item.announcement.id !== annId));
+  };
+
+  // Cart calculations
+  const cartTotalKg = cart.reduce((sum, item) => sum + (item.announcement.unitWeightKg * item.quantity), 0);
+  const cartBasePrice = cart.reduce((sum, item) => sum + (item.announcement.pricePerUnit * item.quantity), 0);
+  const cartIvaAmount = cartBasePrice * 0.21;
+  const cartTransportCost = cartNeedsTransport && cart.length > 0 ? (60 + cartTotalKg * 0.08) : 0;
+  const cartGrandTotal = cartBasePrice + cartIvaAmount + cartTransportCost;
+  const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const handleCheckoutCart = async () => {
+    if (cart.length === 0) return;
+    setIsSubmitting(true);
+    setMsg(null);
+
+    let successCount = 0;
+    let failMsg = '';
+
+    for (const item of cart) {
+      try {
+        const res = await fetch('/api/raw-materials/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentId: currentUser.id,
+            announcementId: item.announcement.id,
+            quantity: item.quantity,
+            needsTransport: cartNeedsTransport,
+            pickupVehicleId: !cartNeedsTransport && ownedTruck ? ownedTruck.id : undefined
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          successCount++;
+        } else {
+          failMsg = data.error || 'Error en algún producto.';
+        }
+      } catch (err) {
+        failMsg = 'Error de conexión.';
+      }
+    }
+
+    setIsSubmitting(false);
+    if (successCount > 0) {
+      setMsg({ type: 'success', text: `¡Se han tramitado ${successCount} solicitud(es) de compra de materias primas exitosamente!` });
+      setCart([]);
+      setIsCartOpen(false);
+      fetchData();
+      if (onRefreshUser) onRefreshUser();
+    } else {
+      setMsg({ type: 'error', text: failMsg || 'No se pudieron procesar las solicitudes.' });
+    }
+  };
 
   const handleOpenOrderModal = (ann: RawMaterialAnnouncement) => {
     setSelectedAnn(ann);
@@ -182,15 +277,31 @@ export default function RawMaterialsPortal({ currentUser, onRefreshUser }: RawMa
             </p>
           </div>
 
-          <div className="bg-slate-800/80 backdrop-blur border border-slate-700/80 rounded-xl p-4 flex items-center gap-4 min-w-[240px]">
-            <div className="p-3 bg-amber-500/20 text-amber-400 rounded-lg">
-              <Building className="w-6 h-6" />
+          <div className="flex items-center gap-3">
+            <div className="bg-slate-800/80 backdrop-blur border border-slate-700/80 rounded-xl p-4 flex items-center gap-4">
+              <div className="p-3 bg-amber-500/20 text-amber-400 rounded-lg">
+                <Building className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">Sede del Vendedor</div>
+                <div className="text-sm font-semibold text-white">San Fernando de Henares</div>
+                <div className="text-xs text-amber-400 font-mono mt-0.5">Av. de la Industria 14, Madrid</div>
+              </div>
             </div>
-            <div>
-              <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">Sede del Vendedor</div>
-              <div className="text-sm font-semibold text-white">San Fernando de Henares</div>
-              <div className="text-xs text-amber-400 font-mono mt-0.5">Av. de la Industria 14, Madrid</div>
-            </div>
+
+            {/* Shopping Cart Trigger */}
+            <button
+              onClick={() => setIsCartOpen(true)}
+              className="relative px-4 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-extrabold text-xs shadow-lg transition flex items-center gap-2"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              <span>Cesta Materias Primas</span>
+              {cartItemCount > 0 && (
+                <span className="bg-slate-950 text-amber-400 font-black text-[10px] px-2 py-0.5 rounded-full">
+                  {cartItemCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -296,54 +407,77 @@ export default function RawMaterialsPortal({ currentUser, onRefreshUser }: RawMa
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          {announcements.map((ann) => (
-            <div
-              key={ann.id}
-              className="bg-slate-900 border border-slate-800 hover:border-amber-500/40 transition-all rounded-2xl p-5 flex flex-col justify-between group shadow-lg"
-            >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-semibold uppercase tracking-wider border border-amber-500/20">
-                    <Layers className="w-3 h-3" />
-                    {ann.isPallet ? 'Pallet Industrial' : 'Presentación Individual'}
-                  </span>
-                  <span className="text-xs text-slate-500 font-mono">ID: {ann.id}</span>
+          {announcements.map((ann) => {
+            const inCartItem = cart.find(item => item.announcement.id === ann.id);
+
+            return (
+              <div
+                key={ann.id}
+                className="bg-slate-900 border border-slate-800 hover:border-amber-500/40 transition-all rounded-2xl p-5 flex flex-col justify-between group shadow-lg"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-semibold uppercase tracking-wider border border-amber-500/20">
+                      <Layers className="w-3 h-3" />
+                      {ann.isPallet ? 'Pallet Industrial' : 'Presentación Individual'}
+                    </span>
+                    {inCartItem && (
+                      <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-md">
+                        En Cesta ({inCartItem.quantity})
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 className="text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
+                      {ann.title}
+                    </h3>
+                    <p className="text-xs font-medium text-amber-300/80 mt-0.5">{ann.presentation}</p>
+                  </div>
+
+                  <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">{ann.description}</p>
                 </div>
 
-                <div>
-                  <h3 className="text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
-                    {ann.title}
-                  </h3>
-                  <p className="text-xs font-medium text-amber-300/80 mt-0.5">{ann.presentation}</p>
-                </div>
+                <div className="pt-4 mt-4 border-t border-slate-800 space-y-3">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs text-slate-400 font-medium">Precio Base</span>
+                    <div className="text-right">
+                      <span className="text-xl font-bold text-white">{formatNumber(ann.pricePerUnit)} €</span>
+                      <span className="text-[10px] text-slate-400 block">+ 21% IVA</span>
+                    </div>
+                  </div>
 
-                <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">{ann.description}</p>
-              </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => addToCart(ann, 1)}
+                      disabled={!isLevel1}
+                      className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
+                        isLevel1
+                          ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                      }`}
+                    >
+                      <ShoppingCart className="w-4 h-4" />
+                      <span>Añadir a Cesta</span>
+                    </button>
 
-              <div className="pt-4 mt-4 border-t border-slate-800 space-y-3">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-slate-400 font-medium">Precio Base</span>
-                  <div className="text-right">
-                    <span className="text-xl font-bold text-white">{formatNumber(ann.pricePerUnit)} €</span>
-                    <span className="text-[10px] text-slate-400 block">+ 21% IVA</span>
+                    <button
+                      onClick={() => handleOpenOrderModal(ann)}
+                      disabled={!isLevel1}
+                      className={`py-2.5 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1 transition-all ${
+                        isLevel1
+                          ? 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
+                          : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                      }`}
+                      title="Solicitar unidades directamente"
+                    >
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-
-                <button
-                  onClick={() => handleOpenOrderModal(ann)}
-                  disabled={!isLevel1}
-                  className={`w-full py-2.5 px-4 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition-all ${
-                    isLevel1
-                      ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20'
-                      : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                  }`}
-                >
-                  <span>Solicitar Compra</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
