@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialInventory } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 
@@ -1596,6 +1596,202 @@ app.use((req, res, next) => {
   next();
 });
 
+function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
+  return [
+    {
+      id: 'rm-hierro',
+      materialType: 'hierro',
+      title: 'Fragmentos de Hierro',
+      presentation: 'Pallet de 1.000 kg (Fragmentos)',
+      unitWeightKg: 1000,
+      isPallet: true,
+      pricePerUnit: 450,
+      description: 'Materia prima metálica de alta calidad para producción en Línea de Varilla y Punta. Presentación en palet de 1.000 kg.',
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'rm-metal',
+      materialType: 'metal',
+      title: 'Fragmentos de Metal',
+      presentation: 'Pallet de 1.000 kg (Fragmentos)',
+      unitWeightKg: 1000,
+      isPallet: true,
+      pricePerUnit: 520,
+      description: 'Fragmentos metálicos para aleación y varillas de destornilladores. Presentación en palet de 1.000 kg.',
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'rm-plastico',
+      materialType: 'plastico',
+      title: 'Pellets de Plástico',
+      presentation: 'Pallet de 1.000 kg (40 sacos de 25 kg)',
+      unitWeightKg: 1000,
+      isPallet: true,
+      pricePerUnit: 380,
+      description: 'Polímero plástico en pellets para inyección de mangos. 40 sacos de 25 kg por palet (total 1.000 kg).',
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'rm-epoxi',
+      materialType: 'epoxi',
+      title: 'Pegamento Epoxi',
+      presentation: 'Lata de 5 kg',
+      unitWeightKg: 5,
+      isPallet: false,
+      pricePerUnit: 45,
+      description: 'Resina y pegamento epoxi bicomponente de grado industrial para ensamblaje final. Lata de 5 kg.',
+      updatedAt: new Date().toISOString()
+    }
+  ];
+}
+
+function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
+  if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+
+  const now = new Date();
+
+  // Auto-deliver approved orders when time has passed
+  for (const ord of db.rawMaterialOrders) {
+    if (ord.studentId === studentId && ord.status === 'aprobado') {
+      const delivTime = ord.estimatedDeliveryAt ? new Date(ord.estimatedDeliveryAt) : now;
+      if (now >= delivTime) {
+        ord.status = 'entregado';
+        ord.deliveredAt = now.toISOString();
+
+        let inv = db.rawMaterialInventories.find(i => i.studentId === studentId);
+        if (!inv) {
+          inv = {
+            studentId,
+            ironKg: 0,
+            metalKg: 0,
+            plasticKg: 0,
+            epoxiKg: 0,
+            producedRodsUnits: 0,
+            producedScrewdriversUnits: 0,
+            lastCalculatedAt: now.toISOString(),
+            updatedAt: now.toISOString()
+          };
+          db.rawMaterialInventories.push(inv);
+        }
+
+        if (ord.materialType === 'hierro') inv.ironKg += ord.totalKg;
+        if (ord.materialType === 'metal') inv.metalKg += ord.totalKg;
+        if (ord.materialType === 'plastico') inv.plasticKg += ord.totalKg;
+        if (ord.materialType === 'epoxi') inv.epoxiKg += ord.totalKg;
+        inv.updatedAt = now.toISOString();
+      }
+    }
+  }
+
+  let inv = db.rawMaterialInventories.find(i => i.studentId === studentId);
+  if (!inv) {
+    inv = {
+      studentId,
+      ironKg: 0,
+      metalKg: 0,
+      plasticKg: 0,
+      epoxiKg: 0,
+      producedRodsUnits: 0,
+      producedScrewdriversUnits: 0,
+      lastCalculatedAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    db.rawMaterialInventories.push(inv);
+  }
+
+  const lastTime = new Date(inv.lastCalculatedAt || now);
+  const elapsedMs = now.getTime() - lastTime.getTime();
+  const hoursElapsed = Math.min(24, Math.max(0, elapsedMs / (1000 * 60))); // 1 min real = 1 hour simulated
+
+  if (hoursElapsed > 0.05) {
+    const machinery = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId && m.status !== 'montaje');
+    const line1 = machinery.find(m => m.category === 'metal_hierro');
+    const line2 = machinery.find(m => m.category === 'plastico_montaje' || m.category === 'plastico_ensamblaje');
+
+    const numLines = machinery.length;
+    const reqWh = numLines === 1 ? 2 : 3;
+
+    const electricityContracts = (db.electricityContracts || []).filter(e => e.studentId === studentId && e.status === 'active');
+    const hasElectricity = electricityContracts.length > 0;
+
+    const ownedForklifts = (db.purchasedVehicles || []).filter(v => v.studentId === studentId && v.vehicleType === 'carretilla_elevadora').length;
+    const hasForklifts = ownedForklifts >= reqWh;
+
+    const hiredEmployees = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+    const carretilleros = hiredEmployees.filter(e => e.role === 'carretillero');
+    let missingWhCarretillero = false;
+    for (let wh = 1; wh <= reqWh; wh++) {
+      if (!carretilleros.some(e => e.assignedWarehouseIndex === wh)) {
+        missingWhCarretillero = true;
+        break;
+      }
+    }
+    const hasCarretilleros = !missingWhCarretillero;
+
+    // Line 1 calculation
+    if (line1 && hasElectricity && hasForklifts && hasCarretilleros) {
+      const line1Ops = hiredEmployees.filter(e => e.assignedMachineryId === line1.id);
+      const mOps = line1Ops.filter(e => (e.shift || 1) === 1).length;
+      const aOps = line1Ops.filter(e => e.shift === 2).length;
+      const nOps = line1Ops.filter(e => e.shift === 3).length;
+
+      const activeShiftsCount = [mOps >= 5, aOps >= 5, nOps >= 5].filter(Boolean).length;
+
+      if (activeShiftsCount > 0) {
+        const potentialUnits1 = Math.floor(hoursElapsed * activeShiftsCount * 100);
+        const availableRawKg = inv.ironKg + inv.metalKg;
+        const maxUnitsFromRaw = Math.floor(availableRawKg / 0.0495);
+
+        const actualProduced1 = Math.min(potentialUnits1, maxUnitsFromRaw);
+        if (actualProduced1 > 0) {
+          const neededKg = actualProduced1 * 0.0495;
+          if (inv.ironKg >= neededKg) {
+            inv.ironKg -= neededKg;
+          } else {
+            const rem = neededKg - inv.ironKg;
+            inv.ironKg = 0;
+            inv.metalKg = Math.max(0, inv.metalKg - rem);
+          }
+          inv.producedRodsUnits += actualProduced1;
+        }
+      }
+    }
+
+    // Line 2 calculation
+    if (line2 && hasElectricity && hasForklifts && hasCarretilleros) {
+      const line2Ops = hiredEmployees.filter(e => e.assignedMachineryId === line2.id);
+      const mOps = line2Ops.filter(e => (e.shift || 1) === 1).length;
+      const aOps = line2Ops.filter(e => e.shift === 2).length;
+      const nOps = line2Ops.filter(e => e.shift === 3).length;
+
+      const activeShiftsCount = [mOps >= 5, aOps >= 5, nOps >= 5].filter(Boolean).length;
+
+      if (activeShiftsCount > 0) {
+        const ratePerHour = line1 ? 100 : 120;
+        const potentialUnits2 = Math.floor(hoursElapsed * activeShiftsCount * ratePerHour);
+
+        const maxUnitsFromRods = inv.producedRodsUnits;
+        const maxUnitsFromPlastic = Math.floor(inv.plasticKg / 0.0275);
+        const maxUnitsFromEpoxi = Math.floor(inv.epoxiKg / 0.0005);
+
+        const actualProduced2 = Math.min(potentialUnits2, maxUnitsFromRods, maxUnitsFromPlastic, maxUnitsFromEpoxi);
+        if (actualProduced2 > 0) {
+          inv.producedRodsUnits -= actualProduced2;
+          inv.plasticKg = Math.max(0, inv.plasticKg - actualProduced2 * 0.0275);
+          inv.epoxiKg = Math.max(0, inv.epoxiKg - actualProduced2 * 0.0005);
+          inv.producedScrewdriversUnits += actualProduced2;
+        }
+      }
+    }
+
+    inv.lastCalculatedAt = now.toISOString();
+    inv.updatedAt = now.toISOString();
+  }
+
+  return inv;
+}
+
 function getDefaultSeedProperties(): PropertyListing[] {
   return [
     {
@@ -2613,6 +2809,11 @@ function readDb(): DatabaseSchema {
     if (!db.telecomInvoices) db.telecomInvoices = [];
     if (!db.officeOrders) db.officeOrders = [];
     if (!db.purchasedVehicles) db.purchasedVehicles = [];
+    if (!db.rawMaterialAnnouncements || db.rawMaterialAnnouncements.length === 0) {
+      db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+    }
+    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+    if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
 
     checkAndProcessAutomatedPayrollAndTaxes(db);
     checkAndProcessAutomatedElectricity(db);
@@ -6206,6 +6407,291 @@ app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
 
   writeDb(db);
   res.json({ success: true, employee: emp });
+});
+
+// RAW MATERIALS & STUDENT LEVEL API ENDPOINTS
+
+app.put('/api/teacher/students/:studentId/level', (req, res) => {
+  const { studentId } = req.params;
+  const { level } = req.body;
+  const db = readDb();
+
+  const user = db.users.find(u => u.id === studentId);
+  if (!user) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  user.level = Number(level) as 1 | 2 | 3;
+  writeDb(db);
+  res.json({ success: true, level: user.level, user });
+});
+
+app.get('/api/raw-materials/announcements', (req, res) => {
+  const db = readDb();
+  res.json({ success: true, announcements: db.rawMaterialAnnouncements || [] });
+});
+
+app.put('/api/raw-materials/announcements/:id', (req, res) => {
+  const { id } = req.params;
+  const { pricePerUnit, title, description, presentation } = req.body;
+  const db = readDb();
+
+  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+  const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
+  if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
+
+  if (pricePerUnit !== undefined) ann.pricePerUnit = Number(pricePerUnit);
+  if (title) ann.title = title;
+  if (description) ann.description = description;
+  if (presentation) ann.presentation = presentation;
+  ann.updatedAt = new Date().toISOString();
+
+  writeDb(db);
+  res.json({ success: true, announcement: ann });
+});
+
+app.get('/api/raw-materials/orders', (req, res) => {
+  const { studentId } = req.query;
+  const db = readDb();
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+
+  let orders = db.rawMaterialOrders;
+  if (studentId) {
+    orders = orders.filter(o => o.studentId === String(studentId));
+  }
+  orders.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
+  res.json({ success: true, orders });
+});
+
+app.post('/api/raw-materials/orders', (req, res) => {
+  const { studentId, announcementId, quantity, needsTransport, pickupVehicleId } = req.body;
+  const db = readDb();
+
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  const studentLevel = student.level || 1;
+  if (studentLevel !== 1) {
+    return res.status(403).json({
+      error: `Acceso restringido: Tu empresa está clasificada en Nivel ${studentLevel}. Solo las empresas de Nivel 1 pueden comprar materias primas.`
+    });
+  }
+
+  const ann = (db.rawMaterialAnnouncements || []).find(a => a.id === announcementId);
+  if (!ann) return res.status(404).json({ error: 'Materia prima no encontrada' });
+
+  const qty = Math.max(1, Number(quantity) || 1);
+  const requestedPallets = ann.isPallet ? qty : 0;
+
+  const floorPlans = (db.naveFloorPlans || []).filter(f => f.studentId === studentId);
+  let totalWarehouseM2 = floorPlans.reduce((sum, f) => sum + (f.storageZoneM2 || 0), 0);
+  if (totalWarehouseM2 === 0) {
+    const acquisitions = (db.acquisitions || []).filter(a => a.studentId === studentId && a.operation === 'compra');
+    totalWarehouseM2 = acquisitions.reduce((sum, a) => sum + Math.round((a.surfaceM2 || 0) * 0.25), 0) || 30;
+  }
+
+  const maxPalletsAllowed = Math.floor((totalWarehouseM2 / 30) * 25);
+
+  const existingOrders = (db.rawMaterialOrders || []).filter(o => o.studentId === studentId && ['pendiente', 'aprobado', 'entregado'].includes(o.status));
+  const currentPallets = existingOrders.reduce((sum, o) => {
+    const oAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === o.announcementId);
+    return sum + (oAnn?.isPallet ? o.quantity : 0);
+  }, 0);
+
+  if (requestedPallets > 0 && (currentPallets + requestedPallets) > maxPalletsAllowed) {
+    return res.status(400).json({
+      error: `Exceso de capacidad de almacenamiento: Tienes ${totalWarehouseM2} m² de almacén de materias primas (límite: ${maxPalletsAllowed} pallets). Tienes actualmente ${currentPallets} pallets y no puedes superar los ${maxPalletsAllowed} pallets en total.`
+    });
+  }
+
+  if (!needsTransport) {
+    const ownedTruck = (db.purchasedVehicles || []).find(v => v.studentId === studentId && v.vehicleType === 'camion_trailer');
+    const hiredTruckDriver = (db.hiredEmployees || []).find(e => e.studentId === studentId && e.role === 'camionero');
+
+    if (!ownedTruck || !hiredTruckDriver) {
+      return res.status(400).json({
+        error: 'Para recoger la materia prima en la sede del vendedor sin transporte contratado, debes poseer un Camión Tráiler y tener contratado a un camionero.'
+      });
+    }
+  }
+
+  const basePrice = Math.round((ann.pricePerUnit * qty) * 100) / 100;
+  const ivaAmount = Math.round((basePrice * 0.21) * 100) / 100;
+
+  const totalKg = ann.unitWeightKg * qty;
+  let transportCost = 0;
+  if (needsTransport) {
+    transportCost = Math.round((60 + totalKg * 0.08) * 100) / 100;
+  }
+
+  const totalAmount = Math.round((basePrice + ivaAmount + transportCost) * 100) / 100;
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+
+  const now = new Date();
+  const order: RawMaterialOrder = {
+    id: generateId('rmord'),
+    studentId,
+    studentName: student.name,
+    announcementId: ann.id,
+    materialType: ann.materialType,
+    materialTitle: ann.title,
+    quantity: qty,
+    unitWeightKg: ann.unitWeightKg,
+    totalKg,
+    basePrice,
+    ivaAmount,
+    transportCost,
+    totalAmount,
+    needsTransport: !!needsTransport,
+    deliveryAddress: 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Sede Vendedor)',
+    pickupVehicleId: pickupVehicleId || undefined,
+    status: 'pendiente',
+    requestedAt: now.toISOString()
+  };
+
+  db.rawMaterialOrders.unshift(order);
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'SOLICITUD_MATERIA_PRIMA',
+    details: `El alumno ${student.name} ha solicitado ${qty} u. de "${ann.title}" por un total de ${totalAmount.toFixed(2)} € (Pendiente de aprobación).`,
+    timestamp: now.toISOString(),
+    studentId: student.id,
+    studentName: student.name
+  });
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    message: `Solicitud de compra realizada con éxito. Pendiente de aprobación por el Profesor.`
+  });
+});
+
+app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  if (order.status !== 'pendiente') {
+    return res.status(400).json({ error: `La solicitud ya está en estado "${order.status}".` });
+  }
+
+  const student = db.users.find(u => u.id === order.studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  if (student.balance < order.totalAmount) {
+    return res.status(400).json({
+      error: `El alumno no tiene saldo suficiente (${student.balance.toFixed(2)} €) para cubrir el coste de ${order.totalAmount.toFixed(2)} €.`
+    });
+  }
+
+  student.balance = Math.round((student.balance - order.totalAmount) * 100) / 100;
+
+  const now = new Date();
+  order.status = 'aprobado';
+  order.approvedAt = now.toISOString();
+  order.estimatedDeliveryAt = new Date(now.getTime() + 2 * 60 * 1000).toISOString();
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: student.id,
+    senderName: student.name,
+    senderAccount: student.accountNumber,
+    receiverId: 'proveedor-materia-prima',
+    receiverName: 'Suministros Industriales S.A.',
+    receiverAccount: 'ES990001000988776655',
+    amount: order.totalAmount,
+    concept: `Compra de Materia Prima (${order.materialTitle} x${order.quantity})`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept).catch(e => console.error(e));
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'APROBAR_MATERIA_PRIMA',
+    details: `El Profesor ha aprobado el pedido de materia prima "${order.materialTitle}" para ${student.name} por ${order.totalAmount.toFixed(2)} €.`,
+    timestamp: now.toISOString(),
+    studentId: student.id,
+    studentName: student.name
+  });
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    message: `Solicitud aprobada y pago de ${order.totalAmount.toFixed(2)} € descontado.`
+  });
+});
+
+app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  order.status = 'rechazado';
+  writeDb(db);
+
+  res.json({ success: true, order, message: 'Solicitud de materia prima rechazada.' });
+});
+
+app.post('/api/raw-materials/orders/:id/deliver', (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  const now = new Date();
+  order.status = 'entregado';
+  order.deliveredAt = now.toISOString();
+
+  if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+  let inv = db.rawMaterialInventories.find(i => i.studentId === order.studentId);
+  if (!inv) {
+    inv = {
+      studentId: order.studentId,
+      ironKg: 0,
+      metalKg: 0,
+      plasticKg: 0,
+      epoxiKg: 0,
+      producedRodsUnits: 0,
+      producedScrewdriversUnits: 0,
+      lastCalculatedAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    db.rawMaterialInventories.push(inv);
+  }
+
+  if (order.materialType === 'hierro') inv.ironKg += order.totalKg;
+  if (order.materialType === 'metal') inv.metalKg += order.totalKg;
+  if (order.materialType === 'plastico') inv.plasticKg += order.totalKg;
+  if (order.materialType === 'epoxi') inv.epoxiKg += order.totalKg;
+  inv.updatedAt = now.toISOString();
+
+  writeDb(db);
+
+  res.json({ success: true, order, inventory: inv, message: 'Materia prima entregada y registrada en almacén.' });
+});
+
+app.get('/api/raw-materials/inventory/:studentId', (req, res) => {
+  const { studentId } = req.params;
+  const db = readDb();
+
+  const inv = checkAndCalculateProduction(db, studentId);
+  writeDb(db);
+
+  res.json({ success: true, inventory: inv });
 });
 
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------

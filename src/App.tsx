@@ -16,11 +16,13 @@ import JobForumPortal from './components/JobForumPortal.js';
 import TelecomPortal from './components/TelecomPortal.js';
 import OfficeStorePortal from './components/OfficeStorePortal.js';
 import VehicleDealershipPortal from './components/VehicleDealershipPortal.js';
+import RawMaterialsPortal from './components/RawMaterialsPortal.js';
+import { ArrowLeft, Landmark } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles'>('hub');
+  const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials'>('hub');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   useEffect(() => {
@@ -203,6 +205,58 @@ export default function App() {
         onBackToHub={() => setActiveModule('hub')}
         onUserBalanceUpdated={handleUserBalanceUpdated}
       />
+    );
+  }
+
+  if (activeModule === 'raw_materials') {
+    return (
+      <div className="min-h-screen bg-slate-950 font-sans text-slate-100 flex flex-col">
+        {/* Navigation Topbar */}
+        <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 px-4 py-3 shadow-md">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <button
+              onClick={() => setActiveModule('hub')}
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors border border-slate-700"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Volver al Hub Principal</span>
+            </button>
+
+            <div className="flex items-center gap-4">
+              <div className="text-right hidden sm:block">
+                <div className="text-xs text-slate-400 font-medium">{currentUser.name}</div>
+                <div className="text-xs font-bold text-amber-400 font-mono">
+                  {currentUser.balance.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveModule('bank')}
+                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-xl font-bold text-xs border border-amber-500/30 transition-colors flex items-center gap-1.5"
+              >
+                <Landmark className="w-3.5 h-3.5" />
+                <span>Banca</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <RawMaterialsPortal
+            currentUser={currentUser}
+            onRefreshUser={() => {
+              fetch('/api/users')
+                .then(r => r.json())
+                .then(d => {
+                  const u = d.users?.find((x: User) => x.id === currentUser.id);
+                  if (u) {
+                    setCurrentUser(u);
+                    localStorage.setItem('bes_sim_user', JSON.stringify(u));
+                  }
+                });
+            }}
+          />
+        </main>
+      </div>
     );
   }
 

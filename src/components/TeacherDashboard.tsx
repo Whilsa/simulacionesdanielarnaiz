@@ -9,9 +9,9 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench
+  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle
 } from 'lucide-react';
-import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition } from '../types.js';
+import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, RawMaterialAnnouncement, RawMaterialOrder } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
 import Footer from './Footer.js';
@@ -24,11 +24,17 @@ interface TeacherDashboardProps {
 }
 
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials'>('students');
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Raw Materials Teacher Management State
+  const [rmAnnouncements, setRmAnnouncements] = useState<RawMaterialAnnouncement[]>([]);
+  const [rmOrders, setRmOrders] = useState<RawMaterialOrder[]>([]);
+  const [editingAnnId, setEditingAnnId] = useState<string | null>(null);
+  const [editPriceInput, setEditPriceInput] = useState<string>('');
   
   // Create user form state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -142,11 +148,13 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
   const fetchData = async () => {
     try {
-      const [usersRes, transfersRes, logsRes, supabaseRes] = await Promise.all([
+      const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes] = await Promise.all([
         fetch('/users?role=teacher'),
         fetch('/transfers?role=teacher'),
         fetch('/logs'),
-        fetch('/api/supabase-status').catch(() => null)
+        fetch('/api/supabase-status').catch(() => null),
+        fetch('/api/raw-materials/announcements').catch(() => null),
+        fetch('/api/raw-materials/orders').catch(() => null)
       ]);
 
       let usersList: User[] = [];
@@ -171,6 +179,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         if (sbData.dbUrlMasked && !supabaseUrlInput) {
           setSupabaseUrlInput(sbData.dbUrlMasked);
         }
+      }
+      if (annRes && annRes.ok) {
+        const annData = await annRes.json();
+        if (annData.announcements) setRmAnnouncements(annData.announcements);
+      }
+      if (ordRes && ordRes.ok) {
+        const ordData = await ordRes.json();
+        if (ordData.orders) setRmOrders(ordData.orders);
       }
 
       setUsers(usersList);
@@ -411,6 +427,69 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
   };
 
+  const handleUpdateStudentLevel = async (studentId: string, level: number) => {
+    try {
+      const res = await fetch(`/api/teacher/students/${studentId}/level`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level })
+      });
+      if (res.ok) {
+        fetchData();
+      }
+    } catch (e) {
+      console.error('Error updating student level:', e);
+    }
+  };
+
+  const handleSaveAnnouncementPrice = async (annId: string) => {
+    const p = parseFloat(editPriceInput);
+    if (isNaN(p) || p < 0) return;
+    try {
+      const res = await fetch(`/api/teacher/raw-materials/announcements/${annId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pricePerUnit: p })
+      });
+      if (res.ok) {
+        setEditingAnnId(null);
+        setEditPriceInput('');
+        fetchData();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleApproveOrder = async (orderId: string) => {
+    try {
+      const res = await fetch(`/api/teacher/raw-materials/orders/${orderId}/approve`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        fetchData();
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Error al aprobar solicitud');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleRejectOrder = async (orderId: string) => {
+    try {
+      const res = await fetch(`/api/teacher/raw-materials/orders/${orderId}/reject`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        fetchData();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleDeleteUser = async () => {
     if (!deleteTarget) return;
     setDeleteError('');
@@ -647,6 +726,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             <span>Activos, Deudas y Pasivos</span>
           </button>
           <button 
+            onClick={() => setActiveTab('raw_materials')}
+            className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
+              activeTab === 'raw_materials' 
+                ? 'border-amber-600 text-amber-600 bg-amber-50/20' 
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>Materias Primas ({rmOrders.filter(o => o.status === 'pending').length})</span>
+          </button>
+          <button 
             onClick={() => setActiveTab('transfers')}
             className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
               activeTab === 'transfers' 
@@ -736,6 +826,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       <thead>
                         <tr className="border-b border-slate-100 text-xs font-bold text-slate-400 uppercase tracking-wider">
                           <th className="py-4 px-2">Alumno</th>
+                          <th className="py-4 px-2">Clasificación / Nivel</th>
                           <th className="py-4 px-2">Detalles de Acceso</th>
                           <th className="py-4 px-2">Número de Cuenta (IBAN)</th>
                           <th className="py-4 px-2 text-right">Saldo Actual</th>
@@ -750,6 +841,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                                 <p className="font-bold text-slate-950 font-display">{student.name}</p>
                                 <p className="text-xs text-slate-400">ID: {student.id}</p>
                               </div>
+                            </td>
+                            <td className="py-4 px-2">
+                              <select
+                                value={student.level || 1}
+                                onChange={(e) => handleUpdateStudentLevel(student.id, Number(e.target.value))}
+                                className="bg-slate-100 hover:bg-white text-slate-900 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                              >
+                                <option value={1}>Nivel 1 (Materias Primas)</option>
+                                <option value={2}>Nivel 2</option>
+                                <option value={3}>Nivel 3</option>
+                              </select>
                             </td>
                             <td className="py-4 px-2">
                               <div className="space-y-1">
@@ -827,6 +929,209 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 exit={{ opacity: 0, y: -10 }}
               >
                 <TeacherAssetsAndDebtsManagement students={users.filter(u => u.role === 'student')} />
+              </motion.div>
+            )}
+
+            {/* RAW MATERIALS MANAGEMENT TAB */}
+            {activeTab === 'raw_materials' && (
+              <motion.div
+                key="raw-materials-panel"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-8"
+              >
+                {/* Section A: Catalog & Pricing */}
+                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+                        <Package className="w-5 h-5 text-amber-600" />
+                        <span>Publicación de Anuncios y Precios de Materias Primas</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        El profesor puede editar los precios unitarios de cada materia prima disponible para la compra por alumnos de Nivel 1.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {rmAnnouncements.map((ann) => (
+                      <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h4 className="font-bold text-slate-900 text-sm">{ann.materialName}</h4>
+                            <p className="text-xs text-slate-500">{ann.presentation}</p>
+                          </div>
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                            {ann.unit}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-slate-600 leading-relaxed">{ann.description}</p>
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                          <div>
+                            <span className="text-[11px] text-slate-400 font-semibold block">Precio por Unidad:</span>
+                            {editingAnnId === ann.id ? (
+                              <div className="flex items-center gap-2 mt-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={editPriceInput}
+                                  onChange={(e) => setEditPriceInput(e.target.value)}
+                                  className="w-24 px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                />
+                                <span className="text-xs font-bold text-slate-600">€</span>
+                              </div>
+                            ) : (
+                              <span className="text-base font-bold font-mono text-emerald-700">
+                                {ann.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              </span>
+                            )}
+                          </div>
+
+                          <div>
+                            {editingAnnId === ann.id ? (
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleSaveAnnouncementPrice(ann.id)}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  onClick={() => setEditingAnnId(null)}
+                                  className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setEditingAnnId(ann.id);
+                                  setEditPriceInput(ann.pricePerUnit.toString());
+                                }}
+                                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                <span>Editar Precio</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Section B: Purchase Orders Approval */}
+                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <span>Solicitudes de Compra de Alumnos (Nivel 1)</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Al aprobar una solicitud, se descontará automáticamente el importe del saldo bancario del alumno y la materia prima pasará a su inventario.
+                      </p>
+                    </div>
+                    <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded-full border border-amber-200">
+                      {rmOrders.filter(o => o.status === 'pending').length} Pendientes
+                    </span>
+                  </div>
+
+                  {rmOrders.length === 0 ? (
+                    <div className="py-8 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+                      <Package className="w-10 h-10 mx-auto mb-2 opacity-30 text-slate-500" />
+                      <p className="text-sm font-semibold text-slate-600">No hay solicitudes de compra registradas</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto bg-white rounded-xl border border-slate-200">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-100 uppercase tracking-wider">
+                            <th className="py-3 px-3">Alumno</th>
+                            <th className="py-3 px-3">Materia Prima</th>
+                            <th className="py-3 px-3 text-center">Cantidad</th>
+                            <th className="py-3 px-3 text-right">Precio Total</th>
+                            <th className="py-3 px-3 text-center">Estado</th>
+                            <th className="py-3 px-3 text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {rmOrders.map((ord) => {
+                            const student = users.find(u => u.id === ord.studentId);
+                            const ann = rmAnnouncements.find(a => a.id === ord.announcementId);
+                            return (
+                              <tr key={ord.id} className="hover:bg-slate-50">
+                                <td className="py-3 px-3">
+                                  <div className="font-bold text-slate-900">{ord.studentName}</div>
+                                  <div className="text-[11px] text-slate-400">
+                                    Nivel: {student?.level || 1} • {new Date(ord.createdAt).toLocaleString('es-ES')}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <div className="font-semibold text-slate-800">{ord.materialName}</div>
+                                  <div className="text-[11px] text-slate-500">{ann?.presentation || ''}</div>
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold font-mono text-slate-800">
+                                  {ord.quantity} {ord.unit}
+                                </td>
+                                <td className="py-3 px-3 text-right font-bold font-mono text-emerald-700">
+                                  {ord.totalPrice.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  {ord.status === 'pending' && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                      Pendiente
+                                    </span>
+                                  )}
+                                  {ord.status === 'approved' && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      Aprobada
+                                    </span>
+                                  )}
+                                  {ord.status === 'rejected' && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                      Rechazada
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  {ord.status === 'pending' ? (
+                                    <div className="flex justify-center gap-1.5">
+                                      <button
+                                        onClick={() => handleApproveOrder(ord.id)}
+                                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                                        title="Aprobar y cobrar"
+                                      >
+                                        <Check className="w-3.5 h-3.5" />
+                                        <span>Aprobar</span>
+                                      </button>
+                                      <button
+                                        onClick={() => handleRejectOrder(ord.id)}
+                                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                                        title="Rechazar solicitud"
+                                      >
+                                        <XCircle className="w-3.5 h-3.5" />
+                                        <span>Rechazar</span>
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 text-[11px]">Procesada</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </motion.div>
             )}
 

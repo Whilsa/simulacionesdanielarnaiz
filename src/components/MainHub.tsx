@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck, Package
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
@@ -15,12 +15,12 @@ import { formatNumber } from '../lib/formatters.js';
 
 interface MainHubProps {
   currentUser: User;
-  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles') => void;
+  onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials') => void;
   onLogout: () => void;
   availablePropertiesCount?: number;
 }
 
-type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store' | 'vehicles';
+type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials';
 
 export default function MainHub({ currentUser, onSelectModule, onLogout, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
@@ -65,7 +65,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
     }
   }, [currentUser.id, isTeacher]);
 
-  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity', 'telecom', 'office_store', 'vehicles'];
+  const defaultOrder: ModuleType[] = ['bank', 'company', 'real_estate', 'machinery', 'jobs', 'electricity', 'telecom', 'office_store', 'vehicles', 'raw_materials'];
 
   const [cardOrder, setCardOrder] = useState<ModuleType[]>(() => {
     try {
@@ -77,6 +77,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           if (!parsed.includes('telecom')) parsed.push('telecom');
           if (!parsed.includes('office_store')) parsed.push('office_store');
           if (!parsed.includes('vehicles')) parsed.push('vehicles');
+          if (!parsed.includes('raw_materials')) parsed.push('raw_materials');
           return parsed;
         }
       }
@@ -267,6 +268,21 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, availab
           description: 'Venta de vehículos corporativos e industriales: camiones con tráiler para logística, carretillas elevadoras contrapesadas para almacenes y coches de empresa.',
           statLabel: 'Concesionario',
           statValue: '3 Categorías'
+        };
+      case 'raw_materials':
+        return {
+          id: 'raw_materials' as ModuleType,
+          title: 'Mercado de Materias Primas',
+          badge: 'Suministros',
+          badgeStyle: 'bg-emerald-50 text-emerald-900 border-emerald-200/80',
+          hoverBorder: 'hover:border-emerald-500',
+          hoverBg: 'group-hover:bg-emerald-600',
+          hoverText: 'group-hover:text-emerald-600',
+          iconBg: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+          Icon: Package,
+          description: 'Adquisición de fragmentos de hierro y metal, pellets de plástico y pegamento epoxi para las líneas de fabricación. Exclusivo para empresas de Nivel 1.',
+          statLabel: 'Suministro Industrial',
+          statValue: currentUser.level === 1 ? 'Nivel 1 (Habilitado)' : `Nivel ${currentUser.level || 1} (Solo Lectura)`
         };
     }
   };

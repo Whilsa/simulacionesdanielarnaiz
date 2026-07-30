@@ -13,6 +13,7 @@ export interface User {
   balance: number;
   initialBalance?: number;
   nifCif?: string;
+  level?: 1 | 2 | 3;
 }
 
 export interface Transfer {
@@ -265,6 +266,56 @@ export interface BankLoan {
   schedule: AmortizationRow[];
 }
 
+export type RawMaterialType = 'hierro' | 'metal' | 'plastico' | 'epoxi';
+
+export interface RawMaterialAnnouncement {
+  id: string;
+  materialType: RawMaterialType;
+  title: string;
+  presentation: string;
+  unitWeightKg: number;
+  isPallet: boolean;
+  pricePerUnit: number;
+  description: string;
+  updatedAt: string;
+}
+
+export interface RawMaterialOrder {
+  id: string;
+  studentId: string;
+  studentName: string;
+  announcementId: string;
+  materialType: RawMaterialType;
+  materialTitle: string;
+  quantity: number;
+  unitWeightKg: number;
+  totalKg: number;
+  basePrice: number;
+  ivaAmount: number;
+  transportCost: number;
+  totalAmount: number;
+  needsTransport: boolean;
+  deliveryAddress: string;
+  pickupVehicleId?: string;
+  status: 'pendiente' | 'aprobado' | 'rechazado' | 'entregado';
+  requestedAt: string;
+  approvedAt?: string;
+  estimatedDeliveryAt?: string;
+  deliveredAt?: string;
+}
+
+export interface RawMaterialInventory {
+  studentId: string;
+  ironKg: number;
+  metalKg: number;
+  plasticKg: number;
+  epoxiKg: number;
+  producedRodsUnits: number;
+  producedScrewdriversUnits: number;
+  lastCalculatedAt: string;
+  updatedAt: string;
+}
+
 export interface DatabaseSchema {
   users: User[];
   transfers: Transfer[];
@@ -285,6 +336,9 @@ export interface DatabaseSchema {
   telecomInvoices?: TelecomInvoice[];
   officeOrders?: OfficePurchaseOrder[];
   purchasedVehicles?: PurchasedVehicle[];
+  rawMaterialAnnouncements?: RawMaterialAnnouncement[];
+  rawMaterialOrders?: RawMaterialOrder[];
+  rawMaterialInventories?: RawMaterialInventory[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }

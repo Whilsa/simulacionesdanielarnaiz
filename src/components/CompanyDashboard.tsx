@@ -8,7 +8,7 @@ import { User, PropertyAcquisition, PaymentObligation, BankLoan, MachineryAcquis
 import { 
   Briefcase, Landmark, Building2, ShieldCheck, ArrowLeft, RefreshCw, 
   Euro, Calendar, FileText, CheckCircle2, Clock, AlertTriangle, Layers, CreditCard, Receipt,
-  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid, PhoneCall, ShoppingBag, ShoppingCart, Truck
+  ChevronRight, ExternalLink, X, Info, Calculator, Wrench, Factory, Users, DollarSign, UserCheck, Download, Zap, LayoutGrid, PhoneCall, ShoppingBag, ShoppingCart, Truck, Package, Boxes
 } from 'lucide-react';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
@@ -23,7 +23,7 @@ import { OFFICE_STORE_CATALOG } from '../lib/officeStoreData.js';
 
 interface CompanyDashboardProps {
   currentUser: User;
-  initialTab?: 'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica';
+  initialTab?: 'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica' | 'inventory';
   onBackToHub: () => void;
   onGoToBank?: () => void;
   onUserBalanceUpdated?: (newBalance: number) => void;
@@ -75,11 +75,31 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
   const [payingObligationId, setPayingObligationId] = useState<string | null>(null);
   const [payingTaxId, setPayingTaxId] = useState<string | null>(null);
   const [updatingEmpId, setUpdatingEmpId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'owned' | 'rented' | 'machinery' | 'employees' | 'obligations' | 'loans' | 'energia' | 'telecom' | 'muebles_informatica' | 'inventory'>(initialTab);
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
+
+  // Raw Materials & Inventory State
+  const [inventoryData, setInventoryData] = useState<{
+    rawMaterials: { [key: string]: number };
+    producedGoods: { [key: string]: number };
+    machineryStatuses?: any[];
+  } | null>(null);
+
+  const fetchInventoryData = async () => {
+    try {
+      const res = await fetch(`/api/raw-materials/inventory?studentId=${currentUser.id}`);
+      if (res.ok) {
+        const json = await res.json();
+        setInventoryData(json);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
   
   // Modal for detailed breakdown of debts by operation origin
   const [showDebtDetailsModal, setShowDebtDetailsModal] = useState(false);
+  const [showMachineryInfoModal, setShowMachineryInfoModal] = useState(false);
   const [debtFilterOrigin, setDebtFilterOrigin] = useState<'all' | 'loans' | 'obligations'>('all');
   const [selectedLoanForTable, setSelectedLoanForTable] = useState<BankLoan | null>(null);
   const [selectedPropertyForPayments, setSelectedPropertyForPayments] = useState<PropertyAcquisition | null>(null);
@@ -171,6 +191,7 @@ export default function CompanyDashboard({ currentUser, initialTab = 'owned', on
     fetchCompanyData();
     fetchElectricityData();
     fetchTelecomAndOfficeData();
+    fetchInventoryData();
   }, [currentUser.id]);
 
   const handleSaveFloorPlan = async (plan: Partial<NaveFloorPlan>) => {
@@ -947,6 +968,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               </button>
 
               <button
+                onClick={() => setActiveTab('inventory')}
+                className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'inventory'
+                    ? 'border-emerald-600 text-emerald-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Boxes className="w-4 h-4 text-emerald-600" />
+                <span>Inventario y Producción</span>
+              </button>
+
+              <button
                 onClick={() => setActiveTab('employees')}
                 className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
                   activeTab === 'employees'
@@ -1267,7 +1300,19 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <th className="p-3.5">Capacidad producción</th>
                             <th className="p-3.5">Inversión base</th>
                             <th className="p-3.5">IVA (21%)</th>
-                            <th className="p-3.5">Estado montaje</th>
+                            <th className="p-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <span>Estado maquinaria</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowMachineryInfoModal(true)}
+                                  className="p-1 hover:bg-slate-200 rounded-full text-slate-500 hover:text-amber-700 transition cursor-pointer"
+                                  title="Ver definición de estados de la maquinaria"
+                                >
+                                  <Info className="w-3.5 h-3.5 text-amber-600" />
+                                </button>
+                              </div>
+                            </th>
                             <th className="p-3.5">Modalidad de pago</th>
                             <th className="p-3.5 text-right">Acciones</th>
                           </tr>
@@ -1305,28 +1350,89 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   {formatNumber(ivaVal)} €
                                 </td>
                                 <td className="p-3.5">
-                                  {isPendingEnergy ? (
-                                    <div className="flex flex-col gap-1 items-start">
-                                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
-                                        <Zap className="w-3 h-3 text-rose-600" />
-                                        Montaje pausado (Falta Luz)
-                                      </span>
-                                      <button
-                                        onClick={() => setActiveTab('energia')}
-                                        className="text-[10px] text-amber-700 font-bold hover:underline cursor-pointer"
-                                      >
-                                        Contratar Luz ({mac.requiredPowerKW || 35} kW)
-                                      </button>
-                                    </div>
-                                  ) : isAssembly ? (
-                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
-                                      En montaje (5 días)
-                                    </span>
-                                  ) : (
-                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                      Operativa
-                                    </span>
-                                  )}
+                                  {(() => {
+                                    if (isPendingEnergy) {
+                                      return (
+                                        <div className="flex flex-col gap-1 items-start">
+                                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
+                                            <Zap className="w-3 h-3 text-rose-600" />
+                                            Montaje pausado (Falta Luz)
+                                          </span>
+                                          <button
+                                            onClick={() => setActiveTab('energia')}
+                                            className="text-[10px] text-amber-700 font-bold hover:underline cursor-pointer"
+                                          >
+                                            Contratar Luz ({mac.requiredPowerKW || 35} kW)
+                                          </button>
+                                        </div>
+                                      );
+                                    }
+
+                                    if (isAssembly) {
+                                      return (
+                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                                          En montaje (5 días)
+                                        </span>
+                                      );
+                                    }
+
+                                    // Mounted! Calculate operational requirements
+                                    const numMachinery = (data.machineryAcquisitions || []).length;
+                                    const reqWarehouses = numMachinery === 1 ? 2 : 3;
+
+                                    // Forklifts check
+                                    const ownedForklifts = (data.purchasedVehicles || []).filter(v => v.vehicleType === 'carretilla_elevadora').length;
+                                    const hasForklifts = ownedForklifts >= reqWarehouses;
+
+                                    // Operators check (5 operators per active shift for this machine)
+                                    const assignedOperators = (data.hiredEmployees || []).filter(e => e.assignedMachineryId === mac.id);
+                                    const mOp = assignedOperators.filter(e => (e.shift || 1) === 1).length;
+                                    const aOp = assignedOperators.filter(e => e.shift === 2).length;
+                                    const nOp = assignedOperators.filter(e => e.shift === 3).length;
+                                    const activeShifts = [{ s: 1, c: mOp }, { s: 2, c: aOp }, { s: 3, c: nOp }].filter(item => item.c > 0);
+                                    const hasEnoughOperators = activeShifts.length > 0 && activeShifts.every(item => item.c >= 5);
+
+                                    // Carretilleros check per required warehouse
+                                    const carretilleros = (data.hiredEmployees || []).filter(e => e.role === 'carretillero');
+                                    let missingWh = false;
+                                    for (let wh = 1; wh <= reqWarehouses; wh++) {
+                                      const cCount = carretilleros.filter(e => e.assignedWarehouseIndex === wh).length;
+                                      if (cCount === 0) {
+                                        missingWh = true;
+                                        break;
+                                      }
+                                    }
+                                    const hasCarretilleros = !missingWh;
+
+                                    const missingReasons: string[] = [];
+                                    if (!hasForklifts) missingReasons.push(`Faltan carretillas (${ownedForklifts}/${reqWarehouses})`);
+                                    if (!hasEnoughOperators) missingReasons.push(`Faltan operarios (mín. 5/turno)`);
+                                    if (!hasCarretilleros) missingReasons.push(`Faltan carretilleros (${reqWarehouses} almacenes)`);
+
+                                    if (missingReasons.length === 0) {
+                                      return (
+                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-1">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                                          Operativa - Encendida
+                                        </span>
+                                      );
+                                    }
+
+                                    return (
+                                      <div className="flex flex-col gap-1 items-start">
+                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-slate-200 text-slate-800 border border-slate-300">
+                                          Apagada / Parada
+                                        </span>
+                                        <div className="text-[10px] text-slate-500 space-y-0.5">
+                                          {missingReasons.map((reason, idx) => (
+                                            <p key={idx} className="flex items-center gap-1 text-rose-700 font-medium">
+                                              <span>•</span> {reason}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="p-3.5">
                                   <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
@@ -1360,6 +1466,149 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* TAB INVENTORY: ALMACÉN Y ESTADO DE PRODUCCIÓN */}
+            {activeTab === 'inventory' && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 text-white p-5 rounded-2xl border border-slate-800 shadow-md">
+                  <div>
+                    <h3 className="text-lg font-bold font-display flex items-center gap-2">
+                      <Boxes className="w-5 h-5 text-emerald-400" />
+                      <span>Almacenes de Materia Prima y Productos Terminados</span>
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1">
+                      El inventario de materias primas se consume y los productos terminados se fabrican automáticamente por hora de simulación en función de los turnos de la maquinaria operativa.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => fetchInventoryData()}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Actualizar Stock</span>
+                  </button>
+                </div>
+
+                {/* Section 1: Materia Prima Almacenada */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Package className="w-4 h-4 text-amber-600" />
+                    <span>Materia Prima en Almacén (Inputs de Fabricación)</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                      <p className="text-xs font-semibold text-slate-500">Fragmentos de Hierro</p>
+                      <p className="text-xl font-bold font-mono text-slate-900 mt-1">
+                        {inventoryData?.rawMaterials?.fragmentos_hierro_kg || 0} <span className="text-xs text-slate-500">kg</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Pallets de 1.000 kg</p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                      <p className="text-xs font-semibold text-slate-500">Fragmentos de Metal</p>
+                      <p className="text-xl font-bold font-mono text-slate-900 mt-1">
+                        {inventoryData?.rawMaterials?.fragmentos_metal_kg || 0} <span className="text-xs text-slate-500">kg</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Pellets de 1.000 kg</p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                      <p className="text-xs font-semibold text-slate-500">Pellets de Plástico</p>
+                      <p className="text-xl font-bold font-mono text-slate-900 mt-1">
+                        {inventoryData?.rawMaterials?.pellets_plastico_kg || 0} <span className="text-xs text-slate-500">kg</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Sacos de 25 kg (40/palet)</p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                      <p className="text-xs font-semibold text-slate-500">Pegamento Epoxi</p>
+                      <p className="text-xl font-bold font-mono text-slate-900 mt-1">
+                        {inventoryData?.rawMaterials?.pegamento_epoxi_kg || 0} <span className="text-xs text-slate-500">kg</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Latas de 5 kg</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 2: Productos Fabricados / Output */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Factory className="w-4 h-4 text-emerald-600" />
+                    <span>Productos Fabricados y Listos para Venta (Outputs)</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-emerald-900 uppercase">Varillas de Metal con Punta</p>
+                          <p className="text-2xl font-black font-mono text-emerald-700 mt-1">
+                            {inventoryData?.producedGoods?.varillas_punta || 0} <span className="text-xs font-normal text-emerald-800">unidades</span>
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-1 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          Línea de Hierro/Metal
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-2">
+                        • Producción: 100 unidades/hora por máquina operativa.
+                        <br />
+                        • Consumo: 49,5g de fragmentos de hierro o metal por varilla.
+                      </p>
+                    </div>
+
+                    <div className="bg-indigo-50/50 border border-indigo-200 rounded-xl p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-indigo-900 uppercase">Producto Final Ensamblado (Plástico)</p>
+                          <p className="text-2xl font-black font-mono text-indigo-700 mt-1">
+                            {inventoryData?.producedGoods?.productos_ensamblados || 0} <span className="text-xs font-normal text-indigo-800">unidades</span>
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300">
+                          Línea de Plástico y Ensamblaje
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-2">
+                        • Producción: 120 unidades/hora por máquina operativa.
+                        <br />
+                        • Consumo: 1 varilla con punta + 27,5g de plástico + 0,5g de epoxi.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 3: Estado Actual de las Líneas de Fabricación */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-amber-600" />
+                    <span>Rendimiento y Producción Estimada por Turno</span>
+                  </h4>
+
+                  {data?.machineryAcquisitions && data.machineryAcquisitions.length > 0 ? (
+                    <div className="space-y-3">
+                      {data.machineryAcquisitions.map((mac) => (
+                        <div key={mac.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div>
+                            <p className="font-bold text-slate-900 text-sm">{mac.machineryTitle}</p>
+                            <p className="text-xs text-slate-500">Ubicación: {mac.installationNaveTitle}</p>
+                          </div>
+                          <div className="text-left md:text-right">
+                            <span className="text-xs font-semibold text-slate-500 block">Capacidad nominal:</span>
+                            <span className="text-sm font-mono font-bold text-slate-800">
+                              {mac.productionCapacityUnitsPerHour} unid / hora
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">No tienes ninguna línea de maquinaria adquirida actualmente.</p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2860,6 +3109,80 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           onSave={handleSaveFloorPlan}
           onClose={() => setSelectedNaveForFloorPlan(null)}
         />
+      )}
+
+      {/* MACHINERY STATUS EXPLANATION MODAL */}
+      {showMachineryInfoModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <Info className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Estados de la Maquinaria</h3>
+                  <p className="text-xs text-slate-500">Requisitos para la producción industrial</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMachineryInfoModal(false)}
+                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-600">
+              <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                    En Montaje / Pausado
+                  </span>
+                </div>
+                <p className="text-slate-700 leading-relaxed mt-1">
+                  Tras adquirir la maquinaria, requiere <strong>5 días lectivos de montaje</strong>. Es imprescindible contar con un <strong>contrato eléctrico activo</strong> para que el periodo de montaje transcurra.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-slate-100 rounded-2xl border border-slate-200 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-slate-200 text-slate-800 border border-slate-300">
+                    Apagada / Parada
+                  </span>
+                </div>
+                <p className="text-slate-700 leading-relaxed mt-1">
+                  La maquinaria está montada y dispone de luz, pero <strong>permanece apagada</strong> por no cumplir los requisitos mínimos operacionales:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-slate-600 mt-1">
+                  <li><strong>Operarios:</strong> Exactamente 5 operarios asignados a la máquina por cada turno activo.</li>
+                  <li><strong>Carretillas elevadoras:</strong> Tener en propiedad 1 carretilla elevadora contrapesada por almacén (2 carretillas si hay 1 máquina, 3 carretillas si hay 2 máquinas).</li>
+                  <li><strong>Carretilleros:</strong> 1 carretillero asignado por almacén en cada turno activo para introducir inputs y extraer outputs.</li>
+                </ul>
+              </div>
+
+              <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    Operativa - Encendida
+                  </span>
+                </div>
+                <p className="text-slate-700 leading-relaxed mt-1">
+                  La maquinaria ha completado los 5 días de montaje, dispone de energía eléctrica y cumple <strong>al 100%</strong> con los 5 operarios por turno, el número de carretillas contrapesadas en propiedad y los carretilleros asignados por almacén.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end border-t border-slate-100">
+              <button
+                onClick={() => setShowMachineryInfoModal(false)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
