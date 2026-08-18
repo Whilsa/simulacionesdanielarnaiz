@@ -272,7 +272,6 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                   <option value="mixto">Mezcla de Roles</option>
                   <option value="operario">Operario Industrial</option>
                   <option value="camionero">Camionero / Conductor</option>
-                  <option value="carretillero">Carretillero de Almacén</option>
                 </select>
               </div>
 
@@ -398,7 +397,6 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 <option value="todos">Todos los puestos</option>
                 <option value="operario">Operarios Industriales</option>
                 <option value="camionero">Camioneros / Conductores</option>
-                <option value="carretillero">Carretilleros de Almacén</option>
               </select>
 
               <select

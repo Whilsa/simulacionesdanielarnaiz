@@ -26,7 +26,7 @@ export const TELECOM_PLANS: TelecomPlan[] = [
       'Soporte Técnico Pyme 24/7 (SLA < 6 horas)',
       'Router Wifi 6 de grado empresarial incluido'
     ],
-    imageUrl: 'https://images.unsplash.com/photo-1544197150-b99a580bb7a8?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_fijo_ip_ejecutivo.jpg'
   },
   {
     id: 'tel-empresa-1000',
@@ -48,7 +48,7 @@ export const TELECOM_PLANS: TelecomPlan[] = [
       'Servicio de Ciberseguridad Cloud & Firewall de red',
       'Soporte Técnico Prioritario SLA < 4 horas'
     ],
-    imageUrl: 'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/centralita_telefono_conferencia.jpg'
   },
   {
     id: 'tel-corp-2000',
@@ -70,7 +70,7 @@ export const TELECOM_PLANS: TelecomPlan[] = [
       'Gestor de Cuenta Personalizado y Soporte Crítico SLA < 2 horas 24/7/365',
       'Instalación redundante de backup 4G/5G automático'
     ],
-    imageUrl: 'https://images.unsplash.com/photo-1520869578617-557561d7b114?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_movil_5g.jpg'
   }
 ];
 
@@ -84,7 +84,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 180,
     description: 'Estantería metálica galvanizada de alta resistencia para almacén u oficina. Soporta hasta 350 kg por balda.',
     specs: ['Dimensiones: 200 x 100 x 50 cm', '5 baldas regulables en altura', 'Acero galvanizado anti-corrosión', 'Capacidad total: 1.750 kg'],
-    imageUrl: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/estanteria_industrial_pesada.jpg'
   },
   {
     id: 'est-02',
@@ -158,7 +158,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 340,
     description: 'Silla alta para despacho de dirección en piel sintética suave de gran durabilidad y acolchado de alta densidad.',
     specs: ['Acabado en cuero flor negro acolchado', 'Base de aluminio pulido de 5 radios', 'Pistón de gas Clase 4 de alta resistencia', 'Basculante avanzado con tensión regulable'],
-    imageUrl: 'https://images.unsplash.com/photo-1505797149-43b0069ec26b?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/silla_ejecutiva_cuero.jpg'
   },
   {
     id: 'sil-03',
@@ -180,7 +180,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 580,
     description: 'Ordenador de sobremesa en formato torre compacta, optimizado para tareas de ofimática, navegación y gestión contable.',
     specs: ['Procesador Intel Core i5 de 13ª Gen', '16 GB RAM DDR4 3200MHz', 'Disco duro 512 GB SSD NVMe M.2', 'Windows 11 Pro Licencia Corporativa original'],
-    imageUrl: 'https://images.unsplash.com/photo-1587831990711-23ca6441447b?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/pc_sobremesa.jpg'
   },
   {
     id: 'pc-02',
@@ -190,7 +190,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 1150,
     description: 'Estación de trabajo potente diseñada para cargas de trabajo exigentes, diseño, análisis masivo de datos y multitarea.',
     specs: ['Procesador Intel Core i7 13700K', '32 GB RAM DDR5 ultra-rápida', '1 TB SSD M.2 PCIe 4.0 (7000 MB/s)', 'Tarjeta gráfica Nvidia RTX 3060 12GB'],
-    imageUrl: 'https://images.unsplash.com/photo-1593640408182-31c70c8268f5?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/pc_sobremesa.jpg'
   },
   {
     id: 'pc-03',
@@ -200,7 +200,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 1380,
     description: 'Ordenador todo-en-uno con pantalla de 27 pulgadas 4K IPS, diseño ultra-estilizado para puestos de atención al público u oficinas sin cables.',
     specs: ['Pantalla 27" 4K UHD (3840x2160) IPS', 'Intel Core i7 / 32GB RAM / 1TB SSD', 'Webcam emergente 5MP con micrófono', 'Incluye Kit Teclado y Ratón inalámbrico premium'],
-    imageUrl: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/pc_all_in_one_white.jpg'
   },
 
   // 5. ORDENADORES PORTÁTILES (3 tipos)
@@ -212,7 +212,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 740,
     description: 'Portátil ultraligero con excelente autonomía de batería, ideal para movilidad corporativa y trabajo en ruta.',
     specs: ['Pantalla 14" Full HD Antirreflejos', 'Intel Core i5 / 16GB RAM / 512GB SSD', 'Batería hasta 12 horas de duración', 'Peso: 1.1 kg / Chasis de aluminio'],
-    imageUrl: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/portatil_ejecutivo.jpg'
   },
   {
     id: 'lap-02',
@@ -222,7 +222,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 1090,
     description: 'Portátil de alto rendimiento empresarial con teclado numérico dedicado y pantalla de 15.6 pulgadas de alta precisión.',
     specs: ['Pantalla 15.6" IPS FHD (100% sRGB)', 'Intel Core i7 de 13ª Gen / 32GB RAM', '1 TB SSD M.2 NVMe', 'Lector de huellas dactilares y Chip TPM 2.0'],
-    imageUrl: 'https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/portatil_ejecutivo.jpg'
   },
   {
     id: 'lap-03',
@@ -232,7 +232,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 1450,
     description: 'Portátil workstation diseñado para ingenieros, directivos y profesionales que requieren máxima potencia gráfica y de procesamiento.',
     specs: ['Pantalla 16" QHD+ (2560x1600) 165Hz', 'AMD Ryzen 7 7840HS / 32GB DDR5 / 1TB SSD', 'Nvidia RTX 4060 8GB VRAM', 'Chasis de magnesio resistente militar MIL-STD'],
-    imageUrl: 'https://images.unsplash.com/photo-1525547719571-a2d4ac8945e2?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/portatil_ejecutivo.jpg'
   },
 
   // 6. PERIFÉRICOS (3 tipos)
@@ -244,7 +244,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 65,
     description: 'Conjunto de teclado silencioso con reposamuñecas y ratón ergonómico de alta precisión inalámbrico.',
     specs: ['Conexión Bluetooth y receptor USB 2.4GHz', 'Teclas de acceso rápido multimedia programables', 'Autonomía de batería de hasta 36 meses', 'Diseño silencioso SilentTouch'],
-    imageUrl: 'https://images.unsplash.com/photo-1587829741301-dc798b83add3?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/teclado_mouse.jpg'
   },
   {
     id: 'per-02',
@@ -254,7 +254,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 240,
     description: 'Monitor ergonómico de 27 pulgadas con resolución QHD (2560x1440), altavoces integrados y puerto USB-C con carga 65W.',
     specs: ['Panel IPS 27" QHD (2560 x 1440 px)', 'Conexión USB-C (Power Delivery 65W + vídeo)', 'Soporte pivotante (giratorio, inclinable, regulable)', 'Filtro Eye Care anti-parpadeo y luz azul'],
-    imageUrl: 'https://images.unsplash.com/photo-1547082299-de196ea013d6?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/monitor_profesional.jpg'
   },
   {
     id: 'per-03',
@@ -276,7 +276,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 380,
     description: 'Equipamiento multifunción 4-en-1 (impresora, escáner, fotocopiadora y fax) con impresión automática a doble cara.',
     specs: ['Velocidad: 28 ppm en color y monocromo', 'Conectividad WiFi 5, Ethernet y USB', 'Pantalla táctil a color de 4.3 pulgadas', 'Escáner alimentador automático (ADF) de 50 hojas'],
-    imageUrl: 'https://images.unsplash.com/photo-1612815154858-60aa4c59eaa6?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/impresora_color_hp.jpg'
   },
   {
     id: 'imp-02',
@@ -340,7 +340,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 290,
     description: 'Software contable en la nube adaptado al Plan General Contable (PGC). Generación de Libro Diario, Mayor y Balances.',
     specs: ['Suscripción por 1 año con copias de seguridad automáticas', 'Plan General Contable de Pymes completo integrado', 'Presentación oficial de Cuentas Anuales e Impuestos (IVA/IS)', 'Generación de ficheros para AEAT'],
-    imageUrl: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/software_contabilidad.jpg'
   },
   {
     id: 'soft-cnt-02',
@@ -350,7 +350,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 450,
     description: 'Programa profesional de contabilidad financiera, analítica y gestión de facturación emitida y recibida.',
     specs: ['Licencia corporativa multi-usuario y multi-empresa', 'Conciliación bancaria automática con archivos N43', 'Gestión de amortizaciones de inmovilizado y patrimonio', 'Cuadro de mando e informes de liquidez en tiempo real'],
-    imageUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/software_contabilidad.jpg'
   },
   {
     id: 'soft-cnt-03',
@@ -360,7 +360,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 890,
     description: 'Sistema ERP contable integral con gestión de tesorería, presupuestos, cobros, pagos, cartera de efectos y auditoría.',
     specs: ['Licencia ilimitada de servidor corporativo', 'Módulo de auditoría interna y trazabilidad de asientos', 'Automatización de remesas bancarias SEPA XML', 'Integración API con bancos e instituciones financieras'],
-    imageUrl: 'https://images.unsplash.com/photo-1504868584819-f8e8b4b6d7e3?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/software_contabilidad.jpg'
   },
 
   // 10. TELÉFONOS FIJOS (3 tipos)
@@ -404,7 +404,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 280,
     description: 'Móvil de empresa con conectividad 5G, chasis reforzado, gran autonomía y lector NFC para autenticación.',
     specs: ['Pantalla 6.5" FHD+ 90Hz', 'Procesador Octa-Core 5G / 6GB RAM / 128GB SSD', 'Batería de 5.000 mAh con carga rápida 33W', 'Certificación IP68 de resistencia al agua y polvo'],
-    imageUrl: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_movil_5g.jpg'
   },
   {
     id: 'tel-mov-02',
@@ -414,7 +414,7 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 620,
     description: 'Teléfono inteligente de alta gama para directivos con triple cámara de precisión, pantalla AMOLED y diseño refinado.',
     specs: ['Pantalla AMOLED 6.7" QHD+ 120Hz', 'Procesador Snapdragon 8 Gen 2 / 12GB RAM / 256GB', 'Cámara triple de 50 MP con estabilización óptica', 'Carga inalámbrica y seguridad Knox Enterprise'],
-    imageUrl: 'https://images.unsplash.com/photo-1565849904461-04a58ad377e0?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_redmi_blue.jpg'
   },
   {
     id: 'tel-mov-03',
@@ -424,6 +424,6 @@ export const OFFICE_STORE_CATALOG: OfficeStoreItem[] = [
     price: 980,
     description: 'Teléfono insignia corporativo con encriptación de datos de grado militar, 512GB de memoria y acabado en titanio.',
     specs: ['Pantalla de cristal de zafiro 6.8" AMOLED', 'Procesador de última generación / 16GB RAM / 512GB Storage', 'Cuerpo de Titanio aeroespacial', 'Encriptación de hardware y soporte Dual SIM e-SIM'],
-    imageUrl: 'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?auto=format&fit=crop&w=800&q=80'
+    imageUrl: '/images/products/telefono_razr_ultra.jpg'
   }
 ];

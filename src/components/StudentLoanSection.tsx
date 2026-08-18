@@ -202,7 +202,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
             <Landmark className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="font-display font-bold text-slate-900 text-lg">Financiación Hipotecaria</h3>
+            <h3 className="font-display font-bold text-slate-900 text-lg">Financiación hipotecaria</h3>
             <p className="text-xs text-slate-500">Préstamos a tipo francés (Euribor 3,5% + 1%) y comisión de apertura del 1‰</p>
           </div>
         </div>
@@ -212,7 +212,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
           className="bg-amber-800 hover:bg-amber-900 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center space-x-2 shadow-sm cursor-pointer"
         >
           <Calculator className="w-4 h-4" />
-          <span>Solicitar Nuevo Préstamo</span>
+          <span>Solicitar nuevo préstamo</span>
         </button>
       </div>
 
@@ -316,8 +316,8 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     <p className="text-xs text-slate-500 mt-1">
                       Garantía: <span className="font-semibold text-slate-700">
                         {loan.collateral.type === 'property' 
-                          ? (loan.collateral.propertyTitle || 'Inmueble Comercial') 
-                          : `Vivienda Privada (${loan.collateral.surfaceM2} m²)`}
+                          ? (loan.collateral.propertyTitle || 'Inmueble comercial') 
+                          : `Vivienda privada (${loan.collateral.surfaceM2} m²)`}
                       </span> • Tasación: <span className="font-mono">{formatNumber(loan.collateral.appraisalValue)} €</span>
                     </p>
                   </div>
@@ -328,14 +328,14 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                       className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1.5 cursor-pointer"
                     >
                       <FileText className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Tabla de Amortización</span>
+                      <span>Tabla de amortización</span>
                     </button>
                     <button
                       onClick={() => setActiveDocumentModal({ type: 'loan_statement', loan })}
                       className="bg-amber-900 hover:bg-amber-800 text-white px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
                     >
                       <Receipt className="w-3.5 h-3.5 text-amber-300" />
-                      <span>Ver Documento Bancario</span>
+                      <span>Ver documento bancario</span>
                     </button>
                   </div>
                 </div>
@@ -433,7 +433,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
             
             <div className="bg-gradient-to-r from-amber-800 to-amber-900 text-white p-6 flex justify-between items-start">
               <div>
-                <h3 className="text-lg font-bold font-display">Solicitud de Préstamo Hipotecario</h3>
+                <h3 className="text-lg font-bold font-display">Solicitud de préstamo hipotecario</h3>
                 <p className="text-xs text-amber-200">Condiciones de mercado fijadas por el banco simulado</p>
               </div>
               <button onClick={() => setShowRequestModal(false)} className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white transition">
@@ -514,7 +514,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   >
                     <Shield className="w-4 h-4 shrink-0 text-amber-700" />
                     <div>
-                      <p className="text-xs">Casa / Vivienda Privada</p>
+                      <p className="text-xs">Casa / Vivienda privada</p>
                       <p className="text-[10px] text-slate-500 font-normal">Vivienda habitual particular</p>
                     </div>
                   </button>
@@ -540,7 +540,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     </div>
                   ) : (
                     <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-[11px] text-amber-800">
-                      ⚠️ No tienes inmuebles comprados aún en el Portal Inmobiliario. Si utilizas esta opción, introduce la tasación o selecciona Vivienda Privada.
+                      ⚠️ No tienes inmuebles comprados aún en el Portal Inmobiliario. Si utilizas esta opción, introduce la tasación o selecciona Vivienda privada.
                     </div>
                   )
                 ) : (

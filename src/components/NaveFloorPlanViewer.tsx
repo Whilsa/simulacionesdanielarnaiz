@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PropertyAcquisition, MachineryAcquisition, NaveFloorPlan } from '../types';
-import { Layers, CheckCircle2, AlertTriangle, Save, Maximize2, LayoutGrid, Info, Box } from 'lucide-react';
+import { Layers, CheckCircle2, AlertTriangle, Save, LayoutGrid, Box } from 'lucide-react';
 
 interface Props {
   acquisition: PropertyAcquisition;
@@ -19,7 +19,11 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
 }) => {
   const naveSurface = acquisition.surfaceM2 || 1000;
 
-  // Calculate Machinery Surface requirement
+  const pType = (acquisition.propertyType || acquisition.type || '').toLowerCase();
+  const pTitle = (acquisition.propertyTitle || acquisition.title || '').toLowerCase();
+  const isLogisticsWarehouse = pType === 'almacen' || pType === 'almacen_logistico' || pType === 'warehouse' || pTitle.includes('almacén') || pTitle.includes('almacen') || pTitle.includes('logístico') || pTitle.includes('logistico');
+
+  // Calculate Machinery Surface requirement for Naves Industriales
   // 240 m2 per metal machine, 180 m2 per plastic machine
   const metalMachinesCount = studentMachinery.filter(m => 
     m.category === 'metal_hierro' || m.title?.toLowerCase().includes('metal') || m.lineTitle?.toLowerCase().includes('metal')
@@ -29,48 +33,19 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
     m.category === 'plastico_montaje' || m.category === 'plastico_ensamblaje' || m.title?.toLowerCase().includes('plástic') || m.lineTitle?.toLowerCase().includes('plástic')
   ).length;
 
-  const requiredMachineryM2 = (metalMachinesCount * 240) + (plasticMachinesCount * 180);
-
-  // Calculate Warehouse requirement
-  // If 1 machine type -> 2 almacenes (Materias primas, Productos terminados) min 30 m2 each
-  // If BOTH machine types -> 3 almacenes (Materias primas, Semiterminados varillas/puntas, Productos terminados destornilladores) min 30 m2 each
-  // If 2 equal machines -> 2 almacenes min 30 m2 each
-  let requiredWarehouseCount = 2;
-  let warehouseDescriptions: string[] = [];
-
-  if (metalMachinesCount > 0 && plasticMachinesCount > 0) {
-    requiredWarehouseCount = 3;
-    warehouseDescriptions = [
-      'Almacén 1: Materias Primas (Mín. 30 m²)',
-      'Almacén 2: Productos Semiterminados - Varillas y Puntas (Mín. 30 m²)',
-      'Almacén 3: Productos Terminados - Destornilladores y Ensamblaje Final (Mín. 30 m²)'
-    ];
-  } else if (metalMachinesCount > 0 || plasticMachinesCount > 0) {
-    requiredWarehouseCount = 2;
-    warehouseDescriptions = [
-      'Almacén 1: Materias Primas (Mín. 30 m²)',
-      'Almacén 2: Productos Terminados (Mín. 30 m²)'
-    ];
-  } else {
-    // Default if no machinery purchased yet
-    requiredWarehouseCount = 2;
-    warehouseDescriptions = [
-      'Almacén 1: Materias Primas (Mín. 30 m²)',
-      'Almacén 2: Productos Terminados (Mín. 30 m²)'
-    ];
-  }
-
-  const requiredStorageM2 = requiredWarehouseCount * 30; // 30 m2 per warehouse
-  const defaultAdminM2 = Math.max(40, Math.round(naveSurface * 0.10));
+  const requiredMachineryM2 = isLogisticsWarehouse ? 0 : ((metalMachinesCount * 240) + (plasticMachinesCount * 180));
+  const requiredStorageM2 = 30; // Minimum 30 m2 for general storage
 
   const [machineryM2, setMachineryM2] = useState<number>(
-    existingFloorPlan?.machineryZoneM2 || Math.max(requiredMachineryM2, 240)
+    isLogisticsWarehouse ? 0 : (existingFloorPlan?.machineryZoneM2 ?? (requiredMachineryM2 > 0 ? requiredMachineryM2 : 0))
   );
+
   const [storageM2, setStorageM2] = useState<number>(
-    existingFloorPlan?.storageZoneM2 || Math.max(requiredStorageM2, 60)
+    existingFloorPlan?.storageZoneM2 ?? existingFloorPlan?.rawMaterialsStorageM2 ?? Math.max(30, naveSurface - (isLogisticsWarehouse ? 0 : (requiredMachineryM2 > 0 ? requiredMachineryM2 : 0)) - (existingFloorPlan?.adminZoneM2 || 0))
   );
+
   const [adminM2, setAdminM2] = useState<number>(
-    existingFloorPlan?.adminZoneM2 || defaultAdminM2
+    existingFloorPlan?.adminZoneM2 ?? 0
   );
 
   const [saving, setSaving] = useState(false);
@@ -78,23 +53,37 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
 
   // Sync state when existingFloorPlan or requirements change
   useEffect(() => {
-    if (existingFloorPlan) {
-      setMachineryM2(existingFloorPlan.machineryZoneM2 || Math.max(requiredMachineryM2, 240));
-      setStorageM2(existingFloorPlan.storageZoneM2 || Math.max(requiredStorageM2, 60));
-      setAdminM2(existingFloorPlan.adminZoneM2 || defaultAdminM2);
+    if (isLogisticsWarehouse) {
+      setMachineryM2(0);
+      if (existingFloorPlan) {
+        const storedM2 = existingFloorPlan.storageZoneM2 ?? existingFloorPlan.rawMaterialsStorageM2 ?? Math.max(30, naveSurface - (existingFloorPlan.adminZoneM2 || 0));
+        setStorageM2(storedM2);
+        setAdminM2(existingFloorPlan.adminZoneM2 ?? 0);
+      } else {
+        setStorageM2(naveSurface);
+        setAdminM2(0);
+      }
     } else {
-      setMachineryM2(Math.max(requiredMachineryM2, 240));
-      setStorageM2(Math.max(requiredStorageM2, 60));
-      setAdminM2(defaultAdminM2);
+      if (existingFloorPlan) {
+        setMachineryM2(existingFloorPlan.machineryZoneM2 ?? (requiredMachineryM2 > 0 ? requiredMachineryM2 : 0));
+        const storedM2 = existingFloorPlan.storageZoneM2 ?? existingFloorPlan.rawMaterialsStorageM2 ?? Math.max(30, naveSurface - (requiredMachineryM2 > 0 ? requiredMachineryM2 : 0) - (existingFloorPlan.adminZoneM2 || 0));
+        setStorageM2(storedM2);
+        setAdminM2(existingFloorPlan.adminZoneM2 ?? 0);
+      } else {
+        const reqMach = requiredMachineryM2 > 0 ? requiredMachineryM2 : 0;
+        setMachineryM2(reqMach);
+        setStorageM2(Math.max(30, naveSurface - reqMach));
+        setAdminM2(0);
+      }
     }
-  }, [existingFloorPlan?.id, existingFloorPlan?.updatedAt, requiredMachineryM2, requiredStorageM2, defaultAdminM2, acquisition.id]);
+  }, [existingFloorPlan?.id, existingFloorPlan?.updatedAt, requiredMachineryM2, acquisition.id, naveSurface, isLogisticsWarehouse]);
 
   // Keep within total surface
-  const usedM2 = machineryM2 + storageM2 + adminM2;
+  const usedM2 = (isLogisticsWarehouse ? 0 : machineryM2) + storageM2 + adminM2;
   const freeM2 = Math.max(0, naveSurface - usedM2);
 
   // Validation checks
-  const isMachineryValid = machineryM2 >= requiredMachineryM2;
+  const isMachineryValid = isLogisticsWarehouse || machineryM2 >= requiredMachineryM2;
   const isStorageValid = storageM2 >= requiredStorageM2;
   const isTotalValid = usedM2 <= naveSurface;
 
@@ -106,11 +95,14 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
         propertyId: acquisition.propertyId || acquisition.id,
         acquisitionId: acquisition.id,
         propertyTitle: acquisition.propertyTitle,
-        machineryZoneM2: machineryM2,
+        machineryZoneM2: isLogisticsWarehouse ? 0 : machineryM2,
         storageZoneM2: storageM2,
+        rawMaterialsStorageM2: storageM2,
+        semiFinishedStorageM2: 0,
+        finishedGoodsStorageM2: 0,
         adminZoneM2: adminM2,
         freeZoneM2: freeM2,
-        warehousesCount: requiredWarehouseCount
+        warehousesCount: 1
       });
       setSuccessMsg('Plano guardado correctamente');
       setTimeout(() => setSuccessMsg(''), 3000);
@@ -131,7 +123,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           </div>
           <div>
             <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <span>Plano de Distribución: {acquisition.propertyTitle}</span>
+              <span>Plano de Distribución: {isLogisticsWarehouse ? 'Almacén Logístico' : 'Nave Industrial'} - {acquisition.propertyTitle}</span>
             </h3>
             <p className="text-xs text-slate-400">
               Superficie Total disponible: <span className="text-blue-400 font-semibold">{naveSurface} m²</span>
@@ -147,8 +139,8 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           )}
           <button
             onClick={handleSave}
-            disabled={saving || !isTotalValid}
-            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition shadow-md"
+            disabled={saving || !isTotalValid || !isStorageValid || !isMachineryValid}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition shadow-md cursor-pointer"
           >
             <Save className="w-4 h-4" />
             <span>{saving ? 'Guardando...' : 'Guardar Plano'}</span>
@@ -159,7 +151,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
       {/* Blueprint Visual Diagram */}
       <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 overflow-hidden">
         <div className="absolute top-2 right-3 text-[10px] uppercase tracking-wider text-slate-500 font-mono">
-          Esquema Arquitectónico - Nave Industrial ({naveSurface} m²)
+          Esquema Arquitectónico - {isLogisticsWarehouse ? 'Almacén Logístico' : 'Nave Industrial'} ({naveSurface} m²)
         </div>
 
         {/* Blueprint Grid Canvas */}
@@ -172,48 +164,49 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
         >
           {/* Visual Zones Layout */}
           <div className="flex gap-2 h-full w-full">
-            {/* Machinery Zone */}
-            <div 
-              style={{ flex: machineryM2 || 1 }}
-              className="bg-blue-900/40 border-2 border-blue-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-blue-400 transition min-w-[120px]"
-            >
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-xs font-bold text-blue-300 uppercase tracking-wider flex items-center gap-1">
-                  <Box className="w-3.5 h-3.5 text-blue-400 shrink-0" /> <span className="truncate">Maquinaria</span>
-                </span>
-                <span className="text-xs font-mono bg-blue-950/80 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 shrink-0">
-                  {machineryM2} m²
-                </span>
+            {/* Machinery Zone (Only for Naves Industriales) */}
+            {!isLogisticsWarehouse && (
+              <div 
+                style={{ flex: machineryM2 || 1 }}
+                className="bg-blue-900/40 border-2 border-blue-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-blue-400 transition min-w-[120px]"
+              >
+                <div className="flex justify-between items-start gap-1">
+                  <span className="text-xs font-bold text-blue-300 uppercase tracking-wider flex items-center gap-1">
+                    <Box className="w-3.5 h-3.5 text-blue-400 shrink-0" /> <span className="truncate">Maquinaria</span>
+                  </span>
+                  <span className="text-xs font-mono bg-blue-950/80 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 shrink-0">
+                    {machineryM2} m²
+                  </span>
+                </div>
+                <div className="space-y-1 my-auto text-[11px] text-blue-200/80">
+                  <p>• Metal: {metalMachinesCount} ({metalMachinesCount * 240} m² min)</p>
+                  <p>• Plástico: {plasticMachinesCount} ({plasticMachinesCount * 180} m² min)</p>
+                </div>
+                <div className="text-[10px] text-blue-400 font-mono truncate">
+                  Mín: {requiredMachineryM2} m² {isMachineryValid ? '✓' : '⚠️ Insuficiente'}
+                </div>
               </div>
-              <div className="space-y-1 my-auto text-[11px] text-blue-200/80">
-                <p>• Metal: {metalMachinesCount} ({metalMachinesCount * 240} m² min)</p>
-                <p>• Plástico: {plasticMachinesCount} ({plasticMachinesCount * 180} m² min)</p>
-              </div>
-              <div className="text-[10px] text-blue-400 font-mono truncate">
-                Mín: {requiredMachineryM2} m² {isMachineryValid ? '✓' : '⚠️ Insuficiente'}
-              </div>
-            </div>
+            )}
 
-            {/* Storage Zone */}
+            {/* General Warehouse Storage Zone */}
             <div 
               style={{ flex: storageM2 || 1 }}
-              className="bg-emerald-900/40 border-2 border-emerald-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-emerald-400 transition min-w-[100px]"
+              className="bg-emerald-900/40 border-2 border-emerald-500/60 rounded-md p-3 flex flex-col justify-between backdrop-blur-sm relative group hover:border-emerald-400 transition min-w-[140px]"
             >
               <div className="flex justify-between items-start gap-1">
                 <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1">
-                  <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Almacenes</span>
+                  <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Almacén General</span>
                 </span>
                 <span className="text-xs font-mono bg-emerald-950/80 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800 shrink-0">
                   {storageM2} m²
                 </span>
               </div>
-              <div className="space-y-0.5 text-[10px] text-emerald-200/80 my-auto">
-                {warehouseDescriptions.map((desc, idx) => (
-                  <p key={idx} className="truncate" title={desc}>• {desc}</p>
-                ))}
+              <div className="space-y-1 my-auto text-[11px] text-emerald-200/90">
+                <p>• Almacenaje unificado de materias primas, productos semiterminados y terminados</p>
+                <p>• Paletización, gestión de stock y expedición de mercancías</p>
               </div>
               <div className="text-[10px] text-emerald-400 font-mono truncate">
-                Mín: {requiredStorageM2} m² {isStorageValid ? '✓' : '⚠️ Insuficiente'}
+                Mín: 30 m² {isStorageValid ? '✓' : '⚠️ Insuficiente'}
               </div>
             </div>
 
@@ -233,7 +226,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
                     {adminM2} m²
                   </span>
                 </div>
-                <span className="text-[9px] text-purple-200/70 truncate">Oficinas y climatización</span>
+                <span className="text-[9px] text-purple-200/70 truncate">Oficinas y gestión administrativa</span>
               </div>
 
               {/* Free Zone */}
@@ -254,131 +247,213 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Rules and Surface Allocators */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Machinery Allocator */}
-        <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
-          <div className="flex justify-between items-center">
-            <label className="text-sm font-semibold text-blue-300 flex items-center gap-1.5">
-              <Box className="w-4 h-4 text-blue-400" />
-              <span>Maquinaria</span>
-            </label>
-            <span className="text-xs text-slate-400 font-mono">Mín: {requiredMachineryM2} m²</span>
-          </div>
-
-          <div className="flex items-center space-x-3">
-            <input
-              type="number"
-              min={requiredMachineryM2}
-              max={naveSurface}
-              value={machineryM2}
-              onChange={e => setMachineryM2(Math.max(0, parseInt(e.target.value) || 0))}
-              className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-blue-500"
-            />
-            <span className="text-xs text-slate-400">m²</span>
-          </div>
-
-          <div className="text-xs text-slate-400 space-y-1">
-            <p className="text-slate-300">Normativa de Maquinaria:</p>
-            <p>• Línea Metal/Hierro: 240 m² / máquina ({metalMachinesCount} compradas)</p>
-            <p>• Línea Plástico/Ensamblaje: 180 m² / máquina ({plasticMachinesCount} compradas)</p>
-          </div>
-
-          {isMachineryValid ? (
-            <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>Superficie suficiente para la maquinaria</span>
+      {/* Surface Allocators */}
+      {isLogisticsWarehouse ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Logistics Warehouse Allocator */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <label className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-emerald-400" />
+                <span>Superficie de Almacén</span>
+              </label>
+              <span className="text-xs text-slate-400 font-mono">Mín: 30 m²</span>
             </div>
-          ) : (
-            <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>Faltan {requiredMachineryM2 - machineryM2} m² según normativa</span>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="number"
+                min={30}
+                max={naveSurface}
+                value={storageM2}
+                onChange={e => setStorageM2(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-32 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-emerald-500"
+              />
+              <span className="text-xs text-slate-400">m²</span>
             </div>
-          )}
+
+            <div className="text-xs text-slate-400 space-y-1">
+              <p className="text-slate-300 font-medium">• Almacén Logístico:</p>
+              <p>Espacio único de almacenaje general de stock. Sin divisiones por tipo de producto ni zona de maquinaria industrial.</p>
+            </div>
+
+            {isStorageValid ? (
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium pt-1">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Superficie suficiente para la operativa de almacenaje</span>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium pt-1">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>El almacén debe disponer de al menos 30 m²</span>
+              </div>
+            )}
+          </div>
+
+          {/* Admin & Total Summary */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <label className="text-sm font-semibold text-purple-300">Administración / Oficinas</label>
+              <span className="text-xs text-slate-400 font-mono">m²</span>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="number"
+                min={0}
+                max={naveSurface}
+                value={adminM2}
+                onChange={e => setAdminM2(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-32 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-purple-500"
+              />
+              <span className="text-xs text-slate-400">m²</span>
+            </div>
+
+            <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>Superficie asignada total:</span>
+                <span className={`font-mono font-bold ${usedM2 > naveSurface ? 'text-rose-400' : 'text-slate-100'}`}>
+                  {usedM2} / {naveSurface} m²
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Espacio libre restante:</span>
+                <span className="font-mono text-emerald-400">{freeM2} m²</span>
+              </div>
+            </div>
+
+            {!isTotalValid && (
+              <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium pt-1">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Superas la superficie total del almacén en {usedM2 - naveSurface} m²</span>
+              </div>
+            )}
+          </div>
         </div>
-
-        {/* Warehouses Allocator */}
-        <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
-          <div className="flex justify-between items-center">
-            <label className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-emerald-400" />
-              <span>Almacenes</span>
-            </label>
-            <span className="text-xs text-slate-400 font-mono">Mín: {requiredStorageM2} m² ({requiredWarehouseCount} alm.)</span>
-          </div>
-
-          <div className="flex items-center space-x-3">
-            <input
-              type="number"
-              min={requiredStorageM2}
-              max={naveSurface}
-              value={storageM2}
-              onChange={e => setStorageM2(Math.max(0, parseInt(e.target.value) || 0))}
-              className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-emerald-500"
-            />
-            <span className="text-xs text-slate-400">m² totales</span>
-          </div>
-
-          <div className="text-xs text-slate-400 space-y-1">
-            <p className="text-slate-300 font-medium">Distribución requerida ({requiredWarehouseCount} almacenes):</p>
-            {warehouseDescriptions.map((desc, i) => (
-              <p key={i} className="text-[11px] text-slate-400">{desc}</p>
-            ))}
-          </div>
-
-          {isStorageValid ? (
-            <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>Almacenes cumplen superficie mínima</span>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Machinery Allocator */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <label className="text-sm font-semibold text-blue-300 flex items-center gap-1.5">
+                <Box className="w-4 h-4 text-blue-400" />
+                <span>Zona de Maquinaria</span>
+              </label>
+              <span className="text-xs text-slate-400 font-mono">Mín: {requiredMachineryM2} m²</span>
             </div>
-          ) : (
-            <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>Superficie inferior al mínimo ({requiredStorageM2} m²)</span>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="number"
+                min={requiredMachineryM2}
+                max={naveSurface}
+                value={machineryM2}
+                onChange={e => setMachineryM2(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-blue-500"
+              />
+              <span className="text-xs text-slate-400">m²</span>
             </div>
-          )}
+
+            <div className="text-xs text-slate-400 space-y-1">
+              <p className="text-slate-300 font-medium">• Requisitos por maquinaria:</p>
+              <p>• Línea Metal/Hierro: 240 m² / máquina ({metalMachinesCount} compradas)</p>
+              <p>• Línea Plástico/Ensamblaje: 180 m² / máquina ({plasticMachinesCount} compradas)</p>
+            </div>
+
+            {isMachineryValid ? (
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Superficie suficiente para la maquinaria</span>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Faltan {requiredMachineryM2 - machineryM2} m² según normativa</span>
+              </div>
+            )}
+          </div>
+
+          {/* Unified Storage Allocator */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <label className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-emerald-400" />
+                <span>Almacén General</span>
+              </label>
+              <span className="text-xs text-slate-400 font-mono">Mín: 30 m²</span>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="number"
+                min={30}
+                max={naveSurface}
+                value={storageM2}
+                onChange={e => setStorageM2(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-emerald-500"
+              />
+              <span className="text-xs text-slate-400">m²</span>
+            </div>
+
+            <div className="text-xs text-slate-400 space-y-1">
+              <p className="text-slate-300 font-medium">• Almacenamiento unificado:</p>
+              <p>Espacio único para todo el stock (materias primas, productos semiterminados y productos terminados).</p>
+            </div>
+
+            {isStorageValid ? (
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium pt-1">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Superficie de almacén válida</span>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium pt-1">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>El almacén general debe tener al menos 30 m²</span>
+              </div>
+            )}
+          </div>
+
+          {/* Admin & Total Summary */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <label className="text-sm font-semibold text-purple-300">Administración / Oficinas</label>
+              <span className="text-xs text-slate-400 font-mono">m²</span>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="number"
+                min={0}
+                max={naveSurface}
+                value={adminM2}
+                onChange={e => setAdminM2(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-purple-500"
+              />
+              <span className="text-xs text-slate-400">m²</span>
+            </div>
+
+            <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>Superficie asignada total:</span>
+                <span className={`font-mono font-bold ${usedM2 > naveSurface ? 'text-rose-400' : 'text-slate-100'}`}>
+                  {usedM2} / {naveSurface} m²
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Espacio libre restante:</span>
+                <span className="font-mono text-emerald-400">{freeM2} m²</span>
+              </div>
+            </div>
+
+            {!isTotalValid && (
+              <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium pt-1">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Superas la superficie total de la nave en {usedM2 - naveSurface} m²</span>
+              </div>
+            )}
+          </div>
         </div>
-
-        {/* Admin & Total Summary */}
-        <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
-          <div className="flex justify-between items-center">
-            <label className="text-sm font-semibold text-purple-300">Administración / Oficinas</label>
-            <span className="text-xs text-slate-400 font-mono">m²</span>
-          </div>
-
-          <div className="flex items-center space-x-3">
-            <input
-              type="number"
-              min={20}
-              max={naveSurface}
-              value={adminM2}
-              onChange={e => setAdminM2(Math.max(0, parseInt(e.target.value) || 0))}
-              className="w-28 bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-purple-500"
-            />
-            <span className="text-xs text-slate-400">m²</span>
-          </div>
-
-          <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
-            <div className="flex justify-between text-slate-300">
-              <span>Superficie asignada total:</span>
-              <span className={`font-mono font-bold ${usedM2 > naveSurface ? 'text-rose-400' : 'text-slate-100'}`}>
-                {usedM2} / {naveSurface} m²
-              </span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Espacio libre restante:</span>
-              <span className="font-mono text-emerald-400">{freeM2} m²</span>
-            </div>
-          </div>
-
-          {!isTotalValid && (
-            <div className="flex items-center space-x-1.5 text-xs text-rose-400 font-medium pt-1">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>Superas la superficie total de la nave en {usedM2 - naveSurface} m²</span>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

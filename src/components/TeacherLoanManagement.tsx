@@ -238,8 +238,8 @@ export default function TeacherLoanManagement() {
                     <p className="text-xs text-slate-500 mt-1">
                       Garantía: <strong className="text-slate-700">
                         {loan.collateral.type === 'property' 
-                          ? (loan.collateral.propertyTitle || 'Inmueble Comercial') 
-                          : `Vivienda Privada (${loan.collateral.surfaceM2} m²)`}
+                          ? (loan.collateral.propertyTitle || 'Inmueble comercial') 
+                          : `Vivienda privada (${loan.collateral.surfaceM2} m²)`}
                       </strong> • Valor Tasación: <strong className="font-mono text-slate-800">{formatNumber(loan.collateral.appraisalValue)} €</strong>
                     </p>
                   </div>
@@ -250,7 +250,7 @@ export default function TeacherLoanManagement() {
                       className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1.5 cursor-pointer"
                     >
                       <FileText className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Tabla Amortización</span>
+                      <span>Tabla de amortización</span>
                     </button>
 
                     {isPendingTeacher && (

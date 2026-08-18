@@ -68,7 +68,7 @@
 @media print {
   html, body {
     background: #ffffff !important;
-    color: #000000 !important;
+    color: #0f172a !important;
     margin: 0 !important;
     padding: 0 !important;
     height: auto !important;
@@ -78,7 +78,7 @@
     print-color-adjust: exact !important;
   }
 
-  /* Hide non-printable elements explicitly */
+  /* Hide non-printable controls explicitly */
   .print\:hidden,
   .no-print {
     display: none !important;
@@ -90,6 +90,7 @@
   }
 
   /* Outer portal container for printable document modal */
+  body > div:not(#root),
   body > .printable-modal-backdrop {
     display: block !important;
     position: static !important;
@@ -102,7 +103,7 @@
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
-    color: #000000 !important;
+    color: #0f172a !important;
     overflow: visible !important;
     box-shadow: none !important;
     border: none !important;
@@ -110,7 +111,8 @@
   }
 
   /* Format printable modal sheet container */
-  .printable-document-modal {
+  .printable-document-modal,
+  body > div:not(#root) > div {
     display: block !important;
     position: static !important;
     width: 100% !important;
@@ -122,12 +124,14 @@
     box-shadow: none !important;
     border: none !important;
     background: #ffffff !important;
-    color: #000000 !important;
+    color: #0f172a !important;
     overflow: visible !important;
     border-radius: 0 !important;
   }
 
-  .printable-document-modal * {
+  /* Reset inner scrollable boxes so they expand to multi-page print */
+  .printable-document-modal *,
+  body > div:not(#root) * {
     overflow: visible !important;
     max-height: none !important;
   }

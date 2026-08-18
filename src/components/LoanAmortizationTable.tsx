@@ -27,10 +27,10 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
               <Calculator className="w-5 h-5 text-amber-200" />
-              <h2 className="text-xl font-bold font-display">Cuadro de Amortización (Método Francés)</h2>
+              <h2 className="text-xl font-bold font-display">Cuadro de amortización (método francés)</h2>
             </div>
             <p className="text-xs text-amber-100">
-              Préstamo Hipotecario #{loan.id} • Ref. {loan.studentName}
+              Préstamo hipotecario #{loan.id} • Ref. {loan.studentName}
             </p>
           </div>
           <div className="flex items-center space-x-2">
@@ -39,7 +39,7 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
               className="px-3 py-1.5 bg-amber-950/60 hover:bg-amber-950 text-white rounded-xl text-xs font-bold border border-amber-500/40 transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
             >
               <Receipt className="w-3.5 h-3.5 text-amber-300" />
-              <span>Ver Póliza Bancaria</span>
+              <span>Ver póliza bancaria</span>
             </button>
             <button
               onClick={onClose}
@@ -53,25 +53,25 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
         {/* Loan Key Parameters Summary */}
         <div className="bg-amber-50/70 border-b border-amber-100/80 p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
           <div>
-            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Capital Concedido / Ofrecido</span>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Capital concedido / ofrecido</span>
             <span className="font-bold text-slate-900 text-sm font-mono">
               {formatNumber(loan.approvedAmount || loan.offeredAmount)} €
             </span>
           </div>
           <div>
-            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Tipo de Interés Anual (TIN)</span>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Tipo de interés anual (TIN)</span>
             <span className="font-bold text-emerald-700 text-sm font-mono">
               {formatNumber(loan.annualInterestRate, 2)} % <span className="text-[10px] text-slate-500 font-normal">(Euribor {formatNumber(loan.euriborRate)}% + 1%)</span>
             </span>
           </div>
           <div>
-            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Plazo de Devolución</span>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Plazo de devolución</span>
             <span className="font-bold text-slate-900 text-sm">
               {loan.termMonths} meses ({formatNumber(loan.termMonths / 12, 1)} años)
             </span>
           </div>
           <div>
-            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Cuota Mensual Constante</span>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Cuota mensual constante</span>
             <span className="font-bold text-amber-800 text-sm font-mono">
               {formatNumber(loan.monthlyPayment)} € / mes
             </span>
@@ -84,12 +84,12 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
             <thead>
               <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider text-[10px] bg-slate-50">
                 <th className="py-2.5 px-3 rounded-l-lg">Cuota #</th>
-                <th className="py-2.5 px-3">Fecha Vencimiento</th>
-                <th className="py-2.5 px-3 text-right">Cuota a Pagar</th>
+                <th className="py-2.5 px-3">Fecha de vencimiento</th>
+                <th className="py-2.5 px-3 text-right">Cuota a pagar</th>
                 <th className="py-2.5 px-3 text-right">Intereses</th>
-                <th className="py-2.5 px-3 text-right">Capital Amortizado</th>
-                <th className="py-2.5 px-3 text-right">Total Amortizado</th>
-                <th className="py-2.5 px-3 text-right">Capital Pendiente</th>
+                <th className="py-2.5 px-3 text-right">Capital amortizado</th>
+                <th className="py-2.5 px-3 text-right">Total amortizado</th>
+                <th className="py-2.5 px-3 text-right">Capital pendiente</th>
                 <th className="py-2.5 px-3 text-center">Estado</th>
                 <th className="py-2.5 px-3 text-right rounded-r-lg">Recibo</th>
               </tr>

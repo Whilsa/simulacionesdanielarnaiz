@@ -1,8 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ElectricityBill } from '../types';
-import { Printer, X, Zap, ShieldCheck } from 'lucide-react';
+import { Printer, X, Zap, ShieldCheck, Download, RefreshCw } from 'lucide-react';
 import { formatNumber } from '../lib/formatters';
+import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils';
 
 interface Props {
   bill: ElectricityBill;
@@ -12,9 +13,32 @@ interface Props {
 
 export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownloadPDF = async () => {
+    if (!printRef.current) return;
+    setIsDownloading(true);
+    try {
+      await downloadElementAsPDF(printRef.current, `Factura_Luz_${bill.billNumber || 'ELEC'}`);
+    } catch (e) {
+      console.error('PDF error:', e);
+      if (printRef.current) printElementFallback(printRef.current);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const handlePrint = () => {
-    window.print();
+    if (printRef.current) {
+      printElementFallback(printRef.current);
+    } else {
+      try {
+        window.focus();
+        setTimeout(() => window.print(), 50);
+      } catch (e) {
+        console.error('Print error:', e);
+      }
+    }
   };
 
   const startStr = bill.startDate
@@ -44,11 +68,13 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
 
           <div className="flex items-center space-x-2">
             <button
-              onClick={handlePrint}
-              className="flex items-center space-x-2 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition shadow-md cursor-pointer"
+              onClick={handleDownloadPDF}
+              disabled={isDownloading}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shadow-md cursor-pointer disabled:opacity-50"
+              title="Descargar factura en PDF"
             >
-              <Printer className="w-4 h-4" />
-              <span>Imprimir / Descargar PDF</span>
+              {isDownloading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              <span>{isDownloading ? 'Generando...' : 'Descargar PDF'}</span>
             </button>
             <button
               onClick={onClose}

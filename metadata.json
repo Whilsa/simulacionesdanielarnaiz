@@ -1,6 +1,6 @@
 {
-  "name": "Simulador de Daniel Arnaiz Boluda",
-  "description": "Simulador de negocios para contabilidad creado por Daniel Arnaiz Boluda",
+  "name": "ContaLab",
+  "description": "Simulador de negocios para contabilidad de Daniel Arnaiz Boluda",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

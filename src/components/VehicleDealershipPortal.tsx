@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import { 
   User, 
   PurchasedVehicle, 
   HiredEmployee, 
+  PropertyAcquisition,
   Transfer, 
   SystemLog 
 } from '../types.js';
@@ -79,9 +81,9 @@ const VEHICLE_CATALOG: VehicleCatalogItem[] = [
       'Capacidad nominal: 2.500 kg',
       'Mástil tríplex elevación 4,8 metros',
       'Desplazador lateral integral de horquillas',
-      'Requisito: 1 por cada almacén activo'
+      'Requisito: 1 para la nave industrial / almacén de recepción'
     ],
-    requirementNotes: 'Obligatoria en cada almacén para que funcione la maquinaria. Requiere Carretillero.',
+    requirementNotes: 'Obligatoria (1 unidad en propiedad) para operar la nave industrial y recibir compras de materia prima.',
     imageUrl: '/images/vehicles/carretilla_elevadora.jpg'
   },
   {
@@ -110,6 +112,7 @@ export default function VehicleDealershipPortal({
   const [activeTab, setActiveTab] = useState<'catalog' | 'my_fleet'>('catalog');
   const [purchasedVehicles, setPurchasedVehicles] = useState<PurchasedVehicle[]>([]);
   const [hiredEmployees, setHiredEmployees] = useState<HiredEmployee[]>([]);
+  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Cart state
@@ -135,15 +138,18 @@ export default function VehicleDealershipPortal({
   const fetchFleetData = async () => {
     setIsLoading(true);
     try {
-      const [vRes, eRes] = await Promise.all([
+      const [vRes, eRes, aRes] = await Promise.all([
         fetch(`/api/student/vehicles?studentId=${currentUser.id}`),
-        fetch(`/api/student/employees?studentId=${currentUser.id}`)
+        fetch(`/api/student/employees?studentId=${currentUser.id}`),
+        fetch(`/api/acquisitions?studentId=${currentUser.id}`)
       ]);
       const vData = await vRes.json();
       const eData = await eRes.json();
+      const aData = await aRes.json();
 
       if (vData.vehicles) setPurchasedVehicles(vData.vehicles);
       if (eData.employees) setHiredEmployees(eData.employees);
+      if (aData.acquisitions) setAcquisitions(aData.acquisitions);
     } catch (err) {
       console.error('Error fetching vehicle fleet:', err);
     } finally {
@@ -237,6 +243,28 @@ export default function VehicleDealershipPortal({
       setCartError(err.message || 'Error de conexión con el concesionario.');
     } finally {
       setIsBuyingCart(false);
+    }
+  };
+
+  const handleAssignVehicleWarehouse = async (
+    vehicleId: string, 
+    warehouseIndex: number | undefined,
+    propertyId?: string,
+    propertyTitle?: string,
+    warehouseName?: string
+  ) => {
+    try {
+      const res = await fetch(`/api/student/vehicles/${vehicleId}/assign-warehouse`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ warehouseIndex, propertyId, propertyTitle, warehouseName })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await fetchFleetData();
+      }
+    } catch (e) {
+      console.error('Error asignando vehículo a almacén:', e);
     }
   };
 
@@ -402,9 +430,14 @@ export default function VehicleDealershipPortal({
                     <div>
                       <div className="relative h-48 bg-slate-100 overflow-hidden">
                         <img 
-                          src={item.imageUrl} 
+                          src={resolveImageUrl(item.imageUrl, 'vehicle', item.title)} 
                           alt={item.title} 
+                          referrerPolicy="no-referrer"
                           className="w-full h-full object-cover group-hover:scale-105 transition duration-300" 
+                          onError={(e) => {
+                            const target = e.currentTarget as HTMLImageElement;
+                            if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                          }}
                         />
                         <div className="absolute top-3 left-3 flex items-center gap-2">
                           <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${item.badgeStyle}`}>
@@ -510,9 +543,14 @@ export default function VehicleDealershipPortal({
                   <div key={v.id} className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden p-5 space-y-3">
                     <div className="flex items-center gap-3">
                       <img 
-                        src={v.imageUrl || '/images/vehicles/carretilla_elevadora.jpg'} 
+                        src={resolveImageUrl(v.imageUrl, 'vehicle', v.title)} 
                         alt={v.title} 
+                        referrerPolicy="no-referrer"
                         className="w-16 h-16 rounded-2xl object-cover border border-slate-200" 
+                        onError={(e) => {
+                          const target = e.currentTarget as HTMLImageElement;
+                          if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                        }}
                       />
                       <div>
                         <span className="text-[10px] uppercase font-bold text-blue-600 tracking-wider block">
@@ -545,15 +583,98 @@ export default function VehicleDealershipPortal({
 
                     <div className="text-[11px] text-slate-500 bg-blue-50/60 p-2.5 rounded-xl border border-blue-100 font-medium">
                       {v.vehicleType === 'carretilla_elevadora' && (
-                        <span>🚜 Asignable a almacenes en el panel de patrimonio para permitir producción.</span>
+                        <span>🚜 Requisito: 1 carretilla elevadora para el inmueble industrial para recibir compras y producir.</span>
                       )}
                       {v.vehicleType === 'camion_trailer' && (
-                        <span>🚛 Asignable a camioneros contratados para logística corporativa.</span>
+                        <span>🚛 Requisito: Asignable a un camionero/conductor para recogida propia de mercancías.</span>
                       )}
                       {v.vehicleType === 'coche_empresa' && (
-                        <span>🚗 Vehículo corporativo de flota para representación y gestión comercial.</span>
+                        <span>🚗 Vehículo corporativo de representación y gestión comercial.</span>
                       )}
                     </div>
+
+                    {v.vehicleType === 'carretilla_elevadora' && (
+                      <div className="pt-2 border-t border-slate-100 space-y-1">
+                        <label className="block text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+                          Asignación a Inmueble (Nave Industrial o Almacén Logístico)
+                        </label>
+                        <select
+                          value={
+                            v.assignedPropertyId
+                              ? `${v.assignedPropertyId}_wh_${v.assignedWarehouseIndex || 1}`
+                              : ''
+                          }
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (!val) {
+                              handleAssignVehicleWarehouse(v.id, undefined);
+                              return;
+                            }
+                            const parts = val.split('_wh_');
+                            const propId = parts[0];
+                            const whIdx = Number(parts[1] || 1);
+                            const acq = acquisitions.find(a => String(a.id) === propId || String(a.propertyId) === propId);
+                            const propTitle = acq?.propertyTitle || acq?.title || 'Inmueble / Almacén';
+                            const isNave = acq?.propertyType?.includes('nave') || acq?.propertyType === 'industrial' || acq?.propertyType === 'nave_industrial' || acq?.propertyTitle?.toLowerCase().includes('nave');
+                            const isAlmacen = acq?.propertyType === 'almacen' || acq?.propertyType === 'almacen_logistico' || acq?.propertyType === 'warehouse' || acq?.propertyTitle?.toLowerCase().includes('almacén') || acq?.propertyTitle?.toLowerCase().includes('almacen');
+                            const whName = isNave
+                              ? `${propTitle} (Inmueble Nave Industrial)`
+                              : isAlmacen
+                                ? `${propTitle} (Inmueble Almacén Logístico)`
+                                : `${propTitle} - Almacén ${whIdx}`;
+
+                            handleAssignVehicleWarehouse(v.id, whIdx, propId, propTitle, whName);
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-medium focus:outline-none focus:border-amber-500 cursor-pointer"
+                        >
+                          <option value="">-- Sin inmueble asignado --</option>
+                          {acquisitions.filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyTitle?.toLowerCase().includes('nave')).length > 0 && (
+                            <optgroup label="🏭 Naves Industriales">
+                              {acquisitions
+                                .filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyTitle?.toLowerCase().includes('nave'))
+                                .map(acq => {
+                                  const pId = acq.id || acq.propertyId;
+                                  const title = acq.propertyTitle || 'Nave Industrial';
+                                  return (
+                                    <option key={pId} value={`${pId}_wh_1`}>{title} (Inmueble Completo)</option>
+                                  );
+                                })}
+                            </optgroup>
+                          )}
+
+                          {acquisitions.filter(a => a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen')).length > 0 && (
+                            <optgroup label="📦 Almacenes Logísticos">
+                              {acquisitions
+                                .filter(a => a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen'))
+                                .map(acq => {
+                                  const pId = acq.id || acq.propertyId;
+                                  const title = acq.propertyTitle || 'Almacén Logístico';
+                                  return (
+                                    <option key={pId} value={`${pId}_wh_1`}>{title} (Inmueble Completo)</option>
+                                  );
+                                })}
+                            </optgroup>
+                          )}
+                        </select>
+
+                        {acquisitions.filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('nave') || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen')).length === 0 && (
+                          <p className="text-[11px] text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 mt-1 font-medium">
+                            ⚠️ No dispones de ninguna Nave Industrial o Almacén Logístico (en propiedad o alquiler). Adquiérelo en el Portal Inmobiliario para poder asignar la carretilla.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {v.vehicleType === 'camion_trailer' && (
+                      <div className="pt-2 border-t border-slate-100 space-y-1">
+                        <label className="block text-[11px] font-bold text-indigo-900 uppercase tracking-wider">
+                          Conductor Asignado
+                        </label>
+                        <div className="text-xs text-slate-700 bg-slate-50 p-2 rounded-xl border border-slate-200 font-medium">
+                          {v.assignedDriverName ? `🚛 ${v.assignedDriverName}` : 'Sin camionero asignado (asignable desde Patrimonio)'}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -594,7 +715,16 @@ export default function VehicleDealershipPortal({
                   cart.map(item => (
                     <div key={item.vehicleType} className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <img src={item.imageUrl} alt={item.title} className="w-12 h-12 rounded-xl object-cover border border-slate-200" />
+                        <img 
+                          src={resolveImageUrl(item.imageUrl, 'vehicle', item.title)} 
+                          alt={item.title} 
+                          referrerPolicy="no-referrer"
+                          className="w-12 h-12 rounded-xl object-cover border border-slate-200" 
+                          onError={(e) => {
+                            const target = e.currentTarget as HTMLImageElement;
+                            if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                          }}
+                        />
                         <div>
                           <h4 className="font-bold text-slate-900 text-xs leading-snug">{item.title}</h4>
                           <span className="text-[11px] text-slate-500 font-mono">{formatNumber(item.basePrice)} € / un. (+IVA)</span>
@@ -705,9 +835,14 @@ export default function VehicleDealershipPortal({
 
               <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
                 <img 
-                  src={selectedVehicle.imageUrl} 
+                  src={resolveImageUrl(selectedVehicle.imageUrl, 'vehicle', selectedVehicle.title)} 
                   alt={selectedVehicle.title} 
+                  referrerPolicy="no-referrer"
                   className="w-20 h-20 rounded-xl object-cover border border-slate-200 shrink-0" 
+                  onError={(e) => {
+                    const target = e.currentTarget as HTMLImageElement;
+                    if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                  }}
                 />
                 <div>
                   <h4 className="font-bold text-slate-900 text-sm">{selectedVehicle.title}</h4>

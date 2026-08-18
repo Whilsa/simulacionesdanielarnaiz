@@ -24,6 +24,7 @@ interface StudentDashboardProps {
 
 export default function StudentDashboard({ currentUser, onLogout, onBackToHub }: StudentDashboardProps) {
   const [balance, setBalance] = useState(currentUser.balance);
+  const [bankTab, setBankTab] = useState<'operaciones' | 'vencimientos' | 'hipotecaria'>('operaciones');
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [studentsList, setStudentsList] = useState<User[]>([]);
   const [copied, setCopied] = useState(false);
@@ -105,7 +106,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
   const fetchStudentData = async () => {
     try {
       // 1. Get student's updated user details (for real-time balance)
-      const usersRes = await fetch('/users?role=student');
+      const usersRes = await fetch('/api/users?role=student');
       if (!usersRes.ok) throw new Error(`HTTP error ${usersRes.status}`);
       
       const usersContentType = usersRes.headers.get('content-type');
@@ -128,7 +129,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
       }
 
       // 2. Get student's transfers
-      const transfersRes = await fetch(`/transfers?userId=${currentUser.id}`);
+      const transfersRes = await fetch(`/api/transfers?userId=${currentUser.id}`);
       if (transfersRes.ok) {
         const transfersContentType = transfersRes.headers.get('content-type');
         if (transfersContentType && transfersContentType.includes('application/json')) {
@@ -198,7 +199,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('/transfers', {
+      const response = await fetch('/api/transfers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -259,7 +260,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 <Landmark className="w-6 h-6 text-white animate-pulse" />
               </div>
               <div>
-                <span className="font-display font-bold text-lg tracking-tight block">Simulador de Daniel Arnaiz Boluda</span>
+                <span className="font-display font-bold text-lg tracking-tight block">ContaLab</span>
                 <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Banco Simulado • Alumno</span>
               </div>
             </div>
@@ -267,7 +268,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
             <div className="flex items-center space-x-3">
               <div className="hidden sm:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
-                <p className="text-xs text-amber-200">Cliente de Simulación</p>
+                <p className="text-xs text-amber-200">Titular de la cuenta</p>
               </div>
               <button
                 onClick={() => setShowPasswordModal(true)}
@@ -281,7 +282,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 px-3 py-2 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer border border-white/10"
               >
                 <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline">Cerrar Sesión</span>
+                <span className="hidden sm:inline">Cerrar sesión</span>
               </button>
             </div>
           </div>
@@ -320,38 +321,11 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           </div>
         )}
 
-        {paymentStatus && !paymentStatus.isBlocked && paymentStatus.upcomingCount > 0 && (
-          <div className="mb-8 bg-gradient-to-r from-amber-50 to-amber-100/80 border-2 border-amber-300/80 p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-amber-950">
-            <div className="flex items-start space-x-3.5">
-              <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-xs shrink-0">
-                <Clock className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="font-extrabold text-sm">🔔 Vencimientos de los próximos 30 días</span>
-                  <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full uppercase">
-                    {paymentStatus.upcomingCount} {paymentStatus.upcomingCount === 1 ? 'cargo' : 'cargos'}
-                  </span>
-                </div>
-                <p className="text-xs text-amber-900 mt-1 leading-relaxed">
-                  Se realizarán cobros automáticos domiciliados en tu cuenta bancaria por un total de <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en los próximos 30 días. {paymentStatus.insufficientProjectedBalance ? '⚠️ Revisa tu saldo para evitar recargos del 5% de mora.' : '✅ Cuentas con saldo suficiente para cubrirlos.'}
-                </p>
-              </div>
-            </div>
-            <div className="text-right shrink-0">
-              <span className="text-xs text-amber-800 font-medium block">Total Compromisos 30d:</span>
-              <span className="text-lg font-black font-mono text-amber-950 bg-amber-200/80 px-3 py-1 rounded-xl border border-amber-300">
-                {formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Top Cards: Balance & Account Details */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {/* Top Card: Balance & Account Details */}
+        <div className="mb-8">
           
           {/* Balance card */}
-          <div className="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-2xl shadow-lg md:col-span-2 relative overflow-hidden">
+          <div className="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
             <div className="absolute top-0 right-0 w-48 h-48 bg-white/5 rounded-full filter blur-2xl -z-10"></div>
             
             <div className="flex justify-between items-start mb-4">
@@ -372,7 +346,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
 
             <div className="border-t border-white/10 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div>
-                <p className="text-amber-200 font-medium">Titular de Cuenta:</p>
+                <p className="text-amber-200 font-medium">Titular de la cuenta:</p>
                 <p className="font-semibold text-white">{currentUser.name}</p>
               </div>
               <div className="flex items-center space-x-2">
@@ -393,225 +367,256 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
             </div>
           </div>
 
-          {/* Quick Notice Card */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-            <div className="space-y-3">
-              <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
-                <Info className="w-5 h-5" />
-              </div>
-              <h3 className="font-display font-bold text-slate-900 text-sm">Instrucciones Contables</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Cada transferencia genera una contrapartida inmutable en los libros de la contraparte. Asegúrate de registrar correctamente los cargos en tu libro diario y de compras/ventas de la clase.
-              </p>
-            </div>
-            
-            <div className="bg-slate-50 rounded-xl p-2.5 mt-4 flex items-center space-x-2 text-[11px] text-slate-500 border border-slate-100/50">
-              <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-              <span>Saldos sincronizados en tiempo real</span>
-            </div>
-          </div>
-
         </div>
 
-        {/* Upcoming 30-Day Automatic Payments Section */}
-        <UpcomingPaymentsSection 
-          currentUser={currentUser} 
-        />
+        {/* Navigation Tabs for Bank Modules */}
+        <div className="flex items-center space-x-2 border-b border-slate-200 mb-6 overflow-x-auto pb-1">
+          <button
+            onClick={() => setBankTab('operaciones')}
+            className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              bankTab === 'operaciones'
+                ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Send className="w-4 h-4 text-amber-500" />
+            <span>Operaciones y Transferencias</span>
+          </button>
 
-        {/* Bank Loans Section */}
-        <StudentLoanSection 
-          currentUser={currentUser} 
-          onBalanceUpdated={(newBal) => setBalance(newBal)} 
-        />
+          <button
+            onClick={() => setBankTab('vencimientos')}
+            className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              bankTab === 'vencimientos'
+                ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Clock className="w-4 h-4 text-amber-500" />
+            <span>Próximos vencimientos programados</span>
+            {paymentStatus && paymentStatus.upcomingCount > 0 && (
+              <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                {paymentStatus.upcomingCount}
+              </span>
+            )}
+          </button>
 
-        {/* Bottom grid: Make Transfer & Transactions List */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-          
-          {/* MAKE TRANSFER PANEL */}
-          <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 p-6 self-start">
-            <div className="flex items-center space-x-2.5 mb-6">
-              <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
-                <Send className="w-4 h-4" />
+          <button
+            onClick={() => setBankTab('hipotecaria')}
+            className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              bankTab === 'hipotecaria'
+                ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Landmark className="w-4 h-4 text-amber-500" />
+            <span>Financiación hipotecaria</span>
+          </button>
+        </div>
+
+        {/* TAB 1: PRÓXIMOS VENCIMIENTOS PROGRAMADOS */}
+        {bankTab === 'vencimientos' && (
+          <UpcomingPaymentsSection 
+            currentUser={currentUser} 
+          />
+        )}
+
+        {/* TAB 2: FINANCIACIÓN HIPOTECARIA */}
+        {bankTab === 'hipotecaria' && (
+          <StudentLoanSection 
+            currentUser={currentUser} 
+            onBalanceUpdated={(newBal) => setBalance(newBal)} 
+          />
+        )}
+
+        {/* TAB 3: OPERACIONES Y TRANSFERENCIAS */}
+        {bankTab === 'operaciones' && (
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+            
+            {/* MAKE TRANSFER PANEL */}
+            <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 p-6 self-start">
+              <div className="flex items-center space-x-2.5 mb-6">
+                <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
+                  <Send className="w-4 h-4" />
+                </div>
+                <h3 className="font-display font-bold text-slate-900 text-base">Emitir transferencia</h3>
               </div>
-              <h3 className="font-display font-bold text-slate-900 text-base">Emitir Transferencia</h3>
-            </div>
 
-            <form onSubmit={handleTransferSubmit} className="space-y-4">
-              {transferError && (
-                <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700 flex items-start space-x-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{transferError}</span>
-                </div>
-              )}
-              {transferSuccess && (
-                <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded-r-lg text-xs font-semibold text-emerald-700 flex items-center space-x-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{transferSuccess}</span>
-                </div>
-              )}
+              <form onSubmit={handleTransferSubmit} className="space-y-4">
+                {transferError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700 flex items-start space-x-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{transferError}</span>
+                  </div>
+                )}
+                {transferSuccess && (
+                  <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded-r-lg text-xs font-semibold text-emerald-700 flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{transferSuccess}</span>
+                  </div>
+                )}
 
-              {paymentStatus && paymentStatus.totalUpcoming30DaysAmount > 0 && (
-                <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-amber-900 text-[11px] font-medium space-y-0.5">
-                  <span className="font-bold flex items-center gap-1 text-amber-950">
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Aviso de Cobros Domiciliados a 30 días:</span>
-                  </span>
-                  <p>
-                    Tienes <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
+                {paymentStatus && paymentStatus.totalUpcoming30DaysAmount > 0 && (
+                  <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-amber-900 text-[11px] font-medium space-y-0.5">
+                    <span className="font-bold flex items-center gap-1 text-amber-950">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Aviso de Cobros Domiciliados a 30 días:</span>
+                    </span>
+                    <p>
+                      Tienes <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label htmlFor="recipient-iban" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Número de Cuenta / IBAN del Destinatario
+                  </label>
+                  <input
+                    id="recipient-iban"
+                    type="text"
+                    required
+                    value={customIBAN}
+                    onChange={(e) => setCustomIBAN(e.target.value)}
+                    placeholder="ej. ES001234..."
+                    className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-slate-900"
+                  />
+                  <p className="mt-1.5 text-[11px] text-slate-400 italic">
+                    Para transferir saldo, pídele el IBAN completo a tu compañero de clase.
                   </p>
                 </div>
-              )}
 
-              <div>
-                <label htmlFor="recipient-iban" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Número de Cuenta / IBAN del Destinatario
-                </label>
-                <input
-                  id="recipient-iban"
-                  type="text"
-                  required
-                  value={customIBAN}
-                  onChange={(e) => setCustomIBAN(e.target.value)}
-                  placeholder="ej. ES001234..."
-                  className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-slate-900"
-                />
-                <p className="mt-1.5 text-[11px] text-slate-400 italic">
-                  Para transferir saldo, pídele el IBAN completo a tu compañero de clase.
-                </p>
-              </div>
-
-              <div>
-                <label htmlFor="amount" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Importe (€)
-                </label>
-                <div className="relative rounded-xl">
-                  <input
-                    id="amount"
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    value={transferAmount}
-                    onChange={(e) => setTransferAmount(e.target.value)}
-                    placeholder="0.00"
-                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                  <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-sm">
-                    €
+                <div>
+                  <label htmlFor="amount" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Importe (€)
+                  </label>
+                  <div className="relative rounded-xl">
+                    <input
+                      id="amount"
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={transferAmount}
+                      onChange={(e) => setTransferAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-sm">
+                      €
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div>
-                <label htmlFor="concept" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Concepto Contable
-                </label>
-                <input
-                  id="concept"
-                  type="text"
-                  required
-                  value={transferConcept}
-                  onChange={(e) => setTransferConcept(e.target.value)}
-                  placeholder="ej. Factura F-01, Pago materiales"
-                  className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-900"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full flex justify-center items-center py-3 px-4 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 transition-all shadow-md shadow-amber-100 cursor-pointer"
-              >
-                {isSubmitting ? (
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                ) : (
-                  <span className="flex items-center">
-                    Emitir Pago <Send className="w-4 h-4 ml-2" />
-                  </span>
-                )}
-              </button>
-            </form>
-          </div>
-
-          {/* HISTORIAL DE TRANSFERENCIAS PANEL */}
-          <div className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <div className="flex justify-between items-center mb-6">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
-                  <Clock className="w-4 h-4" />
+                <div>
+                  <label htmlFor="concept" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Concepto Contable
+                  </label>
+                  <input
+                    id="concept"
+                    type="text"
+                    required
+                    value={transferConcept}
+                    onChange={(e) => setTransferConcept(e.target.value)}
+                    placeholder="ej. Factura F-01, Pago materiales"
+                    className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-900"
+                  />
                 </div>
-                <h3 className="font-display font-bold text-slate-900 text-base">Historial de Movimientos</h3>
-              </div>
-              <span className="text-xs text-slate-400 font-medium">Auto-actualizado</span>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full flex justify-center items-center py-3 px-4 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 transition-all shadow-md shadow-amber-100 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <span className="flex items-center">
+                      Emitir pago <Send className="w-4 h-4 ml-2" />
+                    </span>
+                  )}
+                </button>
+              </form>
             </div>
 
-            {transfers.length === 0 ? (
-              <div className="py-16 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
-                <Coins className="w-12 h-12 mx-auto mb-3 opacity-20 text-slate-500" />
-                <p className="font-semibold text-slate-600">Aún no hay movimientos registrados</p>
-                <p className="text-xs text-slate-400 mt-1">Realiza pagos a tus compañeros o espera recibir fondos de ellos para ver tu historial.</p>
+            {/* HISTORIAL DE TRANSFERENCIAS PANEL */}
+            <div className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+              <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-display font-bold text-slate-900 text-base">Historial de movimientos</h3>
+                </div>
               </div>
-            ) : (
-              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-2">
-                <AnimatePresence initial={false}>
-                  {transfers.map((tx) => {
-                    const isOutbound = tx.senderId === currentUser.id;
-                    const counterpartName = isOutbound ? tx.receiverName : tx.senderName;
-                    const counterpartAccount = isOutbound ? tx.receiverAccount : tx.senderAccount;
 
-                    return (
-                      <motion.div
-                        key={tx.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0 }}
-                        className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-all flex items-center justify-between gap-4"
-                      >
-                        <div className="flex items-center space-x-3 min-w-0">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                            isOutbound ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
-                          }`}>
-                            {isOutbound ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-bold text-slate-900 truncate font-display">
-                              {isOutbound ? `Transferencia enviada a ${counterpartName}` : `Transferencia recibida de ${counterpartName}`}
-                            </p>
-                            <p className="text-[11px] text-slate-500 font-mono truncate tracking-tight">{counterpartAccount}</p>
-                            <p className="text-xs text-slate-400 mt-1 flex items-center">
-                              <span className="italic truncate">"{tx.concept}"</span>
-                              <span className="mx-1.5">•</span>
-                              <span className="font-mono text-[10px] shrink-0">
-                                {new Date(tx.timestamp).toLocaleString('es-ES', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
-                              </span>
-                            </p>
-                          </div>
-                        </div>
+              {transfers.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
+                  <Coins className="w-12 h-12 mx-auto mb-3 opacity-20 text-slate-500" />
+                  <p className="font-semibold text-slate-600">Aún no hay movimientos registrados</p>
+                  <p className="text-xs text-slate-400 mt-1">Realiza pagos a tus compañeros o espera recibir fondos de ellos para ver tu historial.</p>
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-[480px] overflow-y-auto pr-2">
+                  <AnimatePresence initial={false}>
+                    {transfers.map((tx, idx) => {
+                      const isOutbound = tx.senderId === currentUser.id;
+                      const counterpartName = isOutbound ? tx.receiverName : tx.senderName;
+                      const counterpartAccount = isOutbound ? tx.receiverAccount : tx.senderAccount;
 
-                        <div className="text-right shrink-0 flex flex-col items-end gap-1">
-                          <p className={`text-base font-bold font-mono ${
-                            isOutbound ? 'text-rose-600' : 'text-emerald-600'
-                          }`}>
-                            {isOutbound ? '-' : '+'}{formatNumber(tx.amount)} €
-                          </p>
-                          <button
-                            onClick={() => setSelectedExtractTx(tx)}
-                            className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
-                            title="Descargar Extracto Bancario"
-                          >
-                            <FileText className="w-3 h-3 text-indigo-600" />
-                            <span>Extracto</span>
-                          </button>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </AnimatePresence>
-              </div>
-            )}
+                      return (
+                        <motion.div
+                          key={`${tx.id}-${idx}`}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0 }}
+                          className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-all flex items-center justify-between gap-4"
+                        >
+                          <div className="flex items-center space-x-3 min-w-0">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                              isOutbound ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
+                            }`}>
+                              {isOutbound ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-slate-900 truncate font-display">
+                                {isOutbound ? `Transferencia enviada a ${counterpartName}` : `Transferencia recibida de ${counterpartName}`}
+                              </p>
+                              <p className="text-[11px] text-slate-500 font-mono truncate tracking-tight">{counterpartAccount}</p>
+                              <p className="text-xs text-slate-400 mt-1 flex items-center">
+                                <span className="italic truncate">"{tx.concept}"</span>
+                                <span className="mx-1.5">•</span>
+                                <span className="font-mono text-[10px] shrink-0">
+                                  {new Date(tx.timestamp).toLocaleString('es-ES', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                            <p className={`text-base font-bold font-mono ${
+                              isOutbound ? 'text-rose-600' : 'text-emerald-600'
+                            }`}>
+                              {isOutbound ? '-' : '+'}{formatNumber(tx.amount)} €
+                            </p>
+                            <button
+                              onClick={() => setSelectedExtractTx(tx)}
+                              className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
+                              title="Descargar Extracto Bancario"
+                            >
+                              <FileText className="w-3 h-3 text-indigo-600" />
+                              <span>Extracto</span>
+                            </button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
+                </div>
+              )}
+            </div>
+
           </div>
-
-        </div>
+        )}
 
       </main>
 

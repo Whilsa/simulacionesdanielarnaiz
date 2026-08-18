@@ -33,6 +33,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
   
   const [selectedInvoice, setSelectedInvoice] = useState<TelecomInvoice | null>(null);
+  const [confirmingPlan, setConfirmingPlan] = useState<TelecomPlan | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -45,19 +46,19 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
         fetch(`/api/company/${currentUser.id}`)
       ]);
 
-      if (pRes.ok) {
+      if (pRes.ok && pRes.headers.get('content-type')?.includes('application/json')) {
         const pData = await pRes.json();
         if (pData.plans && pData.plans.length > 0) setPlans(pData.plans);
       }
-      if (cRes.ok) {
+      if (cRes.ok && cRes.headers.get('content-type')?.includes('application/json')) {
         const cData = await cRes.json();
         setContracts(cData.contracts || []);
       }
-      if (iRes.ok) {
+      if (iRes.ok && iRes.headers.get('content-type')?.includes('application/json')) {
         const iData = await iRes.json();
         setInvoices(iData.invoices || []);
       }
-      if (compRes.ok) {
+      if (compRes.ok && compRes.headers.get('content-type')?.includes('application/json')) {
         const compData = await compRes.json();
         setAcquisitions(compData.acquisitions || []);
       }
@@ -76,10 +77,6 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
   const activeContract = contracts.find(c => c.status === 'active');
 
   const handleContractPlan = async (plan: TelecomPlan) => {
-    if (!confirm(`¿Confirmas la contratación del "${plan.name}" por ${formatNumber(plan.monthlyPrice)} €/mes (+ IVA)? El servicio quedará activo inmediatamente. El cobro se domiciliará el día 1 del mes siguiente (calculando la parte proporcional según el día de alta).`)) {
-      return;
-    }
-
     setSubmittingPlanId(plan.id);
     setError(null);
     setSuccessMsg(null);
@@ -101,6 +98,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
       if (!res.ok) throw new Error(data.error || 'No se pudo contratar el plan');
 
       setSuccessMsg(`¡Contratado con éxito! ${data.message || ''}`);
+      setConfirmingPlan(null);
       if (data.newBalance !== undefined && onUserBalanceUpdated) {
         onUserBalanceUpdated(data.newBalance);
       }
@@ -288,7 +286,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                   {/* Action Footer */}
                   <div className="p-6 pt-0">
                     <button
-                      onClick={() => handleContractPlan(plan)}
+                      onClick={() => setConfirmingPlan(plan)}
                       disabled={isCurrent || isSubmitting}
                       className={`w-full py-3 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer ${
                         isCurrent
@@ -398,6 +396,80 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
         invoice={selectedInvoice}
         onClose={() => setSelectedInvoice(null)}
       />
+
+      {/* Plan Contracting Confirmation Modal */}
+      {confirmingPlan && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <PhoneCall className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Confirmar Contratación</h3>
+                  <p className="text-xs text-slate-500">{confirmingPlan.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setConfirmingPlan(null)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-700">
+              <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-2xl space-y-2">
+                <span className="font-extrabold text-[11px] uppercase tracking-wider text-blue-900 block">
+                  Resumen del Plan de Telecomunicación
+                </span>
+                <div className="flex justify-between items-center text-sm font-bold text-slate-900">
+                  <span>Velocidad Fibra / Conexión:</span>
+                  <span className="text-blue-700 font-mono">{confirmingPlan.speedMbps} Mbps</span>
+                </div>
+                <div className="flex justify-between items-center text-sm font-bold text-slate-900">
+                  <span>Cuota Mensual Base:</span>
+                  <span className="font-mono">{formatNumber(confirmingPlan.monthlyPrice)} €/mes (+ IVA)</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] space-y-1 text-slate-600">
+                <p>• <strong>Activación inmediata:</strong> El servicio y el acceso al Mercado se habilitarán al instante.</p>
+                <p>• <strong>Facturación:</strong> Se domiciliará en la cuenta bancaria de la empresa el día 1 de cada mes.</p>
+                <p>• <strong>Primer cobro:</strong> Prorrateado según los días consumidos del mes en curso.</p>
+              </div>
+
+              {submittingPlanId && (
+                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl flex items-center gap-2 text-xs">
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+                  <span>Procesando alta y activando contrato de telecomunicaciones...</span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={Boolean(submittingPlanId)}
+                onClick={() => setConfirmingPlan(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(submittingPlanId)}
+                onClick={() => handleContractPlan(confirmingPlan)}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition disabled:opacity-50 flex items-center gap-1.5 shadow-md"
+              >
+                {submittingPlanId && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Confirmar y Activar Contrato</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Footer />
     </div>

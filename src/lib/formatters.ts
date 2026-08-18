@@ -25,3 +25,88 @@ export function formatNumber(val: number | null | undefined, decimals: number = 
 export function formatCurrency(val: number | null | undefined): string {
   return `${formatNumber(val, 2)} €`;
 }
+
+/**
+ * Converts a numeric amount into standard legal Spanish words for financial instruments like Promissory Notes (Pagarés).
+ * Example: 15420.50 -> "QUINCE MIL CUATROCIENTOS VEINTE EUROS CON CINCUENTA CÉNTIMOS"
+ */
+export function numberToSpanishWords(num: number): string {
+  if (num === null || num === undefined || isNaN(num) || num === 0) {
+    return 'CERO EUROS CON CERO CÉNTIMOS';
+  }
+
+  const absNum = Math.abs(num);
+  const euros = Math.floor(absNum);
+  const centimos = Math.round((absNum - euros) * 100);
+
+  const units = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE'];
+  const teens = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
+  const tens = ['', 'DIEZ', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+  const hundreds = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+  function convertGroup(n: number): string {
+    let output = '';
+    if (n === 100) return 'CIEN';
+    if (n > 99) {
+      output += hundreds[Math.floor(n / 100)] + ' ';
+      n %= 100;
+    }
+    if (n >= 10 && n <= 19) {
+      output += teens[n - 10] + ' ';
+    } else if (n >= 20 && n <= 29) {
+      if (n === 20) output += 'VEINTE ';
+      else output += 'VEINTI' + units[n - 20] + ' ';
+    } else if (n >= 30) {
+      output += tens[Math.floor(n / 10)];
+      if (n % 10 > 0) {
+        output += ' Y ' + units[n % 10];
+      }
+      output += ' ';
+    } else if (n > 0) {
+      output += units[n] + ' ';
+    }
+    return output.trim();
+  }
+
+  function convertInteger(n: number): string {
+    if (n === 0) return 'CERO';
+    let str = '';
+
+    // Millions
+    const millions = Math.floor(n / 1000000);
+    if (millions > 0) {
+      if (millions === 1) {
+        str += 'UN MILLÓN ';
+      } else {
+        str += convertGroup(millions) + ' MILLONES ';
+      }
+      n %= 1000000;
+    }
+
+    // Thousands
+    const thousands = Math.floor(n / 1000);
+    if (thousands > 0) {
+      if (thousands === 1) {
+        str += 'MIL ';
+      } else {
+        str += convertGroup(thousands) + ' MIL ';
+      }
+      n %= 1000;
+    }
+
+    // Remaining units/tens/hundreds
+    if (n > 0) {
+      str += convertGroup(n);
+    }
+
+    return str.trim();
+  }
+
+  const eurosText = convertInteger(euros);
+  const eurosLabel = euros === 1 ? 'EURO' : 'EUROS';
+  const centimosText = convertInteger(centimos);
+  const centimosLabel = centimos === 1 ? 'CÉNTIMO' : 'CÉNTIMOS';
+
+  return `${eurosText} ${eurosLabel} CON ${centimosText} ${centimosLabel}`.toUpperCase();
+}
+

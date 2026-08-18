@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { PropertyListing, User, PropertyType, OperationType, LocationScope, DeferredPaymentConfig } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import { SPANISH_REGIONS } from '../lib/realEstateData.js';
+import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import { 
   Building2, Store, Warehouse, Factory, Search, Filter, Plus, Trash2, 
   CheckCircle2, ArrowLeft, Euro, MapPin, SlidersHorizontal, Sparkles, 
@@ -79,7 +80,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
     instrument: 'pagare' as 'pagare' | 'letra_cambio'
   });
 
-  const isTeacher = currentUser.role === 'teacher';
+  const isTeacher = currentUser.role === 'teacher' || currentUser.username === 'profesor' || currentUser.username === 'pupdaniel' || currentUser.id === 'profesor-1';
 
   const fetchProperties = async () => {
     setLoading(true);
@@ -262,6 +263,20 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
     }
   };
 
+  // Handle Delete All Properties (Teacher)
+  const handleDeleteAllProperties = async () => {
+    if (!confirm('¿Seguro que deseas eliminar TODOS los inmuebles del portal inmobiliario?')) return;
+    try {
+      const res = await fetch('/api/properties', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al eliminar');
+      setSuccessMsg(data.message);
+      fetchProperties();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const getPropertyTypeLabel = (type: PropertyType) => {
     switch (type) {
       case 'nave_industrial': return 'Nave Industrial';
@@ -315,13 +330,28 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             </div>
 
             {isTeacher && (
-              <button
-                onClick={() => setShowPublishModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-xl shadow-xs transition cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Publicar Ofertas</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPublishModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Publicar Ofertas</span>
+                </button>
+
+                {properties.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteAllProperties}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                    title="Eliminar todos los inmuebles del portal"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span className="hidden sm:inline">Eliminar Todos</span>
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -444,10 +474,14 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     {/* Image Header */}
                     <div className="relative h-48 bg-slate-900 overflow-hidden">
                       <img
-                        src={prop.imageUrl}
+                        src={resolveImageUrl(prop.imageUrl, 'property', `${prop.title} ${prop.propertyType}`)}
                         alt={prop.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget as HTMLImageElement;
+                          if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                        }}
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
 
@@ -467,11 +501,16 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       {/* Delete button for teacher */}
                       {isTeacher && (
                         <button
-                          onClick={() => handleDeleteProperty(prop.id)}
-                          className="absolute top-3 right-3 p-1.5 bg-red-600/90 hover:bg-red-700 text-white rounded-xl text-xs transition cursor-pointer shadow-xs"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteProperty(prop.id);
+                          }}
+                          className="absolute top-3 right-3 z-20 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-md flex items-center gap-1 border border-white/20"
                           title="Eliminar anuncio"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Eliminar</span>
                         </button>
                       )}
 
@@ -532,9 +571,23 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     </div>
 
                     {isTeacher ? (
-                      <span className="text-xs font-bold text-slate-500 bg-slate-200 px-3 py-1.5 rounded-xl">
-                        {isAvailable ? 'Vista Previa Alumno' : 'Ocupado'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteProperty(prop.id);
+                          }}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                          title="Eliminar este inmueble"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Eliminar</span>
+                        </button>
+                        <span className="text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-xl">
+                          {isAvailable ? 'Disponible' : 'Ocupado'}
+                        </span>
+                      </div>
                     ) : isAvailable ? (
                       <button
                         onClick={() => {

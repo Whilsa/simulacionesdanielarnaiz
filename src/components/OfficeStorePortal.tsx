@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, OfficeStoreItem, OfficeStoreCategory, OfficePurchaseOrder } from '../types.js';
 import { OFFICE_STORE_CATALOG } from '../lib/officeStoreData.js';
+import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import { OfficeInvoiceModal } from './OfficeInvoiceModal.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -43,7 +44,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
   const fetchOrders = async () => {
     try {
       const res = await fetch(`/api/office-store/orders?studentId=${currentUser.id}`);
-      if (res.ok) {
+      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
         const data = await res.json();
         setOrders(data.orders || []);
       }
@@ -53,23 +54,24 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
   };
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     fetchOrders();
   }, [currentUser.id]);
 
   // Categories list
-  const categories: { key: OfficeStoreCategory | 'all'; label: string }[] = [
-    { key: 'all', label: 'Todos los Productos' },
-    { key: 'estanterias', label: 'Estanterías' },
-    { key: 'mesas', label: 'Mesas de Oficina' },
-    { key: 'sillas', label: 'Sillas' },
-    { key: 'sobremesa', label: 'Ordenadores Sobremesa' },
-    { key: 'portatiles', label: 'Portátiles' },
-    { key: 'perifericos', label: 'Periféricos' },
-    { key: 'impresoras', label: 'Impresoras' },
-    { key: 'software_texto', label: 'Software Procesador Texto' },
-    { key: 'software_conta', label: 'Software Contabilidad' },
-    { key: 'telefonos_fijos', label: 'Teléfonos Fijos' },
-    { key: 'telefonos_moviles', label: 'Teléfonos Móviles' }
+  const categories: { key: OfficeStoreCategory | 'all'; label: string; icon: string }[] = [
+    { key: 'all', label: 'Todos los Productos', icon: '📦' },
+    { key: 'estanterias', label: 'Estanterías', icon: '🗄️' },
+    { key: 'mesas', label: 'Mesas de Oficina', icon: '🪑' },
+    { key: 'sillas', label: 'Sillas', icon: '💺' },
+    { key: 'sobremesa', label: 'Ordenadores Sobremesa', icon: '🖥️' },
+    { key: 'portatiles', label: 'Portátiles', icon: '💻' },
+    { key: 'perifericos', label: 'Periféricos', icon: '⌨️' },
+    { key: 'impresoras', label: 'Impresoras', icon: '🖨️' },
+    { key: 'software_texto', label: 'Software Texto', icon: '📄' },
+    { key: 'software_conta', label: 'Software Contabilidad', icon: '📊' },
+    { key: 'telefonos_fijos', label: 'Teléfonos Fijos', icon: '☎️' },
+    { key: 'telefonos_moviles', label: 'Teléfonos Móviles', icon: '📱' }
   ];
 
   // Filter items
@@ -121,10 +123,6 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
 
     if (currentUser.balance < cartTotal) {
       setError(`Saldo insuficiente en el banco. Necesitas ${formatNumber(cartTotal)} € y tu saldo actual es de ${formatNumber(currentUser.balance)} €.`);
-      return;
-    }
-
-    if (!confirm(`¿Confirmas la compra por un importe total de ${formatNumber(cartTotal)} € (IVA incl.)? El importe se cargará inmediatamente en tu cuenta bancaria.`)) {
       return;
     }
 
@@ -257,8 +255,8 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
         )}
 
         {/* Filter Controls Bar */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-center justify-between border-b border-slate-100 pb-3">
             {/* Search Input */}
             <div className="relative w-full sm:w-96">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
@@ -271,26 +269,48 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               />
             </div>
 
-            <span className="text-xs font-bold text-slate-500">
-              Mostrando {filteredItems.length} productos
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500">
+                Catálogo ({filteredItems.length} {filteredItems.length === 1 ? 'producto' : 'productos'})
+              </span>
+              {selectedCategory !== 'all' && (
+                <button
+                  onClick={() => setSelectedCategory('all')}
+                  className="text-xs text-amber-600 font-bold hover:underline cursor-pointer ml-1"
+                >
+                  (Limpiar filtro)
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Category Tabs Scrollable */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 no-scrollbar">
-            {categories.map((cat) => (
-              <button
-                key={cat.key}
-                onClick={() => setSelectedCategory(cat.key)}
-                className={`whitespace-nowrap px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer ${
-                  selectedCategory === cat.key
-                    ? 'bg-slate-900 text-amber-400 shadow-xs'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                {cat.label}
-              </button>
-            ))}
+          {/* Category Tags Wrapped (No Scrollbar) */}
+          <div className="flex flex-wrap items-center gap-2">
+            {categories.map((cat) => {
+              const count = cat.key === 'all' 
+                ? catalog.length 
+                : catalog.filter(i => i.category === cat.key).length;
+              const isSelected = selectedCategory === cat.key;
+              return (
+                <button
+                  key={cat.key}
+                  onClick={() => setSelectedCategory(cat.key)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer border ${
+                    isSelected
+                      ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="text-sm leading-none">{cat.icon}</span>
+                  <span>{cat.label}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                    isSelected ? 'bg-amber-400 text-slate-950' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -305,14 +325,14 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                 {/* Product Image Container */}
                 <div className="relative w-full h-48 bg-slate-100 overflow-hidden border-b border-slate-100">
                   <img
-                    src={item.imageUrl}
+                    src={resolveImageUrl(item.imageUrl, 'product', item.name)}
                     alt={item.name}
                     loading="lazy"
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-300"
                     onError={(e) => {
-                      // Fallback gracefully if image fails
-                      (e.target as HTMLElement).style.display = 'none';
+                      const target = e.currentTarget as HTMLImageElement;
+                      if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
                     }}
                   />
                   <span className="absolute top-3 left-3 bg-slate-900/90 text-amber-300 backdrop-blur-xs text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full border border-slate-700/60 shadow-xs">
@@ -393,12 +413,13 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                 cart.map(({ item, quantity }) => (
                   <div key={item.id} className="pt-4 first:pt-0 flex items-center gap-3">
                     <img
-                      src={item.imageUrl}
+                      src={resolveImageUrl(item.imageUrl, 'product', item.name)}
                       alt={item.name}
                       referrerPolicy="no-referrer"
                       className="w-12 h-12 rounded-lg object-cover bg-slate-100 border border-slate-200 shrink-0"
                       onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
+                        const target = e.currentTarget as HTMLImageElement;
+                        if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
                       }}
                     />
                     <div className="flex-1 min-w-0">

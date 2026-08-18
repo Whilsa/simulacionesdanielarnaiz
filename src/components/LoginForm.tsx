@@ -30,7 +30,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/acceso', {
+      const response = await fetch('/api/acceso', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -98,10 +98,10 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
         </div>
         
         <h2 className="mt-6 text-center text-2xl sm:text-3xl font-bold font-display tracking-tight text-slate-900">
-          Simulador de <span className="text-amber-500">Daniel Arnaiz Boluda</span>
+          ContaLab
         </h2>
         <p className="mt-2 text-center text-sm text-slate-500 font-sans">
-          Simulador de negocios para contabilidad
+          Simulador de negocios para contabilidad de Daniel Arnaiz Boluda
         </p>
       </div>
 

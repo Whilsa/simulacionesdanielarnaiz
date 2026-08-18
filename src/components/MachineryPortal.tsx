@@ -9,6 +9,7 @@ import {
   Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight, Info
 } from 'lucide-react';
 import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
+import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
 
@@ -262,8 +263,8 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de Montaje (5 Días Reales):</strong>
-                Se tardan exactamente <strong>5 días reales</strong> en montar la maquinaria antes de estar operativa.
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de Montaje (8 Horas Reales):</strong>
+                Se tardan exactamente <strong>8 horas reales</strong> en montar la maquinaria antes de estar operativa.
               </div>
             </div>
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
@@ -326,7 +327,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                             ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' 
                             : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                         }`}>
-                          {isAssembly ? 'En Montaje (5 días)' : 'Operativa'}
+                          {isAssembly ? 'En Montaje (8 horas)' : 'Operativa'}
                         </span>
                       </div>
 
@@ -371,9 +372,14 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                   {/* Image Header */}
                   <div className="relative h-52 bg-slate-900 overflow-hidden">
                     <img 
-                      src={machinery.imageUrl} 
+                      src={resolveImageUrl(machinery.imageUrl, 'machinery', machinery.title)} 
                       alt={machinery.title} 
                       className="w-full h-full object-cover opacity-90 hover:scale-105 transition duration-500"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.currentTarget as HTMLImageElement;
+                        if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                      }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
                     

@@ -44,7 +44,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
     : (currentContract ? [currentContract] : []);
 
   // Compute breakdown per property
-  const propertyCalculations = acquisitions.map(prop => {
+  const propertyCalculations = acquisitions.map((prop, idx) => {
     const pId = String(prop.id || prop.propertyId || '');
     const pTitle = String(prop.propertyTitle || prop.title || 'Inmueble');
     const pType = String(prop.propertyType || prop.type || prop.inmueble_tipo || prop.property_type || '').toLowerCase();
@@ -83,10 +83,23 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
       freeM2 = Math.max(0, surface - adminM2 - machineryM2 - storageM2);
     }
 
-    // 1. Installed Machinery Power (kW)
+    // 1. Installed Machinery Power (kW) for THIS property only
+    const propertyMachinery = machinery.filter(m => {
+      const mNaveId = String(m.installedAtNaveId || m.installedNaveId || m.installationNaveId || m.propertyId || m.acquisitionId || '');
+      if (mNaveId && mNaveId === pId) return true;
+
+      const mNaveTitle = (m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || m.naveInstaladaTitulo || '').toLowerCase().trim();
+      const propTitleLower = pTitle.toLowerCase().trim();
+      if (mNaveTitle && propTitleLower && (mNaveTitle === propTitleLower || mNaveTitle.includes(propTitleLower) || propTitleLower.includes(mNaveTitle))) return true;
+
+      if (!mNaveId && !mNaveTitle && acquisitions.length === 1) return true;
+
+      return false;
+    });
+
     let installedMachineryKw = 0;
     if (isNave) {
-      machinery.forEach(m => {
+      propertyMachinery.forEach(m => {
         installedMachineryKw += Number(m.requiredPowerKW || m.powerKw || m.potencia || m.power) || (m.category === 'metal_hierro' ? 35 : 25);
       });
     }
@@ -133,9 +146,10 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
     // Matching active contract
     const contract = activeContracts.find(c => 
-      c.propertyId === pId || 
-      (c.propertyTitle && c.propertyTitle.toLowerCase().trim() === pTitle.toLowerCase().trim()) ||
-      (!c.propertyId && activeContracts.length === 1 && acquisitions.length === 1)
+      (c.propertyId && (c.propertyId === pId || c.propertyId === String(prop.id) || c.propertyId === String(prop.propertyId))) || 
+      (c.propertyTitle && pTitle && c.propertyTitle.toLowerCase().trim() === pTitle.toLowerCase().trim()) ||
+      (!c.propertyId && activeContracts.length === acquisitions.length && activeContracts[idx]) ||
+      (!c.propertyId && activeContracts.length === 1)
     );
 
     return {
@@ -532,6 +546,40 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     </div>
                   </div>
 
+                  {/* Detailed Tax & Breakdown Summary Box */}
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs space-y-2">
+                    <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                      <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                        <Calculator className="w-4 h-4 text-amber-400" />
+                        Desglose Estimado de Facturación Mensual ({(shiftsMap[calc.propId] || 1)} {(shiftsMap[calc.propId] || 1) === 1 ? 'Turno (8h/día)' : (shiftsMap[calc.propId] || 1) === 2 ? 'Turnos (16h/día)' : 'Turnos (24h/día)'})
+                      </span>
+                      <span className="font-mono text-slate-400">Consumo: {formatNumber(calc.estimatedMonthlyKwh)} kWh/mes</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1 font-mono text-[11px]">
+                      <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px]">Término Potencia ({currentPower} kW)</span>
+                        <span className="text-slate-200 font-bold">{formatNumber(powerCostEst)} €</span>
+                      </div>
+                      <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px]">Término Energía ({formatNumber(calc.estimatedMonthlyKwh)} kWh)</span>
+                        <span className="text-amber-300 font-bold">{formatNumber(energyCostEst)} €</span>
+                      </div>
+                      <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px]">Imp. Eléctrico IEE (5,11%)</span>
+                        <span className="text-slate-300 font-bold">{formatNumber(ieeEst)} €</span>
+                      </div>
+                      <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px]">IVA (21%)</span>
+                        <span className="text-slate-300 font-bold">{formatNumber(ivaEst)} €</span>
+                      </div>
+                      <div className="bg-amber-950/60 p-2 rounded border border-amber-800 col-span-2 sm:col-span-1">
+                        <span className="text-amber-300 block text-[10px] font-bold">TOTAL FACTURA EST.</span>
+                        <span className="text-amber-400 font-black text-sm">{formatNumber(totalCostEst)} €</span>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Final Power Selection & Contracting Action */}
                   <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                     <div>
@@ -614,17 +662,94 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Info Banner */}
-      <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-200/90 flex items-start gap-3 mt-4">
-        <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <strong className="text-amber-300 font-bold block text-sm">Información sobre la Contratación y Cálculo de Potencia:</strong>
-          <p className="leading-relaxed">
-            • <strong>Previsión de Cargas:</strong> El simulador te permite estimar el impacto en potencia (kW) al comprar nuevos equipos informáticos o instalar maquinaria pesada adicional.
-          </p>
-          <p className="leading-relaxed">
-            • <strong>Liquidación:</strong> IberLuz realiza la liquidación mensual de potencia y energía el día 1 de cada mes y domicilia el recibo bancario el <strong>día 5 de cada mes</strong>.
-          </p>
+      {/* Comprehensive Explanation Card on Electric Bill Calculation & Variance */}
+      <div className="bg-slate-950 border-2 border-amber-500/40 rounded-2xl p-6 space-y-4 shadow-2xl">
+        <div className="flex items-center space-x-3 border-b border-slate-800 pb-3">
+          <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+            <Info className="w-6 h-6" />
+          </div>
+          <div>
+            <h4 className="text-base font-black text-white">Explicación del Cálculo de la Factura de Electricidad y Variaciones del Gasto Previsto</h4>
+            <p className="text-xs text-slate-400">
+              ¿Por qué un contrato de 95 kW puede pasar de un estimado base de ~2.732,38 € a un gasto previsto de ~5.748,99 € al mes?
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
+          {/* Factor 1: Fixed Term vs Variable Energy Term */}
+          <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+            <h5 className="font-bold text-amber-300 text-sm flex items-center gap-1.5">
+              <span>1. Término Fijo vs. Término Variable (Energía Consumida)</span>
+            </h5>
+            <p className="leading-relaxed text-slate-400">
+              La factura eléctrica consta de dos componentes principales:
+            </p>
+            <ul className="list-disc pl-4 space-y-1 text-slate-300">
+              <li>
+                <strong className="text-slate-200">Término de Potencia (Fijo):</strong> Se cobra por la capacidad contratada ({formatNumber(95)} kW × 30,4 días × 0,11 €/kW/día = <span className="font-mono text-amber-300">317,68 €/mes</span>). Este coste es fijo independientemente del uso.
+              </li>
+              <li>
+                <strong className="text-slate-200">Término de Energía (Variable):</strong> Es el consumo real acumulado en kWh a precio de <span className="font-mono text-amber-300">0,14 €/kWh</span>.
+              </li>
+            </ul>
+          </div>
+
+          {/* Factor 2: Impact of Operarios and Shifts */}
+          <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+            <h5 className="font-bold text-purple-300 text-sm flex items-center gap-1.5">
+              <span>2. Impacto de la Maquinaria Activa y los Operarios (Turnos Lunes a Viernes)</span>
+            </h5>
+            <p className="leading-relaxed text-slate-400">
+              Cuando la empresa contrata y asigna operarios a la maquinaria, el número de turnos laborales aumenta (aplicables exclusivamente de <strong>lunes a viernes ambos inclusive</strong>; las máquinas no producen fines de semana):
+            </p>
+            <ul className="list-disc pl-4 space-y-1 text-slate-300">
+              <li>
+                <strong className="text-slate-200">1 Turno (8 h/día × 20 días hábiles = 160h/mes):</strong> Consumo estimado ~15.200 kWh/mes → <span className="font-mono text-slate-200">2.128,00 €</span> de energía.
+              </li>
+              <li>
+                <strong className="text-slate-200">2 Turnos (16 h/día × 20 días hábiles = 320h/mes):</strong> Al asignar operarios en 2 turnos de lunes a viernes → Consumo ~30.400 kWh/mes → <span className="font-mono text-purple-300 font-bold">4.256,00 €</span> de energía.
+              </li>
+              <li>
+                <strong className="text-slate-200">3 Turnos (24 h/día × 20 días hábiles = 480h/mes):</strong> Cobertura completa 24h de lunes a viernes → Consumo ~45.600 kWh/mes → <span className="font-mono text-purple-300 font-bold">6.384,00 €</span> de energía.
+              </li>
+            </ul>
+          </div>
+
+          {/* Factor 3: Taxes (IEE and VAT) */}
+          <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+            <h5 className="font-bold text-emerald-300 text-sm flex items-center gap-1.5">
+              <span>3. Impuestos Regulados: Impuesto Eléctrico (5,11%) e IVA (21%)</span>
+            </h5>
+            <p className="leading-relaxed text-slate-400">
+              Sobre la base imponible (Potencia + Energía + Alquiler de equipos de 0,85 €) se aplican los tributos estatales obligatorios:
+            </p>
+            <ul className="list-disc pl-4 space-y-1 text-slate-300">
+              <li><strong className="text-slate-200">Impuesto sobre la Electricidad (IEE):</strong> 5,11269632% sobre la base.</li>
+              <li><strong className="text-slate-200">IVA General:</strong> 21% sobre (Base + Impuesto Eléctrico).</li>
+            </ul>
+            <p className="text-[11px] text-slate-400 italic">
+              Los impuestos representan aproximadamente un <strong className="text-emerald-300">27,28% adicional</strong> sobre la base imponible de la factura.
+            </p>
+          </div>
+
+          {/* Comparative Summary Example Table */}
+          <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+            <h5 className="font-bold text-amber-400 text-sm">Ejemplo Comparativo para 95 kW Contratados</h5>
+            <div className="space-y-1.5 text-[11px] font-mono">
+              <div className="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
+                <span>• Turno Estándar (160h - ~15.200 kWh):</span>
+                <span className="text-slate-300 font-bold">2.446,53 € base + 285,85 € impuestos = 2.732,38 €</span>
+              </div>
+              <div className="bg-amber-950/80 p-2 rounded border border-amber-800/80 flex justify-between text-amber-300">
+                <span>• Doble Turno Operarios (320h - ~30.400 kWh):</span>
+                <span className="font-black text-amber-400">4.574,53 € base + 1.174,46 € impuestos = 5.748,99 €</span>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
+              En resumen, si asignas personal para trabajar en varios turnos con tus 95 kW de maquinaria, el consumo de energía aumenta proporcionalmente a las horas de uso, lo que eleva el recibo total previsto hasta los <strong>5.748,99 €</strong>.
+            </p>
+          </div>
         </div>
       </div>
     </div>

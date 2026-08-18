@@ -200,7 +200,37 @@ export interface MachineryAcquisition {
   equipmentList?: string[];
   equipment?: string[];
   imageUrl?: string;
+  relocationInvoice?: RelocationInvoice;
+  relocationInvoices?: RelocationInvoice[];
   [key: string]: any;
+}
+
+export interface RelocationInvoice {
+  id?: string;
+  invoiceNumber: string;
+  issueDate: string;
+  studentId: string;
+  studentName?: string;
+  companyName?: string;
+  cifNif?: string;
+  machineryId: string;
+  machineryTitle: string;
+  sourceNaveId?: string;
+  sourceNaveTitle?: string;
+  sourceLocation?: string;
+  targetNaveId?: string;
+  targetNaveTitle?: string;
+  targetLocation?: string;
+  distanceKm: number;
+  disassemblyFee: number;
+  reassemblyFee: number;
+  transportFee: number;
+  subtotal: number;
+  ivaRate: number;
+  ivaAmount: number;
+  totalAmount: number;
+  status: string;
+  paymentMethod: string;
 }
 
 export interface AmortizationRow {
@@ -266,7 +296,16 @@ export interface BankLoan {
   schedule: AmortizationRow[];
 }
 
-export type RawMaterialType = 'hierro' | 'metal' | 'plastico' | 'epoxi';
+export type RawMaterialType = 'hierro' | 'metal' | 'plastico' | 'epoxi' | 'producto_final' | 'transporte' | 'combustible';
+
+export interface PriceAlertFeedback {
+  id: string;
+  message: string;
+  suggestedPrice?: number;
+  timestamp: string;
+  active: boolean;
+  authorName?: string;
+}
 
 export interface RawMaterialAnnouncement {
   id: string;
@@ -278,12 +317,55 @@ export interface RawMaterialAnnouncement {
   pricePerUnit: number;
   description: string;
   updatedAt: string;
+  durationDays?: number | 'indefinido';
+  expirationDate?: string;
+  stock?: number | 'ilimitado';
+  active?: boolean;
+  sellerId?: string;
+  sellerName?: string;
+  sellerLevel?: number | 'official';
+  isDesTornillo?: boolean;
+  priceAlert?: PriceAlertFeedback;
+}
+
+export interface RawMaterialOrderItem {
+  announcementId: string;
+  materialType?: RawMaterialType;
+  materialTitle?: string;
+  title?: string;
+  quantity: number;
+  unitWeightKg?: number;
+  totalKg?: number;
+  basePrice?: number;
+  unitPrice?: number;
+  subtotal?: number;
+  totalCost?: number;
+}
+
+export interface NegotiationHistoryEntry {
+  id: string;
+  authorId: string;
+  authorName: string;
+  timestamp: string;
+  action: 'propuesta_inicial' | 'contraoferta' | 'aceptado' | 'rechazado';
+  quantity: number;
+  pricePerUnit: number;
+  discountPercentage: number;
+  insuranceFee: number;
+  transportCost: number;
+  transportMethod: 'vendedor_envio' | 'comprador_recogida';
+  totalAmount: number;
+  note?: string;
 }
 
 export interface RawMaterialOrder {
   id: string;
   studentId: string;
   studentName: string;
+  buyerLevel?: number;
+  sellerId?: string;
+  sellerName?: string;
+  sellerLevel?: number | 'official';
   announcementId: string;
   materialType: RawMaterialType;
   materialTitle: string;
@@ -291,29 +373,271 @@ export interface RawMaterialOrder {
   unitWeightKg: number;
   totalKg: number;
   basePrice: number;
+  taxableBase?: number;
+  discountPercentage?: number;
+  discountAmount?: number;
+  insuranceFee?: number;
+  insuranceCost?: number;
+  hasInsurance?: boolean;
   ivaAmount: number;
   transportCost: number;
+  transportMethod?: 'vendedor_envio' | 'comprador_recogida';
   totalAmount: number;
   needsTransport: boolean;
   deliveryAddress: string;
   pickupVehicleId?: string;
-  status: 'pendiente' | 'aprobado' | 'rechazado' | 'entregado';
+  status: 'pendiente' | 'en_negociacion' | 'aprobado' | 'en_transito' | 'entregado' | 'rechazado' | 'finalizado' | 'facturado';
   requestedAt: string;
   approvedAt?: string;
+  shippedAt?: string;
   estimatedDeliveryAt?: string;
   deliveredAt?: string;
+  invoicedAt?: string;
+  invoiceNumber?: string;
+  rejectionReason?: string;
+  estimatedDeliveryDays?: number;
+  items?: RawMaterialOrderItem[];
+  lastTurnUserId?: string;
+  negotiationHistory?: NegotiationHistoryEntry[];
+  inventoryCredited?: boolean;
+  destinationNaveId?: string;
+  note?: string;
+  isDirectMessageInvoice?: boolean;
+  isChatInvoice?: boolean;
+  source?: string;
+  subtotalAmount?: number;
+  vatRate?: number;
+  vatAmount?: number;
+  unitPrice?: number;
+}
+
+export interface PromissoryNoteData {
+  id?: string;
+  obligationId?: string;
+  promissoryNoteNumber: string; // e.g. "PAG-2026-8492"
+  concept: string; // Operación origen / Factura vinculada
+  amount: number;
+  amountInWords: string;
+  issueDate: string; // Fecha de libramiento/emisión
+  issuePlace: string; // Lugar de emisión (ej. "Madrid")
+  dueDate: string; // Fecha de vencimiento
+  daysTerm?: number; // Plazo en días (30, 60, 90, 120...)
+  orderType: 'no_a_la_orden' | 'a_la_orden'; // Cláusula cambiaria
+  
+  // Tomador / Beneficiario (Vendedor)
+  beneficiaryId: string;
+  beneficiaryName: string;
+  beneficiaryNifCif?: string;
+  beneficiaryLevel?: number | string;
+  
+  // Firmante / Librador / Deudor (Comprador)
+  issuerId: string;
+  issuerName: string;
+  issuerNifCif?: string;
+  issuerAddress?: string;
+  issuerLevel?: number | string;
+  
+  // Domiciliación Bancaria
+  bankName: string;
+  bankIban: string;
+  
+  // Firma electrónica
+  signatureTimestamp: string;
+  signatureHash: string;
+  status: 'pendiente' | 'descontado' | 'gestion_cobro' | 'pagado' | 'impagado' | 'anulado';
+  paidAt?: string;
+  paidTransferId?: string;
+  collectRequested?: boolean;
+  collectRequestedAt?: string;
+
+  // Descuento bancario de pagarés
+  isDiscounted?: boolean;
+  discountedAt?: string;
+  discountDays?: number;
+  discountRate?: number; // 6% anual nominal
+  discountInterest?: number; // Intereses descontados
+  discountCommissionRate?: number; // 0.5% sobre nominal
+  discountCommission?: number; // Importe de la comisión de apertura/descuento
+  discountNetReceived?: number; // Líquido abonado en cuenta al vendedor
+  discountTransferId?: string;
+
+  // Gestión de cobro bancario
+  isCollectionManagement?: boolean;
+  collectionManagementAt?: string;
+  collectionCommissionRate?: number; // 0.5% sobre nominal (mínimo 20 €)
+  collectionCommission?: number;
+  collectionTransferId?: string;
+  collectionAutoCollectedAt?: string;
+  collectionUnpaidFeeAmount?: number; // 40 € en caso de impago
+
+  // Gestión al vencimiento
+  maturityProcessed?: boolean;
+  unpaidReturnedAt?: string;
+  unpaidFeeRate?: number; // 1%
+  unpaidFeeAmount?: number;
+  unpaidNominalReimbursed?: number;
+  unpaidTotalDebited?: number;
+  unpaidReturnTransferId?: string;
+  unpaidFeeTransferId?: string;
+}
+
+export interface MarketMessage {
+  id: string;
+  chatId: string;
+  senderId: string;
+  senderName: string;
+  recipientId: string;
+  recipientName: string;
+  content: string;
+  timestamp: string;
+  read?: boolean;
+  type?: 'text' | 'invoice' | 'promissory_note';
+  invoiceData?: {
+    id?: string;
+    orderId?: string;
+    invoiceNumber: string;
+    concept: string;
+    items: Array<{
+      title: string;
+      quantity: number;
+      unitPrice: number;
+      subtotal: number;
+    }>;
+    itemsSubtotal?: number;
+    taxableBase: number;
+    discountAmount?: number;
+    transportCost?: number;
+    insuranceFee?: number;
+    vatRate: number;
+    vatAmount: number;
+    totalAmount: number;
+    issuedAt: string;
+    sellerId: string;
+    sellerName: string;
+    sellerLevel?: number | string;
+    buyerId: string;
+    buyerName: string;
+    buyerLevel?: number | string;
+    deliveryAddress?: string;
+    paymentMethod?: string;
+    status?: 'facturado' | 'cobrado';
+  };
+  promissoryNoteData?: PromissoryNoteData;
+}
+
+export interface TradingPartner {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+  level: number | string;
+  levelName: string;
+  canBuyFromMe: boolean;
+  canSellToMe: boolean;
+  canTrade: boolean;
+  unreadCount?: number;
+  lastMessageTimestamp?: string | null;
+  lastMessageContent?: string | null;
+  contactTimestamp?: string | null;
+}
+
+export interface MarketInvoice {
+  id: string;
+  invoiceNumber: string;
+  issuedAt: string;
+  sellerId: string;
+  sellerName: string;
+  sellerAccount?: string;
+  buyerId: string;
+  buyerName: string;
+  buyerAccount?: string;
+  orderId: string;
+  concept: string;
+  items: Array<{
+    title: string;
+    quantity: number;
+    unitPrice: number;
+    subtotal: number;
+  }>;
+  taxableBase: number;
+  discountAmount: number;
+  transportCost: number;
+  insuranceFee: number;
+  vatRate: number;
+  vatAmount: number;
+  totalAmount: number;
+  paymentMethod: string;
+  status: 'facturado' | 'cobrado';
+}
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  userName?: string;
+  title: string;
+  message: string;
+  type: 'order_received' | 'order_negotiating' | 'order_approved' | 'order_rejected' | 'announcement_new' | 'transfer_received' | 'court_lawsuit' | string;
+  read: boolean;
+  createdAt: string;
+  relatedOrderId?: string;
+  relatedAnnouncementId?: string;
+}
+
+export interface RawMaterialNaveInventory {
+  ironKg: number;
+  metalKg?: number;
+  plasticKg: number;
+  epoxiKg: number;
+  rodProductionMode?: 'estrella' | 'plana' | null;
+  producedRodsUnits?: number;
+  producedStarRodsUnits?: number;
+  producedFlatRodsUnits?: number;
+  producedScrewdriversUnits?: number;
+  starScrewdriversUnits?: number;
+  flatScrewdriversUnits?: number;
+  ironScrewdriversUnits?: number;
+  metalScrewdriversUnits?: number;
 }
 
 export interface RawMaterialInventory {
   studentId: string;
   ironKg: number;
-  metalKg: number;
+  metalKg?: number;
   plasticKg: number;
   epoxiKg: number;
+  rodProductionMode?: 'estrella' | 'plana' | null;
   producedRodsUnits: number;
+  producedStarRodsUnits?: number;
+  producedFlatRodsUnits?: number;
+  producedIronRodsUnits?: number;
+  producedMetalRodsUnits?: number;
   producedScrewdriversUnits: number;
+  starScrewdriversUnits?: number;
+  flatScrewdriversUnits?: number;
+  ironScrewdriversUnits?: number;
+  metalScrewdriversUnits?: number;
+  line1PendingHours?: number;
+  line2PendingHours?: number;
+  naveInventories?: { [naveId: string]: RawMaterialNaveInventory };
   lastCalculatedAt: string;
   updatedAt: string;
+}
+
+export interface CompanyProfile {
+  id: string;
+  studentId: string;
+  companyName: string;
+  description: string;
+  logoUrl?: string;
+  level: number;
+  updatedAt: string;
+}
+
+export interface MarketContact {
+  id: string;
+  userId: string;
+  contactId: string;
+  createdAt: string;
 }
 
 export interface DatabaseSchema {
@@ -335,10 +659,17 @@ export interface DatabaseSchema {
   telecomContracts?: TelecomContract[];
   telecomInvoices?: TelecomInvoice[];
   officeOrders?: OfficePurchaseOrder[];
+  relocationInvoices?: RelocationInvoice[];
   purchasedVehicles?: PurchasedVehicle[];
+  unifiedMonthlyInvoices?: UnifiedMonthlyInvoice[];
   rawMaterialAnnouncements?: RawMaterialAnnouncement[];
   rawMaterialOrders?: RawMaterialOrder[];
   rawMaterialInventories?: RawMaterialInventory[];
+  marketMessages?: MarketMessage[];
+  companyProfiles?: CompanyProfile[];
+  marketContacts?: MarketContact[];
+  courtLawsuits?: CourtLawsuit[];
+  notifications?: AppNotification[];
   defaultInitialBalance: number;
   isSeed?: boolean;
 }
@@ -416,6 +747,9 @@ export interface NaveFloorPlan {
   studentId: string;
   machineryZoneM2: number;
   storageZoneM2: number;
+  rawMaterialsStorageM2?: number;
+  semiFinishedStorageM2?: number;
+  finishedGoodsStorageM2?: number;
   adminZoneM2: number;
   freeZoneM2: number;
   warehousesCount: number;
@@ -475,8 +809,39 @@ export interface PurchasedVehicle {
   assignedDriverName?: string;
   assignedShift?: number;
   assignedWarehouseIndex?: number;
+  assignedPropertyId?: string;
+  assignedPropertyTitle?: string;
+  assignedWarehouseName?: string;
   status: 'activo' | 'mantenimiento';
   imageUrl: string;
+}
+
+export interface UnifiedInvoiceItem {
+  category: 'telecom' | 'electricity' | 'office' | 'deferred_payment' | 'other';
+  title: string;
+  concept: string;
+  baseAmount: number;
+  ivaAmount: number;
+  totalAmount: number;
+}
+
+export interface UnifiedMonthlyInvoice {
+  id: string;
+  invoiceNumber: string;
+  studentId: string;
+  studentName: string;
+  cifNif: string;
+  periodMonth: number;
+  periodYear: number;
+  issueDate: string;
+  dueDate: string;
+  paidDate: string;
+  items: UnifiedInvoiceItem[];
+  subtotalBase: number;
+  totalIva: number;
+  grandTotal: number;
+  paymentMethod: string;
+  status: 'pagado';
 }
 
 export interface PayrollRecord {
@@ -626,4 +991,93 @@ export interface OfficePurchaseOrder {
   status: 'completado_pagado';
   paymentMethod: 'banco' | string;
 }
+
+export type CourtLawsuitType = 'ordinaria' | 'cambiaria';
+
+export type CourtLawsuitSubtype = 
+  | 'incumplimiento_pago' 
+  | 'incumplimiento_entrega' 
+  | 'impago_pagare';
+
+export type CourtLawsuitStatus = 
+  | 'pendiente_admision'
+  | 'admitida' 
+  | 'inadmitida'
+  | 'embargo_preventivo'
+  | 'en_tramite' 
+  | 'requerimiento_pago' 
+  | 'allanada_pagada' 
+  | 'estimada'
+  | 'ejecutada' 
+  | 'desestimada';
+
+export interface CourtAttachment {
+  id: string;
+  name: string;
+  size: number;
+  uploadedAt: string;
+  dataUrl: string;
+  docType?: string;
+}
+
+export interface CourtLawsuit {
+  id: string;
+  caseNumber: string;
+  courtName: string;
+  type: CourtLawsuitType;
+  subtype: CourtLawsuitSubtype;
+  plaintiffId: string;
+  plaintiffName: string;
+  plaintiffNif?: string;
+  plaintiffIban?: string;
+  defendantId: string;
+  defendantName: string;
+  defendantNif?: string;
+  defendantIban?: string;
+  claimedAmount: number;
+  interestAndCostsAmount: number;
+  totalClaimAmount: number;
+  contractDate?: string;
+  goodsDescription: string;
+  facts: string;
+  legalBasis: string;
+  petitum: string;
+  evidenceSummary: string;
+  attachments?: CourtAttachment[];
+  relatedOrderId?: string;
+  promissoryNoteNumber?: string;
+  promissoryNoteId?: string;
+  promissoryNoteDueDate?: string;
+  promissoryNoteData?: PromissoryNoteData;
+  status: CourtLawsuitStatus;
+  createdAt: string;
+  updatedAt: string;
+  admissionDate?: string;
+  admissionNotes?: string;
+  resolutionDate?: string;
+  resolutionNotes?: string;
+  judgeComments?: string;
+  executionTransferId?: string;
+  lawyerFeeAmount?: number;
+  lawyerFeeIva?: number;
+  lawyerFeeTotal?: number;
+  lawyerFeeInvoiceNumber?: string;
+  embargoDate?: string;
+  embargoAmount?: number;
+  embargoTransferId?: string;
+  embargoNotes?: string;
+  defendantAnswered?: boolean;
+  defendantAnswerDate?: string;
+  defendantAnswerType?: 'ordinaria_contestacion' | 'cambiaria_ya_pagado' | 'cambiaria_paga_ahora';
+  defendantAnswerFacts?: string;
+  defendantAnswerAttachments?: CourtAttachment[];
+  defendantDeadlineDate?: string;
+  defendantLawyerFeeAmount?: number;
+  defendantLawyerFeeIva?: number;
+  defendantLawyerFeeTotal?: number;
+  defendantLawyerFeeInvoiceNumber?: string;
+  costsPaid?: number;
+  costsTransferId?: string;
+}
+
 

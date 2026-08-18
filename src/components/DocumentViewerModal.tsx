@@ -3,22 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
-  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock
+  Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock, Truck, Download, RefreshCw
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord, RelocationInvoice, PurchasedVehicle } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
+import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 
-export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip';
+export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'machinery_relocation_invoice' | 'vehicle_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip';
 
 export interface DocumentViewerData {
   type: DocumentType;
   // Property or machinery purchase fields
   acquisition?: PropertyAcquisition;
   machineryAcquisition?: MachineryAcquisition;
+  relocationInvoice?: RelocationInvoice;
+  vehicle?: PurchasedVehicle;
   
   // Obligation statement fields
   obligation?: PaymentObligation;
@@ -56,9 +59,45 @@ interface DocumentViewerModalProps {
 
 export default function DocumentViewerModal({ data, onClose }: DocumentViewerModalProps) {
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const printableRef = useRef<HTMLDivElement>(null);
+
+  const getFilename = () => {
+    if (data.type === 'property_invoice') return `Factura_Inmueble_FAC-2026-${data.acquisition?.id || '101'}`;
+    if (data.type === 'machinery_invoice') return `Factura_Maquinaria_FAC-2026-${data.machineryAcquisition?.id || '201'}`;
+    if (data.type === 'machinery_relocation_invoice') return `Factura_Traslado_Maquinaria_FAC-2026-${data.relocationInvoice?.id || '250'}`;
+    if (data.type === 'vehicle_invoice') return `Factura_Vehiculo_VE-2026-${data.vehicle?.id || '301'}`;
+    if (data.type === 'obligation_statement') return `Extracto_Pago_Aplazado_${data.obligation?.id || 'OBL'}`;
+    if (data.type === 'loan_statement') return `Extracto_Prestamo_Bancario_${data.loan?.id || 'PR'}`;
+    if (data.type === 'transfer_statement') return `Extracto_Transferencia_${data.transfer?.id || 'TX'}`;
+    if (data.type === 'payroll_payslip') return `Nomina_${data.payrollRecord?.periodMonth || 'Mes'}-${data.payrollRecord?.periodYear || '2026'}_${data.employeeName || data.hiredEmployee?.employeeName || 'Empleado'}`;
+    return 'Documento_Contable';
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!printableRef.current) return;
+    setIsDownloading(true);
+    try {
+      await downloadElementAsPDF(printableRef.current, getFilename());
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      printElementFallback(printableRef.current);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const handlePrint = () => {
-    window.print();
+    if (printableRef.current) {
+      printElementFallback(printableRef.current);
+    } else {
+      try {
+        window.focus();
+        setTimeout(() => window.print(), 50);
+      } catch (e) {
+        console.error('Print error:', e);
+      }
+    }
   };
 
   const handleCopyText = () => {
@@ -124,7 +163,7 @@ EQUIPAMIENTO / LÍNEA ADQUIRIDA:
 Línea: ${title} (${mac?.optionTitle || 'Configuración Estándar'})
 Ubicación Instalada: ${mac?.installationNaveTitle || 'Nave Industrial'}
 Capacidad Producción: ${mac?.productionCapacityUnitsPerHour || 60} unid/hora
-Plazo de Montaje: 5 Días Reales (Estado: ${mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento'})
+Plazo de Montaje: 8 Horas Reales (Estado: ${mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento'})
 
 Base Imponible (Llave en mano): ${formatNumber(basePrice)} €
 IVA (21%): ${formatNumber(ivaAmount)} €
@@ -134,6 +173,37 @@ CONDICIONES DE PAGO:
 - Parte Pagada al Contado (Entrada + IVA): ${formatNumber(downPayment)} €
 - Parte Pendiente de Pago (Saldo Aplazado en Pagarés): ${formatNumber(pendingBalance)} €
 Forma de Pago: ${mac?.paymentMethod === 'contado' ? 'Al Contado' : 'Pago Aplazado (24 Pagarés Mensuales)'}
+================================================`;
+    } else if (data.type === 'machinery_relocation_invoice') {
+      const relInv = data.relocationInvoice || data.machineryAcquisition?.relocationInvoices?.[0] || data.machineryAcquisition?.relocationInvoice;
+      const mac = data.machineryAcquisition;
+      const macTitle = relInv?.machineryTitle || mac?.lineTitle || mac?.title || 'Línea de Producción Industrial';
+      const invoiceNo = relInv?.invoiceNumber || `FACT-TRSL-2026-${(mac?.id || '301').toUpperCase()}`;
+      const distanceKm = relInv?.distanceKm || 25;
+      const subtotal = relInv?.subtotal || 3100;
+      const ivaAmount = relInv?.ivaAmount || (subtotal * 0.21);
+      const totalAmount = relInv?.totalAmount || (subtotal + ivaAmount);
+
+      textContent = `================================================
+FACTURA DE TRASLADO Y MONTAJE DE MAQUINARIA INDUSTRIAL
+Nº Factura: ${invoiceNo}
+Fecha: ${relInv?.issueDate ? new Date(relInv.issueDate).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES')}
+------------------------------------------------
+PROVEEDOR: Logística y Montajes Industriales España S.L. (CIF: B-88442211)
+CLIENTE: ${relInv?.companyName || mac?.studentName || 'Empresa Estudiante'}
+
+EQUIPO TRASLADADO: ${macTitle}
+ORIGEN: ${relInv?.sourceNaveTitle || 'Nave Origen'}
+DESTINO: ${relInv?.targetNaveTitle || 'Nave Destino'}
+DISTANCIA TRAYECTO: ${distanceKm} km
+
+1. Desmontaje técnico: ${formatNumber(relInv?.disassemblyFee || 1500)} €
+2. Transporte pesado góndola (${distanceKm} km): ${formatNumber(relInv?.transportFee || 800)} €
+3. Remontaje y calibración: ${formatNumber(relInv?.reassemblyFee || 1800)} €
+
+Subtotal: ${formatNumber(subtotal)} €
+IVA (21%): ${formatNumber(ivaAmount)} €
+TOTAL PAGADO: ${formatNumber(totalAmount)} € (PAGADO AL CONTADO)
 ================================================`;
     } else if (data.type === 'obligation_statement') {
       const ob = data.obligation;
@@ -247,15 +317,17 @@ Estado Contable: EJECUTADO Y ABONADO
               title="Copiar texto para ejercicios de contabilidad"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? '¡Copiado!' : 'Copiar Texto'}</span>
+              <span className="hidden md:inline">{copied ? '¡Copiado!' : 'Copiar Texto'}</span>
             </button>
 
             <button
-              onClick={handlePrint}
-              className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
+              onClick={handleDownloadPDF}
+              disabled={isDownloading}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-xs disabled:opacity-50"
+              title="Descargar documento directamente en archivo PDF"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Imprimir / Guardar PDF</span>
+              {isDownloading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              <span>{isDownloading ? 'Generando PDF...' : 'Descargar PDF'}</span>
             </button>
 
             <button
@@ -268,7 +340,7 @@ Estado Contable: EJECUTADO Y ABONADO
         </div>
 
         {/* PRINTABLE SHEET BODY */}
-        <div className="p-8 sm:p-12 overflow-y-auto font-sans text-slate-900 space-y-8 print:p-0 print:overflow-visible text-xs">
+        <div ref={printableRef} className="p-8 sm:p-12 overflow-y-auto font-sans text-slate-900 space-y-8 print:p-0 print:overflow-visible text-xs">
           
           {/* DOCUMENT TYPE 1: PROPERTY INVOICE */}
           {data.type === 'property_invoice' && (() => {
@@ -545,8 +617,8 @@ Estado Contable: EJECUTADO Y ABONADO
                 <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 flex items-start gap-3">
                   <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                   <div className="text-xs text-amber-950">
-                    <strong className="block font-extrabold text-amber-900">Plazo Oficial de Montaje de 5 Días Reales:</strong>
-                    La maquinaria se entrega en régimen de montaje con un periodo garantizado de 5 días reales desde la compra antes de estar 100% operativa. Estado actual: <span className="font-bold uppercase text-amber-800">{mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento / Operativa'}</span>.
+                    <strong className="block font-extrabold text-amber-900">Plazo Oficial de Montaje de 8 Horas Reales:</strong>
+                    La maquinaria se entrega en régimen de montaje con un periodo garantizado de 8 horas reales desde la compra antes de estar 100% operativa. Estado actual: <span className="font-bold uppercase text-amber-800">{mac?.status === 'montaje' ? 'En Montaje' : 'En Funcionamiento / Operativa'}</span>.
                   </div>
                 </div>
 
@@ -596,6 +668,291 @@ Estado Contable: EJECUTADO Y ABONADO
                   Documento emitido electrónicamente. Código de factura único e irrepetible.
                 </div>
 
+              </div>
+            );
+          })()}
+
+          {/* MACHINERY RELOCATION INVOICE VIEW */}
+          {data.type === 'machinery_relocation_invoice' && (() => {
+            const relInv = data.relocationInvoice || data.machineryAcquisition?.relocationInvoices?.[0] || data.machineryAcquisition?.relocationInvoice;
+            const mac = data.machineryAcquisition;
+            const macTitle = relInv?.machineryTitle || mac?.lineTitle || mac?.title || 'Línea de Producción Industrial';
+            const invoiceNo = relInv?.invoiceNumber || `FACT-TRSL-2026-${(mac?.id || '301').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+            const issueDate = relInv?.issueDate ? new Date(relInv.issueDate).toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('es-ES');
+            
+            const distanceKm = relInv?.distanceKm || 25;
+            const disassemblyFee = relInv?.disassemblyFee || 1500;
+            const transportFee = relInv?.transportFee || 800;
+            const reassemblyFee = relInv?.reassemblyFee || 1800;
+            const subtotal = relInv?.subtotal || (disassemblyFee + transportFee + reassemblyFee);
+            const ivaAmount = relInv?.ivaAmount || (subtotal * 0.21);
+            const totalAmount = relInv?.totalAmount || (subtotal + ivaAmount);
+
+            return (
+              <div className="space-y-8">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Truck className="w-6 h-6 text-indigo-600" />
+                      <span>LOGÍSTICA Y MONTAJES INDUSTRIALES ESPAÑA S.L.</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Especialistas en Desmontaje, Transporte Pesado y Remontaje de Maquinaria
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      NIF: B-88442211 | Reg. Mercantil de Madrid, Tomo 9102, Folio 45
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Polígono Industrial Sur, Av. de la Logística 88, Madrid
+                    </p>
+                  </div>
+
+                  <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-300 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-indigo-800 block">FACTURA DE TRASLADO Y SERVICIOS</span>
+                    <span className="text-base font-extrabold text-slate-900 block">{invoiceNo}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">Fecha: {issueDate}</span>
+                  </div>
+                </div>
+
+                {/* Issuer & Client Info Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      PROVEEDOR DEL SERVICIO LOGÍSTICO
+                    </span>
+                    <p className="font-bold text-slate-900">Logística y Montajes Industriales España S.L.</p>
+                    <p className="text-slate-600">CIF: B-88442211</p>
+                    <p className="text-slate-600">Servicio: Reubicación de Equipos Pesados</p>
+                    <p className="text-slate-600 font-mono">IBAN Cobro: ES44 2100 0088 9911 2233</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      CLIENTE / TITULAR DE LA MAQUINARIA
+                    </span>
+                    <p className="font-bold text-slate-900">{relInv?.companyName || mac?.studentName || 'Empresa Estudiante'}</p>
+                    <p className="text-slate-600 font-mono">CIF/NIF: {relInv?.cifNif || 'B-99887766'}</p>
+                    <p className="text-slate-600">Maquinaria Trasladada: <strong>{macTitle}</strong></p>
+                  </div>
+                </div>
+
+                {/* Route detail */}
+                <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase text-indigo-900 tracking-wider block">DETALLE DE LA RUTA Y TRAYECTO</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase block font-bold">Nave de Origen</span>
+                      <span className="font-bold text-slate-900">{relInv?.sourceNaveTitle || mac?.installationNaveTitle || 'Nave Origen'}</span>
+                      <span className="text-[11px] text-slate-500 block">{relInv?.sourceLocation || 'Instalación de Origen'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase block font-bold">Nave de Destino</span>
+                      <span className="font-bold text-slate-900">{relInv?.targetNaveTitle || mac?.relocationTargetNaveTitle || 'Nave Destino'}</span>
+                      <span className="text-[11px] text-slate-500 block">{relInv?.targetLocation || 'Instalación de Destino'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase block font-bold">Distancia Estimada</span>
+                      <span className="font-bold text-indigo-900 font-mono text-sm">{distanceKm} km</span>
+                      <span className="text-[11px] text-slate-500 block">Transporte en Góndola Especial</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Line Items Table */}
+                <div className="border border-slate-300 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider">
+                        <th className="p-3">Concepto y Desglose Técnico del Servicio</th>
+                        <th className="p-3 text-right">Importe Neto</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-mono text-xs">
+                      <tr>
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900 block">1. Desmontaje y Desacople Técnico de Maquinaria</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Desconexión de acometidas eléctricas, desacople hidráulico, etiquetado de piezas y embalaje industrial.
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-medium">{formatNumber(disassemblyFee)} €</td>
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900 block">2. Transporte Especial de Gran Tonelaje ({distanceKm} km)</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Carga con grúa de gran tonelaje, flete en camión góndola de piso bajo y seguro de transporte pesado.
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-medium">{formatNumber(transportFee)} €</td>
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900 block">3. Remontaje, Nivelación y Calibración en Nave de Destino</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Descarga, colocación en solera, alineación de ejes, conexionado eléctrico y prueba de puesta a punto.
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-medium">{formatNumber(reassemblyFee)} €</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Payment Status Banner */}
+                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-300 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div className="text-xs text-emerald-950">
+                      <strong className="block font-extrabold text-emerald-900">PAGADO AL CONTADO POR TRANSFERENCIA BANCARIA:</strong>
+                      El importe total del servicio ha sido abonado íntegramente mediante cargo en la cuenta bancaria de la empresa.
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 bg-emerald-700 text-white font-extrabold text-xs uppercase rounded-full shrink-0">
+                    PAGADO
+                  </span>
+                </div>
+
+                {/* Total Summary Footer */}
+                <div className="flex justify-end pt-2">
+                  <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono border border-slate-900">
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>Subtotal Servicios Logísticos:</span>
+                      <span>{formatNumber(subtotal)} €</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>21,00% IVA Soportado:</span>
+                      <span>+{formatNumber(ivaAmount)} €</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-indigo-300">
+                      <span>TOTAL FACTURA:</span>
+                      <span>{formatNumber(totalAmount)} €</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento fiscal emitido conforme a la normativa de transporte de mercancías e instalaciones industriales.
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE: VEHICLE INVOICE */}
+          {data.type === 'vehicle_invoice' && (() => {
+            const veh = data.vehicle;
+            const title = veh?.title || 'Vehículo Comercial de Empresa';
+            const basePrice = veh?.basePrice || 0;
+            const ivaAmount = veh?.ivaAmount || (basePrice * 0.21);
+            const totalPrice = veh?.totalPrice || (basePrice + ivaAmount);
+            const invoiceNo = `FAC-VEH-2026-${(veh?.id || '301').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+            const issueDate = new Date(veh?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
+              year: 'numeric', month: 'long', day: 'numeric'
+            });
+
+            return (
+              <div className="space-y-8">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Truck className="w-6 h-6 text-blue-700" />
+                      <span>CONCESIONARIO Y MOTOR INDUSTRIAL S.A.</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Venta y Distribución Oficial de Vehículos Industriales, Camiones y Furgonetas
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      NIF: A-77665544 | Reg. Mercantil de Madrid, Tomo 7710, Folio 45
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Vía Automoción 88, 28052 Madrid
+                    </p>
+                  </div>
+
+                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-blue-800 block">FACTURA COMERCIAL VENTA VEHÍCULO</span>
+                    <span className="text-base font-extrabold text-slate-900 block">{invoiceNo}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">
+                      Fecha: {issueDate}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Parties Info */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      EMISOR / VENDEDOR
+                    </span>
+                    <p className="font-bold text-slate-900">Concesionario y Motor Industrial S.A.</p>
+                    <p className="text-slate-600">NIF: A-77665544</p>
+                    <p className="text-slate-600">Domicilio: Vía Automoción 88, Madrid</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      CLIENTE / ADQUIRENTE
+                    </span>
+                    <p className="font-bold text-slate-900">{veh?.studentName || data.studentName || 'Empresa Compradora'}</p>
+                    <p className="text-slate-600 font-mono">ID Alumno: #{veh?.studentId || '1'}</p>
+                    <p className="text-slate-600">Forma de Pago: <span className="font-bold text-slate-900 capitalize">{veh?.paymentMethod === 'contado' ? 'Al Contado (Transferencia)' : 'Financiado / Aplazado'}</span></p>
+                  </div>
+                </div>
+
+                {/* Concept breakdown */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider">
+                        <th className="p-3">Concepto / Descripción del Vehículo</th>
+                        <th className="p-3 text-center">Tipo</th>
+                        <th className="p-3 text-right">Base Imponible</th>
+                        <th className="p-3 text-right">IVA (21%)</th>
+                        <th className="p-3 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-xs">
+                      <tr>
+                        <td className="p-3">
+                          <p className="font-bold text-slate-900">{title}</p>
+                          <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                            Matrícula / Bastidor: VE-2026-{(veh?.id || '301').toUpperCase()}
+                          </p>
+                        </td>
+                        <td className="p-3 text-center font-mono capitalize">
+                          {veh?.vehicleType === 'camion_trailer' ? 'Camión Tráiler' : veh?.vehicleType === 'carretilla_elevadora' ? 'Carretilla Elevadora' : 'Furgoneta / Coche'}
+                        </td>
+                        <td className="p-3 text-right font-mono font-semibold">{formatNumber(basePrice)} €</td>
+                        <td className="p-3 text-right font-mono text-slate-600">{formatNumber(ivaAmount)} €</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-900">{formatNumber(totalPrice)} €</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Totals box */}
+                <div className="flex justify-end">
+                  <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono border border-slate-900">
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>Base Imponible:</span>
+                      <span>{formatNumber(basePrice)} €</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>I.V.A. (21% Soportado):</span>
+                      <span>{formatNumber(ivaAmount)} €</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-blue-300">
+                      <span>TOTAL FACTURA:</span>
+                      <span>{formatNumber(totalPrice)} €</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-8 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento fiscal y factura de adquisición emitida electrónicamente conforme al Reglamento de Facturación Vigente.
+                </div>
               </div>
             );
           })()}

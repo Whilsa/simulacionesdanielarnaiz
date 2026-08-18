@@ -67,28 +67,20 @@ export const SPANISH_REGIONS: SpanishRegion[] = [
 // High quality curated unsplash image collections per type
 export const PROPERTY_IMAGES: Record<PropertyType, string[]> = {
   nave_industrial: [
-    'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=800&q=80', // Industrial warehouse exterior/interior
-    'https://images.unsplash.com/photo-1553413077-190dd305871c?auto=format&fit=crop&w=800&q=80', // Logistics hub
-    'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=800&q=80', // Modern factory building
-    'https://images.unsplash.com/photo-1616401784845-180882ba9ba8?auto=format&fit=crop&w=800&q=80', // Industrial park
+    '/images/properties/nave_industrial.jpg',
+    '/images/properties/nave_industrial.jpg',
   ],
   almacen: [
-    'https://images.unsplash.com/photo-1587293852726-70cdb56c2866?auto=format&fit=crop&w=800&q=80', // Warehouse interior shelves
-    'https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=800&q=80', // Storage facility
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80', // Distribution center
-    'https://images.unsplash.com/photo-1590247819200-16176cd17755?auto=format&fit=crop&w=800&q=80', // Modern bay doors
+    '/images/properties/almacen.jpg',
+    '/images/properties/almacen.jpg',
   ],
   oficina: [
-    'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=800&q=80', // Modern office interior
-    'https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=800&q=80', // Office workspace
-    'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=800&q=80', // Executive office
-    'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80', // Business center exterior
+    '/images/properties/oficina.jpg',
+    '/images/properties/oficina.jpg',
   ],
   local_comercial: [
-    'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=800&q=80',
-    'https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=800&q=80',
-    'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=800&q=80',
-    'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80',
+    '/images/properties/local_comercial.jpg',
+    '/images/properties/local_comercial.jpg',
   ],
 };
 

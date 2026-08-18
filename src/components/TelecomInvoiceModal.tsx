@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TelecomInvoice } from '../types.js';
-import { X, Printer, PhoneCall } from 'lucide-react';
+import { X, Printer, PhoneCall, Download, RefreshCw } from 'lucide-react';
 import { formatNumber } from '../lib/formatters.js';
+import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 
 interface TelecomInvoiceModalProps {
   invoice: TelecomInvoice | null;
@@ -15,15 +16,40 @@ interface TelecomInvoiceModalProps {
 }
 
 export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalProps) {
+  const printRef = useRef<HTMLDivElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
   if (!invoice) return null;
 
+  const handleDownloadPDF = async () => {
+    if (!printRef.current) return;
+    setIsDownloading(true);
+    try {
+      await downloadElementAsPDF(printRef.current, `Factura_Telecom_${invoice.invoiceNumber || 'TEL'}`);
+    } catch (e) {
+      console.error('PDF error:', e);
+      if (printRef.current) printElementFallback(printRef.current);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handlePrint = () => {
-    window.print();
+    if (printRef.current) {
+      printElementFallback(printRef.current);
+    } else {
+      try {
+        window.focus();
+        setTimeout(() => window.print(), 50);
+      } catch (e) {
+        console.error('Print error:', e);
+      }
+    }
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm print:p-0 print:bg-white print:static print:block">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
+    <div className="printable-modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm print:p-0 print:bg-white print:static print:block">
+      <div className="printable-document-modal bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
         
         {/* Modal Header Actions (Sticky top, hidden when printing) */}
         <div className="bg-slate-900 text-white px-5 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0 z-20 print:hidden border-b border-slate-800">
@@ -39,13 +65,13 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
 
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 px-3.5 sm:px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
-              title="Imprimir o guardar en PDF"
+              onClick={handleDownloadPDF}
+              disabled={isDownloading}
+              className="flex items-center gap-1.5 px-3 sm:px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition cursor-pointer shadow-md disabled:opacity-50"
+              title="Descargar factura en archivo PDF"
             >
-              <Printer className="w-4 h-4" />
-              <span className="hidden sm:inline">Descargar / Imprimir PDF</span>
-              <span className="sm:hidden">PDF</span>
+              {isDownloading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              <span>{isDownloading ? 'Generando...' : 'Descargar PDF'}</span>
             </button>
             <button
               onClick={onClose}
@@ -58,7 +84,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
         </div>
 
         {/* Printable Invoice Body (Scrollable inside modal) */}
-        <div className="p-6 sm:p-10 space-y-8 flex-1 overflow-y-auto print:overflow-visible print:p-0">
+        <div ref={printRef} className="p-6 sm:p-10 space-y-8 flex-1 overflow-y-auto print:overflow-visible print:p-0">
           
           {/* Header & Logo */}
           <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-200 pb-6">

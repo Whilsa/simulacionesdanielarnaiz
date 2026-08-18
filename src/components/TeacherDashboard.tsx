@@ -42,6 +42,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const [newUserUsername, setNewUserUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [newUserInitialBalance, setNewUserInitialBalance] = useState('1000');
+  const [newUserLevel, setNewUserLevel] = useState<'1' | '2' | '3'>('1');
   const [createError, setCreateError] = useState('');
   const [createSuccess, setCreateSuccess] = useState('');
 
@@ -154,7 +155,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         fetch('/logs'),
         fetch('/api/supabase-status').catch(() => null),
         fetch('/api/raw-materials/announcements').catch(() => null),
-        fetch('/api/raw-materials/orders').catch(() => null)
+        fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null)
       ]);
 
       let usersList: User[] = [];
@@ -297,14 +298,15 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
 
     try {
-      const response = await fetch('/users', {
+      const response = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newUserName,
           username: newUserUsername,
           password: newUserPassword,
-          initialBalance: Number(newUserInitialBalance) || 0
+          initialBalance: Number(newUserInitialBalance) || 0,
+          level: Number(newUserLevel) || 1
         }),
       });
 
@@ -321,11 +323,12 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         throw new Error(data.error || 'Error al crear usuario');
       }
 
-      setCreateSuccess(`¡Cuenta creada para ${data.user?.name || ''}!`);
+      setCreateSuccess(`¡Cuenta de Nivel ${data.user?.level || newUserLevel} creada para ${data.user?.name || ''}!`);
       setNewUserName('');
       setNewUserUsername('');
       setNewUserPassword('');
       setNewUserInitialBalance('1000');
+      setNewUserLevel('1');
       
       // Refresh list
       fetchData();
@@ -463,8 +466,10 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
   const handleApproveOrder = async (orderId: string) => {
     try {
-      const res = await fetch(`/api/teacher/raw-materials/orders/${orderId}/approve`, {
-        method: 'POST'
+      const res = await fetch(`/api/raw-materials/orders/${orderId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'profesor-1' })
       });
       if (res.ok) {
         fetchData();
@@ -479,8 +484,10 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
   const handleRejectOrder = async (orderId: string) => {
     try {
-      const res = await fetch(`/api/teacher/raw-materials/orders/${orderId}/reject`, {
-        method: 'POST'
+      const res = await fetch(`/api/raw-materials/orders/${orderId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'profesor-1', rejectionReason: 'Rechazado por el Profesor' })
       });
       if (res.ok) {
         fetchData();
@@ -495,7 +502,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     setDeleteError('');
 
     try {
-      const response = await fetch(`/users/${deleteTarget.id}`, {
+      const response = await fetch(`/api/users/${deleteTarget.id}`, {
         method: 'DELETE',
       });
 
@@ -528,7 +535,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
 
     try {
-      const response = await fetch('/reset-simulation', {
+      const response = await fetch('/api/reset-simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -600,7 +607,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 <Landmark className="w-6 h-6 text-white" />
               </div>
               <div>
-                <span className="font-display font-bold text-lg tracking-tight block">Simulador de Daniel Arnaiz Boluda</span>
+                <span className="font-display font-bold text-lg tracking-tight block">ContaLab</span>
                 <span className="text-[10px] text-amber-400 font-semibold tracking-wider uppercase">Banco Simulado • Profesor</span>
               </div>
             </div>
@@ -615,7 +622,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-all cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline">Cerrar Sesión</span>
+                <span className="hidden sm:inline">Cerrar sesión</span>
               </button>
             </div>
           </div>
@@ -960,12 +967,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
                         <div className="flex items-start justify-between">
                           <div>
-                            <h4 className="font-bold text-slate-900 text-sm">{ann.materialName}</h4>
+                            <h4 className="font-bold text-slate-900 text-sm">{ann.title || ann.materialName}</h4>
                             <p className="text-xs text-slate-500">{ann.presentation}</p>
                           </div>
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                            {ann.unit}
-                          </span>
+                          <div className="text-right">
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                              {ann.unit || 'Lote'}
+                            </span>
+                            <span className="block text-[10px] font-bold text-slate-500 mt-1 font-mono">
+                              Stock: {ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'Ilimitado' : `${ann.stock} u.`}
+                            </span>
+                          </div>
                         </div>
 
                         <p className="text-xs text-slate-600 leading-relaxed">{ann.description}</p>
@@ -1615,6 +1627,51 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nivel de la Cuenta del Alumno</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewUserLevel('1')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-0.5 transition-all cursor-pointer ${
+                        newUserLevel === '1'
+                          ? 'border-amber-600 bg-amber-50 text-amber-800 ring-2 ring-amber-500/20'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>Nivel 1</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Inicial</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewUserLevel('2')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-0.5 transition-all cursor-pointer ${
+                        newUserLevel === '2'
+                          ? 'border-amber-600 bg-amber-50 text-amber-800 ring-2 ring-amber-500/20'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>Nivel 2</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Intermedio</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewUserLevel('3')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-0.5 transition-all cursor-pointer ${
+                        newUserLevel === '3'
+                          ? 'border-amber-600 bg-amber-50 text-amber-800 ring-2 ring-amber-500/20'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>Nivel 3</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Avanzado</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Indica las capacidades operativas del alumno (Nivel 1: Venta de producto final y compras a Nivel 1).
+                  </p>
                 </div>
 
                 <div>

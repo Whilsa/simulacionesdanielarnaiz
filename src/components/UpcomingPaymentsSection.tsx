@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CalendarClock, AlertTriangle, CheckCircle2, ShieldAlert, Lock, Clock, 
-  Building, FileText, Landmark, RefreshCw, ArrowUpRight, Info, PhoneCall
+  Building, FileText, Landmark, RefreshCw, ArrowUpRight, Info, PhoneCall, CreditCard, Download, Receipt, Zap
 } from 'lucide-react';
 import { User, UpcomingPaymentItem } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -66,9 +66,22 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
         return <Landmark className="w-4 h-4 text-emerald-700" />;
       case 'cuota_telecom':
         return <PhoneCall className="w-4 h-4 text-sky-700" />;
+      case 'cuota_electricidad':
+        return <Zap className="w-4 h-4 text-amber-600" />;
       default:
         return <CalendarClock className="w-4 h-4 text-slate-700" />;
     }
+  };
+
+  const normalizeTitle = (text?: string) => {
+    if (!text) return '';
+    return text
+      .replace(/Nave Industrial/g, 'Nave industrial')
+      .replace(/préstamo Hipotecario/g, 'Préstamo hipotecario')
+      .replace(/Préstamo Hipotecario/g, 'Préstamo hipotecario')
+      .replace(/Fibra y Teléfono/g, 'Fibra y teléfono')
+      .replace(/Seg\. Social Empleado/g, 'Seg. Social empleado')
+      .replace(/Seg\. Social Empresa/g, 'Seg. Social empresa');
   };
 
   const getTypeName = (type: string) => {
@@ -78,10 +91,11 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
       case 'pagare': return 'Pagaré comercial';
       case 'letra_cambio': return 'Letra de cambio';
       case 'cuota_prestamo': return 'Préstamo hipotecario';
-      case 'cuota_telecom': return 'Servicios de Telecomunicaciones';
+      case 'cuota_telecom': return 'Fibra y teléfono';
+      case 'cuota_electricidad': return 'Gasto previsto de electricidad (IberLuz)';
       case 'cuota_nomina': return 'Nóminas del personal';
-      case 'impuesto_ss_emp': return 'Cuotas SS Trabajador (6,48%)';
-      case 'impuesto_ss_comp': return 'Aportación Patronal SS (75%)';
+      case 'impuesto_ss_emp': return 'Seg. Social empleado (6,48%)';
+      case 'impuesto_ss_comp': return 'Seg. Social empresa (75%)';
       case 'impuesto_irpf':
       case 'liquidacion_impuesto':
       case 'liquidacion_irpf': return 'Retención IRPF de nóminas (17%)';
@@ -174,8 +188,8 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                     <td className="p-2.5 font-sans font-medium text-slate-900 flex items-center space-x-1.5">
                       {getPaymentIcon(item.type)}
                       <div>
-                        <span className="font-bold block">{item.title}</span>
-                        <span className="text-[10px] text-slate-500 font-normal">{item.concept}</span>
+                        <span className="font-bold block">{normalizeTitle(item.title)}</span>
+                        <span className="text-[10px] text-slate-500 font-normal">{normalizeTitle(item.concept)}</span>
                       </div>
                     </td>
                     <td className="p-2.5 text-rose-700 font-bold font-sans">
@@ -235,7 +249,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
       {/* UPCOMING 30 DAYS LIST */}
       <div className="space-y-3">
         <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-          <span>Próximos Vencimientos Programados</span>
+          <span>Próximos vencimientos programados</span>
           <span className="text-slate-500 font-mono font-normal">
             ({data.upcoming30DaysItems.length} cargos en 30 días)
           </span>
@@ -258,8 +272,8 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
                       {getPaymentIcon(item.type)}
                     </div>
                     <div>
-                      <span className="font-bold text-slate-900 text-xs block leading-tight">{item.title}</span>
-                      <span className="text-[10px] text-slate-500 block">{item.concept || getTypeName(item.type)}</span>
+                      <span className="font-bold text-slate-900 text-xs block leading-tight">{normalizeTitle(item.title)}</span>
+                      <span className="text-[10px] text-slate-500 block">{normalizeTitle(item.concept) || getTypeName(item.type)}</span>
                     </div>
                   </div>
 
