@@ -60,18 +60,18 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
 
   // Categories list
   const categories: { key: OfficeStoreCategory | 'all'; label: string; icon: string }[] = [
-    { key: 'all', label: 'Todos los Productos', icon: '📦' },
+    { key: 'all', label: 'Todos los productos', icon: '📦' },
     { key: 'estanterias', label: 'Estanterías', icon: '🗄️' },
-    { key: 'mesas', label: 'Mesas de Oficina', icon: '🪑' },
+    { key: 'mesas', label: 'Mesas de oficina', icon: '🪑' },
     { key: 'sillas', label: 'Sillas', icon: '💺' },
-    { key: 'sobremesa', label: 'Ordenadores Sobremesa', icon: '🖥️' },
+    { key: 'sobremesa', label: 'Ordenadores sobremesa', icon: '🖥️' },
     { key: 'portatiles', label: 'Portátiles', icon: '💻' },
     { key: 'perifericos', label: 'Periféricos', icon: '⌨️' },
     { key: 'impresoras', label: 'Impresoras', icon: '🖨️' },
-    { key: 'software_texto', label: 'Software Texto', icon: '📄' },
-    { key: 'software_conta', label: 'Software Contabilidad', icon: '📊' },
-    { key: 'telefonos_fijos', label: 'Teléfonos Fijos', icon: '☎️' },
-    { key: 'telefonos_moviles', label: 'Teléfonos Móviles', icon: '📱' }
+    { key: 'software_texto', label: 'Software texto', icon: '📄' },
+    { key: 'software_conta', label: 'Software contabilidad', icon: '📊' },
+    { key: 'telefonos_fijos', label: 'Teléfonos fijos', icon: '☎️' },
+    { key: 'telefonos_moviles', label: 'Teléfonos móviles', icon: '📱' }
   ];
 
   // Filter items
@@ -176,7 +176,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition cursor-pointer flex items-center gap-2 text-xs font-semibold"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Volver al Panel</span>
+              <span className="hidden sm:inline">Volver al panel</span>
             </button>
             <div className="h-6 w-px bg-slate-800"></div>
             <div className="flex items-center gap-2">
@@ -184,7 +184,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                 <ShoppingBag className="w-4 h-4" />
               </div>
               <div>
-                <h1 className="text-sm font-bold text-white leading-none">Tienda de Equipamiento e Informática</h1>
+                <h1 className="text-sm font-bold text-white leading-none">Tienda de equipamiento e informática</h1>
                 <p className="text-[11px] text-slate-400 mt-0.5">Suministros OfiTech para mobiliario, hardware y software</p>
               </div>
             </div>
@@ -192,7 +192,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
 
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
-              <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo Disponible</span>
+              <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo disponible</span>
               <span className="text-xs font-extrabold text-amber-400">
                 {formatNumber(currentUser.balance)} €
               </span>
@@ -223,19 +223,19 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
           <div className="space-y-2 max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full text-xs font-bold">
               <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
-              <span>Suministrador Oficial Corporativo</span>
+              <span>Suministrador oficial corporativo</span>
             </div>
             <h2 className="text-xl font-black text-white tracking-tight">
-              Mobiliario de Oficina, Equipos Informáticos y Software de Gestión
+              Mobiliario de oficina, equipos informáticos y software de gestión
             </h2>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Equipa tu empresa con estanterías, mesas, sillas ergonómicas, ordenadores de sobremesa y portátiles, impresoras, software contable y de texto, y telefonía. Todo lo comprado se registrará automáticamente en el patrimonio de tu empresa en la pestaña <strong className="text-amber-400">"Muebles e Informática"</strong>.
+              Equipa tu empresa con estanterías, mesas, sillas ergonómicas, ordenadores de sobremesa y portátiles, impresoras, software contable y de texto, y telefonía. Todo lo comprado se registrará automáticamente en el patrimonio de tu empresa en la pestaña <strong className="text-amber-400">"Muebles e informática"</strong>.
             </p>
           </div>
 
           <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-700 text-xs space-y-1 min-w-[200px]">
             <p className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider">COMPRAS EN PATRIMONIO</p>
-            <p className="font-extrabold text-amber-400 text-lg">{orders.length} {orders.length === 1 ? 'Pedido' : 'Pedidos'}</p>
+            <p className="font-extrabold text-amber-400 text-lg">{orders.length} {orders.length === 1 ? 'pedido' : 'pedidos'}</p>
             <p className="text-slate-400 text-[11px]">Facturas con IVA 21% deducible</p>
           </div>
         </div>
@@ -364,7 +364,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               {/* Price & Add to Cart */}
               <div className="p-5 pt-0 flex items-center justify-between gap-4 border-t border-slate-100 mt-2">
                 <div>
-                  <span className="text-xs text-slate-400 block font-semibold">Precio Unid.</span>
+                  <span className="text-xs text-slate-400 block font-semibold">Precio unid.</span>
                   <span className="text-xl font-black text-slate-900">{formatNumber(item.price)} €</span>
                 </div>
 
@@ -391,7 +391,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
             <div className="bg-slate-900 text-white p-5 flex items-center justify-between border-b border-slate-800">
               <div className="flex items-center gap-3">
                 <ShoppingCart className="w-5 h-5 text-amber-400" />
-                <h3 className="font-extrabold text-sm text-white">Cesta de Equipamiento e Informática</h3>
+                <h3 className="font-extrabold text-sm text-white">Cesta de equipamiento e informática</h3>
               </div>
               <button
                 onClick={() => setIsCartOpen(false)}
@@ -462,7 +462,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
               <div className="p-5 bg-slate-50 border-t border-slate-200 space-y-4">
                 <div className="space-y-1.5 text-xs text-slate-600">
                   <div className="flex justify-between">
-                    <span>Base Imponible:</span>
+                    <span>Base imponible:</span>
                     <span className="font-semibold">{formatNumber(cartSubtotal)} €</span>
                   </div>
                   <div className="flex justify-between">
@@ -470,7 +470,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                     <span className="font-semibold">{formatNumber(cartIva)} €</span>
                   </div>
                   <div className="flex justify-between font-black text-sm text-slate-900 pt-2 border-t border-slate-200">
-                    <span>Total a Pagar:</span>
+                    <span>Total a pagar:</span>
                     <span className="text-amber-600 text-base">{formatNumber(cartTotal)} €</span>
                   </div>
                 </div>
@@ -483,12 +483,12 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
                   {isCheckingOut ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Procesando Pago y Generando Factura...</span>
+                      <span>Procesando pago y generando factura...</span>
                     </>
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      <span>Completar Compra y Pagar ({formatNumber(cartTotal)} €)</span>
+                      <span>Completar compra y pagar ({formatNumber(cartTotal)} €)</span>
                     </>
                   )}
                 </button>

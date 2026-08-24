@@ -292,7 +292,7 @@ export default function App() {
                 className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors border border-slate-700"
               >
                 <ArrowLeft className="w-4 h-4" />
-                <span>Volver al Hub Principal</span>
+                <span>Volver al hub principal</span>
               </button>
 
               <div className="flex items-center gap-4">

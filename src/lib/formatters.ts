@@ -110,3 +110,63 @@ export function numberToSpanishWords(num: number): string {
   return `${eurosText} ${eurosLabel} CON ${centimosText} ${centimosLabel}`.toUpperCase();
 }
 
+/**
+ * Normalizes title casing in UI text to ensure strict Spanish standard capitalization
+ * (capital only on the very first letter of the phrase, preserving acronyms like CNC, PDF, etc.).
+ */
+export function cleanSpanishTitle(str: string | null | undefined): string {
+  if (!str) return '';
+  return str
+    .replace(/Línea de Fabricación de Metal \/ Hierro \(Varilla y Punta\)/gi, 'Línea de fabricación de metal / hierro (varilla y punta)')
+    .replace(/Línea de Inyección de Plástico y Ensamblaje Final/gi, 'Línea de inyección de plástico y ensamblaje final')
+    .replace(/Línea de Fabricación de Metal/gi, 'Línea de fabricación de metal')
+    .replace(/Línea de Inyección de Plástico/gi, 'Línea de inyección de plástico')
+    .replace(/Línea Estándar \(1 Torno CNC de 2 ejes\)/gi, 'Línea estándar (1 torno CNC de 2 ejes)')
+    .replace(/Línea de Alta Capacidad \(2 Tornos CNC de 2 ejes\)/gi, 'Línea de alta capacidad (2 tornos CNC de 2 ejes)')
+    .replace(/Línea Inyectora y Marcado Láser/gi, 'Línea inyectora y marcado láser')
+    .replace(/Carretilla Elevadora Contrapesada 2\.5T/gi, 'Carretilla elevadora contrapesada 2.5T')
+    .replace(/Carretilla Elevadora Contrapesada/gi, 'Carretilla elevadora contrapesada')
+    .replace(/Carretilla Elevadora/gi, 'Carretilla elevadora')
+    .replace(/Nave Industrial Diáfana en Polígono Industrial/gi, 'Nave industrial diáfana en polígono industrial')
+    .replace(/Nave Industrial Acondicionada/gi, 'Nave industrial acondicionada')
+    .replace(/Nave Industrial/gi, 'Nave industrial')
+    .replace(/Almacén Logístico con Muelles de Carga/gi, 'Almacén logístico con muelles de carga')
+    .replace(/Almacén Logístico/gi, 'Almacén logístico')
+    .replace(/Local Comercial Esquina de Gran Afluencia/gi, 'Local comercial esquina de gran afluencia')
+    .replace(/Local Comercial Reformado/gi, 'Local comercial reformado')
+    .replace(/Local Comercial/gi, 'Local comercial')
+    .replace(/Al Contado/g, 'Al contado')
+    .replace(/Ver \/ Imprimir Factura Adquisición \(PDF\)/gi, 'Ver / imprimir factura adquisición (PDF)')
+    .replace(/Ver \/ Imprimir Nómina \(PDF\)/gi, 'Ver / imprimir nómina (PDF)')
+    .replace(/Ver \/ Imprimir/gi, 'Ver / imprimir')
+    .replace(/Factura Adquisición/gi, 'Factura adquisición')
+    .replace(/Factura Compra/gi, 'Factura compra')
+    .replace(/Factura Traslado/gi, 'Factura traslado')
+    .replace(/Varilla y Punta/gi, 'varilla y punta')
+    .replace(/Ensamblaje Final/gi, 'ensamblaje final')
+    .replace(/Pagaré Mercantil/gi, 'Pagaré mercantil')
+    .replace(/Letra de Cambio/gi, 'Letra de cambio')
+    .replace(/Factura Comercial/gi, 'Factura comercial')
+    .replace(/Fragmentos Hierro/gi, 'Fragmentos hierro')
+    .replace(/Pellets Plástico/gi, 'Pellets plástico')
+    .replace(/Pegamento Epoxi/gi, 'Pegamento epoxi')
+    .replace(/IRPF Retenido/gi, 'IRPF retenido')
+    .replace(/Sueldo Bruto/gi, 'Sueldo bruto')
+    .replace(/Sueldo Neto/gi, 'Sueldo neto')
+    .replace(/SS Empleado/gi, 'SS empleado')
+    .replace(/SS Empresa/gi, 'SS empresa')
+    .replace(/Turno Asignado/gi, 'Turno asignado')
+    .replace(/Mes de alta \(Incompleto\)/gi, 'Mes de alta (incompleto)')
+    .replace(/Inmuebles Contratados/gi, 'Inmuebles contratados')
+    .replace(/Contrato Activo/gi, 'Contrato activo')
+    .replace(/Operario Industrial/gi, 'Operario industrial')
+    .replace(/Camionero \/ Conductor Logístico/gi, 'Camionero / conductor logístico')
+    .replace(/Camionero \/ Conductor/gi, 'Camionero / conductor')
+    .replace(/Turno Mañana/gi, 'Turno mañana')
+    .replace(/Turno Tarde/gi, 'Turno tarde')
+    .replace(/Turno Noche/gi, 'Turno noche')
+    .replace(/1 Turno/gi, '1 turno')
+    .replace(/2 Turnos/gi, '2 turnos')
+    .replace(/3 Turnos/gi, '3 turnos');
+}
+

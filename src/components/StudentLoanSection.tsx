@@ -244,13 +244,13 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
           </div>
           <h4 className="font-bold text-slate-800 text-sm">No tienes préstamos solicitados actualmente</h4>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Puedes solicitar financiación bancaria ofreciendo como garantía hipotecaria un inmueble que hayas adquirido en el Portal Inmobiliario o tu vivienda habitual.
+            Puedes solicitar financiación bancaria ofreciendo como garantía hipotecaria un inmueble que hayas adquirido en el portal inmobiliario o tu vivienda habitual.
           </p>
           <button
             onClick={() => setShowRequestModal(true)}
             className="inline-flex items-center space-x-2 bg-amber-800 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-900 transition"
           >
-            <span>Simular y Solicitar Préstamo</span>
+            <span>Simular y solicitar préstamo</span>
           </button>
         </div>
       ) : (
@@ -286,30 +286,30 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                       {isActive && (
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <CheckCircle2 className="w-3 h-3 mr-1" />
-                          Concedido y Activo
+                          Concedido y activo
                         </span>
                       )}
                       {isOffered && (
                         <span className="bg-amber-200 text-amber-900 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center animate-pulse">
                           <Sparkles className="w-3 h-3 mr-1" />
-                          Oferta del Banco Pendiente de Aceptación
+                          Oferta del banco pendiente de aceptación
                         </span>
                       )}
                       {isPendingTeacher && (
                         <span className="bg-sky-100 text-sky-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <Clock className="w-3 h-3 mr-1" />
-                          En Revisión por el Profesor
+                          En revisión por el profesor
                         </span>
                       )}
                       {isRejected && (
                         <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center border border-red-200">
                           <XCircle className="w-3 h-3 mr-1 text-red-600" />
-                          {loan.status === 'denied_teacher' ? 'Rechazada por el Profesor' : 'Rechazada'}
+                          {loan.status === 'denied_teacher' ? 'Rechazada por el profesor' : 'Rechazada'}
                         </span>
                       )}
                       {isPaidOff && (
                         <span className="bg-slate-200 text-slate-700 text-[10px] font-bold px-2.5 py-0.5 rounded-full">
-                          Amortizado Totalmente
+                          Amortizado totalmente
                         </span>
                       )}
                     </div>
@@ -361,7 +361,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                         className="px-4 py-2 bg-white text-amber-900 hover:bg-amber-50 font-bold text-xs rounded-lg transition shadow cursor-pointer flex items-center space-x-1"
                       >
                         <Check className="w-4 h-4 text-emerald-600" />
-                        <span>Aceptar e Ingresar Dinero</span>
+                        <span>Aceptar e ingresar dinero</span>
                       </button>
                     </div>
                   </div>
@@ -370,7 +370,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                 {isPendingTeacher && (
                   <div className="bg-sky-50 border border-sky-200 text-sky-800 rounded-xl p-3 mb-4 text-xs">
                     <p className="font-semibold">
-                      ℹ️ Solicitud enviada a revisión del Profesor.
+                      ℹ️ Solicitud enviada a revisión del profesor.
                     </p>
                     <p className="text-sky-700 mt-0.5">
                       Al tener ya concedido un primer préstamo, esta operación requiere autorización manual desde el panel del docente.
@@ -382,7 +382,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   <div className="bg-red-50 border border-red-200 text-red-800 rounded-xl p-3 mb-4 text-xs">
                     <p className="font-bold flex items-center gap-1.5 text-red-900">
                       <XCircle className="w-4 h-4 text-red-600" />
-                      <span>Solicitud de Préstamo Rechazada</span>
+                      <span>Solicitud de préstamo rechazada</span>
                     </p>
                     <p className="text-red-700 mt-0.5">
                       {loan.rejectionReason || (loan.status === 'denied_teacher' 
@@ -395,25 +395,25 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                 {/* Metrics Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-sans">
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Capital Ofrecido / Concedido</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Capital ofrecido / concedido</span>
                     <span className="text-sm font-bold font-mono text-slate-900">
                       {formatNumber(loan.approvedAmount || loan.offeredAmount)} €
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota Mensual</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota mensual</span>
                     <span className="text-sm font-bold font-mono text-amber-800">
                       {formatNumber(loan.monthlyPayment)} € / mes
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Tipo de Interés Anual</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Tipo de interés anual</span>
                     <span className="text-sm font-bold font-mono text-emerald-700">
                       {formatNumber(loan.annualInterestRate)} % <span className="text-[9px] text-slate-400 font-normal">(Euribor + 1%)</span>
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Comisión Apertura (1‰)</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Comisión apertura (1‰)</span>
                     <span className="text-sm font-bold font-mono text-slate-700">
                       {formatNumber(loan.openingFee)} €
                     </span>
@@ -447,7 +447,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Importe Solicitado (€)
+                    Importe solicitado (€)
                   </label>
                   <input
                     type="number"
@@ -462,7 +462,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Plazo de Devolución
+                    Plazo de devolución
                   </label>
                   <select
                     value={termMonths}
@@ -483,7 +483,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
               {/* Collateral Guarantee Selector */}
               <div className="space-y-3 pt-2 border-t border-slate-100">
                 <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                  Garantía Hipotecaria de Respaldado
+                  Garantía hipotecaria de respaldo
                 </label>
                 
                 <div className="grid grid-cols-2 gap-3">
@@ -498,7 +498,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   >
                     <Building2 className="w-4 h-4 shrink-0 text-amber-700" />
                     <div>
-                      <p className="text-xs">Inmueble del Portal</p>
+                      <p className="text-xs">Inmueble del portal</p>
                       <p className="text-[10px] text-slate-500 font-normal">Nave, local o almacén comprado</p>
                     </div>
                   </button>
@@ -514,7 +514,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   >
                     <Shield className="w-4 h-4 shrink-0 text-amber-700" />
                     <div>
-                      <p className="text-xs">Casa / Vivienda privada</p>
+                      <p className="text-xs">Casa / vivienda privada</p>
                       <p className="text-[10px] text-slate-500 font-normal">Vivienda habitual particular</p>
                     </div>
                   </button>
@@ -524,7 +524,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   acquisitions.length > 0 ? (
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                        Selecciona el Inmueble de tu propiedad
+                        Selecciona el inmueble de tu propiedad
                       </label>
                       <select
                         value={selectedPropertyId}
@@ -540,14 +540,14 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     </div>
                   ) : (
                     <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-[11px] text-amber-800">
-                      ⚠️ No tienes inmuebles comprados aún en el Portal Inmobiliario. Si utilizas esta opción, introduce la tasación o selecciona Vivienda privada.
+                      ⚠️ No tienes inmuebles comprados aún en el portal inmobiliario. Si utilizas esta opción, introduce la tasación o selecciona vivienda privada.
                     </div>
                   )
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                        Superficie Vivienda (m²)
+                        Superficie vivienda (m²)
                       </label>
                       <input
                         type="number"
@@ -560,7 +560,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                        Valor de Tasación (€)
+                        Valor de tasación (€)
                       </label>
                       <input
                         type="number"
@@ -579,23 +579,23 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
               {/* Live Bank Breakdown Box */}
               <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-2 font-mono">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                  <span className="text-[11px] text-slate-400 font-sans">Límite Máximo Aprobado (80% Tasación):</span>
+                  <span className="text-[11px] text-slate-400 font-sans">Límite máximo aprobado (80% tasación):</span>
                   <span className="font-bold text-amber-300">{formatNumber(maxLtvAutoApproved)} €</span>
                 </div>
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                  <span className="text-[11px] text-slate-400 font-sans">Importe a Conceder:</span>
+                  <span className="text-[11px] text-slate-400 font-sans">Importe a conceder:</span>
                   <span className="font-bold text-emerald-400">{formatNumber(estimatedOfferedAmount)} €</span>
                 </div>
                 <div className="flex justify-between items-center text-[11px] border-b border-slate-800 pb-2">
-                  <span className="text-slate-400 font-sans">Interés Anual (Euribor 3,5% + 1%):</span>
+                  <span className="text-slate-400 font-sans">Interés anual (Euribor 3,5% + 1%):</span>
                   <span className="text-amber-200">4,50 % TIN</span>
                 </div>
                 <div className="flex justify-between items-center text-[11px] border-b border-slate-800 pb-2">
-                  <span className="text-slate-400 font-sans">Comisión Bancaria de Apertura (1‰):</span>
+                  <span className="text-slate-400 font-sans">Comisión bancaria de apertura (1‰):</span>
                   <span className="text-rose-300">{formatNumber(openingFeeAmt)} €</span>
                 </div>
                 <div className="flex justify-between items-center pt-1 text-xs">
-                  <span className="font-sans font-bold text-slate-200">Cuota Mensual Estimada (Francés):</span>
+                  <span className="font-sans font-bold text-slate-200">Cuota mensual estimada (francés):</span>
                   <span className="font-extrabold text-amber-400 text-sm">{formatNumber(estimatedMonthlyPayment)} € / mes</span>
                 </div>
               </div>
@@ -613,7 +613,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
                   disabled={submitting}
                   className="px-5 py-2 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl transition cursor-pointer flex items-center space-x-2"
                 >
-                  {submitting ? 'Procesando...' : 'Enviar Solicitud al Banco'}
+                  {submitting ? 'Procesando...' : 'Enviar solicitud al banco'}
                 </button>
               </div>
 

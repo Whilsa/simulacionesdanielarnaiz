@@ -324,6 +324,9 @@ export interface RawMaterialAnnouncement {
   sellerId?: string;
   sellerName?: string;
   sellerLevel?: number | 'official';
+  sellerLocation?: string;
+  sellerMunicipality?: string;
+  sellerProvince?: string;
   isDesTornillo?: boolean;
   priceAlert?: PriceAlertFeedback;
 }
@@ -353,6 +356,8 @@ export interface NegotiationHistoryEntry {
   discountPercentage: number;
   insuranceFee: number;
   transportCost: number;
+  distanceKm?: number;
+  chargedPallets?: number;
   transportMethod: 'vendedor_envio' | 'comprador_recogida';
   totalAmount: number;
   note?: string;
@@ -381,6 +386,8 @@ export interface RawMaterialOrder {
   hasInsurance?: boolean;
   ivaAmount: number;
   transportCost: number;
+  distanceKm?: number;
+  chargedPallets?: number;
   transportMethod?: 'vendedor_envio' | 'comprador_recogida';
   totalAmount: number;
   needsTransport: boolean;
@@ -756,7 +763,7 @@ export interface NaveFloorPlan {
   updatedAt: string;
 }
 
-export type JobRole = 'operario' | 'camionero' | 'carretillero';
+export type JobRole = 'operario' | 'camionero' | 'carretillero' | 'mozo_almacen';
 
 export interface JobListing {
   id: string;

@@ -23,6 +23,36 @@ interface TeacherDashboardProps {
   onBackToHub?: () => void;
 }
 
+const TEACHER_PRODUCT_PRESETS = {
+  hierro: {
+    materialType: 'hierro' as const,
+    title: 'Fragmentos de hierro',
+    presentation: 'Pallet de 1.000 kg (Fragmentos)',
+    description: 'Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.',
+    unitWeightKg: 1000,
+    isPallet: true,
+    defaultPrice: 450
+  },
+  plastico: {
+    materialType: 'plastico' as const,
+    title: 'Pellets de plástico',
+    presentation: 'Pallet de 1.000 kg (40 sacos de 25 kg)',
+    description: 'Polímero plástico en pellets para inyección de mangos. 40 sacos de 25 kg por palet (total 1.000 kg).',
+    unitWeightKg: 1000,
+    isPallet: true,
+    defaultPrice: 380
+  },
+  epoxi: {
+    materialType: 'epoxi' as const,
+    title: 'Pegamento epoxi',
+    presentation: 'Lata de 5 kg',
+    description: 'Resina y pegamento epoxi bicomponente de grado industrial para ensamblaje final. Lata de 5 kg.',
+    unitWeightKg: 5,
+    isPallet: false,
+    defaultPrice: 45
+  }
+};
+
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
   const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials'>('students');
   const [users, setUsers] = useState<User[]>([]);
@@ -35,6 +65,25 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const [rmOrders, setRmOrders] = useState<RawMaterialOrder[]>([]);
   const [editingAnnId, setEditingAnnId] = useState<string | null>(null);
   const [editPriceInput, setEditPriceInput] = useState<string>('');
+
+  // Raw Material Announcement Modal & Deletion State
+  const [isAnnModalOpen, setIsAnnModalOpen] = useState(false);
+  const [editingAnnFullId, setEditingAnnFullId] = useState<string | null>(null);
+  const [annPreset, setAnnPreset] = useState<'hierro' | 'plastico' | 'epoxi' | 'custom'>('hierro');
+  const [annTitle, setAnnTitle] = useState('Fragmentos de hierro');
+  const [annPresentation, setAnnPresentation] = useState('Pallet de 1.000 kg (Fragmentos)');
+  const [annDescription, setAnnDescription] = useState('Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.');
+  const [annPrice, setAnnPrice] = useState<number | string>(450);
+  const [annStock, setAnnStock] = useState<number | string>('ilimitado');
+  const [annUnitWeightKg, setAnnUnitWeightKg] = useState<number | string>(1000);
+  const [annIsPallet, setAnnIsPallet] = useState(true);
+  const [annMaterialType, setAnnMaterialType] = useState<'hierro' | 'plastico' | 'epoxi' | 'producto_final'>('hierro');
+  const [annError, setAnnError] = useState('');
+  const [isSubmittingAnn, setIsSubmittingAnn] = useState(false);
+
+  // Deletion modal state for raw material announcement
+  const [deletingAnn, setDeletingAnn] = useState<RawMaterialAnnouncement | null>(null);
+  const [isDeletingAnn, setIsDeletingAnn] = useState(false);
   
   // Create user form state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -323,7 +372,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         throw new Error(data.error || 'Error al crear usuario');
       }
 
-      setCreateSuccess(`¡Cuenta de Nivel ${data.user?.level || newUserLevel} creada para ${data.user?.name || ''}!`);
+      setCreateSuccess(`¡Cuenta de nivel ${data.user?.level || newUserLevel} creada para ${data.user?.name || ''}!`);
       setNewUserName('');
       setNewUserUsername('');
       setNewUserPassword('');
@@ -445,6 +494,128 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
   };
 
+  const handleSelectAnnPreset = (key: 'hierro' | 'plastico' | 'epoxi') => {
+    setAnnPreset(key);
+    const p = TEACHER_PRODUCT_PRESETS[key];
+    setAnnTitle(p.title);
+    setAnnPresentation(p.presentation);
+    setAnnDescription(p.description);
+    setAnnPrice(p.defaultPrice);
+    setAnnUnitWeightKg(p.unitWeightKg);
+    setAnnIsPallet(p.isPallet);
+    setAnnMaterialType(p.materialType);
+    setAnnError('');
+  };
+
+  const handleOpenCreateAnnouncementModal = () => {
+    setEditingAnnFullId(null);
+    handleSelectAnnPreset('hierro');
+    setAnnStock('ilimitado');
+    setAnnError('');
+    setIsAnnModalOpen(true);
+  };
+
+  const handleOpenEditFullAnnouncementModal = (ann: RawMaterialAnnouncement) => {
+    setEditingAnnFullId(ann.id);
+    setAnnTitle(ann.title || '');
+    setAnnPresentation(ann.presentation || 'Pallet');
+    setAnnDescription(ann.description || '');
+    setAnnPrice(ann.pricePerUnit || 0);
+    setAnnStock(ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'ilimitado' : ann.stock);
+    setAnnUnitWeightKg(ann.unitWeightKg || 1000);
+    setAnnIsPallet(ann.isPallet !== undefined ? ann.isPallet : true);
+    setAnnMaterialType((ann.materialType as any) || 'hierro');
+
+    const lower = (ann.title || '').toLowerCase();
+    if (lower.includes('hierro')) setAnnPreset('hierro');
+    else if (lower.includes('plást') || lower.includes('plast')) setAnnPreset('plastico');
+    else if (lower.includes('epoxi')) setAnnPreset('epoxi');
+    else setAnnPreset('custom');
+
+    setAnnError('');
+    setIsAnnModalOpen(true);
+  };
+
+  const handleSaveAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!annTitle.trim()) {
+      setAnnError('Debes indicar un título para el anuncio.');
+      return;
+    }
+    const numPrice = Number(annPrice);
+    if (isNaN(numPrice) || numPrice <= 0) {
+      setAnnError('Debes indicar un precio unitario válido mayor a 0 €.');
+      return;
+    }
+
+    setIsSubmittingAnn(true);
+    setAnnError('');
+    try {
+      const payload = {
+        title: annTitle.trim(),
+        presentation: annPresentation.trim(),
+        description: annDescription.trim(),
+        pricePerUnit: numPrice,
+        stock: annStock === '' || annStock === 'ilimitado' ? 'ilimitado' : Number(annStock),
+        unitWeightKg: Number(annUnitWeightKg) || 1000,
+        isPallet: annIsPallet,
+        materialType: annMaterialType,
+        sellerId: 'profesor-1',
+        sellerName: 'BricoMaster Distribuciones, S.A.',
+        durationDays: 'indefinido'
+      };
+
+      let res;
+      if (editingAnnFullId) {
+        res = await fetch(`/api/raw-materials/announcements/${editingAnnFullId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        res = await fetch('/api/raw-materials/announcements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (res.ok) {
+        setIsAnnModalOpen(false);
+        setEditingAnnFullId(null);
+        fetchData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setAnnError(data.error || 'Error al guardar el anuncio.');
+      }
+    } catch (err) {
+      setAnnError('Error de conexión con el servidor.');
+    } finally {
+      setIsSubmittingAnn(false);
+    }
+  };
+
+  const handleConfirmDeleteAnnouncement = async () => {
+    if (!deletingAnn) return;
+    setIsDeletingAnn(true);
+    try {
+      const res = await fetch(`/api/raw-materials/announcements/${deletingAnn.id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setDeletingAnn(null);
+        fetchData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Error al eliminar el anuncio.');
+      }
+    } catch (err) {
+      alert('Error de conexión al eliminar el anuncio.');
+    } finally {
+      setIsDeletingAnn(false);
+    }
+  };
+
   const handleSaveAnnouncementPrice = async (annId: string) => {
     const p = parseFloat(editPriceInput);
     if (isNaN(p) || p < 0) return;
@@ -487,7 +658,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       const res = await fetch(`/api/raw-materials/orders/${orderId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'profesor-1', rejectionReason: 'Rechazado por el Profesor' })
+        body: JSON.stringify({ userId: 'profesor-1', rejectionReason: 'Rechazado por el profesor' })
       });
       if (res.ok) {
         fetchData();
@@ -598,7 +769,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 <button
                   onClick={onBackToHub}
                   className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 hover:text-white transition cursor-pointer"
-                  title="Volver al Menú Principal"
+                  title="Volver al menú principal"
                 >
                   <ArrowDownLeft className="w-4 h-4 transform rotate-45" />
                 </button>
@@ -608,14 +779,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
               <div>
                 <span className="font-display font-bold text-lg tracking-tight block">ContaLab</span>
-                <span className="text-[10px] text-amber-400 font-semibold tracking-wider uppercase">Banco Simulado • Profesor</span>
+                <span className="text-[10px] text-amber-400 font-semibold tracking-wider uppercase">Banco simulado • Profesor</span>
               </div>
             </div>
             
             <div className="flex items-center space-x-4">
               <div className="hidden md:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
-                <p className="text-xs text-slate-400">Docente Principal</p>
+                <p className="text-xs text-slate-400">Docente principal</p>
               </div>
               <button 
                 onClick={onLogout}
@@ -647,7 +818,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 onClick={handleRestoreFromLocalStorage}
                 className="bg-white hover:bg-slate-100 text-amber-700 hover:text-amber-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow cursor-pointer"
               >
-                Sincronizar y Recuperar Alumnos
+                Sincronizar y recuperar alumnos
               </button>
               <button
                 onClick={() => setShowRestoreSuggestion(false)}
@@ -662,7 +833,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         {/* Welcome Section */}
         <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold font-display text-slate-900">Control de Contabilidad Bancaria</h1>
+            <h1 className="text-2xl font-bold font-display text-slate-900">Control de contabilidad bancaria</h1>
             <p className="text-sm text-slate-500">Supervisa cuentas, audita transferencias y simula flujos de caja en el aula.</p>
           </div>
           
@@ -671,7 +842,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             className="flex items-center justify-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm px-4 py-2.5 rounded-xl shadow-md shadow-amber-100 transition-all cursor-pointer w-full md:w-auto"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Crear Cuenta Alumno</span>
+            <span>Crear cuenta alumno</span>
           </button>
         </div>
 
@@ -682,7 +853,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <Users className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Alumnos Registrados</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Alumnos registrados</p>
               <p className="text-2xl font-bold text-slate-900 font-display mt-0.5">{totalStudents}</p>
             </div>
           </div>
@@ -692,7 +863,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <Coins className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Masa Monetaria Total</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Masa monetaria total</p>
               <p className="text-2xl font-bold text-slate-900 font-display mt-0.5 font-mono">{formatNumber(totalMoneySupply)} €</p>
             </div>
           </div>
@@ -702,7 +873,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <History className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Transferencias Hechas</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Transferencias hechas</p>
               <p className="text-2xl font-bold text-slate-900 font-display mt-0.5">{transfers.length}</p>
             </div>
           </div>
@@ -719,7 +890,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Users className="w-4 h-4" />
-            <span>Cuentas de Alumnos</span>
+            <span>Cuentas de alumnos</span>
           </button>
           <button 
             onClick={() => setActiveTab('assets')}
@@ -730,7 +901,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Building2 className="w-4 h-4" />
-            <span>Activos, Deudas y Pasivos</span>
+            <span>Activos, deudas y pasivos</span>
           </button>
           <button 
             onClick={() => setActiveTab('raw_materials')}
@@ -741,7 +912,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Package className="w-4 h-4" />
-            <span>Materias Primas ({rmOrders.filter(o => o.status === 'pending').length})</span>
+            <span>Materias primas ({rmOrders.filter(o => o.status === 'pending').length})</span>
           </button>
           <button 
             onClick={() => setActiveTab('transfers')}
@@ -752,7 +923,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <History className="w-4 h-4" />
-            <span>Libro Diario de Transferencias</span>
+            <span>Libro diario de transferencias</span>
           </button>
           <button 
             onClick={() => setActiveTab('loans')}
@@ -763,7 +934,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Landmark className="w-4 h-4" />
-            <span>Préstamos Hipotecarios</span>
+            <span>Préstamos hipotecarios</span>
           </button>
           <button 
             onClick={() => setActiveTab('logs')}
@@ -774,7 +945,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <FileText className="w-4 h-4" />
-            <span>Auditoría de Ajustes</span>
+            <span>Auditoría de ajustes</span>
           </button>
           <button 
             onClick={() => setActiveTab('reset')}
@@ -785,7 +956,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Database className="w-4 h-4" />
-            <span>Copia y Reinicio</span>
+            <span>Copia y reinicio</span>
           </button>
         </div>
 
@@ -825,7 +996,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                   <div className="py-12 text-center text-slate-400">
                     <Users className="w-12 h-12 mx-auto mb-3 opacity-30 text-slate-500" />
                     <p className="font-semibold text-slate-600">No se encontraron cuentas de alumnos</p>
-                    <p className="text-xs text-slate-400 mt-1">Usa el botón "Crear Cuenta Alumno" para empezar la clase.</p>
+                    <p className="text-xs text-slate-400 mt-1">Usa el botón "Crear cuenta de alumno" para empezar la clase.</p>
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -833,10 +1004,10 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       <thead>
                         <tr className="border-b border-slate-100 text-xs font-bold text-slate-400 uppercase tracking-wider">
                           <th className="py-4 px-2">Alumno</th>
-                          <th className="py-4 px-2">Clasificación / Nivel</th>
-                          <th className="py-4 px-2">Detalles de Acceso</th>
-                          <th className="py-4 px-2">Número de Cuenta (IBAN)</th>
-                          <th className="py-4 px-2 text-right">Saldo Actual</th>
+                          <th className="py-4 px-2">Clasificación / nivel</th>
+                          <th className="py-4 px-2">Detalles de acceso</th>
+                          <th className="py-4 px-2">Número de cuenta (IBAN)</th>
+                          <th className="py-4 px-2 text-right">Saldo actual</th>
                           <th className="py-4 px-2 text-center">Acciones</th>
                         </tr>
                       </thead>
@@ -855,7 +1026,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                                 onChange={(e) => handleUpdateStudentLevel(student.id, Number(e.target.value))}
                                 className="bg-slate-100 hover:bg-white text-slate-900 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
                               >
-                                <option value={1}>Nivel 1 (Materias Primas)</option>
+                                <option value={1}>Nivel 1 (Materias primas)</option>
                                 <option value={2}>Nivel 2</option>
                                 <option value={3}>Nivel 3</option>
                               </select>
@@ -874,7 +1045,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                                   <button
                                     onClick={() => togglePasswordVisibility(student.id)}
                                     className="p-0.5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                                    title="Mostrar/Ocultar Contraseña"
+                                    title="Mostrar/Ocultar contraseña"
                                   >
                                     {visiblePasswords[student.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                                   </button>
@@ -912,7 +1083,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                                 <button
                                   onClick={() => { setDeleteTarget(student); setDeleteError(''); }}
                                   className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
-                                  title="Eliminar Cuenta"
+                                  title="Eliminar cuenta"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -950,92 +1121,137 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               >
                 {/* Section A: Catalog & Pricing */}
                 <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
                     <div>
                       <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
                         <Package className="w-5 h-5 text-amber-600" />
-                        <span>Publicación de Anuncios y Precios de Materias Primas</span>
+                        <span>Publicación de anuncios y precios de materias primas</span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        El profesor puede editar los precios unitarios de cada materia prima disponible para la compra por alumnos de Nivel 1.
+                        El profesor puede crear, editar y eliminar los anuncios de materias primas disponibles para los alumnos de nivel 1.
                       </p>
                     </div>
+                    <button
+                      onClick={handleOpenCreateAnnouncementModal}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Publicar nuevo anuncio</span>
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {rmAnnouncements.map((ann) => (
-                      <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h4 className="font-bold text-slate-900 text-sm">{ann.title || ann.materialName}</h4>
-                            <p className="text-xs text-slate-500">{ann.presentation}</p>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                              {ann.unit || 'Lote'}
-                            </span>
-                            <span className="block text-[10px] font-bold text-slate-500 mt-1 font-mono">
-                              Stock: {ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'Ilimitado' : `${ann.stock} u.`}
-                            </span>
-                          </div>
-                        </div>
-
-                        <p className="text-xs text-slate-600 leading-relaxed">{ann.description}</p>
-
-                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                          <div>
-                            <span className="text-[11px] text-slate-400 font-semibold block">Precio por Unidad:</span>
-                            {editingAnnId === ann.id ? (
-                              <div className="flex items-center gap-2 mt-1">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={editPriceInput}
-                                  onChange={(e) => setEditPriceInput(e.target.value)}
-                                  className="w-24 px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                />
-                                <span className="text-xs font-bold text-slate-600">€</span>
+                  {rmAnnouncements.length === 0 ? (
+                    <div className="py-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+                      <Package className="w-12 h-12 mx-auto mb-3 opacity-30 text-slate-500" />
+                      <p className="text-sm font-semibold text-slate-700">No hay anuncios de materias primas publicados</p>
+                      <p className="text-xs text-slate-400 mt-1">Haz clic en &ldquo;Publicar nuevo anuncio&rdquo; para ofertar suministros a los alumnos.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {rmAnnouncements.map((ann) => (
+                        <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between space-y-3">
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <h4 className="font-bold text-slate-900 text-sm leading-snug">{ann.title || ann.materialName}</h4>
+                                <p className="text-xs text-slate-500 font-medium">{ann.presentation}</p>
                               </div>
-                            ) : (
-                              <span className="text-base font-bold font-mono text-emerald-700">
-                                {ann.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                              <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                                {ann.unit || (ann.isPallet ? 'Pallet' : 'Unidad')}
                               </span>
-                            )}
+                            </div>
+
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+                              {ann.materialType !== 'producto_final' && !ann.title?.toLowerCase().includes('destornillador') && (
+                                <>
+                                  <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-600 font-mono">
+                                    {ann.unitWeightKg ? `${ann.unitWeightKg} kg` : '1.000 kg'}
+                                  </span>
+                                  <span>•</span>
+                                </>
+                              )}
+                              <span className="font-mono font-bold text-slate-600">
+                                Stock: {ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'Ilimitado' : `${ann.stock} u.`}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">{ann.description}</p>
                           </div>
 
-                          <div>
-                            {editingAnnId === ann.id ? (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleSaveAnnouncementPrice(ann.id)}
-                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                                >
-                                  Guardar
-                                </button>
-                                <button
-                                  onClick={() => setEditingAnnId(null)}
-                                  className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                                >
-                                  Cancelar
-                                </button>
+                          <div className="pt-3 border-t border-slate-100 flex flex-col gap-2.5">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Precio unitario</span>
+                                {editingAnnId === ann.id ? (
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      value={editPriceInput}
+                                      onChange={(e) => setEditPriceInput(e.target.value)}
+                                      className="w-24 px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                      autoFocus
+                                    />
+                                    <span className="text-xs font-bold text-slate-600">€</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-lg font-bold font-mono text-emerald-700">
+                                    {ann.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                  </span>
+                                )}
                               </div>
-                            ) : (
+
+                              {editingAnnId === ann.id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleSaveAnnouncementPrice(ann.id)}
+                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                                  >
+                                    Guardar
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingAnnId(null)}
+                                    className="px-2 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1 border-t border-slate-50">
+                              <button
+                                onClick={() => handleOpenEditFullAnnouncementModal(ann)}
+                                className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                                title="Editar todos los campos del anuncio"
+                              >
+                                <Edit3 className="w-3.5 h-3.5 text-slate-600" />
+                                <span>Editar</span>
+                              </button>
                               <button
                                 onClick={() => {
                                   setEditingAnnId(ann.id);
                                   setEditPriceInput(ann.pricePerUnit.toString());
                                 }}
-                                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                                className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1"
+                                title="Editar precio rápidamente"
                               >
-                                <Edit className="w-3.5 h-3.5" />
-                                <span>Editar Precio</span>
+                                <Coins className="w-3.5 h-3.5 text-amber-700" />
+                                <span>Precio</span>
                               </button>
-                            )}
+                              <button
+                                onClick={() => setDeletingAnn(ann)}
+                                className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center"
+                                title="Eliminar anuncio"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Section B: Purchase Orders Approval */}
@@ -1044,14 +1260,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     <div>
                       <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                        <span>Solicitudes de Compra de Alumnos (Nivel 1)</span>
+                        <span>Solicitudes de compra de alumnos (nivel 1)</span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
                         Al aprobar una solicitud, se descontará automáticamente el importe del saldo bancario del alumno y la materia prima pasará a su inventario.
                       </p>
                     </div>
                     <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded-full border border-amber-200">
-                      {rmOrders.filter(o => o.status === 'pending').length} Pendientes
+                      {rmOrders.filter(o => o.status === 'pending').length} pendientes
                     </span>
                   </div>
 
@@ -1066,9 +1282,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                         <thead>
                           <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-100 uppercase tracking-wider">
                             <th className="py-3 px-3">Alumno</th>
-                            <th className="py-3 px-3">Materia Prima</th>
+                            <th className="py-3 px-3">Materia prima</th>
                             <th className="py-3 px-3 text-center">Cantidad</th>
-                            <th className="py-3 px-3 text-right">Precio Total</th>
+                            <th className="py-3 px-3 text-right">Precio total</th>
                             <th className="py-3 px-3 text-center">Estado</th>
                             <th className="py-3 px-3 text-center">Acciones</th>
                           </tr>
@@ -1157,9 +1373,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 className="space-y-4"
               >
                 <div className="flex justify-between items-center pb-2">
-                  <h3 className="font-display font-bold text-slate-800 text-base">Libro Diario de Asientos de Transferencia</h3>
+                  <h3 className="font-display font-bold text-slate-800 text-base">Libro diario de asientos de transferencia</h3>
                   <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
-                    {transfers.length} Operaciones
+                    {transfers.length} {transfers.length === 1 ? 'operación' : 'operaciones'}
                   </span>
                 </div>
 
@@ -1174,10 +1390,10 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b border-slate-100 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                          <th className="py-3 px-2">Fecha y Hora</th>
-                          <th className="py-3 px-2">Emisor (Debe)</th>
-                          <th className="py-3 px-2">Receptor (Haber)</th>
-                          <th className="py-3 px-2">Concepto Contable</th>
+                          <th className="py-3 px-2">Fecha y hora</th>
+                          <th className="py-3 px-2">Emisor (debe)</th>
+                          <th className="py-3 px-2">Receptor (haber)</th>
+                          <th className="py-3 px-2">Concepto contable</th>
                           <th className="py-3 px-2 text-right">Importe</th>
                         </tr>
                       </thead>
@@ -1224,7 +1440,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 className="space-y-4"
               >
                 <div className="flex justify-between items-center pb-2">
-                  <h3 className="font-display font-bold text-slate-800 text-base">Registro de Acciones del Banco Central (Profesor)</h3>
+                  <h3 className="font-display font-bold text-slate-800 text-base">Registro de acciones del banco central (profesor)</h3>
                   <p className="text-xs text-slate-400">Historial de auditoría inmutable de creaciones, eliminaciones y regulaciones de capital.</p>
                 </div>
 
@@ -1288,7 +1504,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       <Database className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold font-display text-slate-900">Copias de Seguridad y Salvaguarda</h4>
+                      <h4 className="text-sm font-bold font-display text-slate-900">Copias de seguridad y salvaguarda</h4>
                       <p className="text-xs text-slate-500 mt-0.5">Guarda los datos del simulador en Google Drive o descárgalos localmente.</p>
                     </div>
                   </div>
@@ -1315,7 +1531,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                           <Database className="w-5 h-5" />
                         </div>
                         <div>
-                          <span className="text-xs font-bold text-slate-800 block">Base de Datos PostgreSQL (Supabase)</span>
+                          <span className="text-xs font-bold text-slate-800 block">Base de datos PostgreSQL (Supabase)</span>
                           <span className="text-[10px] text-slate-500 block">
                             {supabaseStatus?.connected 
                               ? `Conectado: ${supabaseStatus.dbUrlMasked || 'DATABASE_URL'}`
@@ -1337,7 +1553,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-1 cursor-pointer shadow-xs disabled:opacity-50"
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${isConnectingSupabase ? 'animate-spin' : ''}`} />
-                            <span>Sincronizar Tablas</span>
+                            <span>Sincronizar tablas</span>
                           </button>
                         </div>
                       ) : (
@@ -1383,7 +1599,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                           className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
                         >
                           <Database className="w-3.5 h-3.5 text-amber-400" />
-                          <span>{isConnectingSupabase ? 'Conectando...' : 'Conectar y Crear Tablas'}</span>
+                          <span>{isConnectingSupabase ? 'Conectando...' : 'Conectar y crear tablas'}</span>
                         </button>
                       </div>
 
@@ -1417,7 +1633,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     {/* Export Card */}
                     <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex flex-col justify-between">
                       <div>
-                        <span className="text-xs font-bold text-slate-700 block mb-1">Exportar Copia</span>
+                        <span className="text-xs font-bold text-slate-700 block mb-1">Exportar copia</span>
                         <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
                           Descarga un archivo JSON con todos los alumnos, contraseñas, saldos e historial de transferencias actuales.
                         </span>
@@ -1435,14 +1651,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     {/* Import Card */}
                     <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex flex-col justify-between">
                       <div>
-                        <span className="text-xs font-bold text-slate-700 block mb-1">Importar Copia</span>
+                        <span className="text-xs font-bold text-slate-700 block mb-1">Importar copia</span>
                         <span className="text-[11px] text-slate-400 leading-relaxed block mb-4">
                           Sube un archivo JSON de copia de seguridad previamente descargado para restaurar el estado completo de la clase.
                         </span>
                       </div>
                       <label className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer text-center">
                         <Upload className="w-3.5 h-3.5" />
-                        <span>Subir Copia JSON</span>
+                        <span>Subir copia JSON</span>
                         <input
                           type="file"
                           accept=".json"
@@ -1458,7 +1674,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                   <div className="flex space-x-3">
                     <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />
                     <div>
-                      <h4 className="text-sm font-bold text-rose-900 font-display">Zona de Peligro: Reinicio Contable</h4>
+                      <h4 className="text-sm font-bold text-rose-900 font-display">Zona de peligro: reinicio contable</h4>
                       <p className="text-xs text-rose-700 mt-1 leading-relaxed">
                         Esta acción permite reiniciar los balances y limpiar el libro diario de transferencias para comenzar una nueva práctica mercantil o una clase diferente.
                       </p>
@@ -1475,7 +1691,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                   )}
 
                   <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 space-y-4">
-                    <h4 className="text-sm font-bold text-slate-800">Opciones de Reinicio</h4>
+                    <h4 className="text-sm font-bold text-slate-800">Opciones de reinicio</h4>
                     
                     <div className="space-y-3">
                       <label className="flex items-start space-x-3 cursor-pointer">
@@ -1486,7 +1702,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                           className="mt-1 text-blue-600 focus:ring-blue-500"
                         />
                         <div>
-                          <span className="text-sm font-semibold text-slate-800 block">Mantener Alumnos y Restablecer Saldos</span>
+                          <span className="text-sm font-semibold text-slate-800 block">Mantener alumnos y restablecer saldos</span>
                           <span className="text-xs text-slate-400 block mt-0.5">Mantiene las cuentas y claves de los alumnos, pero borra su historial y establece sus saldos al valor predefinido.</span>
                         </div>
                       </label>
@@ -1499,7 +1715,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                           className="mt-1 text-rose-600 focus:ring-rose-500"
                         />
                         <div>
-                          <span className="text-sm font-semibold text-slate-800 block">Eliminar Todo (Cero Absoluto)</span>
+                          <span className="text-sm font-semibold text-slate-800 block">Eliminar todo (cero absoluto)</span>
                           <span className="text-xs text-slate-400 block mt-0.5">Elimina todas las cuentas de alumnos, claves, transferencias y registros del sistema para empezar de cero.</span>
                         </div>
                       </label>
@@ -1507,7 +1723,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
                     <div className="border-t border-slate-200/50 pt-4 mt-4">
                       <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                        Saldo Inicial por Defecto para Alumnos
+                        Saldo inicial por defecto para alumnos
                       </label>
                       <div className="relative rounded-xl max-w-[200px]">
                         <input
@@ -1534,7 +1750,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       value={resetConfirmText}
                       onChange={(e) => setResetConfirmText(e.target.value)}
                       required
-                      placeholder="reiniciar"
+                      placeholder="Reiniciar"
                       className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none focus:border-rose-500"
                     />
                   </div>
@@ -1545,7 +1761,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     className="w-full flex justify-center items-center py-3 px-4 rounded-xl text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-rose-100 cursor-pointer"
                   >
                     <RotateCcw className="w-4 h-4 mr-2" />
-                    <span>Ejecutar Reinicio del Simulador</span>
+                    <span>Ejecutar reinicio del simulador</span>
                   </button>
                 </form>
               </motion.div>
@@ -1570,7 +1786,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
                 <h3 className="font-display font-bold text-base flex items-center">
                   <UserPlus className="w-5 h-5 mr-2 text-amber-400" />
-                  Nueva Cuenta de Alumno
+                  Nueva cuenta de alumno
                 </h3>
                 <button 
                   onClick={() => setShowCreateModal(false)}
@@ -1593,26 +1809,26 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre Completo del Alumno</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre completo del alumno</label>
                   <input
                     type="text"
                     required
                     value={newUserName}
                     onChange={(e) => setNewUserName(e.target.value)}
-                    placeholder="ej. Daniel Arnaiz"
+                    placeholder="Ej. Daniel Arnaiz"
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de Acceso</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de acceso</label>
                     <input
                       type="text"
                       required
                       value={newUserUsername}
                       onChange={(e) => setNewUserUsername(e.target.value)}
-                      placeholder="ej. daniel"
+                      placeholder="Ej. daniel"
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                     />
                   </div>
@@ -1623,14 +1839,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       required
                       value={newUserPassword}
                       onChange={(e) => setNewUserPassword(e.target.value)}
-                      placeholder="ej. 123"
+                      placeholder="Ej. 123"
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nivel de la Cuenta del Alumno</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nivel de la cuenta del alumno</label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -1675,7 +1891,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Saldo de Apertura (€)</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Saldo de apertura (€)</label>
                   <input
                     type="number"
                     value={newUserInitialBalance}
@@ -1701,7 +1917,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     type="submit"
                     className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer"
                   >
-                    Crear Cuenta
+                    Crear cuenta
                   </button>
                 </div>
               </form>
@@ -1723,7 +1939,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
                 <h3 className="font-display font-bold text-base flex items-center">
                   <Coins className="w-5 h-5 mr-2 text-amber-400" />
-                  Regular Fondos de Alumno
+                  Regular fondos de alumno
                 </h3>
                 <button 
                   onClick={() => setSelectedUser(null)}
@@ -1740,7 +1956,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     <p className="font-bold text-slate-800 font-display text-sm">{selectedUser.name}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs font-bold text-slate-400 uppercase">Saldo Actual</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase">Saldo actual</p>
                     <p className="font-mono font-bold text-slate-900 text-base">{formatNumber(selectedUser.balance)} €</p>
                   </div>
                 </div>
@@ -1752,7 +1968,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Acción Contable</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Acción contable</label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -1794,7 +2010,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Importe en Euros (€)</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Importe en euros (€)</label>
                   <div className="relative rounded-xl">
                     <input
                       type="number"
@@ -1812,12 +2028,12 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Concepto de la Transacción Forzada</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Concepto de la transacción forzada</label>
                   <input
                     type="text"
                     value={adjustConcept}
                     onChange={(e) => setAdjustConcept(e.target.value)}
-                    placeholder="Ej. Corrección de saldo por el profesor, Ajuste de evaluación..."
+                    placeholder="Ej. Corrección de saldo por el profesor, ajuste de evaluación..."
                     className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                   />
                   <p className="text-[10px] text-slate-400 mt-1">
@@ -1837,7 +2053,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     type="submit"
                     className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer"
                   >
-                    Guardar Ajuste
+                    Guardar ajuste
                   </button>
                 </div>
               </form>
@@ -1859,7 +2075,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
                 <h3 className="font-display font-bold text-base flex items-center">
                   <Edit3 className="w-5 h-5 mr-2 text-amber-400" />
-                  Editar Datos de Alumno
+                  Editar datos de alumno
                 </h3>
                 <button 
                   onClick={() => setEditUserTarget(null)}
@@ -1882,7 +2098,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre Completo</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre completo</label>
                   <input
                     type="text"
                     required
@@ -1893,7 +2109,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de Acceso</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de acceso</label>
                   <input
                     type="text"
                     required
@@ -1904,7 +2120,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña Personalizada</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña personalizada</label>
                   <input
                     type="text"
                     required
@@ -1930,7 +2146,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     disabled={isEditingUser}
                     className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50"
                   >
-                    {isEditingUser ? 'Guardando...' : 'Guardar Cambios'}
+                    {isEditingUser ? 'Guardando...' : 'Guardar cambios'}
                   </button>
                 </div>
               </form>
@@ -1952,7 +2168,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               <div className="bg-rose-950 text-white px-6 py-4 flex justify-between items-center">
                 <h3 className="font-display font-bold text-base flex items-center">
                   <AlertTriangle className="w-5 h-5 mr-2 text-rose-400" />
-                  Confirmar Eliminación de Cuenta
+                  Confirmar eliminación de cuenta
                 </h3>
                 <button 
                   onClick={() => setDeleteTarget(null)}
@@ -1964,7 +2180,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
               <div className="p-6 space-y-4">
                 <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl space-y-2">
-                  <h4 className="text-xs font-bold text-rose-800 uppercase tracking-wider">¡Atención! Operación Irreversible</h4>
+                  <h4 className="text-xs font-bold text-rose-800 uppercase tracking-wider">¡Atención! Operación irreversible</h4>
                   <p className="text-xs text-rose-700 leading-relaxed">
                     Estás a punto de eliminar permanentemente la cuenta de <strong className="font-bold">{deleteTarget.name}</strong>. Se destruirá su saldo disponible de <strong className="font-bold">{formatNumber(deleteTarget.balance)} €</strong> y no podrá volver a iniciar sesión.
                   </p>
@@ -2008,7 +2224,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     onClick={handleDeleteUser}
                     className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md transition-colors cursor-pointer"
                   >
-                    Sí, Eliminar Cuenta
+                    Sí, eliminar cuenta
                   </button>
                 </div>
               </div>
@@ -2017,6 +2233,579 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
         )}
       </AnimatePresence>
 
+      {/* ADJUST FUNDS MODAL */}
+      <AnimatePresence>
+        {selectedUser && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
+                <h3 className="font-display font-bold text-base flex items-center">
+                  <Coins className="w-5 h-5 mr-2 text-amber-400" />
+                  Regular fondos de alumno
+                </h3>
+                <button 
+                  onClick={() => setSelectedUser(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAdjustBalance} className="p-6 space-y-4">
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 flex justify-between items-center">
+                  <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase">Alumno</p>
+                    <p className="font-bold text-slate-800 font-display text-sm">{selectedUser.name}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-slate-400 uppercase">Saldo actual</p>
+                    <p className="font-mono font-bold text-slate-900 text-base">{formatNumber(selectedUser.balance)} €</p>
+                  </div>
+                </div>
+
+                {adjustError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700">
+                    {adjustError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Acción contable</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdjustAction('add')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-1 transition-all cursor-pointer ${
+                        adjustAction === 'add' 
+                          ? 'border-amber-600 bg-amber-50 text-amber-700' 
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Añadir (+)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustAction('subtract')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-1 transition-all cursor-pointer ${
+                        adjustAction === 'subtract' 
+                          ? 'border-rose-600 bg-rose-50 text-rose-700' 
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Minus className="w-4 h-4" />
+                      <span>Quitar (-)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustAction('set')}
+                      className={`py-2 px-3 text-xs font-bold rounded-xl border flex flex-col items-center justify-center space-y-1 transition-all cursor-pointer ${
+                        adjustAction === 'set' 
+                          ? 'border-slate-900 bg-slate-900 text-white' 
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Settings className="w-4 h-4" />
+                      <span>Fijar (=)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Importe en euros (€)</label>
+                  <div className="relative rounded-xl">
+                    <input
+                      type="number"
+                      required
+                      value={adjustAmount}
+                      onChange={(e) => setAdjustAmount(e.target.value)}
+                      min="0"
+                      placeholder="0.00"
+                      className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-sm">
+                      €
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Concepto de la transacción forzada</label>
+                  <input
+                    type="text"
+                    value={adjustConcept}
+                    onChange={(e) => setAdjustConcept(e.target.value)}
+                    placeholder="Ej. Corrección de saldo por el profesor, ajuste de evaluación..."
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Este concepto aparecerá registrado en el libro diario de transferencias del alumno.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUser(null)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer"
+                  >
+                    Guardar ajuste
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* EDIT STUDENT DETAILS MODAL */}
+      <AnimatePresence>
+        {editUserTarget && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center">
+                <h3 className="font-display font-bold text-base flex items-center">
+                  <Edit3 className="w-5 h-5 mr-2 text-amber-400" />
+                  Editar datos de alumno
+                </h3>
+                <button 
+                  onClick={() => setEditUserTarget(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditUserSubmit} className="p-6 space-y-4">
+                {editError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700">
+                    {editError}
+                  </div>
+                )}
+                {editSuccess && (
+                  <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded-r-lg text-xs font-semibold text-emerald-700">
+                    {editSuccess}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre completo</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario de acceso</label>
+                  <input
+                    type="text"
+                    required
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña personalizada</label>
+                  <input
+                    type="text"
+                    required
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    className="block w-full py-2.5 px-3 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Esta contraseña quedará guardada de forma permanente y sincronizada en Supabase.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditUserTarget(null)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isEditingUser}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isEditingUser ? 'Guardando...' : 'Guardar cambios'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="bg-rose-950 text-white px-6 py-4 flex justify-between items-center">
+                <h3 className="font-display font-bold text-base flex items-center">
+                  <AlertTriangle className="w-5 h-5 mr-2 text-rose-400" />
+                  Confirmar eliminación de cuenta
+                </h3>
+                <button 
+                  onClick={() => setDeleteTarget(null)}
+                  className="p-1 rounded-lg text-rose-300 hover:text-white hover:bg-rose-900 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl space-y-2">
+                  <h4 className="text-xs font-bold text-rose-800 uppercase tracking-wider">¡Atención! Operación irreversible</h4>
+                  <p className="text-xs text-rose-700 leading-relaxed">
+                    Estás a punto de eliminar permanentemente la cuenta de <strong className="font-bold">{deleteTarget.name}</strong>. Se destruirá su saldo disponible de <strong className="font-bold">{formatNumber(deleteTarget.balance)} €</strong> y no podrá volver a iniciar sesión.
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100/80 text-xs space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-medium">Nombre:</span>
+                    <span className="font-bold text-slate-800">{deleteTarget.name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-medium">Usuario:</span>
+                    <span className="font-mono bg-slate-100 px-1 rounded text-slate-700">{deleteTarget.username}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-medium">IBAN:</span>
+                    <span className="font-mono bg-slate-100 px-1 rounded text-slate-700">{deleteTarget.accountNumber}</span>
+                  </div>
+                </div>
+
+                {deleteError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700">
+                    {deleteError}
+                  </div>
+                )}
+
+                <p className="text-[11px] text-slate-400 leading-normal italic text-center">
+                  Para mantener la integridad mercantil, el registro de las transferencias emitidas o recibidas por este alumno no se eliminará del libro diario de operaciones.
+                </p>
+
+                <div className="pt-2 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(null)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteUser}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md transition-colors cursor-pointer"
+                  >
+                    Sí, eliminar cuenta
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+
+      {/* RAW MATERIALS ANNOUNCEMENT CREATE / EDIT MODAL */}
+      <AnimatePresence>
+        {isAnnModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 my-8"
+            >
+              <div className="bg-slate-900 px-6 py-4 flex items-center justify-between border-b border-slate-800">
+                <div className="flex items-center space-x-2">
+                  <Package className="w-5 h-5 text-amber-400" />
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    {editingAnnFullId ? 'Editar anuncio de suministro' : 'Publicar nuevo anuncio de materia prima'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAnnModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveAnnouncement} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                {/* Preset Selector */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider block mb-2">
+                    Plantillas rápidas:
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['hierro', 'plastico', 'epoxi'] as const).map((key) => {
+                      const preset = TEACHER_PRODUCT_PRESETS[key];
+                      const isSelected = annPreset === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => handleSelectAnnPreset(key)}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
+                              : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="text-xs font-bold text-slate-900 leading-snug">{preset.title}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{preset.presentation}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Title */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">
+                    Título del suministro *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={annTitle}
+                    onChange={(e) => {
+                      setAnnTitle(e.target.value);
+                      setAnnPreset('custom');
+                    }}
+                    placeholder="Ej. Fragmentos de hierro"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                  />
+                </div>
+
+                {/* Presentation & Material Type */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">
+                      Presentación *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={annPresentation}
+                      onChange={(e) => setAnnPresentation(e.target.value)}
+                      placeholder="Ej. Pallet de 1.000 kg"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">
+                      Tipo de material
+                    </label>
+                    <select
+                      value={annMaterialType}
+                      onChange={(e) => setAnnMaterialType(e.target.value as any)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                    >
+                      <option value="hierro">Fragmentos de hierro (Materia prima)</option>
+                      <option value="plastico">Pellets de plástico (Inyección mangos)</option>
+                      <option value="epoxi">Pegamento epoxi (Lata pegamento)</option>
+                      <option value="producto_final">Otro / Producto terminado</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Price and Stock */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">
+                      Precio unitario (€) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={annPrice}
+                      onChange={(e) => setAnnPrice(e.target.value)}
+                      placeholder="450.00"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">
+                      Stock inicial (u. o &ldquo;ilimitado&rdquo;)
+                    </label>
+                    <input
+                      type="text"
+                      value={annStock}
+                      onChange={(e) => setAnnStock(e.target.value)}
+                      placeholder="ilimitado o número"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Unit Weight and IsPallet */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">
+                      Peso unitario (kg)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={annUnitWeightKg}
+                      onChange={(e) => setAnnUnitWeightKg(e.target.value)}
+                      placeholder="1000"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col justify-end">
+                    <label className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={annIsPallet}
+                        onChange={(e) => setAnnIsPallet(e.target.checked)}
+                        className="rounded text-amber-600 focus:ring-amber-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-700">Ocupa espacio de palet en nave</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">
+                    Descripción del producto
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={annDescription}
+                    onChange={(e) => setAnnDescription(e.target.value)}
+                    placeholder="Detalles sobre especificaciones técnicas, empaque, etc."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                  />
+                </div>
+
+                {annError && (
+                  <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded-r-lg text-xs font-semibold text-rose-700">
+                    {annError}
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-100 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsAnnModalOpen(false)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingAnn}
+                    className="flex-1 py-2.5 text-center text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-600 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingAnn ? 'Guardando...' : editingAnnFullId ? 'Actualizar anuncio' : 'Publicar anuncio'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* DELETE ANNOUNCEMENT CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {deletingAnn && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200"
+            >
+              <div className="bg-rose-600 px-6 py-4 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <AlertTriangle className="w-5 h-5 text-white" />
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Eliminar anuncio de suministro
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeletingAnn(null)}
+                  className="p-1 rounded-lg text-rose-200 hover:text-white hover:bg-rose-700 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-700 font-medium">
+                  ¿Estás seguro de que deseas eliminar este anuncio de materia prima? Los alumnos de nivel 1 ya no podrán comprar este ítem en el mercado.
+                </p>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1 text-xs">
+                  <div className="font-bold text-slate-900">{deletingAnn.title || deletingAnn.materialName}</div>
+                  <div className="text-slate-500">{deletingAnn.presentation}</div>
+                  <div className="font-mono font-bold text-emerald-700">{deletingAnn.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € / ud</div>
+                </div>
+
+                <div className="pt-2 flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setDeletingAnn(null)}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmDeleteAnnouncement}
+                    disabled={isDeletingAnn}
+                    className="flex-1 py-2.5 text-center text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isDeletingAnn ? 'Eliminando...' : 'Sí, eliminar anuncio'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -56,24 +56,24 @@ interface CartItem {
 const VEHICLE_CATALOG: VehicleCatalogItem[] = [
   {
     type: 'camion_trailer',
-    title: 'Camión de Gran Tonelaje con Tráiler',
-    categoryLabel: 'Logística Heavy-Duty',
+    title: 'Camión de gran tonelaje con tráiler',
+    categoryLabel: 'Logística heavy-duty',
     badgeStyle: 'bg-blue-100 text-blue-900 border-blue-200',
     basePrice: 85000,
     description: 'Camión cabeza tractora de gran tonelaje con semirremolque tráiler para transporte interurbano y aprovisionamiento de materia prima.',
     specs: [
-      'Motor Diésel 480 CV Euro VI',
+      'Motor diésel 480 CV Euro VI',
       'Capacidad de carga: 24.000 kg',
       'Semirremolque de lonas correderas',
-      'GPS & Telemetría corporativa'
+      'GPS y telemetría corporativa'
     ],
-    requirementNotes: 'Requiere contratación de Camionero / Conductor en el Foro de Empleo.',
+    requirementNotes: 'Requiere contratación de camionero / conductor en el foro de empleo.',
     imageUrl: '/images/vehicles/camion_trailer.jpg'
   },
   {
     type: 'carretilla_elevadora',
-    title: 'Carretilla Elevadora Contrapesada 2.5T',
-    categoryLabel: 'Maquinaria de Almacén',
+    title: 'Carretilla elevadora contrapesada 2.5T',
+    categoryLabel: 'Maquinaria de almacén',
     badgeStyle: 'bg-amber-100 text-amber-900 border-amber-200',
     basePrice: 18500,
     description: 'Carretilla industrial contrapesada eléctrica/diésel de 2.5 Tn. Indispensable para operaciones de carga, descarga y movimiento de pallets en cada almacén.',
@@ -88,13 +88,13 @@ const VEHICLE_CATALOG: VehicleCatalogItem[] = [
   },
   {
     type: 'coche_empresa',
-    title: 'Coche de Empresa / Berlina Corporativa',
-    categoryLabel: 'Flota Comercial',
+    title: 'Coche de empresa / berlina corporativa',
+    categoryLabel: 'Flota comercial',
     badgeStyle: 'bg-emerald-100 text-emerald-900 border-emerald-200',
     basePrice: 24000,
     description: 'Vehículo de flota corporativa para desplazamientos del equipo comercial, dirección y gestión de clientes.',
     specs: [
-      'Motor Híbrido Etiqueta ECO',
+      'Motor híbrido etiqueta ECO',
       'Navegador GPS y manos libres integrado',
       'Consumo reducido 4.2 L/100km',
       'Mantenimiento e IVA deducible'
@@ -330,7 +330,7 @@ export default function VehicleDealershipPortal({
               className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition flex items-center gap-1.5 text-xs font-semibold"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Volver a la Central</span>
+              <span>Volver a la central</span>
             </button>
             <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
             <div className="flex items-center gap-2">
@@ -338,7 +338,7 @@ export default function VehicleDealershipPortal({
                 <Truck className="w-5 h-5" />
               </div>
               <div>
-                <h1 className="text-base font-bold text-slate-900 leading-tight">Concesionario de Vehículos</h1>
+                <h1 className="text-base font-bold text-slate-900 leading-tight">Concesionario de vehículos</h1>
                 <p className="text-[11px] text-slate-500 hidden sm:block">Camiones con tráiler, carretillas elevadoras y flota corporativa</p>
               </div>
             </div>
@@ -346,7 +346,7 @@ export default function VehicleDealershipPortal({
 
           <div className="flex items-center gap-3">
             <div className="bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 text-right">
-              <span className="text-[10px] uppercase font-bold text-slate-500 block">Saldo Banco</span>
+              <span className="text-[10px] uppercase font-bold text-slate-500 block">Saldo banco</span>
               <span className="text-sm font-extrabold text-slate-900 font-mono">
                 {formatNumber(currentUser.balance)} €
               </span>
@@ -383,7 +383,7 @@ export default function VehicleDealershipPortal({
               }`}
             >
               <Truck className="w-4 h-4" />
-              <span>Catálogo de Vehículos</span>
+              <span>Catálogo de vehículos</span>
             </button>
 
             <button
@@ -395,7 +395,7 @@ export default function VehicleDealershipPortal({
               }`}
             >
               <ShieldCheck className="w-4 h-4" />
-              <span>Mi Flota Corporativa ({purchasedVehicles.length})</span>
+              <span>Mi flota corporativa ({purchasedVehicles.length})</span>
             </button>
           </div>
         </div>
@@ -407,10 +407,10 @@ export default function VehicleDealershipPortal({
               <div className="relative z-10 space-y-2 max-w-3xl">
                 <span className="inline-flex items-center gap-1.5 bg-blue-800 text-blue-200 text-[11px] font-extrabold px-3 py-1 rounded-full border border-blue-700">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Suministro Vehicular para Empresas</span>
+                  <span>Suministro vehicular para empresas</span>
                 </span>
                 <h2 className="text-xl sm:text-2xl font-black text-white">
-                  Equipa tu Empresa con Logística, Maquinaria y Movilidad
+                  Equipa tu empresa con logística, maquinaria y movilidad
                 </h2>
                 <p className="text-xs sm:text-sm text-blue-100 leading-relaxed">
                   Adquiere camiones con tráiler para el transporte de mercancías, carretillas elevadoras contrapesadas obligatorias para la operativa de tus almacenes y coches de empresa para la representación comercial. Puedes comprar unidades sueltas o añadirlas a tu cesta de la compra.
@@ -445,7 +445,7 @@ export default function VehicleDealershipPortal({
                           </span>
                           {inCartItem && (
                             <span className="bg-slate-900 text-amber-400 font-extrabold text-[10px] px-2 py-0.5 rounded-md border border-slate-700">
-                              En Cesta ({inCartItem.quantity})
+                              En cesta ({inCartItem.quantity})
                             </span>
                           )}
                         </div>
@@ -456,7 +456,7 @@ export default function VehicleDealershipPortal({
                         <p className="text-xs text-slate-600 leading-relaxed">{item.description}</p>
 
                         <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 space-y-1.5">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Especificaciones Técnicas</span>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Especificaciones técnicas</span>
                           <ul className="space-y-1">
                             {item.specs.map((spec, idx) => (
                               <li key={idx} className="text-[11px] text-slate-700 flex items-center gap-1.5">
@@ -477,12 +477,12 @@ export default function VehicleDealershipPortal({
                     <div className="p-5 pt-0 space-y-3">
                       <div className="border-t border-slate-100 pt-3 flex items-end justify-between">
                         <div>
-                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Precio Base + IVA 21%</span>
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Precio base + IVA 21%</span>
                           <span className="text-sm font-semibold text-slate-500 font-mono">{formatNumber(item.basePrice)} € + {formatNumber(iva)} €</span>
                         </div>
                         <div className="text-right">
                           <span className="text-lg font-black text-slate-900 font-mono block">{formatNumber(total)} €</span>
-                          <span className="text-[9px] text-emerald-600 font-bold uppercase">Total Unidad</span>
+                          <span className="text-[9px] text-emerald-600 font-bold uppercase">Total unidad</span>
                         </div>
                       </div>
 
@@ -494,7 +494,7 @@ export default function VehicleDealershipPortal({
                           className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-2xl font-extrabold text-xs transition shadow-xs flex items-center justify-center gap-1.5"
                         >
                           <ShoppingCart className="w-4 h-4" />
-                          <span>Añadir a la Cesta</span>
+                          <span>Añadir a la cesta</span>
                         </button>
 
                         <button
@@ -507,7 +507,7 @@ export default function VehicleDealershipPortal({
                           title="Comprar directamente 1 unidad"
                         >
                           <CreditCard className="w-4 h-4" />
-                          <span className="hidden lg:inline">Comprar Ya</span>
+                          <span className="hidden lg:inline">Comprar ya</span>
                         </button>
                       </div>
                     </div>
@@ -534,7 +534,7 @@ export default function VehicleDealershipPortal({
                   onClick={() => setActiveTab('catalog')}
                   className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-xs hover:bg-blue-700 transition"
                 >
-                  Ver Catálogo de Vehículos
+                  Ver catálogo de vehículos
                 </button>
               </div>
             ) : (
@@ -554,29 +554,29 @@ export default function VehicleDealershipPortal({
                       />
                       <div>
                         <span className="text-[10px] uppercase font-bold text-blue-600 tracking-wider block">
-                          {v.vehicleType === 'carretilla_elevadora' ? 'Maquinaria de Almacén' : v.vehicleType === 'camion_trailer' ? 'Camión con Tráiler' : 'Coche de Empresa'}
+                          {v.vehicleType === 'carretilla_elevadora' ? 'Maquinaria de almacén' : v.vehicleType === 'camion_trailer' ? 'Camión con tráiler' : 'Coche de empresa'}
                         </span>
                         <h4 className="font-bold text-slate-900 text-sm leading-snug">{v.title}</h4>
                         <span className="text-[11px] text-slate-500 block font-mono mt-0.5">
-                          Fecha Compra: {v.purchaseDate ? v.purchaseDate.split('T')[0] : 'N/A'}
+                          Fecha compra: {v.purchaseDate ? v.purchaseDate.split('T')[0] : 'N/A'}
                         </span>
                       </div>
                     </div>
 
                     <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-xs space-y-1.5 font-medium">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Precio de Adquisición:</span>
+                        <span className="text-slate-500">Precio de adquisición:</span>
                         <strong className="text-slate-900 font-mono">{formatNumber(v.totalPrice)} €</strong>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Forma de Pago:</span>
-                        <span className="text-emerald-700 font-bold uppercase">{v.paymentMethod === 'contado' ? 'Al Contado' : 'Aplazado'}</span>
+                        <span className="text-slate-500">Forma de pago:</span>
+                        <span className="text-emerald-700 font-bold uppercase">{v.paymentMethod === 'contado' ? 'Al contado' : 'Aplazado'}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Estado Operativo:</span>
+                        <span className="text-slate-500">Estado operativo:</span>
                         <span className="text-emerald-600 font-bold flex items-center gap-1">
                           <Check className="w-3 h-3" />
-                          <span>Activo / Disponible</span>
+                          <span>Activo / disponible</span>
                         </span>
                       </div>
                     </div>
@@ -596,7 +596,7 @@ export default function VehicleDealershipPortal({
                     {v.vehicleType === 'carretilla_elevadora' && (
                       <div className="pt-2 border-t border-slate-100 space-y-1">
                         <label className="block text-[11px] font-bold text-amber-900 uppercase tracking-wider">
-                          Asignación a Inmueble (Nave Industrial o Almacén Logístico)
+                          Asignación a inmueble (nave industrial o almacén logístico)
                         </label>
                         <select
                           value={
@@ -614,13 +614,13 @@ export default function VehicleDealershipPortal({
                             const propId = parts[0];
                             const whIdx = Number(parts[1] || 1);
                             const acq = acquisitions.find(a => String(a.id) === propId || String(a.propertyId) === propId);
-                            const propTitle = acq?.propertyTitle || acq?.title || 'Inmueble / Almacén';
+                            const propTitle = acq?.propertyTitle || acq?.title || 'Inmueble / almacén';
                             const isNave = acq?.propertyType?.includes('nave') || acq?.propertyType === 'industrial' || acq?.propertyType === 'nave_industrial' || acq?.propertyTitle?.toLowerCase().includes('nave');
                             const isAlmacen = acq?.propertyType === 'almacen' || acq?.propertyType === 'almacen_logistico' || acq?.propertyType === 'warehouse' || acq?.propertyTitle?.toLowerCase().includes('almacén') || acq?.propertyTitle?.toLowerCase().includes('almacen');
                             const whName = isNave
-                              ? `${propTitle} (Inmueble Nave Industrial)`
+                              ? `${propTitle} (inmueble nave industrial)`
                               : isAlmacen
-                                ? `${propTitle} (Inmueble Almacén Logístico)`
+                                ? `${propTitle} (inmueble almacén logístico)`
                                 : `${propTitle} - Almacén ${whIdx}`;
 
                             handleAssignVehicleWarehouse(v.id, whIdx, propId, propTitle, whName);
@@ -629,28 +629,28 @@ export default function VehicleDealershipPortal({
                         >
                           <option value="">-- Sin inmueble asignado --</option>
                           {acquisitions.filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyTitle?.toLowerCase().includes('nave')).length > 0 && (
-                            <optgroup label="🏭 Naves Industriales">
+                            <optgroup label="🏭 Naves industriales">
                               {acquisitions
                                 .filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyTitle?.toLowerCase().includes('nave'))
                                 .map(acq => {
                                   const pId = acq.id || acq.propertyId;
-                                  const title = acq.propertyTitle || 'Nave Industrial';
+                                  const title = acq.propertyTitle || 'Nave industrial';
                                   return (
-                                    <option key={pId} value={`${pId}_wh_1`}>{title} (Inmueble Completo)</option>
+                                    <option key={pId} value={`${pId}_wh_1`}>{title} (inmueble completo)</option>
                                   );
                                 })}
                             </optgroup>
                           )}
 
                           {acquisitions.filter(a => a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen')).length > 0 && (
-                            <optgroup label="📦 Almacenes Logísticos">
+                            <optgroup label="📦 Almacenes logísticos">
                               {acquisitions
                                 .filter(a => a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen'))
                                 .map(acq => {
                                   const pId = acq.id || acq.propertyId;
-                                  const title = acq.propertyTitle || 'Almacén Logístico';
+                                  const title = acq.propertyTitle || 'Almacén logístico';
                                   return (
-                                    <option key={pId} value={`${pId}_wh_1`}>{title} (Inmueble Completo)</option>
+                                    <option key={pId} value={`${pId}_wh_1`}>{title} (inmueble completo)</option>
                                   );
                                 })}
                             </optgroup>
@@ -659,7 +659,7 @@ export default function VehicleDealershipPortal({
 
                         {acquisitions.filter(a => a.propertyType?.includes('nave') || a.propertyType === 'industrial' || a.propertyType === 'nave_industrial' || a.propertyType === 'almacen' || a.propertyType === 'almacen_logistico' || a.propertyType === 'warehouse' || a.propertyTitle?.toLowerCase().includes('nave') || a.propertyTitle?.toLowerCase().includes('almacén') || a.propertyTitle?.toLowerCase().includes('almacen')).length === 0 && (
                           <p className="text-[11px] text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 mt-1 font-medium">
-                            ⚠️ No dispones de ninguna Nave Industrial o Almacén Logístico (en propiedad o alquiler). Adquiérelo en el Portal Inmobiliario para poder asignar la carretilla.
+                            ⚠️ No dispones de ninguna nave industrial o almacén logístico (en propiedad o alquiler). Adquiérelo en el portal inmobiliario para poder asignar la carretilla.
                           </p>
                         )}
                       </div>
@@ -668,10 +668,10 @@ export default function VehicleDealershipPortal({
                     {v.vehicleType === 'camion_trailer' && (
                       <div className="pt-2 border-t border-slate-100 space-y-1">
                         <label className="block text-[11px] font-bold text-indigo-900 uppercase tracking-wider">
-                          Conductor Asignado
+                          Conductor asignado
                         </label>
                         <div className="text-xs text-slate-700 bg-slate-50 p-2 rounded-xl border border-slate-200 font-medium">
-                          {v.assignedDriverName ? `🚛 ${v.assignedDriverName}` : 'Sin camionero asignado (asignable desde Patrimonio)'}
+                          {v.assignedDriverName ? `🚛 ${v.assignedDriverName}` : 'Sin camionero asignado (asignable desde patrimonio)'}
                         </div>
                       </div>
                     )}
@@ -691,8 +691,8 @@ export default function VehicleDealershipPortal({
                 <div className="flex items-center gap-2">
                   <ShoppingCart className="w-5 h-5 text-amber-400" />
                   <div>
-                    <h3 className="font-bold text-base text-white">Cesta de la Compra</h3>
-                    <p className="text-[11px] text-slate-300">Concesionario de Vehículos Industriales</p>
+                    <h3 className="font-bold text-base text-white">Cesta de la compra</h3>
+                    <p className="text-[11px] text-slate-300">Concesionario de vehículos industriales</p>
                   </div>
                 </div>
                 <button 
@@ -765,19 +765,19 @@ export default function VehicleDealershipPortal({
                 <div className="p-5 border-t border-slate-200 bg-slate-50 space-y-4">
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between text-slate-600">
-                      <span>Base Imponible Total:</span>
+                      <span>Base imponible total:</span>
                       <span className="font-mono font-bold text-slate-900">{formatNumber(cartBaseSubtotal)} €</span>
                     </div>
                     <div className="flex justify-between text-slate-600">
-                      <span>IVA Soportado (21%):</span>
+                      <span>IVA soportado (21%):</span>
                       <span className="font-mono font-bold text-slate-900">{formatNumber(cartIvaTotal)} €</span>
                     </div>
                     <div className="flex justify-between text-sm pt-2 border-t border-slate-200 font-extrabold">
-                      <span className="text-slate-900">Total Operación Cesta:</span>
+                      <span className="text-slate-900">Total operación cesta:</span>
                       <span className="font-mono text-blue-700 font-black text-base">{formatNumber(cartGrandTotal)} €</span>
                     </div>
                     <div className="flex justify-between text-[11px] text-slate-500 pt-0.5">
-                      <span>Saldo Banco Disponible:</span>
+                      <span>Saldo banco disponible:</span>
                       <span className="font-mono font-bold">{formatNumber(currentUser.balance)} €</span>
                     </div>
                   </div>
@@ -806,7 +806,7 @@ export default function VehicleDealershipPortal({
                     ) : (
                       <>
                         <CreditCard className="w-4 h-4" />
-                        <span>Comprar Todo en Una Sola Operación ({cartTotalItemsCount} u.)</span>
+                        <span>Comprar todo en una sola operación ({cartTotalItemsCount} u.)</span>
                       </>
                     )}
                   </button>
@@ -823,7 +823,7 @@ export default function VehicleDealershipPortal({
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                   <Truck className="w-5 h-5 text-blue-600" />
-                  <span>Confirmación de Compra de Vehículo</span>
+                  <span>Confirmación de compra de vehículo</span>
                 </h3>
                 <button
                   onClick={() => setSelectedVehicle(null)}
@@ -853,19 +853,19 @@ export default function VehicleDealershipPortal({
               {/* Invoice breakdown */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2 text-xs">
                 <div className="flex justify-between">
-                  <span className="text-slate-600">Base Imponible:</span>
+                  <span className="text-slate-600">Base imponible:</span>
                   <span className="font-mono font-bold text-slate-900">{formatNumber(selectedVehicle.basePrice)} €</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-600">IVA Soportado (21%):</span>
+                  <span className="text-slate-600">IVA soportado (21%):</span>
                   <span className="font-mono font-bold text-slate-900">{formatNumber(selectedVehicle.basePrice * 0.21)} €</span>
                 </div>
                 <div className="border-t border-slate-200 pt-2 flex justify-between text-sm">
-                  <span className="font-bold text-slate-900">Importe Total Factura:</span>
+                  <span className="font-bold text-slate-900">Importe total factura:</span>
                   <strong className="font-mono text-blue-700 font-extrabold">{formatNumber(selectedVehicle.basePrice * 1.21)} €</strong>
                 </div>
                 <div className="flex justify-between text-[11px] text-slate-500 pt-1">
-                  <span>Saldo Actual en Cuenta:</span>
+                  <span>Saldo actual en cuenta:</span>
                   <span className="font-mono font-semibold">{formatNumber(currentUser.balance)} €</span>
                 </div>
               </div>
@@ -902,7 +902,7 @@ export default function VehicleDealershipPortal({
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      <span>Confirmar y Pagar</span>
+                      <span>Confirmar y pagar</span>
                     </>
                   )}
                 </button>

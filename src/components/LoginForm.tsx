@@ -126,7 +126,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
             <div>
               <label htmlFor="username" className="block text-sm font-semibold text-slate-700">
-                Nombre de Usuario
+                Nombre de usuario
               </label>
               <div className="mt-1 relative rounded-md shadow-sm">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -141,7 +141,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 focus:bg-white transition-all text-slate-900 text-sm font-sans"
-                  placeholder="ej. ana, carlos, profesor"
+                  placeholder="Ej. Ana, Carlos, Profesor"
                 />
               </div>
             </div>
@@ -178,7 +178,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (
                   <span className="flex items-center">
-                    Acceder a la Simulación <ArrowRight className="w-4 h-4 ml-2" />
+                    Acceder a ContaLab <ArrowRight className="w-4 h-4 ml-2" />
                   </span>
                 )}
               </button>

@@ -149,7 +149,7 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                       <button
                         onClick={() => setDocModal({ type: 'loan_statement', loan, installmentPeriod: row.period })}
                         className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg text-[10px] font-bold border border-amber-200 transition inline-flex items-center gap-1 cursor-pointer"
-                        title="Ver Recibo Oficial de la Cuota"
+                        title="Ver recibo oficial de la cuota"
                       >
                         <Receipt className="w-3 h-3 text-amber-700" />
                         <span>Recibo</span>

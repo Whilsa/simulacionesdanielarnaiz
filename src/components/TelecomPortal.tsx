@@ -122,7 +122,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
               className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition cursor-pointer flex items-center gap-2 text-xs font-semibold"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Volver al Panel</span>
+              <span className="hidden sm:inline">Volver al panel</span>
             </button>
             <div className="h-6 w-px bg-slate-800"></div>
             <div className="flex items-center gap-2">
@@ -130,7 +130,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                 <PhoneCall className="w-4 h-4" />
               </div>
               <div>
-                <h1 className="text-sm font-bold text-white leading-none">Servicios de Teléfono e Internet</h1>
+                <h1 className="text-sm font-bold text-white leading-none">Servicios de teléfono e internet</h1>
                 <p className="text-[11px] text-slate-400 mt-0.5">Ofertas empresariales de fibra, móvil y centralita IP</p>
               </div>
             </div>
@@ -138,7 +138,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
 
           <div className="flex items-center gap-3">
             <div className="text-right">
-              <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo Banco</span>
+              <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Saldo banco</span>
               <span className="text-xs font-extrabold text-amber-400">
                 {formatNumber(currentUser.balance)} €
               </span>
@@ -155,10 +155,10 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
           <div className="space-y-2 max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full text-xs font-bold">
               <Zap className="w-3.5 h-3.5" />
-              <span>Conectividad Corporativa para Empresas</span>
+              <span>Conectividad corporativa para empresas</span>
             </div>
             <h2 className="text-xl font-black text-white tracking-tight">
-              Contratación de Servicios de Fibra Óptica, Móvil y Centralita
+              Contratación de servicios de fibra óptica, móvil y centralita
             </h2>
             <p className="text-xs text-slate-300 leading-relaxed">
               Selecciona el plan de telecomunicaciones adecuado para tu empresa. El pago se realizará de forma <strong className="text-amber-400">automática el día 1 del mes siguiente</strong> mediante adeudo directo en tu cuenta bancaria corporativa. Podrás descargar y consultar todas tus facturas con desglose oficial desde esta tarjeta y desde el patrimonio de la empresa.
@@ -178,7 +178,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
             ) : (
               <p className="font-bold text-amber-400 flex items-center gap-1.5">
                 <AlertCircle className="w-4 h-4" />
-                <span>Sin Contrato Activo</span>
+                <span>Sin contrato activo</span>
               </p>
             )}
           </div>
@@ -204,7 +204,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
             <div className="flex items-center gap-3">
               <Building2 className="w-5 h-5 text-slate-500" />
               <div>
-                <p className="text-xs font-bold text-slate-900">Vincular Sede de Destino (Opcional)</p>
+                <p className="text-xs font-bold text-slate-900">Vincular sede de destino (opcional)</p>
                 <p className="text-[11px] text-slate-500">Asigna la instalación de la línea de fibra a uno de tus inmuebles</p>
               </div>
             </div>
@@ -213,7 +213,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
               onChange={(e) => setSelectedPropertyId(e.target.value)}
               className="w-full sm:w-auto px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">Oficina / Sede Principal General</option>
+              <option value="">Oficina / sede principal general</option>
               {acquisitions.map(acq => (
                 <option key={acq.id || acq.propertyId} value={acq.id || acq.propertyId}>
                   {acq.propertyTitle || acq.title} ({acq.surfaceM2} m²)
@@ -227,7 +227,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
         <section className="space-y-4">
           <h3 className="font-extrabold text-base text-slate-900 flex items-center gap-2">
             <Wifi className="w-5 h-5 text-blue-600" />
-            <span>Ofertas Disponibles para Empresas</span>
+            <span>Ofertas disponibles para empresas</span>
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -259,7 +259,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
 
                       <div>
                         <h4 className="font-extrabold text-base leading-snug">{plan.name}</h4>
-                        <p className="text-xs text-slate-300">{plan.speedMbps >= 1000 ? `${plan.speedMbps / 1000} Gbps` : `${plan.speedMbps} Mbps`} Fibra Simétrica</p>
+                        <p className="text-xs text-slate-300">{plan.speedMbps >= 1000 ? `${plan.speedMbps / 1000} Gbps` : `${plan.speedMbps} Mbps`} fibra simétrica</p>
                       </div>
                     </div>
 
@@ -302,12 +302,12 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                       ) : isCurrent ? (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          <span>Plan Contratado Activo</span>
+                          <span>Plan contratado activo</span>
                         </>
                       ) : (
                         <>
                           <Zap className="w-4 h-4 text-amber-300" />
-                          <span>Contratar Servicio</span>
+                          <span>Contratar servicio</span>
                         </>
                       )}
                     </button>
@@ -324,12 +324,12 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
             <div>
               <h3 className="font-extrabold text-base text-slate-900 flex items-center gap-2">
                 <FileText className="w-5 h-5 text-emerald-600" />
-                <span>Histórico de Facturas Emitidas (Pago Automático el 1 de Mes)</span>
+                <span>Histórico de facturas emitidas (pago automático el 1 de mes)</span>
               </h3>
               <p className="text-xs text-slate-500">Facturación automática mensual por servicio de fibra e internet empresarial</p>
             </div>
             <span className="text-xs font-extrabold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
-              {invoices.length} {invoices.length === 1 ? 'Factura' : 'Facturas'} Registradas
+              {invoices.length} {invoices.length === 1 ? 'factura' : 'facturas'} registradas
             </span>
           </div>
 
@@ -344,12 +344,12 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-slate-700 font-bold">
-                    <th className="p-3">Nº Factura</th>
+                    <th className="p-3">Nº factura</th>
                     <th className="p-3">Periodo</th>
-                    <th className="p-3">Plan / Proveedor</th>
-                    <th className="p-3 text-right">Base Imponible</th>
+                    <th className="p-3">Plan / proveedor</th>
+                    <th className="p-3 text-right">Base imponible</th>
                     <th className="p-3 text-right">IVA (21%)</th>
-                    <th className="p-3 text-right">Total Factura</th>
+                    <th className="p-3 text-right">Total factura</th>
                     <th className="p-3 text-center">Estado</th>
                     <th className="p-3 text-right">Acciones</th>
                   </tr>
@@ -407,7 +407,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                   <PhoneCall className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-900">Confirmar Contratación</h3>
+                  <h3 className="text-base font-extrabold text-slate-900">Confirmar contratación</h3>
                   <p className="text-xs text-slate-500">{confirmingPlan.name}</p>
                 </div>
               </div>
@@ -422,20 +422,20 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
             <div className="space-y-4 text-xs text-slate-700">
               <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-2xl space-y-2">
                 <span className="font-extrabold text-[11px] uppercase tracking-wider text-blue-900 block">
-                  Resumen del Plan de Telecomunicación
+                  Resumen del plan de telecomunicación
                 </span>
                 <div className="flex justify-between items-center text-sm font-bold text-slate-900">
-                  <span>Velocidad Fibra / Conexión:</span>
+                  <span>Velocidad fibra / conexión:</span>
                   <span className="text-blue-700 font-mono">{confirmingPlan.speedMbps} Mbps</span>
                 </div>
                 <div className="flex justify-between items-center text-sm font-bold text-slate-900">
-                  <span>Cuota Mensual Base:</span>
+                  <span>Cuota mensual base:</span>
                   <span className="font-mono">{formatNumber(confirmingPlan.monthlyPrice)} €/mes (+ IVA)</span>
                 </div>
               </div>
 
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] space-y-1 text-slate-600">
-                <p>• <strong>Activación inmediata:</strong> El servicio y el acceso al Mercado se habilitarán al instante.</p>
+                <p>• <strong>Activación inmediata:</strong> El servicio y el acceso al mercado se habilitarán al instante.</p>
                 <p>• <strong>Facturación:</strong> Se domiciliará en la cuenta bancaria de la empresa el día 1 de cada mes.</p>
                 <p>• <strong>Primer cobro:</strong> Prorrateado según los días consumidos del mes en curso.</p>
               </div>
@@ -464,7 +464,7 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
                 className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition disabled:opacity-50 flex items-center gap-1.5 shadow-md"
               >
                 {submittingPlanId && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                <span>Confirmar y Activar Contrato</span>
+                <span>Confirmar y activar contrato</span>
               </button>
             </div>
           </div>

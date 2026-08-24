@@ -123,10 +123,10 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           </div>
           <div>
             <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <span>Plano de Distribución: {isLogisticsWarehouse ? 'Almacén Logístico' : 'Nave Industrial'} - {acquisition.propertyTitle}</span>
+              <span>Plano de distribución: {isLogisticsWarehouse ? 'Almacén logístico' : 'Nave industrial'} - {acquisition.propertyTitle}</span>
             </h3>
             <p className="text-xs text-slate-400">
-              Superficie Total disponible: <span className="text-blue-400 font-semibold">{naveSurface} m²</span>
+              Superficie total disponible: <span className="text-blue-400 font-semibold">{naveSurface} m²</span>
             </p>
           </div>
         </div>
@@ -143,7 +143,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition shadow-md cursor-pointer"
           >
             <Save className="w-4 h-4" />
-            <span>{saving ? 'Guardando...' : 'Guardar Plano'}</span>
+            <span>{saving ? 'Guardando...' : 'Guardar plano'}</span>
           </button>
         </div>
       </div>
@@ -151,7 +151,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
       {/* Blueprint Visual Diagram */}
       <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 overflow-hidden">
         <div className="absolute top-2 right-3 text-[10px] uppercase tracking-wider text-slate-500 font-mono">
-          Esquema Arquitectónico - {isLogisticsWarehouse ? 'Almacén Logístico' : 'Nave Industrial'} ({naveSurface} m²)
+          Esquema arquitectónico - {isLogisticsWarehouse ? 'Almacén logístico' : 'Nave industrial'} ({naveSurface} m²)
         </div>
 
         {/* Blueprint Grid Canvas */}
@@ -195,7 +195,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             >
               <div className="flex justify-between items-start gap-1">
                 <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1">
-                  <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Almacén General</span>
+                  <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Almacén general</span>
                 </span>
                 <span className="text-xs font-mono bg-emerald-950/80 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800 shrink-0">
                   {storageM2} m²
@@ -235,7 +235,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
                 className="bg-slate-800/60 border-2 border-slate-600/60 rounded-md p-2 flex flex-col justify-between backdrop-blur-sm"
               >
                 <div className="flex justify-between items-center gap-1">
-                  <span className="text-[10px] font-bold text-slate-300 uppercase truncate">Diáfana / Libre</span>
+                  <span className="text-[10px] font-bold text-slate-300 uppercase truncate">Diáfana / libre</span>
                   <span className="text-[10px] font-mono bg-slate-900 text-slate-300 px-1 py-0.5 rounded border border-slate-700 shrink-0">
                     {freeM2} m²
                   </span>
@@ -255,7 +255,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
               <label className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
                 <Layers className="w-4 h-4 text-emerald-400" />
-                <span>Superficie de Almacén</span>
+                <span>Superficie de almacén</span>
               </label>
               <span className="text-xs text-slate-400 font-mono">Mín: 30 m²</span>
             </div>
@@ -273,7 +273,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             </div>
 
             <div className="text-xs text-slate-400 space-y-1">
-              <p className="text-slate-300 font-medium">• Almacén Logístico:</p>
+              <p className="text-slate-300 font-medium">• Almacén logístico:</p>
               <p>Espacio único de almacenaje general de stock. Sin divisiones por tipo de producto ni zona de maquinaria industrial.</p>
             </div>
 
@@ -293,7 +293,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           {/* Admin & Total Summary */}
           <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-              <label className="text-sm font-semibold text-purple-300">Administración / Oficinas</label>
+              <label className="text-sm font-semibold text-purple-300">Administración / oficinas</label>
               <span className="text-xs text-slate-400 font-mono">m²</span>
             </div>
 
@@ -337,7 +337,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
               <label className="text-sm font-semibold text-blue-300 flex items-center gap-1.5">
                 <Box className="w-4 h-4 text-blue-400" />
-                <span>Zona de Maquinaria</span>
+                <span>Zona de maquinaria</span>
               </label>
               <span className="text-xs text-slate-400 font-mono">Mín: {requiredMachineryM2} m²</span>
             </div>
@@ -356,8 +356,8 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
 
             <div className="text-xs text-slate-400 space-y-1">
               <p className="text-slate-300 font-medium">• Requisitos por maquinaria:</p>
-              <p>• Línea Metal/Hierro: 240 m² / máquina ({metalMachinesCount} compradas)</p>
-              <p>• Línea Plástico/Ensamblaje: 180 m² / máquina ({plasticMachinesCount} compradas)</p>
+              <p>• Línea metal/hierro: 240 m² / máquina ({metalMachinesCount} compradas)</p>
+              <p>• Línea plástico/ensamblaje: 180 m² / máquina ({plasticMachinesCount} compradas)</p>
             </div>
 
             {isMachineryValid ? (
@@ -378,7 +378,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
               <label className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
                 <Layers className="w-4 h-4 text-emerald-400" />
-                <span>Almacén General</span>
+                <span>Almacén general</span>
               </label>
               <span className="text-xs text-slate-400 font-mono">Mín: 30 m²</span>
             </div>
@@ -416,7 +416,7 @@ export const NaveFloorPlanViewer: React.FC<Props> = ({
           {/* Admin & Total Summary */}
           <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 space-y-3">
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-              <label className="text-sm font-semibold text-purple-300">Administración / Oficinas</label>
+              <label className="text-sm font-semibold text-purple-300">Administración / oficinas</label>
               <span className="text-xs text-slate-400 font-mono">m²</span>
             </div>
 

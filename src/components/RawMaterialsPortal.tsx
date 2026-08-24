@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { User, RawMaterialAnnouncement, RawMaterialOrder, PurchasedVehicle, HiredEmployee, MarketMessage, CompanyProfile, TradingPartner, PromissoryNoteData } from '../types.js';
 import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
+import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import {
   Package,
@@ -79,7 +80,7 @@ const PRODUCT_PRESETS = {
     materialType: 'hierro' as const,
     title: 'Fragmentos de hierro',
     presentation: 'Pallet de 1.000 kg (Fragmentos)',
-    description: 'Materia prima metálica de alta calidad para producción en Línea de Varilla y Punta. Presentación en palet de 1.000 kg.',
+    description: 'Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.',
     unitWeightKg: 1000,
     isPallet: true,
     defaultPrice: 450
@@ -145,6 +146,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [acquisitions, setAcquisitions] = useState<any[]>([]);
   const [producedGoods, setProducedGoods] = useState<any>(null);
   const [rawMaterialsState, setRawMaterialsState] = useState<any>(null);
+  const [inventoryData, setInventoryData] = useState<any>(null);
 
   // Cart State
   const [cart, setCart] = useState<RawMaterialCartItem[]>([]);
@@ -166,7 +168,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [annPreset, setAnnPreset] = useState<'hierro' | 'plastico' | 'epoxi'>('hierro');
   const [annTitle, setAnnTitle] = useState('Fragmentos de hierro');
   const [annPresentation, setAnnPresentation] = useState('Pallet de 1.000 kg (Fragmentos)');
-  const [annDescription, setAnnDescription] = useState('Materia prima metálica de alta calidad para producción en Línea de Varilla y Punta. Presentación en palet de 1.000 kg.');
+  const [annDescription, setAnnDescription] = useState('Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.');
   const [annPrice, setAnnPrice] = useState<number | string>(450);
   const [annDurationDays, setAnnDurationDays] = useState<number | 'indefinido'>('indefinido');
   const [annStock, setAnnStock] = useState<number | string | 'ilimitado'>('ilimitado');
@@ -855,7 +857,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       <html lang="es">
       <head>
         <meta charset="UTF-8" />
-        <title>Pagaré Mercantil - ${note.promissoryNoteNumber}</title>
+        <title>Pagaré mercantil - ${note.promissoryNoteNumber}</title>
         <style>
           @page {
             size: A4 landscape;
@@ -1197,7 +1199,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
     const sellerLvl = order.sellerLevel !== undefined ? order.sellerLevel : (order.sellerId === 'profesor-1' || order.sellerId === 'LOGISTICA_EXTERIOR' ? 'Proveedor Oficial' : 1);
     const buyerLvl = order.buyerLevel !== undefined ? order.buyerLevel : (order.studentLevel || 1);
-    const delAddress = order.deliveryAddress || 'Dirección Comercial Registrada';
+    const delAddress = order.deliveryAddress || 'Dirección comercial registrada';
 
     let items = order.items && order.items.length > 0
       ? order.items.map((i: any) => {
@@ -1207,6 +1209,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           const p = Number(i.unitPrice) || (baseP > 0 ? baseP / q : (Number(order.unitPrice) || (Number(order.basePrice) && order.quantity ? Number(order.basePrice) / order.quantity : 0)));
           const sub = i.subtotal !== undefined && Number(i.subtotal) > 0 ? Number(i.subtotal) : (baseP > 0 ? baseP : (q * p));
           const cost = i.totalCost !== undefined && Number(i.totalCost) > 0 ? Number(i.totalCost) : sub;
+          const isScrewdriverItem = (i.materialType === 'producto_final') || (title && title.toLowerCase().includes('destornillador'));
           return {
             ...i,
             announcementId: i.announcementId || 'item',
@@ -1214,7 +1217,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             materialTitle: title,
             quantity: q,
             unitPrice: Math.round(p * 100) / 100,
-            totalKg: Number(i.totalKg) || (q * (Number(i.unitWeightKg) || 1)),
+            totalKg: isScrewdriverItem ? 0 : (Number(i.totalKg) || (q * (Number(i.unitWeightKg) || 1000))),
             subtotal: Math.round(sub * 100) / 100,
             totalCost: Math.round(cost * 100) / 100
           };
@@ -1226,13 +1229,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const baseP = Number(order.subtotalAmount) || Number(order.basePrice) || 0;
       const p = Number(order.unitPrice) || (baseP > 0 ? baseP / q : 0);
       const sub = baseP > 0 ? baseP : (q * p);
+      const isScrewdriverOrd = (order.materialType === 'producto_final') || (order.materialTitle && order.materialTitle.toLowerCase().includes('destornillador')) || (order.concept && order.concept.toLowerCase().includes('destornillador'));
       items = [{
         announcementId: order.announcementId || 'item',
-        title: order.materialTitle || order.concept || 'Materia Prima',
-        materialTitle: order.materialTitle || order.concept || 'Materia Prima',
+        title: order.materialTitle || order.concept || 'Materia prima',
+        materialTitle: order.materialTitle || order.concept || 'Materia prima',
         quantity: q,
         unitPrice: Math.round(p * 100) / 100,
-        totalKg: Number(order.totalKg) || 0,
+        totalKg: isScrewdriverOrd ? 0 : (Number(order.totalKg) || 0),
         subtotal: Math.round(sub * 100) / 100,
         totalCost: Math.round(sub * 100) / 100
       }];
@@ -1317,7 +1321,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       buyerLevel: invData.buyerLevel,
       announcementId: 'manual',
       materialType: 'hierro',
-      materialTitle: invData.concept || (invData.items && invData.items[0] ? (invData.items[0].title || invData.items[0].materialTitle) : 'Factura Comercial'),
+      materialTitle: invData.concept || (invData.items && invData.items[0] ? (invData.items[0].title || invData.items[0].materialTitle) : 'Factura comercial'),
       quantity: itemsCount,
       unitWeightKg: 1,
       totalKg: itemsCount,
@@ -1330,7 +1334,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       vatAmount: invData.vatAmount || 0,
       totalAmount: invData.totalAmount || 0,
       needsTransport: Boolean(invData.transportCost > 0),
-      deliveryAddress: invData.deliveryAddress || 'Dirección Comercial Registrada',
+      deliveryAddress: invData.deliveryAddress || 'Dirección comercial registrada',
       status: 'facturado',
       requestedAt: invData.issuedAt || new Date().toISOString(),
       invoicedAt: invData.issuedAt || new Date().toISOString(),
@@ -1395,7 +1399,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   const getTransportConcept = (order: RawMaterialOrder) => {
     let address = order.deliveryAddress;
-    if (!address || address === 'Almacén del destinatario' || address === 'Almacén Central' || address === 'Dirección Comercial Registrada') {
+    if (!address || address === 'Almacén del destinatario' || address === 'Almacén Central' || address === 'Dirección comercial registrada') {
       const recipientAcq = acquisitions.find((a: any) => 
         (a.studentId && order.materialTitle?.includes(a.studentName)) ||
         a.location
@@ -1407,7 +1411,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
     }
 
-    const title = order.materialTitle || 'Servicio Exterior de Transporte - Envío de existencias';
+    const title = order.materialTitle || 'Servicio exterior de transporte - Envío de existencias';
     if (title.toLowerCase().includes('dirección') || title.toLowerCase().includes('inmueble') || title.includes(address)) {
       return title;
     }
@@ -1466,22 +1470,25 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">1 u.</td>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #0f172a;">${formatNumber(subtotal)} €</td>
       </tr>
-    ` : itemsList.map(it => `
+    ` : itemsList.map(it => {
+      const isScrewdriverItem = (it.materialType === 'producto_final') || (it.materialTitle && it.materialTitle.toLowerCase().includes('destornillador')) || ((it as any).title && (it as any).title.toLowerCase().includes('destornillador'));
+      return `
       <tr>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color: #1e293b;">${it.materialTitle || (it as any).title || 'Material'}</td>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">${it.quantity || 1} u.</td>
-        <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">${formatNumber(it.totalKg || 0)} kg</td>
+        <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">${isScrewdriverItem ? '-' : `${formatNumber(it.totalKg || 0)} kg`}</td>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">${formatNumber(it.unitPrice || 0)} €</td>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #0f172a;">${formatNumber(it.totalCost || (it.quantity * it.unitPrice))} €</td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     const tableHeader = isTransport ? `
       <thead>
         <tr>
           <th>Concepto</th>
           <th style="text-align: right;">Cantidad</th>
-          <th style="text-align: right;">Total Neto</th>
+          <th style="text-align: right;">Total neto</th>
         </tr>
       </thead>
     ` : `
@@ -1490,8 +1497,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <th>Concepto / Material</th>
           <th style="text-align: right;">Cantidad</th>
           <th style="text-align: right;">Peso (kg)</th>
-          <th style="text-align: right;">Precio Unid.</th>
-          <th style="text-align: right;">Total Neto</th>
+          <th style="text-align: right;">Precio unid.</th>
+          <th style="text-align: right;">Total neto</th>
         </tr>
       </thead>
     `;
@@ -1502,7 +1509,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Factura Comercial ${invoiceNum}</title>
+  <title>Factura comercial ${invoiceNum}</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; margin: 0; padding: 20px; background: #f8fafc; }
@@ -1533,14 +1540,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 </head>
 <body>
   <div class="print-bar">
-    <span style="font-weight: bold; font-size: 14px;">Factura Comercial Oficial — ${invoiceNum}</span>
-    <button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button>
+    <span style="font-weight: bold; font-size: 14px;">Factura comercial oficial — ${invoiceNum}</span>
+    <button class="print-btn" onclick="window.print()">🖨️ Imprimir / guardar como PDF</button>
   </div>
   <div class="invoice-card">
     <div class="header">
       <div>
         <h1 class="title">FACTURA COMERCIAL</h1>
-        <div class="subtitle">Simulador Empresarial — Operaciones de Cadena de Suministro</div>
+        <div class="subtitle">Simulador empresarial — operaciones de cadena de suministro</div>
       </div>
       <div>
         <div class="inv-num">${invoiceNum}</div>
@@ -1578,17 +1585,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <span>${subtotalLabel}</span>
           <span style="font-family: monospace;">${formatNumber(subtotal)} €</span>
         </div>
-        ${disc > 0 ? `<div class="totals-row" style="color: #047857;"><span>Descuento Comercial:</span><span style="font-family: monospace;">-${formatNumber(disc)} €</span></div>` : ''}
-        ${!isTransport && trans > 0 ? `<div class="totals-row"><span>Gastos Transporte / Portes:</span><span style="font-family: monospace;">+${formatNumber(trans)} €</span></div>` : ''}
+        ${disc > 0 ? `<div class="totals-row" style="color: #047857;"><span>Descuento comercial:</span><span style="font-family: monospace;">-${formatNumber(disc)} €</span></div>` : ''}
+        ${!isTransport && trans > 0 ? `<div class="totals-row"><span>Gastos transporte / portes:</span><span style="font-family: monospace;">+${formatNumber(trans)} €</span></div>` : ''}
         <div class="totals-row" style="font-weight: bold; border-top: 1px solid #e2e8f0; padding-top: 4px; margin-top: 4px;">
-          <span>Base Imponible (21% IVA):</span>
+          <span>Base imponible (21% IVA):</span>
           <span style="font-family: monospace;">${formatNumber(baseImp)} €</span>
         </div>
         <div class="totals-row">
           <span>Cuota I.V.A. (21%):</span>
           <span style="font-family: monospace;">${formatNumber(iva)} €</span>
         </div>
-        ${ins > 0 ? `<div class="totals-row" style="color: #475569;"><span>Seguro Mercancía (No sujeto a IVA):</span><span style="font-family: monospace;">+${formatNumber(ins)} €</span></div>` : ''}
+        ${ins > 0 ? `<div class="totals-row" style="color: #475569;"><span>Seguro mercancía (no sujeto a IVA):</span><span style="font-family: monospace;">+${formatNumber(ins)} €</span></div>` : ''}
         <div class="totals-row totals-grand">
           <span>TOTAL FACTURA:</span>
           <span style="font-family: monospace;">${formatNumber(tot)} €</span>
@@ -1654,6 +1661,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
 
       if (invData) {
+        if (invData.inventory) setInventoryData(invData.inventory);
         if (invData.producedGoods) setProducedGoods(invData.producedGoods);
         if (invData.rawMaterials) setRawMaterialsState(invData.rawMaterials);
       }
@@ -1664,58 +1672,91 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     }
   };
 
-  // Real Raw Material Storage Surface Calculation
-  const naveStorageM2 = floorPlans.reduce((sum: number, f: any) => {
-    const rawM2 = Number(f.rawMaterialsStorageM2);
-    if (!isNaN(rawM2) && rawM2 > 0) return sum + rawM2;
-    return sum + (Number(f.storageZoneM2) || 0);
-  }, 0);
-  const navesWithStorageCount = floorPlans.filter((f: any) => {
-    const rawM2 = Number(f.rawMaterialsStorageM2);
-    if (!isNaN(rawM2) && rawM2 > 0) return true;
-    return (Number(f.storageZoneM2) || 0) > 0;
-  }).length;
-
-  const almacenAcquisitions = acquisitions.filter((a: any) => {
-    const t = (a.type || a.propertyType || '').toLowerCase();
-    const title = (a.propertyTitle || a.title || '').toLowerCase();
-    return t === 'almacen' || t === 'almacén' || title.includes('almacen') || title.includes('almacén');
+  // Warehouse Properties & Storage Surface Calculation (aligned with "Existencias" in CompanyDashboard)
+  const warehouseProperties = (acquisitions || []).filter((a: any) => {
+    const pType = (a.propertyType || a.type || "").toLowerCase();
+    const title = (a.propertyTitle || a.title || "").toLowerCase();
+    return (
+      ["nave_industrial", "almacen", "almacen_logistico", "industrial", "warehouse"].includes(pType) ||
+      title.includes("nave") ||
+      title.includes("almacen") ||
+      title.includes("almacén")
+    );
   });
-  const almacenStorageM2 = almacenAcquisitions.reduce((sum: number, a: any) => sum + (Number(a.surfaceM2) || 0), 0);
 
-  const realWarehouseM2 = naveStorageM2 + almacenStorageM2;
-  const rawMaterialWarehousesCount = navesWithStorageCount + almacenAcquisitions.length;
+  let realWarehouseM2 = 0;
+  let maxPalletsAllowed = 0;
+
+  if (warehouseProperties.length === 0) {
+    realWarehouseM2 = 65;
+    maxPalletsAllowed = Math.max(1, Math.floor((realWarehouseM2 / 30) * 25));
+  } else {
+    warehouseProperties.forEach((acq: any) => {
+      const pType = (acq.propertyType || acq.type || "").toLowerCase();
+      const isLogisticsWarehouse = pType.includes("almacen") || pType.includes("almacén");
+      let storageM2 = 0;
+      if (isLogisticsWarehouse) {
+        storageM2 = Number(acq.surfaceM2 || acq.m2 || 300);
+      } else {
+        const matchedPlan = (floorPlans || []).find(
+          (p: any) =>
+            String(p.acquisitionId) === String(acq.id) ||
+            String(p.propertyId) === String(acq.id) ||
+            String(p.propertyId) === String(acq.propertyId) ||
+            (p.propertyTitle && acq.propertyTitle && p.propertyTitle.trim().toLowerCase() === acq.propertyTitle.trim().toLowerCase())
+        );
+        if (matchedPlan) {
+          const raw = Number(matchedPlan.rawMaterialsStorageM2);
+          const fin = Number(matchedPlan.finishedGoodsStorageM2);
+          const semi = Number(matchedPlan.semiFinishedStorageM2);
+          const totalPlanStorage = (isNaN(raw) ? 0 : raw) + (isNaN(fin) ? 0 : fin) + (isNaN(semi) ? 0 : semi);
+          storageM2 = totalPlanStorage > 0 ? totalPlanStorage : (Number(matchedPlan.storageZoneM2) || 65);
+        } else {
+          storageM2 = 65;
+        }
+      }
+      if (!storageM2 || storageM2 <= 0) storageM2 = 65;
+
+      realWarehouseM2 += storageM2;
+      maxPalletsAllowed += Math.max(1, Math.floor((storageM2 / 30) * 25));
+    });
+  }
+
+  const rawMaterialWarehousesCount = Math.max(1, warehouseProperties.length);
 
   // Forklifts requirement check (1 forklift for the property)
   const ownedForklifts = vehicles.filter(v => v.vehicleType === 'carretilla_elevadora').length;
-
   const hasEnoughForklifts = rawMaterialWarehousesCount > 0 && ownedForklifts >= 1;
   const canPurchaseRawMaterials = (isLevel1 || isTeacher) && rawMaterialWarehousesCount > 0 && hasEnoughForklifts;
 
-  // Capacity calculation (25 pallets per 30 m2, 10,000 screwdrivers per pallet)
-  const maxPalletsAllowed = Math.floor((realWarehouseM2 / 30) * 25);
-  const maxUnitsAllowed = maxPalletsAllowed * 10000;
+  // Stored inventory quantities & pallet conversions (Identical to "Existencias" in CompanyDashboard)
+  const ironKg = inventoryData?.ironKg ?? rawMaterialsState?.fragmentos_hierro_kg ?? 0;
+  const plasticKg = inventoryData?.plasticKg ?? rawMaterialsState?.pellets_plastico_kg ?? 0;
+  const epoxiKg = inventoryData?.epoxiKg ?? rawMaterialsState?.pegamento_epoxi_kg ?? 0;
 
-  const totalStoredScrewdrivers = 
-    (producedGoods?.destornilladores_hierro || 0) + 
-    (producedGoods?.destornilladores_metal || 0) + 
-    (producedGoods?.productos_ensamblados || 0) + 
-    (producedGoods?.varillas_hierro_punta || 0) + 
-    (producedGoods?.varillas_metal_punta || 0);
+  const starRods = inventoryData?.producedStarRodsUnits ?? inventoryData?.producedIronRodsUnits ?? producedGoods?.varillas_punta_estrella ?? 0;
+  const flatRods = inventoryData?.producedFlatRodsUnits ?? inventoryData?.producedMetalRodsUnits ?? producedGoods?.varillas_punta_plana ?? 0;
+  const starScrewdrivers = inventoryData?.starScrewdriversUnits ?? inventoryData?.ironScrewdriversUnits ?? producedGoods?.destornilladores_punta_estrella ?? 0;
+  const flatScrewdrivers = inventoryData?.flatScrewdriversUnits ?? inventoryData?.metalScrewdriversUnits ?? producedGoods?.destornilladores_punta_plana ?? 0;
 
-  const rawMaterialPalletUnits = orders
-    .filter(o => ['pendiente', 'aprobado', 'entregado'].includes(o.status))
-    .reduce((sum, o) => {
-      const ann = announcements.find(a => a.id === o.announcementId);
-      return sum + (ann?.isPallet ? o.quantity * 10000 : 0);
-    }, 0);
+  const ironPallets = ironKg / 1000;
+  const plasticPallets = plasticKg / 1000;
+  const epoxiPallets = epoxiKg / 1000;
+  const rawMaterialsPallets = ironPallets + plasticPallets + epoxiPallets;
 
-  const currentStoredUnits = totalStoredScrewdrivers + rawMaterialPalletUnits;
-  const currentPalletsStored = Math.ceil(currentStoredUnits / 10000);
+  const rodsPallets = (isLevel1 ? starRods + flatRods : 0) / 10000;
+  const screwdriversPallets = (starScrewdrivers + flatScrewdrivers) / 10000;
+  const finishedGoodsPallets = rodsPallets + screwdriversPallets;
 
-  const availableUnits = Math.max(0, maxUnitsAllowed - currentStoredUnits);
-  const availablePallets = Math.max(0, maxPalletsAllowed - currentPalletsStored);
-  const isOverCapacity = currentStoredUnits > maxUnitsAllowed;
+  const totalOccupiedPallets = rawMaterialsPallets + finishedGoodsPallets;
+
+  // Overall warehouse metrics (strictly identical to Existencias)
+  const occupiedPercentage = maxPalletsAllowed > 0 ? (totalOccupiedPallets / maxPalletsAllowed) * 100 : 0;
+  const clampedOccupiedPercentage = Math.min(100, Math.max(0, occupiedPercentage));
+  const freePercentage = Math.max(0, 100 - occupiedPercentage);
+  const freePallets = Math.max(0, maxPalletsAllowed - totalOccupiedPallets);
+  const clampedFreePercentage = Math.max(0, 100 - clampedOccupiedPercentage);
+  const isOverCapacity = totalOccupiedPallets > maxPalletsAllowed || occupiedPercentage > 100;
 
   const ownedTruck = vehicles.find(v => v.vehicleType === 'camion_trailer');
   const hiredDriver = employees.find(e => e.role === 'camionero');
@@ -1811,10 +1852,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const stockInfo = getAvailableStockForProductType(defaultTitle);
       setAnnStock(stockInfo.availableMax);
       setAnnDurationDays('indefinido');
-      setAnnUnitWeightKg(1);
+      setAnnUnitWeightKg(0);
       setAnnIsPallet(false);
     } else {
-      const defaultTitle = 'Producto Final Alumno';
+      const defaultTitle = 'Producto final alumno';
       setAnnTitle(defaultTitle);
       setAnnPresentation('Unidades');
       setAnnDescription('');
@@ -1822,8 +1863,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const stockInfo = getAvailableStockForProductType(defaultTitle);
       setAnnStock(stockInfo.availableMax);
       setAnnDurationDays('indefinido');
-      setAnnUnitWeightKg(100);
-      setAnnIsPallet(true);
+      setAnnUnitWeightKg(0);
+      setAnnIsPallet(false);
     }
     setIsAnnModalOpen(true);
   };
@@ -1835,21 +1876,26 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     setAnnDescription(ann.description);
     setAnnPrice(ann.pricePerUnit);
     setAnnDurationDays(ann.durationDays || 'indefinido');
-    setAnnUnitWeightKg(ann.unitWeightKg || 100);
-    setAnnIsPallet(ann.isPallet !== undefined ? ann.isPallet : true);
+    setAnnUnitWeightKg(ann.materialType === 'producto_final' ? 0 : (ann.unitWeightKg || (ann.materialType === 'epoxi' ? 5 : 1000)));
+    setAnnIsPallet(ann.isPallet !== undefined ? ann.isPallet : (ann.materialType !== 'epoxi' && ann.materialType !== 'producto_final'));
 
-    const stockInfo = getAvailableStockForProductType(ann.title);
-    if (typeof ann.stock === 'number') {
-      setAnnStock(Math.min(ann.stock, stockInfo.availableMax));
+    if (isTeacher) {
+      setAnnStock(ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'ilimitado' : ann.stock);
     } else {
-      setAnnStock(stockInfo.availableMax);
+      const stockInfo = getAvailableStockForProductType(ann.title);
+      if (typeof ann.stock === 'number') {
+        setAnnStock(Math.min(ann.stock, stockInfo.availableMax));
+      } else {
+        setAnnStock(stockInfo.availableMax);
+      }
     }
 
     // Detect preset if matches
-    if (ann.title.toLowerCase().includes('hierro')) setAnnPreset('hierro');
-    else if (ann.title.toLowerCase().includes('metal')) setAnnPreset('metal');
-    else if (ann.title.toLowerCase().includes('plástico') || ann.title.toLowerCase().includes('plastico')) setAnnPreset('plastico');
-    else if (ann.title.toLowerCase().includes('epoxi')) setAnnPreset('epoxi');
+    const lower = (ann.title || '').toLowerCase();
+    if (lower.includes('hierro') || lower.includes('metal')) setAnnPreset('hierro');
+    else if (lower.includes('plást') || lower.includes('plast')) setAnnPreset('plastico');
+    else if (lower.includes('epoxi')) setAnnPreset('epoxi');
+    else setAnnPreset('custom');
 
     setIsAnnModalOpen(true);
   };
@@ -1901,16 +1947,20 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     setMsg(null);
     try {
       let materialType = 'producto_final';
-      let unitWeightKg = Number(annUnitWeightKg) || 100;
-      let isPallet = annIsPallet;
+      let unitWeightKg = 0;
+      let isPallet = false;
 
       if (isTeacher) {
         const preset = PRODUCT_PRESETS[annPreset];
-        materialType = preset ? preset.materialType : 'hierro';
-        unitWeightKg = preset ? preset.unitWeightKg : 1000;
-        isPallet = preset ? preset.isPallet : true;
+        const lower = annTitle.toLowerCase();
+        materialType = preset 
+          ? preset.materialType 
+          : (lower.includes('plast') ? 'plastico' : lower.includes('epoxi') ? 'epoxi' : 'hierro');
+        unitWeightKg = annUnitWeightKg ? Number(annUnitWeightKg) : (preset ? preset.unitWeightKg : (materialType === 'epoxi' ? 5 : 1000));
+        isPallet = annIsPallet !== undefined ? annIsPallet : (preset ? preset.isPallet : materialType !== 'epoxi');
       }
 
+      const primaryWh = studentWarehouses.find((w: any) => String(w.id) === String(selectedDestinationNaveId)) || studentWarehouses[0];
       const payload = {
         materialType,
         title: annTitle,
@@ -1920,10 +1970,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         isPallet,
         pricePerUnit: Number(annPrice),
         durationDays: annDurationDays,
-        stock: annStock === '' ? 'ilimitado' : annStock,
+        stock: annStock === '' || annStock === 'ilimitado' ? 'ilimitado' : Number(annStock),
         sellerId: currentUser.id,
         sellerName: isTeacher ? 'BricoMaster Distribuciones, S.A.' : currentUser.name,
-        isDesTornillo: studentLevel === 3
+        sellerLevel: isTeacher ? 'official' : (currentUser.level || 1),
+        sellerLocation: primaryWh?.location || primaryWh?.municipality || primaryWh?.propertyTitle || (currentUser as any).location || (currentUser as any).municipality || '',
+        sellerMunicipality: primaryWh?.municipality || (currentUser as any).municipality || (currentUser as any).city || '',
+        sellerProvince: primaryWh?.province || (currentUser as any).province || (currentUser as any).provincia || '',
+        isDesTornillo: !isTeacher && studentLevel === 3
       };
 
       let res;
@@ -2130,12 +2184,29 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   // Cart calculations
-  const cartTotalKg = cart.reduce((sum, item) => sum + (item.announcement.unitWeightKg * item.quantity), 0);
+  const cartTotalKg = cart.reduce((sum, item) => {
+    const isScrewdriver = item.announcement.materialType === 'producto_final' || (item.announcement.title && item.announcement.title.toLowerCase().includes('destornillador'));
+    return sum + (isScrewdriver ? 0 : (item.announcement.unitWeightKg * item.quantity));
+  }, 0);
   const cartBasePrice = cart.reduce((sum, item) => sum + (item.announcement.pricePerUnit * item.quantity), 0);
-  const cartIvaAmount = cartBasePrice * 0.21;
-  const cartTransportCost = cartNeedsTransport && cart.length > 0 ? (60 + cartTotalKg * 0.08) : 0;
-  const cartGrandTotal = cartBasePrice + cartIvaAmount + cartTransportCost;
+  const cartRequestedPallets = cart.reduce((sum, item) => {
+    const isScrewdriver = item.announcement.materialType === 'producto_final' || (item.announcement.title && item.announcement.title.toLowerCase().includes('destornillador'));
+    const itemKg = isScrewdriver ? 0 : (item.announcement.unitWeightKg * item.quantity);
+    const itemP = isScrewdriver ? (item.quantity / 10000) : (itemKg / 1000);
+    return sum + itemP;
+  }, 0);
+  const cartChargedPallets = cartRequestedPallets > 0 ? Math.max(1, Math.ceil(cartRequestedPallets)) : 0;
+  const primarySellerAnn = cart[0]?.announcement;
+  const cartDestNave = studentWarehouses.find((w: any) => String(w.id) === String(selectedDestinationNaveId)) || studentWarehouses[0];
+  const cartDistanceKm = calculateSpanishDistanceKm(
+    cartDestNave || currentUser,
+    primarySellerAnn || 'Almacén Central Oficial'
+  );
+  const cartTransportCost = cartNeedsTransport && cart.length > 0 ? Math.round(cartChargedPallets * cartDistanceKm * 0.38 * 100) / 100 : 0;
+  const cartIvaAmount = Math.round(((cartBasePrice + cartTransportCost) * 0.21) * 100) / 100;
+  const cartGrandTotal = Math.round((cartBasePrice + cartTransportCost + cartIvaAmount) * 100) / 100;
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const cartExceedsWarehouse = (isLevel1 && !isTeacher) && (totalOccupiedPallets + cartRequestedPallets) > (maxPalletsAllowed + 0.001);
 
   const handleCheckoutCart = async () => {
     if (cart.length === 0) return;
@@ -2146,6 +2217,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         return;
       }
     }
+
+    if (cartExceedsWarehouse) {
+      setMsg({
+        type: 'error',
+        text: `Exceso de capacidad en almacén: Tienes ${realWarehouseM2} m² de zona de almacén (${maxPalletsAllowed} palets máx.). Tu stock actual ocupa ${totalOccupiedPallets.toFixed(2)} palets y la cesta suma ${cartRequestedPallets.toFixed(2)} palets, superando el límite máximo permitido (${freePallets.toFixed(2)} palets libres actuales).`
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     setMsg(null);
 
@@ -2244,6 +2324,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       setMsg({ type: 'error', text: check.reason || 'No cumples los requisitos de nivel para esta compra.' });
       return;
     }
+
+    if (orderExceedsWarehouse) {
+      setMsg({
+        type: 'error',
+        text: `Exceso de capacidad en almacén: Tienes ${realWarehouseM2} m² de zona de almacén (${maxPalletsAllowed} palets máx.). Tu stock actual ocupa ${totalOccupiedPallets.toFixed(2)} palets y el pedido suma ${orderRequestedPallets.toFixed(2)} palets, superando el límite máximo permitido (${freePallets.toFixed(2)} palets libres actuales).`
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     setMsg(null);
 
@@ -2391,11 +2480,21 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   // Single Order Modal calculations
-  const totalKg = selectedAnn ? selectedAnn.unitWeightKg * quantity : 0;
+  const isSelectedScrewdriver = selectedAnn && (selectedAnn.materialType === 'producto_final' || selectedAnn.isDesTornillo || (selectedAnn.title && selectedAnn.title.toLowerCase().includes('destornillador')));
+  const totalKg = (selectedAnn && !isSelectedScrewdriver) ? selectedAnn.unitWeightKg * quantity : 0;
   const basePrice = selectedAnn ? Math.round((selectedAnn.pricePerUnit * quantity) * 100) / 100 : 0;
-  const ivaAmount = Math.round((basePrice * 0.21) * 100) / 100;
-  const transportCost = needsTransport ? Math.round((60 + totalKg * 0.08) * 100) / 100 : 0;
-  const totalAmount = Math.round((basePrice + ivaAmount + transportCost) * 100) / 100;
+  const orderRequestedPallets = selectedAnn ? (isSelectedScrewdriver ? (quantity / 10000) : (totalKg / 1000)) : 0;
+  const orderChargedPallets = orderRequestedPallets > 0 ? Math.max(1, Math.ceil(orderRequestedPallets)) : 0;
+  const selectedDestNave = studentWarehouses.find((w: any) => String(w.id) === String(selectedDestinationNaveId)) || studentWarehouses[0];
+  const orderDistanceKm = selectedAnn ? calculateSpanishDistanceKm(
+    selectedDestNave || currentUser,
+    selectedAnn
+  ) : 35;
+  const transportCost = needsTransport ? Math.round(orderChargedPallets * orderDistanceKm * 0.38 * 100) / 100 : 0;
+  const ivaAmount = Math.round(((basePrice + transportCost) * 0.21) * 100) / 100;
+  const totalAmount = Math.round((basePrice + transportCost + ivaAmount) * 100) / 100;
+
+  const orderExceedsWarehouse = (isLevel1 && !isTeacher) && (totalOccupiedPallets + orderRequestedPallets) > (maxPalletsAllowed + 0.001);
 
   const pendingReceivedOrders = orders.filter(o => {
     const isSeller = o.sellerId === currentUser.id || (isTeacher && (o.sellerId === 'proveedor-materia-prima' || !o.sellerId));
@@ -2439,7 +2538,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <Building className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Tu Nivel de Mercado</div>
+                  <div className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Tu nivel de mercado</div>
                   <div className="text-xs font-bold text-white">Nivel {studentLevel}</div>
                 </div>
               </div>
@@ -2482,8 +2581,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <th className="py-3 px-4 font-semibold">Producto / Anuncio</th>
                   <th className="py-3 px-4 font-semibold">Cantidad</th>
                   <th className="py-3 px-4 font-semibold">Logística</th>
-                  <th className="py-3 px-4 font-semibold">Importe Total</th>
-                  <th className="py-3 px-4 font-semibold text-right">Acciones de Vendedor</th>
+                  <th className="py-3 px-4 font-semibold">Importe total</th>
+                  <th className="py-3 px-4 font-semibold text-right">Acciones de vendedor</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
@@ -2499,17 +2598,22 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       <div>{ord.materialTitle}</div>
                       {ord.items && ord.items.length > 1 && (
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {ord.items.map((it, idx) => (
-                            <span key={idx} className="text-[10px] bg-slate-800 text-slate-300 border border-slate-700/80 px-1.5 py-0.5 rounded font-mono">
-                              {it.materialTitle} ({it.quantity} u. - {formatNumber(it.totalKg)} kg)
-                            </span>
-                          ))}
+                          {ord.items.map((it, idx) => {
+                            const isItScrewdriver = it.materialType === 'producto_final' || (it.materialTitle && it.materialTitle.toLowerCase().includes('destornillador'));
+                            return (
+                              <span key={idx} className="text-[10px] bg-slate-800 text-slate-300 border border-slate-700/80 px-1.5 py-0.5 rounded font-mono">
+                                {it.materialTitle} ({it.quantity} u.{!isItScrewdriver && it.totalKg ? ` - ${formatNumber(it.totalKg)} kg` : ''})
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                     </td>
                     <td className="py-3.5 px-4">
                       <div className="font-medium text-slate-200">{ord.quantity} unidades</div>
-                      <div className="text-[11px] text-slate-400">{formatNumber(ord.totalKg)} kg</div>
+                      {ord.materialType !== 'producto_final' && !ord.materialTitle?.toLowerCase().includes('destornillador') && ord.totalKg > 0 && (
+                        <div className="text-[11px] text-slate-400">{formatNumber(ord.totalKg)} kg</div>
+                      )}
                     </td>
                     <td className="py-3.5 px-4">
                       {ord.needsTransport ? (
@@ -2564,15 +2668,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
       {/* Warehouse Surface & Equipment Requirements Banner for Level 1 Students */}
       {!isTeacher && isLevel1 && (
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4">
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
                 <Scale className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-white">Superficie de Almacén y Requisitos de Compra (Nivel 1)</h2>
-                <p className="text-xs text-slate-400">Capacidad legal: Máximo 25 pallets por cada 30 m² de almacén de materias primas.</p>
+                <h2 className="text-lg font-bold text-white">Superficie y capacidad de almacén (Nivel 1)</h2>
+                <p className="text-xs text-slate-400">Capacidad legal y estocaje: Máximo 25 palets por cada 30 m² de almacén ({maxPalletsAllowed} palets en {realWarehouseM2} m²).</p>
               </div>
             </div>
 
@@ -2582,49 +2686,117 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <div className="text-sm font-black text-indigo-400">{realWarehouseM2} m²</div>
               </div>
               <div className="bg-slate-800/90 px-3.5 py-2 rounded-xl border border-slate-700 text-right">
-                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Capacidad Total</div>
-                <div className="text-sm font-black text-white">{maxPalletsAllowed} pallets <span className="text-[10px] text-slate-400 font-normal">({formatNumber(maxUnitsAllowed)} u.)</span></div>
+                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Capacidad máx.</div>
+                <div className="text-sm font-black text-white">{maxPalletsAllowed} palets</div>
               </div>
               <div className="bg-slate-800/90 px-3.5 py-2 rounded-xl border border-slate-700 text-right">
-                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Ocupación Actual</div>
+                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Ocupación almacén</div>
                 <div className={`text-sm font-black ${isOverCapacity ? 'text-rose-400' : 'text-amber-400'}`}>
-                  {currentPalletsStored} pallets <span className="text-[10px] text-slate-400 font-normal">({formatNumber(currentStoredUnits)} u.)</span>
+                  {occupiedPercentage.toFixed(1)}% <span className="text-[10px] text-slate-400 font-normal">({totalOccupiedPallets.toFixed(2)} pal.)</span>
                 </div>
               </div>
               <div className="bg-slate-800/90 px-3.5 py-2 rounded-xl border border-slate-700 text-right">
-                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Disponible</div>
+                <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Disponible compra</div>
                 <div className="text-sm font-black text-emerald-400">
-                  {availablePallets} pallets <span className="text-[10px] text-emerald-300/80 font-normal">({formatNumber(availableUnits)} u.)</span>
+                  {freePercentage.toFixed(1)}% <span className="text-[10px] text-emerald-300/80 font-normal">({freePallets.toFixed(2)} pal.)</span>
                 </div>
               </div>
             </div>
           </div>
 
+          {/* Occupancy and Capacity Progress Bar (Identical to "Existencias") */}
+          <div className="space-y-1.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-400 text-[11px]">0 palets (0%)</span>
+              <span className="font-bold text-slate-200 text-[11px]">
+                Almacén ocupado: {totalOccupiedPallets.toFixed(2)} / {maxPalletsAllowed} palets ({occupiedPercentage.toFixed(1)}%) — Espacio libre: {freePallets.toFixed(2)} palets
+              </span>
+              <span className="text-slate-400 text-[11px]">Capacidad máx: {maxPalletsAllowed} palets (100%)</span>
+            </div>
+            <div className="h-3.5 w-full bg-slate-800 rounded-full overflow-hidden flex border border-slate-700 shadow-inner">
+              <div
+                style={{ width: `${clampedOccupiedPercentage}%` }}
+                className={`h-full transition-all duration-500 flex items-center justify-center text-[9px] font-bold text-white ${
+                  occupiedPercentage > 100
+                    ? "bg-gradient-to-r from-rose-500 to-rose-600 animate-pulse"
+                    : occupiedPercentage > 85
+                    ? "bg-gradient-to-r from-amber-500 to-amber-600"
+                    : "bg-gradient-to-r from-indigo-500 to-indigo-600"
+                }`}
+                title={`Ocupado: ${occupiedPercentage.toFixed(1)}% (${totalOccupiedPallets.toFixed(2)} palets)`}
+              >
+                {clampedOccupiedPercentage >= 15 && (
+                  <span className="px-1 truncate">{occupiedPercentage.toFixed(1)}%</span>
+                )}
+              </div>
+              <div
+                style={{ width: `${clampedFreePercentage}%` }}
+                className="h-full bg-emerald-500/80 transition-all duration-500 flex items-center justify-center text-[9px] font-bold text-white"
+                title={`Libre: ${freePercentage.toFixed(1)}% (${freePallets.toFixed(2)} palets)`}
+              >
+                {clampedFreePercentage >= 15 && (
+                  <span className="px-1 truncate">{freePercentage.toFixed(1)}%</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Overcapacity Warning Banner */}
           {isOverCapacity && (
-            <div className="p-3 bg-rose-950/60 border border-rose-500/50 rounded-xl text-xs text-rose-200 flex items-center justify-between font-medium">
+            <div className="p-3 bg-rose-950/70 border border-rose-500/60 rounded-xl text-xs text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-medium shadow-md">
               <span className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>⚠️ <strong>Exceso de Capacidad:</strong> Superas el límite legal por +{formatNumber(currentStoredUnits - maxUnitsAllowed)} u. (+{currentPalletsStored - maxPalletsAllowed} pallets).</span>
+                <span>
+                  ⚠️ <strong>Exceso de capacidad en almacén:</strong> Superas la capacidad máxima de tu almacén por +{(totalOccupiedPallets - maxPalletsAllowed).toFixed(2)} palets (+{(occupiedPercentage - 100).toFixed(1)}%).
+                </span>
               </span>
-              <span className="text-[11px] bg-rose-900/80 text-rose-200 font-bold px-2.5 py-1 rounded-md border border-rose-700 shrink-0">
+              <span className="text-[11px] bg-rose-900/90 text-rose-200 font-bold px-2.5 py-1 rounded-md border border-rose-700 shrink-0 self-start sm:self-auto">
                 Sanción: 1.000 € / semana
               </span>
             </div>
           )}
+
+          {/* Pallet Breakdown (Exact standards from Existencias) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
+            <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/70">
+              <span className="text-slate-400 block text-[10px]">⚖️ Fragmentos hierro (1.000 kg/palet)</span>
+              <span className="font-bold font-mono text-slate-200">
+                {formatNumber(ironKg, 1)} kg → {ironPallets.toFixed(2)} palets
+              </span>
+            </div>
+            <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/70">
+              <span className="text-slate-400 block text-[10px]">📦 Pellets plástico (1.000 kg / 40 sacos)</span>
+              <span className="font-bold font-mono text-slate-200">
+                {formatNumber(plasticKg, 1)} kg → {plasticPallets.toFixed(2)} palets
+              </span>
+            </div>
+            <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/70">
+              <span className="text-slate-400 block text-[10px]">🧪 Pegamento epoxi (1.000 kg/palet)</span>
+              <span className="font-bold font-mono text-slate-200">
+                {formatNumber(epoxiKg, 1)} kg → {epoxiPallets.toFixed(2)} palets
+              </span>
+            </div>
+            <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/70">
+              <span className="text-slate-400 block text-[10px]">🔩 Terminados (varillas y destornilladores)</span>
+              <span className="font-bold font-mono text-slate-200">
+                {formatNumber((isLevel1 ? starRods + flatRods : 0) + starScrewdrivers + flatScrewdrivers, 0)} u. → {finishedGoodsPallets.toFixed(2)} palets
+              </span>
+            </div>
+          </div>
 
           {/* Requirements Status Checklist */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
               rawMaterialWarehousesCount > 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
-              <span>1. Almacén Configurado:</span>
-              <strong className="font-bold">{rawMaterialWarehousesCount > 0 ? `${realWarehouseM2} m² ✅` : '0 m² ❌'}</strong>
+              <span>1. Almacén configurado:</span>
+              <strong className="font-bold">{rawMaterialWarehousesCount > 0 ? `${realWarehouseM2} m² (${maxPalletsAllowed} pal.) ✅` : '0 m² ❌'}</strong>
             </div>
 
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
               hasEnoughForklifts ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
-              <span>2. Carretilla Elevadora (mín. 1 en propiedad):</span>
+              <span>2. Carretilla elevadora (mín. 1 en propiedad):</span>
               <strong className="font-bold">{ownedForklifts}/1 {hasEnoughForklifts ? '✅ OK' : '❌ Pendiente'}</strong>
             </div>
           </div>
@@ -2642,7 +2814,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           }`}
         >
           <Package className="w-4 h-4" />
-          <span>Catálogo de Mercado</span>
+          <span>Catálogo de mercado</span>
         </button>
 
         <button
@@ -2654,7 +2826,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           }`}
         >
           <MessageSquare className="w-4 h-4" />
-          <span>Mensajería Directa ({tradingPartners.length})</span>
+          <span>Mensajería directa ({tradingPartners.length})</span>
           {tradingPartners.reduce((acc, p) => acc + (p.unreadCount || 0), 0) > 0 && (
             <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-red-600 rounded-full shadow-sm">
               {tradingPartners.reduce((acc, p) => acc + (p.unreadCount || 0), 0) > 99
@@ -2697,7 +2869,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="inline-flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl shadow transition-all"
               >
                 <Building2 className="w-4 h-4" />
-                <span>{companyProfiles.some(p => p.studentId === currentUser.id) ? 'Editar Mi Perfil de Empresa' : 'Publicar Perfil de Empresa'}</span>
+                <span>{companyProfiles.some(p => p.studentId === currentUser.id) ? 'Editar mi perfil de empresa' : 'Publicar perfil de empresa'}</span>
               </button>
             )}
             {isTeacher && (
@@ -2706,7 +2878,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="inline-flex items-center gap-1.5 text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3.5 py-2 rounded-xl shadow transition-all"
               >
                 <Plus className="w-4 h-4" />
-                <span>Publicar Oferta Oficial</span>
+                <span>Publicar oferta oficial</span>
               </button>
             )}
             <button
@@ -2724,7 +2896,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
               <Users className="w-4 h-4 text-indigo-400" />
-              <span>Perfiles de Empresa Comercial ({companyProfiles.length})</span>
+              <span>Perfiles de empresa comercial ({companyProfiles.length})</span>
             </h3>
             <span className="text-[11px] font-mono text-slate-400">
               Visibilidad regulada por Nivel de Empresa
@@ -2740,7 +2912,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   onClick={handleOpenMyProfileModal}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white rounded-xl transition"
                 >
-                  Sé el primero en publicar el Perfil de tu Empresa
+                  Sé el primero en publicar el perfil de tu empresa
                 </button>
               )}
             </div>
@@ -2807,7 +2979,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
                         >
                           <Edit className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>Editar Perfil de Empresa</span>
+                          <span>Editar perfil de empresa</span>
                         </button>
                       ) : (
                         <button
@@ -2815,7 +2987,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           className="w-full py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md flex items-center justify-center gap-2"
                         >
                           <MessageSquare className="w-4 h-4" />
-                          <span>Contactar en Mensajería Directa</span>
+                          <span>Contactar en mensajería directa</span>
                         </button>
                       )}
                     </div>
@@ -2832,7 +3004,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                 <Package className="w-4 h-4 text-amber-400" />
-                <span>Suministro Oficial de Materias Primas ({announcements.length})</span>
+                <span>Suministro oficial de materias primas ({announcements.length})</span>
               </h3>
               <div className="flex items-center gap-3">
                 <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
@@ -2889,7 +3061,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 }`}
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Comprables para mi Nivel</span>
+                <span>Comprables para mi nivel</span>
               </button>
               {(isTeacher || studentLevel === 3) && (
                 <button
@@ -2897,7 +3069,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition flex items-center gap-1"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>{studentLevel === 3 ? 'Publicar en El Des-Tornillo' : 'Publicar Anuncio'}</span>
+                  <span>{studentLevel === 3 ? 'Publicar en El Des-Tornillo' : 'Publicar anuncio'}</span>
                 </button>
               )}
               <button
@@ -2930,7 +3102,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
           const renderCard = (ann: RawMaterialAnnouncement) => {
             const inCartItem = cart.find(item => item.announcement.id === ann.id);
-            const isMyAnnouncement = ann.sellerId === currentUser.id;
+            const isMyAnnouncement = isTeacher
+              ? (ann.sellerId === currentUser.id || ann.sellerLevel === 'official' || ann.sellerId === 'proveedor-materia-prima' || ann.sellerId === 'profesor-1' || ann.materialType !== 'producto_final')
+              : ann.sellerId === currentUser.id;
             const eligibility = canBuyFromSeller(ann);
             const isFinishedProduct = ann.materialType === 'producto_final';
 
@@ -2939,7 +3113,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 key={ann.id}
                 className={`bg-slate-900 border transition-all rounded-2xl p-5 flex flex-col justify-between group shadow-lg relative ${
                   isMyAnnouncement 
-                    ? 'border-purple-500/40 bg-purple-950/10' 
+                    ? isTeacher
+                      ? 'border-amber-500/40 bg-amber-950/15 hover:border-amber-400'
+                      : 'border-purple-500/40 bg-purple-950/10' 
                     : ann.isDesTornillo
                       ? 'border-amber-500/40 bg-amber-950/20 hover:border-amber-400'
                       : eligibility.allowed 
@@ -2961,13 +3137,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30'
                           : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                       }`}>
-                        {isFinishedProduct ? '🏆 Producto Final' : '📦 Materia Prima'}
+                        {isFinishedProduct ? '🏆 Producto final' : '📦 Materia prima'}
                       </span>
                     )}
 
                     {isMyAnnouncement ? (
-                      <span className="bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold text-[10px] px-2 py-0.5 rounded-md">
-                        Tu Anuncio
+                      <span className={`${isTeacher ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-purple-500/20 text-purple-300 border-purple-500/40'} border font-bold text-[10px] px-2 py-0.5 rounded-md`}>
+                        {isTeacher ? 'Gestión Profesor' : 'Tu Anuncio'}
                       </span>
                     ) : inCartItem ? (
                       <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-md">
@@ -3005,7 +3181,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-3 space-y-1.5 shadow-sm">
                       <div className="flex items-center gap-1.5 text-amber-300 font-bold text-[11px]">
                         <TrendingDown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span>Alerta de Demanda Comercial:</span>
+                        <span>Alerta de demanda comercial:</span>
                       </div>
                       <p className="text-xs text-amber-100/90 leading-relaxed italic">
                         "{ann.priceAlert.message}"
@@ -3023,7 +3199,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           className="mt-1.5 w-full py-1.5 px-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] rounded-lg transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           <Edit className="w-3.5 h-3.5" />
-                          <span>Ajustar / Reducir Precio Ahora</span>
+                          <span>Ajustar / reducir precio ahora</span>
                         </button>
                       )}
                     </div>
@@ -3040,7 +3216,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-2 py-1 rounded-lg" title={eligibility.reason}>
                           <ShieldAlert className="w-3 h-3 text-amber-400" />
-                          {ann.isDesTornillo ? 'Venta exclusiva al Profesor' : 'No comprable para tu Nivel'}
+                          {ann.isDesTornillo ? 'Venta exclusiva al Profesor' : 'No comprable para tu nivel'}
                         </span>
                       )}
                     </div>
@@ -3051,7 +3227,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="flex items-center justify-between text-xs py-1.5 px-3 bg-slate-950/70 rounded-xl border border-slate-800">
                     <span className="text-slate-400 font-medium flex items-center gap-1.5">
                       <Package className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Unidades Disponibles:</span>
+                      <span>Unidades disponibles:</span>
                     </span>
                     <span className={`font-bold font-mono text-xs ${
                       typeof ann.stock === 'number'
@@ -3069,7 +3245,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   </div>
 
                   <div className="flex items-baseline justify-between">
-                    <span className="text-xs text-slate-400 font-medium">Precio Base</span>
+                    <span className="text-xs text-slate-400 font-medium">Precio base</span>
                     <div className="text-right">
                       <span className="text-xl font-bold text-white">{formatNumber(ann.pricePerUnit)} €</span>
                       <span className="text-[10px] text-slate-400 block">+ 21% IVA</span>
@@ -3093,7 +3269,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                                 className="w-full py-1.5 px-2.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-[11px] border border-amber-500/40 flex items-center justify-center gap-1.5 transition-colors"
                               >
                                 <RefreshCw className="w-3 h-3 text-amber-400" />
-                                <span>Ajustar Anuncio a {stockInfo.availableMax} u.</span>
+                                <span>Ajustar anuncio a {stockInfo.availableMax} u.</span>
                               </button>
                             )}
                           </>
@@ -3110,7 +3286,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         <button
                           onClick={() => handleDeleteAnnouncement(ann.id)}
                           className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors"
-                          title="Eliminar Anuncio"
+                          title="Eliminar anuncio"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -3128,7 +3304,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         }`}
                       >
                         <ShoppingCart className="w-4 h-4" />
-                        <span>Añadir a Cesta</span>
+                        <span>Añadir a la cesta</span>
                       </button>
 
                       <button
@@ -3158,7 +3334,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                             title="Modificar o reenviar aviso de demanda de mercado"
                           >
                             <Megaphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                            <span>Aviso de Precio Enviado</span>
+                            <span>Aviso de precio enviado</span>
                           </button>
                           <button
                             type="button"
@@ -3177,7 +3353,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           title="Enviar aviso simulado de mercado al alumno indicando que los clientes se quejan del precio tan alto"
                         >
                           <Megaphone className="w-3.5 h-3.5 text-amber-400 group-hover/btn:scale-110 transition-transform shrink-0" />
-                          <span>Avisar de Precio Excesivo</span>
+                          <span>Avisar de precio excesivo</span>
                         </button>
                       )}
                     </div>
@@ -3195,7 +3371,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                       <Package className="w-4 h-4 text-amber-400" />
-                      <span>Suministro Oficial de Materias Primas ({officialAnnouncements.length})</span>
+                      <span>Suministro oficial de materias primas ({officialAnnouncements.length})</span>
                     </h3>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -3238,7 +3414,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="bg-amber-500/15 border border-amber-500/40 rounded-2xl p-4 flex items-start gap-3 text-amber-200 shadow-lg animate-pulse-slow">
                     <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                     <div className="text-xs space-y-1">
-                      <span className="font-bold text-amber-300 text-sm">Avisos de Demanda Comercial Activos en El Des-Tornillo</span>
+                      <span className="font-bold text-amber-300 text-sm">Avisos de demanda comercial activos en El Des-Tornillo</span>
                       <p className="text-slate-300 leading-relaxed">
                         Los clientes y compradores del mercado han reportado que el precio fijado en tus productos es excesivo y no pueden asumirlo. Revisa y reduce tus publicaciones de precio para reactivar la demanda y no bloquear tus ventas.
                       </p>
@@ -3264,7 +3440,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                       <ShoppingBag className="w-4 h-4 text-indigo-400" />
-                      <span>Mercado Secundario entre Alumnos ({studentAnnouncements.length})</span>
+                      <span>Mercado secundario entre alumnos ({studentAnnouncements.length})</span>
                     </h3>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -3427,7 +3603,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
                                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs space-y-1">
                                   <p className="font-semibold text-amber-200 text-[11px] border-b border-slate-800 pb-1">
-                                    {msg.invoiceData.concept || 'Factura Comercial'}
+                                    {msg.invoiceData.concept || 'Factura comercial'}
                                   </p>
                                   {msg.invoiceData.items && msg.invoiceData.items.map((it, idx) => (
                                     <div key={idx} className="flex justify-between text-[11px] text-slate-300 pt-0.5">
@@ -3440,24 +3616,24 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                                 <div className="pt-1 border-t border-slate-800 text-xs space-y-1">
                                   {Boolean(msg.invoiceData.discountAmount > 0 || msg.invoiceData.transportCost > 0 || msg.invoiceData.insuranceFee > 0) && (
                                     <div className="flex justify-between text-slate-400 text-[11px]">
-                                      <span>Subtotal Conceptos:</span>
+                                      <span>Subtotal conceptos:</span>
                                       <span className="font-mono">{formatNumber(msg.invoiceData.itemsSubtotal || (msg.invoiceData.items ? msg.invoiceData.items.reduce((s: number, i: any) => s + (i.subtotal || 0), 0) : msg.invoiceData.taxableBase))} €</span>
                                     </div>
                                   )}
                                   {Boolean(msg.invoiceData.discountAmount > 0) && (
                                     <div className="flex justify-between text-emerald-400 text-[11px] font-medium">
-                                      <span>Descuento Comercial:</span>
+                                      <span>Descuento comercial:</span>
                                       <span className="font-mono">-{formatNumber(msg.invoiceData.discountAmount)} €</span>
                                     </div>
                                   )}
                                   {Boolean(msg.invoiceData.transportCost > 0) && (
                                     <div className="flex justify-between text-slate-300 text-[11px]">
-                                      <span>Gastos de Transporte:</span>
+                                      <span>Gastos de transporte:</span>
                                       <span className="font-mono">+{formatNumber(msg.invoiceData.transportCost)} €</span>
                                     </div>
                                   )}
                                   <div className="flex justify-between text-slate-300 font-semibold text-[11px] pt-0.5 border-t border-slate-800/80">
-                                    <span>Base Imponible:</span>
+                                    <span>Base imponible:</span>
                                     <span className="font-mono">{formatNumber(msg.invoiceData.taxableBase)} €</span>
                                   </div>
                                   <div className="flex justify-between text-slate-400 text-[11px]">
@@ -3466,7 +3642,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                                   </div>
                                   {Boolean(msg.invoiceData.insuranceFee > 0) && (
                                     <div className="flex justify-between text-slate-300 text-[11px]">
-                                      <span>Seguro (No sujeto a IVA):</span>
+                                      <span>Seguro (no sujeto a IVA):</span>
                                       <span className="font-mono">+{formatNumber(msg.invoiceData.insuranceFee)} €</span>
                                     </div>
                                   )}
@@ -3483,7 +3659,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                                     className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                                   >
                                     <Receipt className="w-3.5 h-3.5" />
-                                    <span>Ver Documento Completo</span>
+                                    <span>Ver documento completo</span>
                                   </button>
                                   <button
                                     type="button"
@@ -3800,7 +3976,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         title="Emitir y enviar una factura comercial a este chat"
                       >
                         <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Enviar Factura</span>
+                        <span>Enviar factura</span>
                       </button>
 
                       <button
@@ -3811,7 +3987,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         title="Firmar y emitir un pagaré mercantil con validez legal cambiaria en favor del vendedor"
                       >
                         <FileSignature className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Firmar Pagaré</span>
+                        <span>Firmar pagaré</span>
                       </button>
 
                       <button
@@ -3843,8 +4019,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-purple-400" />
                 {studentLevel === 1
-                  ? 'Facturas Compras Materias Primas y Servicios Transporte'
-                  : 'Facturas Servicios de Transporte'}
+                  ? 'Facturas compras materias primas y servicios transporte'
+                  : 'Facturas servicios de transporte'}
               </h2>
               <p className="text-xs text-slate-400 mt-1">
                 Consulta e imprime los documentos tributarios y facturas emitidas y recibidas en tus operaciones de mercado.
@@ -3856,13 +4032,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <table className="w-full text-left text-sm text-slate-300">
               <thead className="text-xs text-slate-400 uppercase bg-slate-950 border-b border-slate-800">
                 <tr>
-                  <th className="py-3 px-4 font-semibold">Nº Factura</th>
-                  <th className="py-3 px-4 font-semibold">Fecha Emisión</th>
-                  <th className="py-3 px-4 font-semibold">Vendedor / Emisor</th>
-                  <th className="py-3 px-4 font-semibold">Comprador / Receptor</th>
-                  <th className="py-3 px-4 font-semibold">Base Imponible</th>
+                  <th className="py-3 px-4 font-semibold">Nº factura</th>
+                  <th className="py-3 px-4 font-semibold">Fecha emisión</th>
+                  <th className="py-3 px-4 font-semibold">Vendedor / emisor</th>
+                  <th className="py-3 px-4 font-semibold">Comprador / receptor</th>
+                  <th className="py-3 px-4 font-semibold">Base imponible</th>
                   <th className="py-3 px-4 font-semibold">IVA (21%)</th>
-                  <th className="py-3 px-4 font-semibold">Total Facturado</th>
+                  <th className="py-3 px-4 font-semibold">Total facturado</th>
                   <th className="py-3 px-4 font-semibold text-right">Documento</th>
                 </tr>
               </thead>
@@ -3930,7 +4106,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex items-center justify-between border-b border-slate-800 pb-4 no-print print:hidden">
               <div className="flex items-center gap-2">
                 <Receipt className="w-6 h-6 text-purple-400" />
-                <h3 className="text-xl font-bold text-white">Factura Comercial Oficial</h3>
+                <h3 className="text-xl font-bold text-white">Factura comercial oficial</h3>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -3959,7 +4135,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="flex justify-between items-start border-b pb-4 border-slate-200">
                 <div>
                   <h1 className="text-2xl font-black text-slate-900 tracking-tight">FACTURA COMERCIAL</h1>
-                  <p className="text-xs text-slate-500 mt-0.5">Simulador Empresarial — Operaciones de Cadena de Suministro</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Simulador empresarial — Operaciones de cadena de suministro</p>
                 </div>
                 <div className="text-right">
                   <div className="text-sm font-mono font-bold text-purple-700">
@@ -4028,15 +4204,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                             <>
                               <th className="py-2 px-2">Concepto</th>
                               <th className="py-2 px-2 text-right">Cantidad</th>
-                              <th className="py-2 px-2 text-right">Total Neto</th>
+                              <th className="py-2 px-2 text-right">Total neto</th>
                             </>
                           ) : (
                             <>
-                              <th className="py-2 px-2">Concepto / Material</th>
+                              <th className="py-2 px-2">Concepto / material</th>
                               <th className="py-2 px-2 text-right">Cantidad</th>
                               <th className="py-2 px-2 text-right">Peso (kg)</th>
-                              <th className="py-2 px-2 text-right">Precio Unid.</th>
-                              <th className="py-2 px-2 text-right">Total Neto</th>
+                              <th className="py-2 px-2 text-right">Precio unid.</th>
+                              <th className="py-2 px-2 text-right">Total neto</th>
                             </>
                           )}
                         </tr>
@@ -4055,11 +4231,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                             const uPrice = Number(it.unitPrice) || (baseP > 0 ? baseP / qty : 0);
                             const lineTotal = Number(it.totalCost) || Number(it.subtotal) || (baseP > 0 ? baseP : (qty * uPrice));
 
+                            const isScrewdriverItem = (it.materialType === 'producto_final') || (it.materialTitle && it.materialTitle.toLowerCase().includes('destornillador')) || ((it as any).title && (it as any).title.toLowerCase().includes('destornillador'));
+
                             return (
                               <tr key={idx}>
                                 <td className="py-2 px-2 font-medium">{it.materialTitle || (it as any).title || selectedInvoiceOrder.materialTitle || 'Concepto'}</td>
                                 <td className="py-2 px-2 text-right">{qty} u.</td>
-                                <td className="py-2 px-2 text-right">{formatNumber(it.totalKg)} kg</td>
+                                <td className="py-2 px-2 text-right">{isScrewdriverItem ? '-' : `${formatNumber(it.totalKg)} kg`}</td>
                                 <td className="py-2 px-2 text-right">{formatNumber(uPrice)} €</td>
                                 <td className="py-2 px-2 text-right font-bold">{formatNumber(lineTotal)} €</td>
                               </tr>
@@ -4072,23 +4250,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     <div className="flex justify-end pt-2 border-t border-slate-200">
                       <div className="w-72 space-y-1.5 text-xs">
                         <div className="flex justify-between text-slate-600">
-                          <span>{isTransport ? 'Subtotal transporte:' : 'Subtotal Materiales / Productos:'}</span>
+                          <span>{isTransport ? 'Subtotal transporte:' : 'Subtotal materiales / productos:'}</span>
                           <span className="font-mono">{formatNumber(subtotal)} €</span>
                         </div>
                         {disc > 0 && (
                           <div className="flex justify-between text-emerald-600 font-medium">
-                            <span>Descuento Comercial:</span>
+                            <span>Descuento comercial:</span>
                             <span className="font-mono">-{formatNumber(disc)} €</span>
                           </div>
                         )}
                         {!isTransport && (trans > 0 || selectedInvoiceOrder.needsTransport) && (
                           <div className="flex justify-between text-slate-600">
-                            <span>Gastos de Transporte / Portes:</span>
+                            <span>Gastos de transporte / portes:</span>
                             <span className="font-mono">+{formatNumber(trans)} €</span>
                           </div>
                         )}
                         <div className="flex justify-between text-slate-900 font-bold border-t border-slate-200 pt-1">
-                          <span>Base Imponible (21% IVA):</span>
+                          <span>Base imponible (21% IVA):</span>
                           <span className="font-mono">{formatNumber(baseImp)} €</span>
                         </div>
                         <div className="flex justify-between text-slate-600">
@@ -4097,7 +4275,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         </div>
                         {ins > 0 && (
                           <div className="flex justify-between text-slate-600">
-                            <span>Seguro de Mercancía (No sujeto a IVA):</span>
+                            <span>Seguro de mercancía (no sujeto a IVA):</span>
                             <span className="font-mono">+{formatNumber(ins)} €</span>
                           </div>
                         )}
@@ -4123,14 +4301,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex items-start justify-between border-b border-slate-800 pb-3 sticky top-0 bg-slate-900 z-10 pt-1">
               <div>
                 <span className={`text-xs font-bold uppercase tracking-wider ${isTeacher ? 'text-amber-400' : 'text-emerald-400'}`}>
-                  {isTeacher ? 'Anuncio Oficial — Profesor (pupdaniel)' : `Publicación de Producto Final — Alumno (Nivel ${studentLevel})`}
+                  {isTeacher ? 'Anuncio oficial — Profesor (pupdaniel)' : `Publicación de producto final — Alumno (Nivel ${studentLevel})`}
                 </span>
                 <h3 className="text-xl font-bold text-white mt-0.5">
                   {editingAnnId 
-                    ? 'Editar Anuncio' 
+                    ? 'Editar anuncio' 
                     : isTeacher 
-                      ? 'Publicar Anuncio de Materia Prima / Producto' 
-                      : 'Publicar Producto Final en Mercado'}
+                      ? 'Publicar anuncio de materia prima / producto' 
+                      : 'Publicar producto final en mercado'}
                 </h3>
               </div>
               <button
@@ -4145,8 +4323,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="bg-indigo-500/10 border border-indigo-500/30 p-3.5 rounded-xl text-xs text-indigo-200 flex items-start gap-2.5 font-medium">
                 <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
                 <div>
-                  <strong className="block text-indigo-300 font-bold mb-0.5">Normativa de Venta para Alumnos:</strong>
-                  Los alumnos de Nivel 1 y 2 solo pueden vender <strong>Producto Final</strong> (no materia prima). Rellena los datos de tu oferta para publicarla en Mercado.
+                  <strong className="block text-indigo-300 font-bold mb-0.5">Normativa de venta para alumnos:</strong>
+                  Los alumnos de Nivel 1 y 2 solo pueden vender <strong>producto final</strong> (no materia prima). Rellena los datos de tu oferta para publicarla en el mercado.
                 </div>
               </div>
             )}
@@ -4163,9 +4341,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     <button
                       type="button"
                       onClick={() => {
-                        const title = 'Destornillador de Punta Plana';
+                        const title = 'Destornillador de punta plana';
                         setAnnTitle(title);
-                        setAnnDescription('Destornilladores de Punta Plana de alta resistencia fabricados en fábrica N3 para El Des-Tornillo.');
+                        setAnnDescription('Destornilladores de punta plana de alta resistencia fabricados en fábrica N3 para El Des-Tornillo.');
                         const info = getAvailableStockForProductType(title);
                         setAnnStock(info.availableMax);
                       }}
@@ -4175,16 +4353,16 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      <div className="text-xs font-bold text-white">Destornillador Punta Plana</div>
+                      <div className="text-xs font-bold text-white">Destornillador punta plana</div>
                       <div className="text-[10px] text-slate-400 mt-1">Varilla de acero cromo-vanadio</div>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
-                        const title = 'Destornillador de Punta Estrella';
+                        const title = 'Destornillador de punta estrella';
                         setAnnTitle(title);
-                        setAnnDescription('Destornilladores de Punta Estrella (Phillips) de alta precisión fabricados en fábrica N3 para El Des-Tornillo.');
+                        setAnnDescription('Destornilladores de punta estrella (Phillips) de alta precisión fabricados en fábrica N3 para El Des-Tornillo.');
                         const info = getAvailableStockForProductType(title);
                         setAnnStock(info.availableMax);
                       }}
@@ -4194,7 +4372,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      <div className="text-xs font-bold text-white">Destornillador Punta Estrella</div>
+                      <div className="text-xs font-bold text-white">Destornillador punta estrella</div>
                       <div className="text-[10px] text-slate-400 mt-1">Varilla de acero cromo-vanadio - Phillips</div>
                     </button>
                   </div>
@@ -4210,7 +4388,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2 text-slate-200 font-semibold">
                       <PackageCheck className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>Existencias Reales en Almacén ({annTitle || 'Producto'}):</span>
+                      <span>Existencias reales en almacén ({annTitle || 'Producto'}):</span>
                     </div>
                     <span className="font-bold text-amber-300 font-mono text-sm">
                       {stockInfo.availableMax} u. libres
@@ -4226,7 +4404,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     className="w-full py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs border border-amber-500/40 transition flex items-center justify-center gap-2 shadow-sm"
                   >
                     <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Sincronizar Anuncio con Existencias Reales ({stockInfo.availableMax} u.)</span>
+                    <span>Sincronizar anuncio con existencias reales ({stockInfo.availableMax} u.)</span>
                   </button>
                 </div>
               );
@@ -4236,9 +4414,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             {isTeacher && (
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">
-                  Seleccionar Materia Prima a Publicar:
+                  Seleccionar materia prima a publicar:
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {(['hierro', 'plastico', 'epoxi'] as const).map((presetKey) => {
                     const preset = PRODUCT_PRESETS[presetKey];
                     const isSelected = annPreset === presetKey;
@@ -4265,11 +4443,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             {/* Title / Name Field */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-slate-300 block">
-                Nombre / Título del {isTeacher ? 'Anuncio' : 'Producto Final'}:
+                Nombre / título del {isTeacher ? 'anuncio' : 'producto final'}:
               </label>
               <input
                 type="text"
-                placeholder={isTeacher ? 'Ej: Fragmentos de hierro' : 'Ej: Destornillador de Punta Plana'}
+                placeholder={isTeacher ? 'Ej: Fragmentos de hierro' : 'Ej: Destornillador de punta plana'}
                 value={annTitle}
                 onChange={(e) => setAnnTitle(e.target.value)}
                 readOnly={!isTeacher && studentLevel === 3}
@@ -4283,7 +4461,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             {!isTeacher ? (
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300 flex items-center justify-between">
-                  <span>Stock / Unidades puestas a la venta:</span>
+                  <span>Stock / unidades puestas a la venta:</span>
                   <span className="text-amber-400 text-[10px] font-mono">
                     Máx. Real: {getAvailableStockForProductType(annTitle).availableMax} u.
                   </span>
@@ -4318,7 +4496,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-slate-300 block">
-                    Presentación / Formato:
+                    Presentación / formato:
                   </label>
                   <input
                     type="text"
@@ -4331,7 +4509,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-slate-300 block">
-                    Stock / Cantidad Disponible:
+                    Stock / cantidad disponible:
                   </label>
                   <input
                     type="text"
@@ -4349,7 +4527,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300 flex items-center gap-1">
                   <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
-                  Precio Base por Unidad (€)
+                  Precio base por unidad (€)
                 </label>
                 <input
                   type="number"
@@ -4367,7 +4545,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300 flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 text-indigo-400" />
-                  Duración del Anuncio
+                  Duración del anuncio
                 </label>
                 <select
                   value={String(annDurationDays)}
@@ -4377,10 +4555,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-semibold text-xs focus:outline-none focus:border-amber-500"
                 >
-                  <option value="indefinido">Indefinido (Activo)</option>
-                  <option value="7">7 Días</option>
-                  <option value="15">15 Días</option>
-                  <option value="30">30 Días</option>
+                  <option value="indefinido">Indefinido (activo)</option>
+                  <option value="7">7 días</option>
+                  <option value="15">15 días</option>
+                  <option value="30">30 días</option>
                 </select>
               </div>
             </div>
@@ -4403,10 +4581,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   type="button"
                   onClick={() => handleDeleteAnnouncement(editingAnnId)}
                   className="py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs transition-colors flex items-center justify-center gap-1.5"
-                  title="Eliminar Anuncio"
+                  title="Eliminar anuncio"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Eliminar Anuncio</span>
+                  <span>Eliminar anuncio</span>
                 </button>
               )}
               <button
@@ -4423,7 +4601,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{editingAnnId ? 'Guardar Cambios' : 'Publicar Anuncio'}</span>
+                <span>{editingAnnId ? 'Guardar cambios' : 'Publicar anuncio'}</span>
               </button>
             </div>
           </div>
@@ -4436,13 +4614,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <XCircle className="w-5 h-5 text-rose-400" />
-              Rechazar Solicitud de Compra
+              Rechazar solicitud de compra
             </h3>
             <p className="text-xs text-slate-400">
               Indica opcionalmente el motivo por el cual rechazas esta solicitud de materias primas para informar al alumno.
             </p>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-300">Motivo del Rechazo (Opcional):</label>
+              <label className="text-xs font-medium text-slate-300">Motivo del rechazo (opcional):</label>
               <textarea
                 rows={3}
                 placeholder="Ej: No se reune la documentación de transporte o saldo insuficiente..."
@@ -4463,7 +4641,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 disabled={isSubmitting}
                 className="flex-1 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 font-bold text-xs shadow-lg transition-colors"
               >
-                Confirmar Rechazo
+                Confirmar rechazo
               </button>
             </div>
           </div>
@@ -4477,7 +4655,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="w-12 h-12 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center mx-auto">
               <ShieldAlert className="w-7 h-7" />
             </div>
-            <h3 className="text-lg font-bold text-white">Comprobación de Requisitos de Suministro</h3>
+            <h3 className="text-lg font-bold text-white">Comprobación de requisitos de suministro</h3>
             <div className="bg-slate-950/90 p-4 rounded-xl border border-slate-800 text-left">
               <p className="text-sm font-medium text-slate-200 leading-relaxed">
                 Tras realizar las comprobaciones pertinentes, usted no reúne los requisitos exigidos por la empresa suministradora para completar la compra. Lamentamos las molestias
@@ -4487,7 +4665,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               onClick={() => setShowLevelRestrictionModal(false)}
               className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-lg transition-colors"
             >
-              Entendido / Cerrar
+              Entendido / cerrar
             </button>
           </div>
         </div>
@@ -4499,7 +4677,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between border-b border-slate-800 pb-4">
               <div>
-                <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Solicitud de Compra</span>
+                <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Solicitud de compra</span>
                 <h3 className="text-xl font-bold text-white mt-0.5">{selectedAnn.title}</h3>
                 <p className="text-xs text-slate-400">{selectedAnn.presentation}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -4507,7 +4685,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     Vendedor: {selectedAnn.sellerName} {selectedAnn.sellerLevel && selectedAnn.sellerLevel !== 'official' ? `(Alumno Nivel ${selectedAnn.sellerLevel})` : '(Proveedor Oficial)'}
                   </span>
                   <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-800 text-emerald-400 border border-slate-700">
-                    Stock Disponible: {selectedAnn.stock === undefined || selectedAnn.stock === null || selectedAnn.stock === 'ilimitado' ? 'Ilimitado' : `${selectedAnn.stock} u.`}
+                    Stock disponible: {selectedAnn.stock === undefined || selectedAnn.stock === null || selectedAnn.stock === 'ilimitado' ? 'Ilimitado' : `${selectedAnn.stock} u.`}
                   </span>
                 </div>
               </div>
@@ -4522,7 +4700,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="space-y-4 text-sm">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300">
-                  Cantidad (Unidades totales de producto terminado a solicitar):
+                  Cantidad ({isSelectedScrewdriver ? 'Unidades de destornilladores a solicitar' : 'Unidades / formatos a solicitar'}):
                 </label>
                 <div className="flex items-center gap-3">
                   <input
@@ -4533,14 +4711,18 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2 text-white font-bold text-lg focus:outline-none focus:border-amber-500"
                   />
                   <span className="text-xs text-slate-400 whitespace-nowrap">
-                    Total: <strong className="text-amber-400 font-mono">{formatNumber(totalKg)} kg</strong>
+                    {isSelectedScrewdriver ? (
+                      <span>Total: <strong className="text-amber-400 font-mono">{formatNumber(quantity)} unidades</strong></span>
+                    ) : (
+                      <span>Total: <strong className="text-amber-400 font-mono">{formatNumber(totalKg)} kg</strong></span>
+                    )}
                   </span>
                 </div>
               </div>
 
               <div className="space-y-2 pt-2 border-t border-slate-800">
                 <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">
-                  Opciones de Entrega y Logística:
+                  Opciones de entrega y logística:
                 </label>
 
                 <div className="grid grid-cols-1 gap-2">
@@ -4584,7 +4766,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       />
                       <div>
                         <div className="font-semibold text-xs text-white">Recoger con flota propia</div>
-                        <div className="text-[11px] text-slate-400">Requiere Camión Tráiler y camionero contratado</div>
+                        <div className="text-[11px] text-slate-400">Requiere camión tráiler y camionero contratado</div>
                       </div>
                     </div>
                     <span className="font-mono font-bold text-emerald-400 text-xs">0.00 €</span>
@@ -4595,7 +4777,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2 mt-2">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     <span>
-                      Para recogida propia debes poseer un <strong>Camión Tráiler</strong> y un <strong>Camionero</strong> contratado.
+                      Para recogida propia debes poseer un <strong>camión tráiler</strong> y un <strong>camionero</strong> contratado.
                     </span>
                   </div>
                 )}
@@ -4604,7 +4786,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               {studentWarehouses.length > 0 && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-800">
                   <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                    <span>Inmueble / Almacén de Destino:</span>
+                    <span>Inmueble / almacén de destino:</span>
                     {studentWarehouses.length > 1 && (
                       <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">
                         ⚠️ Selecciona el almacén de destino
@@ -4620,7 +4802,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       const hasF = checkWarehouseHasForklift(w);
                       return (
                         <option key={w.id} value={w.id}>
-                          {w.propertyTitle || w.title || 'Almacén'} ({w.location || w.direccion || 'Polígono Industrial'}) — {hasF ? '🚜 [Carretilla OK]' : '⚠️ [Falta Carretilla]'}
+                          {w.propertyTitle || w.title || 'Almacén'} ({w.location || w.direccion || 'Polígono industrial'}) — {hasF ? '🚜 [Carretilla OK]' : '⚠️ [Falta carretilla]'}
                         </option>
                       );
                     })}
@@ -4631,7 +4813,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     if (!hasF && currentWh) {
                       return (
                         <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[11px] font-medium flex items-center gap-1.5 mt-1.5">
-                          <span>⚠️ Este almacén no tiene carretilla elevadora asignada. Asigna una desde la Gestión de Flotas / Concesionario.</span>
+                          <span>⚠️ Este almacén no tiene carretilla elevadora asignada. Asigna una desde la gestión de flotas / concesionario.</span>
                         </div>
                       );
                     }
@@ -4642,22 +4824,38 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
               <div className="bg-slate-950 rounded-xl p-4 space-y-2 border border-slate-800/80 font-mono text-xs">
                 <div className="flex justify-between text-slate-400">
-                  <span>Precio Base ({quantity} u. x {formatNumber(selectedAnn.pricePerUnit)} €):</span>
+                  <span>Precio base ({quantity} u. x {formatNumber(selectedAnn.pricePerUnit)} €):</span>
                   <span className="text-white">{formatNumber(basePrice)} €</span>
                 </div>
+                {needsTransport && (
+                  <>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Gasto de transporte ({orderChargedPallets} {orderChargedPallets === 1 ? 'palet' : 'palets'} × {orderDistanceKm} km × 0,38 €):</span>
+                      <span className="text-amber-400 font-bold">{formatNumber(transportCost)} €</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 italic">
+                      * Tarifa unificada de 0,38 €/palet/km ({orderRequestedPallets.toFixed(2)} palets reales → {orderChargedPallets} {orderChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between text-slate-400">
                   <span>IVA (21%):</span>
                   <span className="text-white">{formatNumber(ivaAmount)} €</span>
                 </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Coste de Transporte:</span>
-                  <span className="text-amber-400">{formatNumber(transportCost)} €</span>
-                </div>
                 <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline text-sm">
-                  <span className="font-bold text-white font-sans">Total a Pagar:</span>
+                  <span className="font-bold text-white font-sans">Total a pagar:</span>
                   <span className="font-bold text-emerald-400 text-lg">{formatNumber(totalAmount)} €</span>
                 </div>
               </div>
+
+              {orderExceedsWarehouse && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2.5 animate-in fade-in duration-200">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <div className="leading-relaxed">
+                    <strong className="text-rose-200">Exceso de capacidad:</strong> Este pedido sumaría <strong>{orderRequestedPallets.toFixed(2)} palets</strong>, superando la capacidad máxima de tu almacén ({totalOccupiedPallets.toFixed(2)} / {maxPalletsAllowed} palets ocupados, <strong>{freePallets.toFixed(2)} palets libres</strong>).
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
@@ -4671,11 +4869,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <button
                 type="button"
                 onClick={handleCreateOrder}
-                disabled={isSubmitting || (!needsTransport && !canPickupWithoutTransport)}
+                disabled={isSubmitting || (!needsTransport && !canPickupWithoutTransport) || orderExceedsWarehouse}
                 className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-2"
               >
                 <ShoppingBag className="w-4 h-4" />
-                <span>Tramitar Pedido</span>
+                <span>Tramitar pedido</span>
               </button>
             </div>
           </div>
@@ -4690,7 +4888,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex items-center justify-between border-b border-slate-800 pb-4 shrink-0">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-amber-400" />
-                <h3 className="text-lg font-bold text-white">Cesta de Materias Primas</h3>
+                <h3 className="text-lg font-bold text-white">Cesta de materias primas</h3>
               </div>
               <button
                 onClick={() => setIsCartOpen(false)}
@@ -4762,7 +4960,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 {studentWarehouses.length > 0 && (
                   <div className="space-y-1.5 p-3 bg-slate-950 border border-slate-800 rounded-xl">
                     <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                      <span>Inmueble / Almacén de Destino:</span>
+                      <span>Inmueble / almacén de destino:</span>
                       {studentWarehouses.length > 1 && (
                         <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">
                           ⚠️ Selecciona almacén
@@ -4778,7 +4976,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         const hasF = checkWarehouseHasForklift(w);
                         return (
                           <option key={w.id} value={w.id}>
-                            {w.propertyTitle || w.title || 'Almacén'} ({w.location || w.direccion || 'Polígono Industrial'}) — {hasF ? '🚜 [Carretilla OK]' : '⚠️ [Falta Carretilla]'}
+                            {w.propertyTitle || w.title || 'Almacén'} ({w.location || w.direccion || 'Polígono industrial'}) — {hasF ? '🚜 [Carretilla OK]' : '⚠️ [Falta carretilla]'}
                           </option>
                         );
                       })}
@@ -4789,7 +4987,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       if (!hasF && currentWh) {
                         return (
                           <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[11px] font-medium flex items-center gap-1.5 mt-1">
-                            <span>⚠️ Este almacén no tiene carretilla elevadora asignada. Asigna una desde la Gestión de Flotas / Concesionario.</span>
+                            <span>⚠️ Este almacén no tiene carretilla elevadora asignada. Asigna una desde la gestión de flotas / concesionario.</span>
                           </div>
                         );
                       }
@@ -4800,30 +4998,46 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs font-mono">
                   <div className="flex justify-between text-slate-400">
-                    <span>Base Imponible:</span>
+                    <span>Base imponible:</span>
                     <span className="text-white">{formatNumber(cartBasePrice)} €</span>
                   </div>
+                  {cartNeedsTransport && (
+                    <>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Transporte ({cartChargedPallets} pal. × {cartDistanceKm} km × 0,38 €):</span>
+                        <span className="text-amber-400 font-bold">{formatNumber(cartTransportCost)} €</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 italic">
+                        * Tarifa unificada de 0,38 €/palet/km ({cartRequestedPallets.toFixed(2)} palets reales → {cartChargedPallets} {cartChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
+                      </div>
+                    </>
+                  )}
                   <div className="flex justify-between text-slate-400">
                     <span>IVA (21%):</span>
                     <span className="text-white">{formatNumber(cartIvaAmount)} €</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>Transporte:</span>
-                    <span className="text-amber-400">{formatNumber(cartTransportCost)} €</span>
-                  </div>
                   <div className="pt-1.5 border-t border-slate-800 flex justify-between text-sm font-sans font-bold">
-                    <span className="text-white">Total a Pagar:</span>
+                    <span className="text-white">Total a pagar:</span>
                     <span className="text-emerald-400 text-base">{formatNumber(cartGrandTotal)} €</span>
                   </div>
                 </div>
 
+                {cartExceedsWarehouse && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2.5 animate-in fade-in duration-200">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <div className="leading-relaxed">
+                      <strong className="text-rose-200">Exceso de capacidad:</strong> La cesta sumaría <strong>{cartRequestedPallets.toFixed(2)} palets</strong>, superando la capacidad máxima de tu almacén ({totalOccupiedPallets.toFixed(2)} / {maxPalletsAllowed} palets ocupados, <strong>{freePallets.toFixed(2)} palets libres</strong>).
+                    </div>
+                  </div>
+                )}
+
                 <button
                   onClick={handleCheckoutCart}
-                  disabled={isSubmitting}
-                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-lg transition flex items-center justify-center gap-2"
+                  disabled={isSubmitting || cartExceedsWarehouse}
+                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-extrabold text-xs shadow-lg transition flex items-center justify-center gap-2"
                 >
                   <ShoppingBag className="w-4 h-4" />
-                  <span>Tramitar Pedido de Cesta ({cartItemCount} items)</span>
+                  <span>Tramitar pedido de cesta ({cartItemCount} items)</span>
                 </button>
               </div>
             )}
@@ -4837,7 +5051,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Scale className="w-5 h-5 text-indigo-400" />
-                <h3 className="text-lg font-bold text-white">Herramienta de Negociación de Compra</h3>
+                <h3 className="text-lg font-bold text-white">Herramienta de negociación de compra</h3>
               </div>
               <button
                 onClick={() => setNegotiatingOrder(null)}
@@ -4848,7 +5062,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             </div>
 
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs space-y-1">
-              <div className="text-slate-400 font-medium">Pedido Ref: <span className="font-mono text-amber-400 font-bold">{negotiatingOrder.id}</span></div>
+              <div className="text-slate-400 font-medium">Pedido ref: <span className="font-mono text-amber-400 font-bold">{negotiatingOrder.id}</span></div>
               <div className="text-white font-bold text-sm">{negotiatingOrder.materialTitle}</div>
               <div className="text-slate-400">Comprador: <span className="text-white">{negotiatingOrder.studentName}</span></div>
             </div>
@@ -4856,7 +5070,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             {/* Negotiation History */}
             {negotiatingOrder.negotiationHistory && negotiatingOrder.negotiationHistory.length > 0 && (
               <div className="space-y-2">
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Historial de Negociación</h4>
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Historial de negociación</h4>
                 <div className="max-h-36 overflow-y-auto space-y-2 pr-1">
                   {negotiatingOrder.negotiationHistory.map((entry, idx) => (
                     <div key={idx} className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-lg text-xs space-y-1">
@@ -4867,7 +5081,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       <div className="text-slate-300 font-medium">
                         Desc: <span className="text-amber-400 font-bold">{entry.discountPercentage}%</span> |
                         Seguro: <span className="text-emerald-400 font-bold">{entry.insuranceFee} €</span> |
-                        Transp: <span className="text-indigo-400">{entry.transportMethod === 'vendedor_envio' ? 'Envío Vendedor' : 'Recogida Comprador'}</span>
+                        Transp: <span className="text-indigo-400">{entry.transportMethod === 'vendedor_envio' ? 'Envío vendedor' : 'Recogida comprador'}</span>
                       </div>
                       {entry.note && <div className="text-slate-400 italic font-sans text-[11px]">"{entry.note}"</div>}
                     </div>
@@ -4880,7 +5094,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Precio Unitario (€)</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Precio unitario (€)</label>
                   <input
                     type="number"
                     min="1"
@@ -4890,7 +5104,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Cantidad Solicidad (u.)</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Cantidad solicitada (u.)</label>
                   <input
                     type="number"
                     min="1"
@@ -4914,7 +5128,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Prima de Seguro (€)</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Prima de seguro (€)</label>
                   <input
                     type="number"
                     min="0"
@@ -4926,24 +5140,24 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Método de Transporte</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Método de transporte</label>
                 <select
                   value={negTransportMethod}
                   onChange={(e: any) => setNegTransportMethod(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
                 >
-                  <option value="vendedor_envio">Envío a cargo del Vendedor (+ portes)</option>
-                  <option value="comprador_recogida">Recogida por el Comprador (Requiere Camión + Camionero)</option>
+                  <option value="vendedor_envio">Envío a cargo del vendedor (+ portes)</option>
+                  <option value="comprador_recogida">Recogida por el comprador (requiere camión + camionero)</option>
                 </select>
                 {negTransportMethod === 'comprador_recogida' && !canPickupWithoutTransport && (
                   <p className="text-[11px] text-amber-400 mt-1">
-                    ⚠️ Advertencia: Para recoger la mercancía debes disponer de un Camión Tráiler y un chofer Camionero contratado.
+                    ⚠️ Advertencia: Para recoger la mercancía debes disponer de un camión tráiler y un chofer camionero contratado.
                   </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Nota / Propuesta de la contraoferta</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Nota / propuesta de la contraoferta</label>
                 <textarea
                   rows={2}
                   value={negNote}
@@ -4967,7 +5181,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>Enviar Contraoferta</span>
+                <span>Enviar contraoferta</span>
               </button>
             </div>
           </div>
@@ -4981,7 +5195,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Building2 className="w-5 h-5 text-indigo-400" />
-                <h3 className="text-lg font-bold text-white">Perfil Comercial de Empresa</h3>
+                <h3 className="text-lg font-bold text-white">Perfil comercial de empresa</h3>
               </div>
               <button
                 onClick={() => setIsProfileModalOpen(false)}
@@ -4995,7 +5209,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               {/* Company Name (Read-only mandatory) */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Nombre Oficial de la Empresa <span className="text-indigo-400 text-[10px] font-normal">(Asignado por el profesor)</span>
+                  Nombre oficial de la empresa <span className="text-indigo-400 text-[10px] font-normal">(Asignado por el profesor)</span>
                 </label>
                 <input
                   type="text"
@@ -5008,7 +5222,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               {/* Description & Business Info */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Información y Descripción de la Empresa
+                  Información y descripción de la empresa
                 </label>
                 <textarea
                   rows={4}
@@ -5022,7 +5236,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               {/* Logo Upload & URL */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Logotipo de la Empresa
+                  Logotipo de la empresa
                 </label>
                 <div className="flex gap-3 items-center">
                   <div className="w-14 h-14 rounded-xl border border-slate-700 bg-slate-950 flex items-center justify-center shrink-0 overflow-hidden">
@@ -5089,7 +5303,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
               >
                 {isSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                <span>Guardar y Publicar Perfil</span>
+                <span>Guardar y publicar perfil</span>
               </button>
             </div>
           </div>
@@ -5105,13 +5319,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <Trash2 className="w-5 h-5 text-rose-400" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white">Eliminar Anuncio del Mercado</h3>
+                <h3 className="text-lg font-bold text-white">Eliminar anuncio del mercado</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Retirar oferta comercial del catálogo</p>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800 leading-relaxed">
-              ¿Estás seguro de que deseas eliminar este anuncio? Los compradores ya no podrán ver esta oferta en el Mercado ni realizar solicitudes sobre ella.
+              ¿Estás seguro de que deseas eliminar este anuncio? Los compradores ya no podrán ver esta oferta en el mercado ni realizar solicitudes sobre ella.
             </p>
 
             <div className="flex gap-3 pt-2">
@@ -5130,7 +5344,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
               >
                 {isDeletingAnn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                <span>{isDeletingAnn ? 'Eliminando...' : 'Confirmar Eliminación'}</span>
+                <span>{isDeletingAnn ? 'Eliminando...' : 'Confirmar eliminación'}</span>
               </button>
             </div>
           </div>
@@ -5147,7 +5361,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <Receipt className="w-5 h-5 text-amber-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Emitir Factura Manual en Chat</h3>
+                  <h3 className="text-lg font-bold text-white">Emitir factura manual en chat</h3>
                   <p className="text-xs text-slate-400">
                     Enviar documento oficial a <span className="text-amber-300 font-bold">{tradingPartners.find(p => p.id === selectedPartnerId)?.name || 'Cliente'}</span>
                   </p>
@@ -5163,59 +5377,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             </div>
 
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
-              {/* Optional: Select Existing Order */}
-              {orders.filter(o => (o.studentId === selectedPartnerId || o.sellerId === selectedPartnerId)).length > 0 && (
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                    <span>Vincular a Pedido Existente (Opcional)</span>
-                    <span className="text-[10px] text-slate-500">Auto-completa importes del pedido</span>
-                  </label>
-                  <select
-                    value={manualInvoiceSelectedOrderId}
-                    onChange={(e) => {
-                      const ordId = e.target.value;
-                      setManualInvoiceSelectedOrderId(ordId);
-                      if (ordId) {
-                        const targetOrd = orders.find(o => o.id === ordId);
-                        if (targetOrd) {
-                          setManualInvoiceConcept(targetOrd.note || 'Suministro Comercial');
-                          if (targetOrd.items && targetOrd.items.length > 0) {
-                            setManualInvoiceItems(targetOrd.items.map(i => ({
-                              title: i.title,
-                              quantity: i.quantity,
-                              unitPrice: i.unitPrice
-                            })));
-                          } else {
-                            setManualInvoiceItems([{
-                              title: 'Lote Comercial',
-                              quantity: targetOrd.quantity,
-                              unitPrice: targetOrd.unitPrice
-                            }]);
-                          }
-                          setManualInvoiceDiscount(targetOrd.discountAmount || 0);
-                          setManualInvoiceTransport(targetOrd.transportCost || 0);
-                          setManualInvoiceInsurance(targetOrd.insuranceFee || 0);
-                        }
-                      }
-                    }}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                  >
-                    <option value="">-- Factura Manual Directa (Sin pedido previo) --</option>
-                    {orders
-                      .filter(o => (o.studentId === selectedPartnerId || o.sellerId === selectedPartnerId))
-                      .map(o => (
-                        <option key={o.id} value={o.id}>
-                          Pedido #{o.id.slice(-6)} - Total: {formatNumber(o.totalAmount)} € ({o.status})
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              )}
-
               {/* Concept Title */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Concepto General / Título de Factura
+                  Concepto general / título de factura
                 </label>
                 <input
                   type="text"
@@ -5230,7 +5395,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-slate-300">
-                    Líneas de Detalle de Productos / Servicios
+                    Líneas de detalle de productos / servicios
                   </label>
                   <button
                     type="button"
@@ -5238,7 +5403,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     className="text-xs text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Añadir Línea</span>
+                    <span>Añadir línea</span>
                   </button>
                 </div>
 
@@ -5356,23 +5521,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 return (
                   <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl space-y-1.5 text-xs">
                     <div className="flex justify-between text-slate-300">
-                      <span>Suma de Conceptos:</span>
+                      <span>Suma de conceptos:</span>
                       <span className="font-mono">{formatNumber(subtotal)} €</span>
                     </div>
                     {disc > 0 && (
                       <div className="flex justify-between text-emerald-400">
-                        <span>Descuento Comercial:</span>
+                        <span>Descuento comercial:</span>
                         <span className="font-mono">-{formatNumber(disc)} €</span>
                       </div>
                     )}
                     {trans > 0 && (
                       <div className="flex justify-between text-slate-300">
-                        <span>Gastos de Transporte:</span>
+                        <span>Gastos de transporte:</span>
                         <span className="font-mono">+{formatNumber(trans)} €</span>
                       </div>
                     )}
                     <div className="flex justify-between text-slate-300 border-t border-slate-800/80 pt-1 font-semibold">
-                      <span>Base Imponible (21% IVA):</span>
+                      <span>Base imponible (21% IVA):</span>
                       <span className="font-mono">{formatNumber(base)} €</span>
                     </div>
                     <div className="flex justify-between text-slate-300">
@@ -5381,7 +5546,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     </div>
                     {ins > 0 && (
                       <div className="flex justify-between text-slate-300">
-                        <span>Seguro de Mercancía (No sujeto a IVA):</span>
+                        <span>Seguro de mercancía (no sujeto a IVA):</span>
                         <span className="font-mono">+{formatNumber(ins)} €</span>
                       </div>
                     )}
@@ -5409,7 +5574,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-lg transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 {isSubmittingManualInvoice ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Receipt className="w-4 h-4" />}
-                <span>Emitir y Enviar Factura al Chat</span>
+                <span>Emitir y enviar factura al chat</span>
               </button>
             </div>
           </div>
@@ -5611,8 +5776,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     onChange={(e) => setPromissoryOrderType(e.target.value as any)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-semibold"
                   >
-                    <option value="no_a_la_orden">NO A LA ORDEN (Recomendado)</option>
-                    <option value="a_la_orden">A LA ORDEN (Endosable)</option>
+                    <option value="no_a_la_orden">No a la orden (recomendado)</option>
+                    <option value="a_la_orden">A la orden (endosable)</option>
                   </select>
                 </div>
               </div>
@@ -5945,7 +6110,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         </div>
       )}
 
-      {/* Modal de Descuento Bancario de Pagaré Mercantil */}
+      {/* Modal de descuento bancario de pagaré mercantil */}
       {noteForDiscountModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative text-slate-200 animate-in fade-in zoom-in-95 duration-150">
@@ -6050,7 +6215,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         <strong className="text-emerald-300">Si el deudor paga al vencimiento:</strong> Tu banco liquidará el cobro directamente con el comprador. No se te aplicará ningún coste adicional.
                       </li>
                       <li>
-                        <strong className="text-rose-300">Si el deudor no tiene saldo (Impago al vencimiento):</strong> Como el banco te anticipó el dinero hoy, te cargará en cuenta el <strong>reintegro del importe nominal (-{formatNumber(note.amount)} €)</strong> más la <strong>comisión bancaria de devolución del 1,00% (-{formatNumber(unpaidPenaltyFee)} €)</strong>, totalizando un cargo de <strong>-{formatNumber(note.amount + unpaidPenaltyFee)} €</strong>. Conservarás el efecto cambiario impagado para reclamar el cobro en el Juzgado (Portal Judicial).
+                        <strong className="text-rose-300">Si el deudor no tiene saldo (impago al vencimiento):</strong> Como el banco te anticipó el dinero hoy, te cargará en cuenta el <strong>reintegro del importe nominal (-{formatNumber(note.amount)} €)</strong> más la <strong>comisión bancaria de devolución del 1,00% (-{formatNumber(unpaidPenaltyFee)} €)</strong>, totalizando un cargo de <strong>-{formatNumber(note.amount + unpaidPenaltyFee)} €</strong>. Conservarás el efecto cambiario impagado para reclamar el cobro en el juzgado (portal judicial).
                       </li>
                     </ul>
                   </div>
@@ -6081,7 +6246,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         </div>
       )}
 
-      {/* Modal de Gestión de Cobro Bancaria de Pagaré Mercantil */}
+      {/* Modal de gestión de cobro bancaria de pagaré mercantil */}
       {noteForCollectionModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative text-slate-200 animate-in fade-in zoom-in-95 duration-150">
@@ -6216,7 +6381,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <Megaphone className="w-5 h-5 text-amber-400" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Aviso de Demanda de Mercado</h3>
+                  <h3 className="text-base font-bold text-white">Aviso de demanda de mercado</h3>
                   <p className="text-xs text-slate-400">Feedback comercial sobre precio en El Des-Tornillo</p>
                 </div>
               </div>
@@ -6236,11 +6401,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <span className="font-bold text-white">{selectedAnnForPriceAlert.title}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Vendedor / Alumno:</span>
+                <span className="text-slate-400 font-medium">Vendedor / alumno:</span>
                 <span className="font-bold text-indigo-300">{selectedAnnForPriceAlert.sellerName}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Precio Unitario Fijado:</span>
+                <span className="text-slate-400 font-medium">Precio unitario fijado:</span>
                 <span className="font-mono font-bold text-amber-400 text-sm">
                   {formatNumber(selectedAnnForPriceAlert.pricePerUnit)} € + IVA
                 </span>
@@ -6259,7 +6424,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="space-y-2">
               <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Plantillas de Simulación de Mercado (Feedback realista):</span>
+                <span>Plantillas de simulación de mercado (feedback realista):</span>
               </label>
               <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
                 {REALISTIC_PRICE_ALERT_TEMPLATES.map(tpl => (
@@ -6298,7 +6463,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             {/* Precio orientativo sugerido opcional */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                <span>Precio orientativo sugerido (€/u) (Opcional):</span>
+                <span>Precio orientativo sugerido (€/u) (opcional):</span>
                 <span className="text-[10px] text-slate-400 font-normal">Guía de precio de venta</span>
               </label>
               <div className="relative">
@@ -6335,7 +6500,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 ) : (
                   <Megaphone className="w-4 h-4" />
                 )}
-                <span>Enviar Aviso al Alumno</span>
+                <span>Enviar aviso al alumno</span>
               </button>
             </div>
           </div>

@@ -69,7 +69,7 @@ export default function PriceAlertModal({
         <div className="bg-gradient-to-br from-amber-950/40 via-amber-900/20 to-slate-950 border border-amber-500/40 rounded-2xl p-4.5 space-y-2.5 shadow-sm">
           <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
             <TrendingDown className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>Respuesta de los Compradores en Mercado:</span>
+            <span>Respuesta de los compradores en mercado:</span>
           </div>
           <blockquote className="text-sm sm:text-base font-semibold text-amber-100 italic pl-3 border-l-2 border-amber-500/70 leading-relaxed">
             "{priceAlert.message}"
@@ -87,16 +87,16 @@ export default function PriceAlertModal({
           <div className="flex items-center justify-between">
             <span className="text-slate-400 flex items-center gap-1.5 font-medium">
               <Package className="w-3.5 h-3.5 text-slate-500" />
-              Producto Afectado:
+              Producto afectado:
             </span>
             <span className="font-bold text-white text-sm">{announcement.title}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 font-medium">Formato / Presentación:</span>
+            <span className="text-slate-400 font-medium">Formato / presentación:</span>
             <span className="text-slate-300 font-medium">{announcement.presentation || 'Unidades'}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 font-medium">Precio Unitario Ofertado:</span>
+            <span className="text-slate-400 font-medium">Precio unitario ofertado:</span>
             <span className="font-mono font-bold text-rose-400 text-sm">
               {formatNumber(announcement.pricePerUnit)} € + 21% IVA
             </span>
@@ -127,7 +127,7 @@ export default function PriceAlertModal({
             onClick={onGoToMarket}
             className="sm:flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer group"
           >
-            <span>Ir a El Des-Tornillo / Ajustar Precio</span>
+            <span>Ir a El Des-Tornillo / ajustar precio</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </div>

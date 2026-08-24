@@ -10,6 +10,7 @@ import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
 import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
+import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 import { numberToSpanishWords } from './src/lib/formatters.js';
 
@@ -360,7 +361,7 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         announcement_id VARCHAR(255) NOT NULL,
         materia_tipo VARCHAR(50) NOT NULL,
         materia_titulo TEXT NOT NULL,
-        cantidad INT NOT NULL,
+        cantidad NUMERIC(12, 2) NOT NULL,
         peso_unitario_kg NUMERIC(10, 2) NOT NULL,
         peso_total_kg NUMERIC(10, 2) NOT NULL,
         precio_base NUMERIC(12, 2) NOT NULL,
@@ -388,7 +389,7 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_id VARCHAR(255);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_name TEXT;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_level VARCHAR(50);
-      ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS buyer_level INT;
+      ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS buyer_level VARCHAR(50);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS discount_percentage NUMERIC(5, 2) DEFAULT 0;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS insurance_fee NUMERIC(12, 2) DEFAULT 0;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS transport_method VARCHAR(50) DEFAULT 'vendedor_envio';
@@ -399,6 +400,9 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS invoice_number TEXT;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS inventory_credited BOOLEAN DEFAULT FALSE;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS destination_nave_id VARCHAR(255);
+      ALTER TABLE materias_primas_pedidos ALTER COLUMN cantidad TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_pedidos ALTER COLUMN buyer_level TYPE VARCHAR(50);
+      ALTER TABLE materias_primas_pedidos ALTER COLUMN seller_level TYPE VARCHAR(50);
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS varillas_hierro_punta INT NOT NULL DEFAULT 0;
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS varillas_metal_punta INT NOT NULL DEFAULT 0;
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS destornilladores_hierro INT NOT NULL DEFAULT 0;
@@ -411,6 +415,16 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS line1_pending_hours NUMERIC(12, 6) NOT NULL DEFAULT 0;
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS line2_pending_hours NUMERIC(12, 6) NOT NULL DEFAULT 0;
       ALTER TABLE materias_primas_inventario ADD COLUMN IF NOT EXISTS desglose_almacenes JSONB;
+      ALTER TABLE materias_primas_inventario ALTER COLUMN varillas_punta TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN varillas_hierro_punta TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN varillas_metal_punta TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN productos_ensamblados TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN destornilladores_hierro TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN destornilladores_metal TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN varillas_punta_estrella TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN varillas_punta_plana TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN destornilladores_punta_estrella TYPE NUMERIC(12, 2);
+      ALTER TABLE materias_primas_inventario ALTER COLUMN destornilladores_punta_plana TYPE NUMERIC(12, 2);
 
       CREATE TABLE IF NOT EXISTS market_messages (
         id VARCHAR(255) PRIMARY KEY,
@@ -431,6 +445,11 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_id VARCHAR(255);
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_titulo TEXT;
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS almacen_asignado_nombre TEXT;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS is_des_tornillo BOOLEAN DEFAULT FALSE;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS price_alert JSONB;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_location TEXT;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_municipality TEXT;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_province TEXT;
 
       CREATE TABLE IF NOT EXISTS notificaciones (
         id VARCHAR(255) PRIMARY KEY,
@@ -587,7 +606,12 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         active BOOLEAN NOT NULL DEFAULT TRUE,
         seller_id VARCHAR(255),
         seller_name TEXT,
-        seller_level VARCHAR(50)
+        seller_level VARCHAR(50),
+        seller_location TEXT,
+        seller_municipality TEXT,
+        seller_province TEXT,
+        is_des_tornillo BOOLEAN DEFAULT FALSE,
+        price_alert JSONB
       );
 
       CREATE TABLE IF NOT EXISTS perfiles_empresa (
@@ -1008,14 +1032,14 @@ async function syncLoanToSupabase(loan: BankLoan) {
 async function syncMachineryToSupabase(mac: MachineryAcquisition) {
   if (!dbPool) return;
   try {
-    const lineTitleVal = mac.lineTitle || mac.title || mac.optionTitle || 'Línea de Maquinaria';
+    const lineTitleVal = mac.lineTitle || mac.title || mac.optionTitle || 'Línea de maquinaria';
     const deferredPriceVal = mac.deferredPrice || mac.financedPrice || mac.basePrice || 0;
     const installmentCountVal = mac.installmentCount || mac.installmentsCount || null;
     const purchaseDateVal = parseSafeDate(mac.purchaseDate);
     const assemblyDaysVal = mac.assemblyDays || 5;
     const assemblyFinishDateVal = parseSafeDate(mac.assemblyFinishDate || mac.assemblyEndDate);
     const installedNaveIdVal = mac.installedNaveId || mac.installedAtNaveId || mac.installationNaveId || '';
-    const installedNaveTitleVal = mac.installedNaveTitle || mac.installedAtNaveTitle || mac.installationNaveTitle || 'Nave Industrial';
+    const installedNaveTitleVal = mac.installedNaveTitle || mac.installedAtNaveTitle || mac.installationNaveTitle || 'Nave industrial';
     const requiredStaffVal = mac.requiredStaff || 2;
     const powerKwVal = mac.powerKw || mac.requiredPowerKW || 35;
     const capacityVal = mac.productionCapacityUnitsPerHour || 60;
@@ -1069,7 +1093,7 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
 async function syncJobListingToSupabase(job: JobListing) {
   if (!dbPool) return;
   try {
-    const roleVal = job.role || (job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario');
+    const roleVal = job.role || (job.title && (job.title.toLowerCase().includes('mozo') || job.title.toLowerCase().includes('almacen') || job.title.toLowerCase().includes('almacén')) ? 'mozo_almacen' : job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario');
     await safeDbQuery(
       `INSERT INTO ofertas_empleo (id, titulo, puesto, nombre_empleado, genero, sueldo_bruto_mensual, edad, estado, alumno_id, alumno_nombre, fecha_contratacion, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -1311,8 +1335,8 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
         ord.studentName || '',
         ord.announcementId || '',
         ord.materialType || 'hierro',
-        ord.materialTitle || ord.note || (ord.items && ord.items[0] && ord.items[0].title) || 'Factura Comercial',
-        ord.quantity || 1,
+        ord.materialTitle || ord.note || (ord.items && ord.items[0] && ord.items[0].title) || 'Factura comercial',
+        ord.quantity !== undefined && ord.quantity !== null ? Number(ord.quantity) : 1,
         ord.unitWeightKg || 0,
         ord.totalKg || 0,
         ord.basePrice || ord.subtotalAmount || 0,
@@ -1330,8 +1354,8 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
         itemsJson,
         ord.sellerId || null,
         ord.sellerName || null,
-        ord.sellerLevel ? String(ord.sellerLevel) : null,
-        ord.buyerLevel || null,
+        ord.sellerLevel !== undefined && ord.sellerLevel !== null ? String(ord.sellerLevel) : null,
+        ord.buyerLevel !== undefined && ord.buyerLevel !== null ? String(ord.buyerLevel) : null,
         ord.discountPercentage || 0,
         ord.insuranceFee || 0,
         ord.transportMethod || 'vendedor_envio',
@@ -1587,12 +1611,16 @@ async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncemen
     if (ann.stock !== undefined && ann.stock !== null) {
       st = String(ann.stock);
     }
+    const priceAlertJson = ann.priceAlert ? JSON.stringify(ann.priceAlert) : null;
+    const isDesTornilloVal = ann.isDesTornillo !== undefined ? !!ann.isDesTornillo : false;
 
     await safeDbQuery(
       `INSERT INTO anuncios_materia_prima (
         id, material_type, title, presentation, unit_weight_kg, is_pallet, price_per_unit,
-        description, updated_at, duration_days, expiration_date, stock, active, seller_id, seller_name, seller_level
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        description, updated_at, duration_days, expiration_date, stock, active, seller_id, seller_name, seller_level,
+        seller_location, seller_municipality, seller_province,
+        is_des_tornillo, price_alert
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       ON CONFLICT (id) DO UPDATE SET
         material_type = EXCLUDED.material_type,
         title = EXCLUDED.title,
@@ -1608,7 +1636,12 @@ async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncemen
         active = EXCLUDED.active,
         seller_id = EXCLUDED.seller_id,
         seller_name = EXCLUDED.seller_name,
-        seller_level = EXCLUDED.seller_level`,
+        seller_level = EXCLUDED.seller_level,
+        seller_location = EXCLUDED.seller_location,
+        seller_municipality = EXCLUDED.seller_municipality,
+        seller_province = EXCLUDED.seller_province,
+        is_des_tornillo = EXCLUDED.is_des_tornillo,
+        price_alert = EXCLUDED.price_alert`,
       [
         ann.id,
         ann.materialType,
@@ -1625,7 +1658,12 @@ async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncemen
         ann.active !== undefined ? ann.active : true,
         ann.sellerId || null,
         ann.sellerName || null,
-        sLevel
+        sLevel,
+        ann.sellerLocation || null,
+        ann.sellerMunicipality || null,
+        ann.sellerProvince || null,
+        isDesTornilloVal,
+        priceAlertJson
       ]
     );
   } catch (e) {
@@ -2143,6 +2181,47 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           });
         }
       }
+
+      // If no student accounts were retrieved from Supabase, preserve default students
+      if (restoredUsers.filter(u => u.role === 'student').length === 0) {
+        const defaultStudents: User[] = [
+          {
+            id: 'alumno-1',
+            username: 'ana',
+            password: '123',
+            role: 'student',
+            name: 'Ana López',
+            accountNumber: 'ES910001000212345678',
+            balance: 1000,
+            level: 1
+          },
+          {
+            id: 'alumno-2',
+            username: 'carlos',
+            password: '123',
+            role: 'student',
+            name: 'Carlos Ruiz',
+            accountNumber: 'ES910001000287654321',
+            balance: 1000,
+            level: 1
+          },
+          {
+            id: 'alumno-3',
+            username: 'beatriz',
+            password: '123',
+            role: 'student',
+            name: 'Beatriz Gómez',
+            accountNumber: 'ES910001000244556677',
+            balance: 1000,
+            level: 1
+          }
+        ];
+        restoredUsers.push(...defaultStudents);
+        for (const st of defaultStudents) {
+          syncAccountToSupabase(st.id, st.name, st.balance, st.username, st.password, st.accountNumber, st.role, st.level).catch(() => {});
+        }
+      }
+
       db.users = restoredUsers;
 
       // Reconstruct db.transfers from "movimientos"
@@ -2375,7 +2454,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       if (resJobs.rows.length > 0) {
         db.jobListings = resJobs.rows.map((row: any) => {
           const t = String(row.titulo || '').toLowerCase();
-          const roleVal = row.puesto || row.rol || (t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario');
+          const roleVal = row.puesto || row.rol || (t.includes('mozo') || t.includes('almacen') || t.includes('almacén') ? 'mozo_almacen' : t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario');
           return {
             id: String(row.id),
             title: String(row.titulo),
@@ -2535,7 +2614,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           status: String(row.estado) as 'pagado' | 'pendiente',
           paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
           items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
-          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia Bancaria Directa'
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
         }));
       }
 
@@ -2701,6 +2780,15 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             if (!isNaN(numStock)) parsedStock = numStock;
           }
 
+          let parsedPriceAlert: any = undefined;
+          if (row.price_alert) {
+            try {
+              parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
+            } catch (e) {
+              console.warn('[Supabase Parse] price_alert JSON parse error:', e);
+            }
+          }
+
           return {
             id: String(row.id),
             materialType: String(row.material_type) as any,
@@ -2717,7 +2805,12 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             active: Boolean(row.active),
             sellerId: row.seller_id ? String(row.seller_id) : undefined,
             sellerName: row.seller_name ? String(row.seller_name) : undefined,
-            sellerLevel: parsedLevel
+            sellerLevel: parsedLevel,
+            sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
+            sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
+            sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
+            isDesTornillo: Boolean(row.is_des_tornillo),
+            priceAlert: parsedPriceAlert
           };
         });
       } else if (db.rawMaterialAnnouncements && db.rawMaterialAnnouncements.length > 0) {
@@ -2953,26 +3046,12 @@ function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
     {
       id: 'rm-hierro',
       materialType: 'hierro',
-      title: 'Fragmentos de Hierro',
+      title: 'Fragmentos de hierro',
       presentation: 'Pallet de 1.000 kg (Fragmentos)',
       unitWeightKg: 1000,
       isPallet: true,
       pricePerUnit: 450,
-      description: 'Materia prima metálica de alta calidad para producción en Línea de Varilla y Punta. Presentación en palet de 1.000 kg.',
-      updatedAt: new Date().toISOString(),
-      sellerId: 'proveedor-materia-prima',
-      sellerName: 'Suministros Industriales S.A.',
-      sellerLevel: 'official'
-    },
-    {
-      id: 'rm-metal',
-      materialType: 'metal',
-      title: 'Fragmentos de Metal',
-      presentation: 'Pallet de 1.000 kg (Fragmentos)',
-      unitWeightKg: 1000,
-      isPallet: true,
-      pricePerUnit: 520,
-      description: 'Fragmentos metálicos para aleación y varillas de destornilladores. Presentación en palet de 1.000 kg.',
+      description: 'Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.',
       updatedAt: new Date().toISOString(),
       sellerId: 'proveedor-materia-prima',
       sellerName: 'Suministros Industriales S.A.',
@@ -2981,7 +3060,7 @@ function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
     {
       id: 'rm-plastico',
       materialType: 'plastico',
-      title: 'Pellets de Plástico',
+      title: 'Pellets de plástico',
       presentation: 'Pallet de 1.000 kg (40 sacos de 25 kg)',
       unitWeightKg: 1000,
       isPallet: true,
@@ -2995,7 +3074,7 @@ function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
     {
       id: 'rm-epoxi',
       materialType: 'epoxi',
-      title: 'Pegamento Epoxi',
+      title: 'Pegamento epoxi',
       presentation: 'Lata de 5 kg',
       unitWeightKg: 5,
       isPallet: false,
@@ -3011,7 +3090,7 @@ function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
       materialType: 'producto_final',
       title: 'Destornilladores M3 con Mango Ergonómico',
       presentation: 'Caja de 50 unidades',
-      unitWeightKg: 25,
+      unitWeightKg: 0,
       isPallet: false,
       pricePerUnit: 120,
       description: 'Anuncio de prueba publicado por Alumno de Nivel 3.',
@@ -3057,6 +3136,101 @@ function recalculateTotalInventory(inv: any) {
   inv.ironScrewdriversUnits = totalStarScrewdrivers;
   inv.metalScrewdriversUnits = totalFlatScrewdrivers;
   inv.producedScrewdriversUnits = totalStarScrewdrivers + totalFlatScrewdrivers;
+}
+
+function deductRodsFromSellerInv(sellerInv: any, qtyToDeduct: number, title?: string) {
+  if (!sellerInv) return;
+  const isPlana = title ? (title.toLowerCase().includes('plana') || title.toLowerCase().includes('metal')) : false;
+  const isEstrella = title ? (title.toLowerCase().includes('estrella') || title.toLowerCase().includes('hierro')) : false;
+
+  if (!sellerInv.naveInventories || Object.keys(sellerInv.naveInventories).length === 0) {
+    sellerInv.producedRodsUnits = Math.max(0, (sellerInv.producedRodsUnits || 0) - qtyToDeduct);
+    if (isPlana) {
+      sellerInv.producedFlatRodsUnits = Math.max(0, (sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0) - qtyToDeduct);
+      sellerInv.producedMetalRodsUnits = sellerInv.producedFlatRodsUnits;
+    } else if (isEstrella) {
+      sellerInv.producedStarRodsUnits = Math.max(0, (sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0) - qtyToDeduct);
+      sellerInv.producedIronRodsUnits = sellerInv.producedStarRodsUnits;
+    } else {
+      let starAvail = sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0;
+      let takeStar = Math.min(qtyToDeduct, starAvail);
+      sellerInv.producedStarRodsUnits = starAvail - takeStar;
+      sellerInv.producedIronRodsUnits = sellerInv.producedStarRodsUnits;
+      let remaining = qtyToDeduct - takeStar;
+      if (remaining > 0) {
+        let flatAvail = sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0;
+        sellerInv.producedFlatRodsUnits = Math.max(0, flatAvail - remaining);
+        sellerInv.producedMetalRodsUnits = sellerInv.producedFlatRodsUnits;
+      }
+    }
+    return;
+  }
+
+  let remaining = qtyToDeduct;
+  for (const naveKey of Object.keys(sellerInv.naveInventories)) {
+    if (remaining <= 0) break;
+    const nInv = sellerInv.naveInventories[naveKey];
+    if (!nInv) continue;
+
+    if (isPlana) {
+      const avail = nInv.producedFlatRodsUnits || nInv.producedMetalRodsUnits || 0;
+      const take = Math.min(remaining, avail);
+      if (take > 0) {
+        nInv.producedFlatRodsUnits = avail - take;
+        nInv.producedMetalRodsUnits = nInv.producedFlatRodsUnits;
+        nInv.producedRodsUnits = Math.max(0, (nInv.producedRodsUnits || 0) - take);
+        remaining -= take;
+      }
+    } else if (isEstrella) {
+      const avail = nInv.producedStarRodsUnits || nInv.producedIronRodsUnits || 0;
+      const take = Math.min(remaining, avail);
+      if (take > 0) {
+        nInv.producedStarRodsUnits = avail - take;
+        nInv.producedIronRodsUnits = nInv.producedStarRodsUnits;
+        nInv.producedRodsUnits = Math.max(0, (nInv.producedRodsUnits || 0) - take);
+        remaining -= take;
+      }
+    } else {
+      let starAvail = nInv.producedStarRodsUnits || nInv.producedIronRodsUnits || 0;
+      let takeStar = Math.min(remaining, starAvail);
+      if (takeStar > 0) {
+        nInv.producedStarRodsUnits = starAvail - takeStar;
+        nInv.producedIronRodsUnits = nInv.producedStarRodsUnits;
+        nInv.producedRodsUnits = Math.max(0, (nInv.producedRodsUnits || 0) - takeStar);
+        remaining -= takeStar;
+      }
+      if (remaining > 0) {
+        let flatAvail = nInv.producedFlatRodsUnits || nInv.producedMetalRodsUnits || 0;
+        let takeFlat = Math.min(remaining, flatAvail);
+        if (takeFlat > 0) {
+          nInv.producedFlatRodsUnits = flatAvail - takeFlat;
+          nInv.producedMetalRodsUnits = nInv.producedFlatRodsUnits;
+          nInv.producedRodsUnits = Math.max(0, (nInv.producedRodsUnits || 0) - takeFlat);
+          remaining -= takeFlat;
+        }
+      }
+    }
+  }
+
+  if (remaining > 0) {
+    const firstKey = Object.keys(sellerInv.naveInventories)[0];
+    const nInv = sellerInv.naveInventories[firstKey];
+    if (nInv) {
+      if (isPlana) {
+        nInv.producedFlatRodsUnits = Math.max(0, (nInv.producedFlatRodsUnits || 0) - remaining);
+        nInv.producedMetalRodsUnits = nInv.producedFlatRodsUnits;
+      } else if (isEstrella) {
+        nInv.producedStarRodsUnits = Math.max(0, (nInv.producedStarRodsUnits || 0) - remaining);
+        nInv.producedIronRodsUnits = nInv.producedStarRodsUnits;
+      } else {
+        nInv.producedStarRodsUnits = Math.max(0, (nInv.producedStarRodsUnits || 0) - remaining);
+        nInv.producedIronRodsUnits = nInv.producedStarRodsUnits;
+      }
+      nInv.producedRodsUnits = Math.max(0, (nInv.producedRodsUnits || 0) - remaining);
+    }
+  }
+
+  recalculateTotalInventory(sellerInv);
 }
 
 function deductScrewdriversFromSellerInv(sellerInv: any, qtyToDeduct: number, title?: string) {
@@ -3232,16 +3406,22 @@ function processStockDeductionForOrder(db: DatabaseSchema, order: any) {
     const sellerInv = checkAndCalculateProduction(db, sellerId);
     if (order.items && order.items.length > 0) {
       for (const item of order.items) {
-        if (item.materialType === 'producto_final') {
-          deductScrewdriversFromSellerInv(sellerInv, item.quantity, item.materialTitle || order.materialTitle);
+        const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+        if (itemTitle.includes('varilla')) {
+          deductRodsFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+        } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+          deductScrewdriversFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
         } else {
           deductRawMaterialFromSellerInv(sellerInv, item.materialType, item.totalKg || item.quantity);
         }
       }
     } else {
       const orderQty = order.quantity || 1;
-      if (order.materialType === 'producto_final') {
-        deductScrewdriversFromSellerInv(sellerInv, orderQty, order.materialTitle);
+      const orderTitle = (order.materialTitle || '').toLowerCase();
+      if (orderTitle.includes('varilla')) {
+        deductRodsFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+      } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+        deductScrewdriversFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
       } else {
         deductRawMaterialFromSellerInv(sellerInv, order.materialType, order.totalKg || orderQty);
       }
@@ -3446,7 +3626,7 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
     const numSteps = Math.ceil(elapsedMs / stepMs);
     const stepHours = (elapsedMs / numSteps) / 3600000;
 
-    const navesToProcess = studentNaves.length > 0 ? studentNaves : [{ id: primaryNaveId, propertyTitle: 'Nave Industrial' }];
+    const navesToProcess = studentNaves.length > 0 ? studentNaves : [{ id: primaryNaveId, propertyTitle: 'Nave industrial' }];
 
     for (let i = 0; i < numSteps; i++) {
       const stepMidpoint = new Date(lastTime.getTime() + (i + 0.5) * (elapsedMs / numSteps));
@@ -3659,15 +3839,29 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
           for (const item of ord.items) {
             const mType = item.materialType || ord.materialType;
             const itemTitleLower = (item.materialTitle || ord.materialTitle || '').toLowerCase();
-            if (mType === 'producto_final') {
-              if (itemTitleLower.includes('metal')) {
-                (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + (item.quantity || 0);
-                (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + (item.quantity || 0);
+            const isRods = itemTitleLower.includes('varilla') || (mType as string) === 'varilla';
+            const isScrewdriver = itemTitleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+            if (isRods) {
+              const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+              if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+                (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+                (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
               } else {
-                (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + (item.quantity || 0);
-                (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + (item.quantity || 0);
+                (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+                (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
               }
-              targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + (item.quantity || 0);
+              targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+            } else if (isScrewdriver) {
+              const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+              if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+                (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+                (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+              } else {
+                (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+                (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+              }
+              targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
             } else if (mType === 'hierro' || itemTitleLower.includes('hierro')) {
               targetNaveInv.ironKg = (targetNaveInv.ironKg || 0) + (item.totalKg || 0);
             } else if (mType === 'metal' || itemTitleLower.includes('metal')) {
@@ -3681,15 +3875,29 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
         } else {
           const mType = ord.materialType;
           const titleLower = (ord.materialTitle || '').toLowerCase();
-          if (mType === 'producto_final') {
-            if (titleLower.includes('metal')) {
-              (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + (ord.quantity || 0);
-              (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + (ord.quantity || 0);
+          const isRods = titleLower.includes('varilla') || (mType as string) === 'varilla';
+          const isScrewdriver = titleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+          if (isRods) {
+            const qty = ord.quantity || (ord.totalKg ? Math.round(ord.totalKg / 0.1) : 0) || 0;
+            if (titleLower.includes('plana') || titleLower.includes('metal')) {
+              (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+              (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
             } else {
-              (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + (ord.quantity || 0);
-              (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + (ord.quantity || 0);
+              (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+              (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
             }
-            targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + (ord.quantity || 0);
+            targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+          } else if (isScrewdriver) {
+            const qty = ord.quantity || (ord.totalKg ? Math.round(ord.totalKg / 0.1) : 0) || 0;
+            if (titleLower.includes('plana') || titleLower.includes('metal')) {
+              (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+              (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+            } else {
+              (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+              (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+            }
+            targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
           } else if (mType === 'hierro' || titleLower.includes('hierro')) {
             targetNaveInv.ironKg = (targetNaveInv.ironKg || 0) + (ord.totalKg || 0);
           } else if (mType === 'metal' || titleLower.includes('metal')) {
@@ -3751,7 +3959,7 @@ function getDefaultSeedProperties(): PropertyListing[] {
   return [
     {
       id: 'inm-1',
-      title: 'Nave Industrial Diáfana en Polígono Industrial',
+      title: 'Nave industrial diáfana en polígono industrial',
       type: 'nave_industrial',
       operation: 'compra',
       surfaceM2: 850,
@@ -3778,7 +3986,7 @@ function getDefaultSeedProperties(): PropertyListing[] {
     },
     {
       id: 'inm-2',
-      title: 'Local Comercial Esquina de Gran Afluencia',
+      title: 'Local comercial esquina de gran afluencia',
       type: 'local_comercial',
       operation: 'alquiler',
       surfaceM2: 180,
@@ -3798,7 +4006,7 @@ function getDefaultSeedProperties(): PropertyListing[] {
     },
     {
       id: 'inm-3',
-      title: 'Almacén Logístico con Muelles de Carga',
+      title: 'Almacén logístico con muelles de carga',
       type: 'almacen',
       operation: 'compra',
       surfaceM2: 1200,
@@ -3825,7 +4033,7 @@ function getDefaultSeedProperties(): PropertyListing[] {
     },
     {
       id: 'inm-4',
-      title: 'Nave Industrial Acondicionada',
+      title: 'Nave industrial acondicionada',
       type: 'nave_industrial',
       operation: 'alquiler',
       surfaceM2: 600,
@@ -3845,7 +4053,7 @@ function getDefaultSeedProperties(): PropertyListing[] {
     },
     {
       id: 'inm-5',
-      title: 'Local Comercial Reformado',
+      title: 'Local comercial reformado',
       type: 'local_comercial',
       operation: 'compra',
       surfaceM2: 140,
@@ -4097,7 +4305,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           senderName: student.name,
           senderAccount: student.accountNumber,
           receiverId: 'empleados-nomina',
-          receiverName: 'Personal Empleado / Nóminas',
+          receiverName: 'Personal empleado / nóminas',
           receiverAccount: 'ES000000000000000000',
           amount: totalNetPaid,
           concept: `Pago automático de nóminas del mes ${currentMonth}/${currentYear} (${myEmployees.length} empleados)`,
@@ -4682,6 +4890,109 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
   }
 }
 
+function sanitizeDbStrings(db: DatabaseSchema) {
+  if (!db) return;
+  const cleanStr = (s?: string) => {
+    if (!s) return s;
+    return s
+      .replace(/Línea de Fabricación de Metal \/ Hierro \(Varilla y Punta\)/gi, 'Línea de fabricación de metal / hierro (varilla y punta)')
+      .replace(/Línea de Inyección de Plástico y Ensamblaje Final/gi, 'Línea de inyección de plástico y ensamblaje final')
+      .replace(/Línea de Fabricación de Metal/gi, 'Línea de fabricación de metal')
+      .replace(/Línea de Inyección de Plástico/gi, 'Línea de inyección de plástico')
+      .replace(/Línea Estándar \(1 Torno CNC de 2 ejes\)/gi, 'Línea estándar (1 torno CNC de 2 ejes)')
+      .replace(/Línea de Alta Capacidad \(2 Tornos CNC de 2 ejes\)/gi, 'Línea de alta capacidad (2 tornos CNC de 2 ejes)')
+      .replace(/Línea Inyectora y Marcado Láser/gi, 'Línea inyectora y marcado láser')
+      .replace(/Carretilla Elevadora Contrapesada 2\.5T/gi, 'Carretilla elevadora contrapesada 2.5T')
+      .replace(/Carretilla Elevadora Contrapesada/gi, 'Carretilla elevadora contrapesada')
+      .replace(/Carretilla Elevadora/gi, 'Carretilla elevadora')
+      .replace(/Nave Industrial Diáfana en Polígono Industrial/gi, 'Nave industrial diáfana en polígono industrial')
+      .replace(/Nave Industrial Acondicionada/gi, 'Nave industrial acondicionada')
+      .replace(/Nave Industrial/gi, 'Nave industrial')
+      .replace(/Almacén Logístico con Muelles de Carga/gi, 'Almacén logístico con muelles de carga')
+      .replace(/Almacén Logístico/gi, 'Almacén logístico')
+      .replace(/Local Comercial Esquina de Gran Afluencia/gi, 'Local comercial esquina de gran afluencia')
+      .replace(/Local Comercial Reformado/gi, 'Local comercial reformado')
+      .replace(/Local Comercial/gi, 'Local comercial')
+      .replace(/Al Contado/g, 'Al contado')
+      .replace(/Varilla y Punta/gi, 'varilla y punta')
+      .replace(/Ensamblaje Final/gi, 'ensamblaje final')
+      .replace(/IRPF Retenido/gi, 'IRPF retenido')
+      .replace(/Sueldo Bruto/gi, 'Sueldo bruto')
+      .replace(/Sueldo Neto/gi, 'Sueldo neto')
+      .replace(/SS Empleado/gi, 'SS empleado')
+      .replace(/SS Empresa/gi, 'SS empresa')
+      .replace(/Turno Asignado/gi, 'Turno asignado')
+      .replace(/Mes de alta \(Incompleto\)/gi, 'Mes de alta (incompleto)')
+      .replace(/Inmuebles Contratados/gi, 'Inmuebles contratados')
+      .replace(/Contrato Activo/gi, 'Contrato activo')
+      .replace(/Operario Industrial/gi, 'Operario industrial')
+      .replace(/Camionero \/ Conductor Logístico/gi, 'Camionero / conductor logístico')
+      .replace(/Camionero \/ Conductor/gi, 'Camionero / conductor')
+      .replace(/Turno Mañana/gi, 'Turno mañana')
+      .replace(/Turno Tarde/gi, 'Turno tarde')
+      .replace(/Turno Noche/gi, 'Turno noche')
+      .replace(/1 Turno/gi, '1 turno')
+      .replace(/2 Turnos/gi, '2 turnos')
+      .replace(/3 Turnos/gi, '3 turnos');
+  };
+
+  if (db.acquisitions) {
+    db.acquisitions.forEach(a => {
+      a.propertyTitle = cleanStr(a.propertyTitle) as string;
+      if ((a as any).title) (a as any).title = cleanStr((a as any).title);
+    });
+  }
+  if (db.properties) {
+    db.properties.forEach(p => {
+      p.title = cleanStr(p.title) as string;
+    });
+  }
+  if (db.machineryAcquisitions) {
+    db.machineryAcquisitions.forEach(m => {
+      m.title = cleanStr(m.title) as string;
+      if (m.lineTitle) m.lineTitle = cleanStr(m.lineTitle);
+      if (m.optionTitle) m.optionTitle = cleanStr(m.optionTitle);
+      if (m.installationNaveTitle) m.installationNaveTitle = cleanStr(m.installationNaveTitle);
+    });
+  }
+  if (db.purchasedVehicles) {
+    db.purchasedVehicles.forEach(v => {
+      v.title = cleanStr(v.title) as string;
+      if ((v as any).assignedNaveTitle) (v as any).assignedNaveTitle = cleanStr((v as any).assignedNaveTitle);
+    });
+  }
+  if (db.paymentObligations) {
+    db.paymentObligations.forEach(o => {
+      o.propertyTitle = cleanStr(o.propertyTitle) as string;
+      if ((o as any).concept) (o as any).concept = cleanStr((o as any).concept);
+    });
+  }
+  if (db.jobListings) {
+    db.jobListings.forEach(j => {
+      j.title = cleanStr(j.title) as string;
+    });
+  }
+  if (db.hiredEmployees) {
+    db.hiredEmployees.forEach(e => {
+      if (e.assignedMachineryTitle) e.assignedMachineryTitle = cleanStr(e.assignedMachineryTitle);
+      if (e.assignedVehicleTitle) e.assignedVehicleTitle = cleanStr(e.assignedVehicleTitle);
+      if ((e as any).jobTitle) (e as any).jobTitle = cleanStr((e as any).jobTitle);
+    });
+  }
+  if (db.rawMaterialAnnouncements) {
+    db.rawMaterialAnnouncements = db.rawMaterialAnnouncements.filter(
+      a => a.id !== 'rm-metal' &&
+           a.materialType !== 'metal' &&
+           !((a.title || '').toLowerCase().includes('fragmentos de metal'))
+    );
+    db.rawMaterialAnnouncements.forEach(a => {
+      if (a.title) a.title = cleanStr(a.title);
+      if (a.description) a.description = cleanStr(a.description);
+      if (a.presentation) a.presentation = cleanStr(a.presentation);
+    });
+  }
+}
+
 // Initialize / Get Database Helper
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
@@ -4770,6 +5081,8 @@ function readDb(): DatabaseSchema {
     if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
     if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
 
+    sanitizeDbStrings(db);
+
     checkAndProcessAutomatedPayrollAndTaxes(db);
     checkAndProcessAutomatedElectricity(db);
     checkAndProcessAutomatedTelecom(db);
@@ -4793,6 +5106,46 @@ function readDb(): DatabaseSchema {
       });
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
     }
+
+    // Ensure default students exist if no students exist in DB
+    const studentUsers = db.users.filter(u => u.role === 'student');
+    if (studentUsers.length === 0) {
+      const defaultStudents: User[] = [
+        {
+          id: 'alumno-1',
+          username: 'ana',
+          password: '123',
+          role: 'student',
+          name: 'Ana López',
+          accountNumber: 'ES910001000212345678',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-2',
+          username: 'carlos',
+          password: '123',
+          role: 'student',
+          name: 'Carlos Ruiz',
+          accountNumber: 'ES910001000287654321',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-3',
+          username: 'beatriz',
+          password: '123',
+          role: 'student',
+          name: 'Beatriz Gómez',
+          accountNumber: 'ES910001000244556677',
+          balance: 1000,
+          level: 1
+        }
+      ];
+      db.users.push(...defaultStudents);
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    }
+
     return db;
   } catch (error) {
     console.error("Error reading database, recreating default:", error);
@@ -4806,6 +5159,36 @@ function readDb(): DatabaseSchema {
           name: 'Profesor de Contabilidad',
           accountNumber: 'ES000000000000000000',
           balance: 0
+        },
+        {
+          id: 'alumno-1',
+          username: 'ana',
+          password: '123',
+          role: 'student',
+          name: 'Ana López',
+          accountNumber: 'ES910001000212345678',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-2',
+          username: 'carlos',
+          password: '123',
+          role: 'student',
+          name: 'Carlos Ruiz',
+          accountNumber: 'ES910001000287654321',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-3',
+          username: 'beatriz',
+          password: '123',
+          role: 'student',
+          name: 'Beatriz Gómez',
+          accountNumber: 'ES910001000244556677',
+          balance: 1000,
+          level: 1
         }
       ],
       transfers: [],
@@ -4965,13 +5348,16 @@ const loginHandler = (req: express.Request, res: express.Response) => {
   
   console.log('[LOGIN] Request received. Username:', username, 'Password:', password ? '****' : 'empty');
 
+  const cleanUsername = String(username || '').trim().toLowerCase();
+  const cleanPassword = String(password || '').trim();
+
   // Log to database systemLogs for diagnostic tracking
   try {
     const db = readDb();
     const newLog: SystemLog = {
       id: generateId('log-debug'),
       action: 'LOGIN_ATTEMPT',
-      details: `Intento de acceso recibido: usuario "${username || 'vacío'}".`,
+      details: `Intento de acceso recibido: usuario "${cleanUsername || 'vacío'}".`,
       timestamp: new Date().toISOString()
     };
     db.systemLogs.unshift(newLog);
@@ -4980,17 +5366,23 @@ const loginHandler = (req: express.Request, res: express.Response) => {
     console.error('Failed to write login attempt log:', e);
   }
 
-  if (!username || !password) {
+  if (!cleanUsername || !cleanPassword) {
     console.log('[LOGIN] Failed: Missing username or password');
     return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   }
 
   const db = readDb();
-  const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
+  const user = db.users.find(u => {
+    const uName = (u.username || '').trim().toLowerCase();
+    const uPass = (u.password || '').trim();
+    const nameMatch = (u.name || '').trim().toLowerCase() === cleanUsername;
+    const accountMatch = (u.accountNumber || '').trim().toLowerCase() === cleanUsername;
+    return (uName === cleanUsername || nameMatch || accountMatch) && uPass === cleanPassword;
+  });
 
   if (!user) {
-    console.log('[LOGIN] Failed: Credentials do not match any active user');
-    return res.status(401).json({ error: 'Credenciales inválidas' });
+    console.log('[LOGIN] Failed: Credentials do not match any active user. Username tried:', cleanUsername);
+    return res.status(401).json({ error: 'Credenciales inválidas. Comprueba tu usuario y contraseña.' });
   }
 
   console.log('[LOGIN] Success! Matched user:', user.name, 'Role:', user.role);
@@ -5619,9 +6011,9 @@ app.post('/api/properties', (req, res) => {
       const landPercentage = batch.manualLandPercentage ? Number(batch.manualLandPercentage) : generateLandPercentage();
 
       const typeLabels: Record<PropertyType, string> = {
-        nave_industrial: 'Nave Industrial',
-        almacen: 'Almacén Logístico',
-        local_comercial: 'Local Comercial'
+        nave_industrial: 'Nave industrial',
+        almacen: 'Almacén logístico',
+        local_comercial: 'Local comercial'
       };
 
       const title = `${typeLabels[type]} ${i + 1} de ${surfaceM2} m² en ${location.municipality}`;
@@ -5920,7 +6312,7 @@ app.post('/api/properties/buy-rent', (req, res) => {
       const instrumentLabel = config.instrument === 'pagare'
         ? 'Pagaré'
         : config.instrument === 'letra_cambio'
-        ? 'Letra de Cambio'
+        ? 'Letra de cambio'
         : 'Cuota Aplazada';
 
       // Record transfer for initial down payment & tax
@@ -6015,7 +6407,7 @@ const MACHINERY_CATALOG: MachineryItem[] = [
   {
     id: 'mac-metal-hierro',
     category: 'metal_hierro',
-    title: 'Línea de Fabricación de Metal / Hierro (Varilla y Punta)',
+    title: 'Línea de fabricación de metal / hierro (varilla y punta)',
     description: 'Línea industrial completa para la fabricación de la varilla de acero y la punta de precisión de los destornilladores.',
     imageUrl: '/images/machinery/maquinaria_cnc.jpg',
     equipment: [
@@ -6037,14 +6429,14 @@ const MACHINERY_CATALOG: MachineryItem[] = [
       {
         id: 'opt-1-lathe',
         lathesCount: 1,
-        title: 'Línea Estándar (1 Torno CNC de 2 ejes)',
+        title: 'Línea estándar (1 torno CNC de 2 ejes)',
         productionCapacityUnitsPerHour: 60,
         basePrice: 104000
       },
       {
         id: 'opt-2-lathes',
         lathesCount: 2,
-        title: 'Línea de Alta Capacidad (2 Tornos CNC de 2 ejes)',
+        title: 'Línea de alta capacidad (2 tornos CNC de 2 ejes)',
         productionCapacityUnitsPerHour: 100,
         basePrice: 110000
       }
@@ -6053,7 +6445,7 @@ const MACHINERY_CATALOG: MachineryItem[] = [
   {
     id: 'mac-plastico-ensamblaje',
     category: 'plastico_ensamblaje',
-    title: 'Línea de Inyección de Plástico y Ensamblaje Final',
+    title: 'Línea de inyección de plástico y ensamblaje final',
     description: 'Línea automatizada para la inyección del mango plástico de polímero, marcado láser y ensamblaje final.',
     imageUrl: '/images/machinery/maquinaria_cnc.jpg',
     equipment: [
@@ -6073,13 +6465,128 @@ const MACHINERY_CATALOG: MachineryItem[] = [
       {
         id: 'opt-plastic-std',
         lathesCount: 0,
-        title: 'Línea Inyectora y Marcado Láser',
+        title: 'Línea inyectora y marcado láser',
         productionCapacityUnitsPerHour: 120,
         basePrice: 102000
       }
     ]
   }
 ];
+
+function getNaveSurfaceBreakdownBackend(db: any, studentId: string, targetAcquisition: any) {
+  const targetId = String(targetAcquisition.id);
+  const propId = String(targetAcquisition.propertyId || '');
+  const targetTitleLower = (targetAcquisition.propertyTitle || targetAcquisition.title || '').toLowerCase().trim();
+
+  const existingMachinery = (db.machineryAcquisitions || []).filter(
+    (m: any) => (m.studentId === studentId || String(m.studentId) === String(studentId)) && (
+      (m.installationNaveId && (String(m.installationNaveId) === targetId || (propId && String(m.installationNaveId) === propId))) ||
+      (m.installedAtNaveId && (String(m.installedAtNaveId) === targetId || (propId && String(m.installedAtNaveId) === propId))) ||
+      (m.installedNaveId && (String(m.installedNaveId) === targetId || (propId && String(m.installedNaveId) === propId))) ||
+      (m.propertyId && (String(m.propertyId) === targetId || (propId && String(m.propertyId) === propId))) ||
+      (m.acquisitionId && (String(m.acquisitionId) === targetId || (propId && String(m.acquisitionId) === propId))) ||
+      ((m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || '').toLowerCase().trim() === targetTitleLower)
+    )
+  );
+
+  const occupiedMachineryM2 = existingMachinery.reduce((sum: number, m: any) => {
+    if (m.requiredSurfaceM2 && m.requiredSurfaceM2 > 0) return sum + Number(m.requiredSurfaceM2);
+    const cat = MACHINERY_CATALOG.find(c => c.id === m.machineryId);
+    if (cat && cat.requiredSurfaceM2) return sum + Number(cat.requiredSurfaceM2);
+    const title = (m.title || m.lineTitle || '').toLowerCase();
+    const isMetal = m.category === 'metal_hierro' || title.includes('metal') || title.includes('hierro');
+    return sum + (isMetal ? 240 : 180);
+  }, 0);
+
+  const totalNaveM2 = Number(targetAcquisition.surfaceM2 || targetAcquisition.superficie_m2 || targetAcquisition.m2) || 1000;
+
+  const floorPlan = (db.naveFloorPlans || []).find((p: any) => 
+    (p.studentId === studentId || String(p.studentId) === String(studentId)) && (
+      (p.acquisitionId && String(p.acquisitionId) === targetId) ||
+      (p.propertyId && propId && String(p.propertyId) === propId) ||
+      (p.propertyId && String(p.propertyId) === targetId) ||
+      (p.propertyTitle && targetTitleLower && p.propertyTitle.toLowerCase().trim() === targetTitleLower)
+    )
+  );
+
+  let machineryZoneM2 = 0;
+  let storageZoneM2 = 30;
+  let adminZoneM2 = 0;
+  let freeZoneM2 = 0;
+
+  if (floorPlan) {
+    machineryZoneM2 = Number(floorPlan.machineryZoneM2) || 0;
+    storageZoneM2 = Number(floorPlan.storageZoneM2 ?? floorPlan.rawMaterialsStorageM2) || 30;
+    adminZoneM2 = Number(floorPlan.adminZoneM2) || 0;
+    freeZoneM2 = floorPlan.freeZoneM2 !== undefined 
+      ? Number(floorPlan.freeZoneM2) 
+      : Math.max(0, totalNaveM2 - (machineryZoneM2 + storageZoneM2 + adminZoneM2));
+  } else {
+    storageZoneM2 = 30;
+    adminZoneM2 = 0;
+    machineryZoneM2 = Math.max(occupiedMachineryM2, 0);
+    freeZoneM2 = Math.max(0, totalNaveM2 - occupiedMachineryM2 - storageZoneM2 - adminZoneM2);
+  }
+
+  const freeInMachineryZone = Math.max(0, machineryZoneM2 - occupiedMachineryM2);
+  const availableForMachineryM2 = freeInMachineryZone + freeZoneM2;
+
+  return {
+    totalNaveM2,
+    existingMachinery,
+    occupiedMachineryM2,
+    machineryZoneM2,
+    freeInMachineryZone,
+    storageZoneM2,
+    adminZoneM2,
+    freeZoneM2,
+    availableForMachineryM2,
+    floorPlan
+  };
+}
+
+function updateFloorPlanAfterMachineryAcquisition(db: any, studentId: string, targetAcquisition: any, newRequiredSurfaceM2: number) {
+  const breakdown = getNaveSurfaceBreakdownBackend(db, studentId, targetAcquisition);
+  const newTotalMachineryM2 = breakdown.occupiedMachineryM2; // already includes new machine
+
+  if (breakdown.floorPlan) {
+    if (newTotalMachineryM2 > breakdown.floorPlan.machineryZoneM2) {
+      breakdown.floorPlan.machineryZoneM2 = newTotalMachineryM2;
+      breakdown.floorPlan.freeZoneM2 = Math.max(
+        0,
+        breakdown.totalNaveM2 -
+          newTotalMachineryM2 -
+          (Number(breakdown.floorPlan.storageZoneM2) || 30) -
+          (Number(breakdown.floorPlan.adminZoneM2) || 0)
+      );
+      breakdown.floorPlan.updatedAt = new Date().toISOString();
+      syncFloorPlanToSupabase(breakdown.floorPlan).catch(e => console.error(e));
+    }
+  } else {
+    const storageM2 = 30;
+    const adminM2 = 0;
+    const freeM2 = Math.max(0, breakdown.totalNaveM2 - newTotalMachineryM2 - storageM2 - adminM2);
+    const newPlan: NaveFloorPlan = {
+      id: generateId('floor_plan'),
+      propertyId: targetAcquisition.propertyId || targetAcquisition.id,
+      acquisitionId: targetAcquisition.id,
+      propertyTitle: targetAcquisition.propertyTitle || 'Nave industrial',
+      studentId,
+      machineryZoneM2: newTotalMachineryM2,
+      storageZoneM2: storageM2,
+      rawMaterialsStorageM2: storageM2,
+      semiFinishedStorageM2: 0,
+      finishedGoodsStorageM2: 0,
+      adminZoneM2: adminM2,
+      freeZoneM2: freeM2,
+      warehousesCount: 1,
+      updatedAt: new Date().toISOString()
+    };
+    if (!db.naveFloorPlans) db.naveFloorPlans = [];
+    db.naveFloorPlans.push(newPlan);
+    syncFloorPlanToSupabase(newPlan).catch(e => console.error(e));
+  }
+}
 
 // GET machinery catalog
 app.get('/api/machinery/catalog', (req, res) => {
@@ -6121,36 +6628,28 @@ app.post('/api/machinery/buy', (req, res) => {
 
   if (!targetAcquisition) {
     return res.status(400).json({
-      error: `Para comprar esta maquinaria se requiere obligatoriamente disponer de una Nave Industrial de al menos ${machinery.totalRequiredM2} m² (superficie de producción + 2 almacenes de 30 m²). Por favor, adquiere o alquila una Nave Industrial adecuada antes de continuar.`
+      error: `Para comprar esta maquinaria se requiere obligatoriamente disponer de una nave industrial de al menos ${machinery.requiredSurfaceM2} m² (superficie de producción). Por favor, adquiere o alquila una nave industrial adecuada antes de continuar.`
     });
   }
 
-  if (targetAcquisition.propertyType !== 'nave_industrial') {
-    const typeLabel = targetAcquisition.propertyType === 'local_comercial' ? 'Local Comercial' : targetAcquisition.propertyType === 'almacen' ? 'Almacén' : 'Inmueble';
+  const pType = (targetAcquisition.propertyType || targetAcquisition.type || '').toLowerCase();
+  const pTitle = (targetAcquisition.propertyTitle || targetAcquisition.title || '').toLowerCase();
+  const isIndustrialNave = pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
+
+  if (!isIndustrialNave) {
+    const typeLabel = targetAcquisition.propertyType === 'local_comercial' ? 'Local comercial' : targetAcquisition.propertyType === 'almacen' ? 'Almacén' : 'Inmueble';
     return res.status(400).json({
-      error: `Requisito de Ubicación Incumplido: El inmueble seleccionado "${targetAcquisition.propertyTitle}" es un ${typeLabel}. La maquinaria industrial de fabricación SOLO puede ser instalada dentro de una NAVE INDUSTRIAL.`
+      error: `Requisito de ubicación incumplido: El inmueble seleccionado "${targetAcquisition.propertyTitle}" es un ${typeLabel}. La maquinaria industrial de fabricación solo puede ser instalada dentro de una nave industrial.`
     });
   }
 
-  // Calculate existing occupied m² in this Nave Industrial by all installed machinery lines
-  const existingMachinery = (db.machineryAcquisitions || []).filter(
-    m => m.studentId === studentId && (
-      m.installationNaveId === targetAcquisition.id || 
-      m.installationNaveId === targetAcquisition.propertyId ||
-      m.installedAtNaveId === targetAcquisition.id ||
-      m.installedNaveId === targetAcquisition.id
-    )
-  );
-  const occupiedSurfaceM2 = existingMachinery.reduce((sum, m) => {
-    const cat = MACHINERY_CATALOG.find(c => c.id === m.machineryId);
-    const reqM2 = m.totalRequiredM2 || m.requiredSurfaceM2 || (cat ? cat.totalRequiredM2 : 270);
-    return sum + reqM2;
-  }, 0);
-  const availableSurfaceM2 = targetAcquisition.surfaceM2 - occupiedSurfaceM2;
+  // Calculate surface breakdown coherently with the floor plan
+  const surfaceBreakdown = getNaveSurfaceBreakdownBackend(db, studentId, targetAcquisition);
+  const requiredSurfaceM2 = machinery.requiredSurfaceM2 || (machinery.category === 'metal_hierro' ? 240 : 180);
 
-  if (availableSurfaceM2 < machinery.totalRequiredM2) {
+  if (surfaceBreakdown.availableForMachineryM2 < requiredSurfaceM2) {
     return res.status(400).json({
-      error: `Superficie Insuficiente en la Nave Industrial: La nave "${targetAcquisition.propertyTitle}" dispone de ${targetAcquisition.surfaceM2} m² en total. Actualmente tiene instalada(s) ${existingMachinery.length} máquina(s) ocupando un total de ${occupiedSurfaceM2} m², por lo que solo quedan libres ${availableSurfaceM2} m². La nueva línea de maquinaria "${machinery.title}" requiere de ${machinery.totalRequiredM2} m² (${machinery.requiredSurfaceM2} m² de línea + 2 almacenes de 30 m²). Por favor, adquiere o alquila una nueva Nave Industrial.`
+      error: `Superficie insuficiente en la nave industrial: La nave "${targetAcquisition.propertyTitle}" dispone de ${surfaceBreakdown.totalNaveM2} m² en total. Actualmente tiene instalada(s) ${surfaceBreakdown.existingMachinery.length} máquina(s) ocupando un total de ${surfaceBreakdown.occupiedMachineryM2} m², almacén de ${surfaceBreakdown.storageZoneM2} m² y administración de ${surfaceBreakdown.adminZoneM2} m². En el plano quedan ${surfaceBreakdown.availableForMachineryM2} m² disponibles para maquinaria (${surfaceBreakdown.freeInMachineryZone} m² libres en la zona de maquinaria + ${surfaceBreakdown.freeZoneM2} m² de superficie diáfana/libre). La nueva línea "${machinery.title}" requiere ${requiredSurfaceM2} m². Por favor, amplía la superficie diáfana en el plano de distribución o adquiere una nueva nave industrial.`
     });
   }
 
@@ -6261,6 +6760,9 @@ app.post('/api/machinery/buy', (req, res) => {
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
     db.machineryAcquisitions.unshift(machAcq);
 
+    // Update or create floor plan coherently
+    updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
+
     writeDb(db);
 
     // Sync to Supabase
@@ -6364,6 +6866,9 @@ app.post('/api/machinery/buy', (req, res) => {
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
     db.machineryAcquisitions.unshift(machAcq);
 
+    // Update or create floor plan coherently
+    updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
+
     // Generate 24 promissory notes payment obligations
     const generatedObligations: PaymentObligation[] = [];
     for (let i = 1; i <= count; i++) {
@@ -6429,7 +6934,7 @@ app.put('/api/student/machinery/:id/relocate', (req, res) => {
   // Check target nave
   const targetNave = (db.acquisitions || []).find(a => (a.id === targetNaveId || a.propertyId === targetNaveId) && (a.studentId === sid || String(a.studentId) === String(sid)));
   if (!targetNave) {
-    return res.status(404).json({ error: 'Nave Industrial de destino no encontrada entre tus inmuebles.' });
+    return res.status(404).json({ error: 'Nave industrial de destino no encontrada entre tus inmuebles.' });
   }
 
   // Check active electricity contract for target nave
@@ -6456,8 +6961,8 @@ app.put('/api/student/machinery/:id/relocate', (req, res) => {
   }
 
   // Calculate relocation costs
-  const sourceTitle = mac.installationNaveTitle || mac.installedAtNaveTitle || mac.installedNaveTitle || 'Nave Origen';
-  const targetTitle = targetNave.propertyTitle || 'Nave Destino';
+  const sourceTitle = mac.installationNaveTitle || mac.installedAtNaveTitle || mac.installedNaveTitle || 'Nave de origen';
+  const targetTitle = targetNave.propertyTitle || 'Nave de destino';
 
   let distanceKm = 15;
   if (sourceTitle && targetTitle) {
@@ -6502,7 +7007,7 @@ app.put('/api/student/machinery/:id/relocate', (req, res) => {
     id: `trsl-trf-${Date.now()}`,
     studentId: sid,
     amount: totalAmount,
-    concept: `Pago Factura Traslado, Desmontaje y Montaje de Maquinaria #${mac.id}`,
+    concept: `Pago factura traslado, desmontaje y montaje de maquinaria #${mac.id}`,
     date: now.toISOString(),
     type: 'egreso',
     recipient: 'Logística y Montajes Industriales España S.L.',
@@ -6522,13 +7027,13 @@ app.put('/api/student/machinery/:id/relocate', (req, res) => {
     companyName: stuObj?.companyName || stuObj?.fullName || stuObj?.name || 'Empresa Estudiante',
     cifNif: stuObj?.cifNif || stuObj?.nif || 'B-99887766',
     machineryId: mac.id,
-    machineryTitle: mac.lineTitle || mac.title || mac.machineryTitle || 'Línea de Producción',
+    machineryTitle: mac.lineTitle || mac.title || mac.machineryTitle || 'Línea de producción',
     sourceNaveId: mac.installedAtNaveId || mac.installationNaveId || '',
     sourceNaveTitle: sourceTitle,
-    sourceLocation: 'Instalación Industrial de Origen',
+    sourceLocation: 'Instalación industrial de origen',
     targetNaveId: targetNave.id,
     targetNaveTitle: targetTitle,
-    targetLocation: 'Instalación Industrial de Destino',
+    targetLocation: 'Instalación industrial de destino',
     distanceKm,
     disassemblyFee,
     reassemblyFee,
@@ -6760,7 +7265,7 @@ app.post('/api/obligations/pay', (req, res) => {
   const instrumentName = obligation.type === 'pagare'
     ? 'Pagaré'
     : obligation.type === 'letra_cambio'
-    ? 'Letra de Cambio'
+    ? 'Letra de cambio'
     : 'Cuota / Alquiler';
 
   // Create Transfer record
@@ -6860,7 +7365,7 @@ app.post('/api/taxes/pay', (req, res) => {
     receiverName,
     receiverAccount,
     amount: tax.amount,
-    concept: `Liquidación Tributaria / SS: ${tax.concept}`,
+    concept: `Liquidación tributaria / SS: ${tax.concept}`,
     timestamp: new Date().toISOString()
   };
   db.transfers.unshift(newTransfer);
@@ -7347,7 +7852,7 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             const principal = ob.amount;
             const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
             const totalRequired = Number((principal + penalty).toFixed(2));
-            const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota / Alquiler';
+            const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
             let concept = `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`;
             if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
               concept = `Cuota de alquiler n.º ${ob.installmentNumber || 1} de ${ob.propertyTitle}`;
@@ -7524,7 +8029,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
       }
       if (ob.studentId === studentId && ob.status !== 'pagado') {
         const dDate = new Date(ob.dueDate);
-        const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de Cambio' : 'Cuota / Alquiler';
+        const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
         const principal = ob.amount;
         const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
         const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
@@ -7615,7 +8120,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           totalAmount: Number((principal + penalty).toFixed(2)),
           isOverdue: dDate <= now,
           daysRemaining: daysRem,
-          installmentInfo: 'Liquidación Tributaria / SS'
+          installmentInfo: 'Liquidación tributaria / SS'
         };
 
         if (dDate <= now) {
@@ -8352,17 +8857,20 @@ app.post('/api/teacher/job-listings/batch', (req, res) => {
     const salary = Math.floor(Math.random() * (numMaxSalary - numMinSalary + 1)) + numMinSalary;
     const age = Math.floor(Math.random() * (numMaxAge - numMinAge + 1)) + numMinAge;
 
-    let chosenRole: 'operario' | 'camionero' = 'operario';
-    if (role === 'camionero' || role === 'operario') {
+    let chosenRole: 'operario' | 'camionero' | 'mozo_almacen' | 'carretillero' = 'operario';
+    if (role === 'camionero' || role === 'operario' || role === 'mozo_almacen' || role === 'carretillero') {
       chosenRole = role;
     } else {
       const rand = Math.random();
-      if (rand < 0.75) chosenRole = 'operario';
-      else chosenRole = 'camionero';
+      if (rand < 0.50) chosenRole = 'operario';
+      else if (rand < 0.75) chosenRole = 'camionero';
+      else chosenRole = 'mozo_almacen';
     }
 
-    let jobTitle = 'Operario Industrial';
-    if (chosenRole === 'camionero') jobTitle = 'Camionero / Conductor Logístico';
+    let jobTitle = 'Operario industrial';
+    if (chosenRole === 'camionero') jobTitle = 'Camionero / conductor logístico';
+    else if (chosenRole === 'mozo_almacen') jobTitle = 'Mozo de almacén';
+    else if (chosenRole === 'carretillero') jobTitle = 'Carretillero';
 
     const newJob: JobListing = {
       id: generateId('job'),
@@ -8442,7 +8950,7 @@ app.post('/api/jobs/:id/hire', (req, res) => {
     studentId: student.id,
     studentName: student.name,
     employeeName: job.employeeName,
-    role: job.role || (job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario'),
+    role: job.role || (job.title && (job.title.toLowerCase().includes('mozo') || job.title.toLowerCase().includes('almacen') || job.title.toLowerCase().includes('almacén')) ? 'mozo_almacen' : job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario'),
     gender: job.gender,
     grossSalaryMonthly: job.grossSalaryMonthly,
     age: job.age,
@@ -8458,7 +8966,7 @@ app.post('/api/jobs/:id/hire', (req, res) => {
   db.systemLogs.unshift({
     id: generateId('log'),
     action: 'HIRE_EMPLOYEE',
-    details: `El alumno ${student.name} ha contratado a ${job.employeeName} (Sueldo Bruto: ${job.grossSalaryMonthly}€/mes, Edad: ${job.age})`,
+    details: `El alumno ${student.name} ha contratado a ${job.employeeName} (Sueldo bruto: ${job.grossSalaryMonthly}€/mes, Edad: ${job.age})`,
     timestamp: now,
     studentId: student.id,
     studentName: student.name
@@ -8802,7 +9310,7 @@ function getStudentFloorPlans(db: any, studentId: string): NaveFloorPlan[] {
         id: `auto_plan_${acq.id}`,
         propertyId: targetId,
         acquisitionId: acq.id,
-        propertyTitle: acq.propertyTitle || acq.title || 'Nave Industrial',
+        propertyTitle: acq.propertyTitle || acq.title || 'Nave industrial',
         studentId,
         machineryZoneM2,
         storageZoneM2,
@@ -9118,7 +9626,7 @@ function autoAssignForkliftsForStudent(db: any, studentId: string) {
     if (!fk.assignedPropertyId) {
       const targetProp = studentAcquisitions[0];
       const pId = targetProp.id || targetProp.propertyId;
-      const pTitle = targetProp.propertyTitle || targetProp.title || 'Nave Industrial / Almacén Logístico';
+      const pTitle = targetProp.propertyTitle || targetProp.title || 'Nave industrial / almacén logístico';
       const isAlmacen = (
         targetProp.propertyType === 'almacen' ||
         targetProp.propertyType === 'almacen_logistico' ||
@@ -9130,8 +9638,8 @@ function autoAssignForkliftsForStudent(db: any, studentId: string) {
       fk.assignedPropertyTitle = pTitle;
       fk.assignedWarehouseIndex = 1;
       fk.assignedWarehouseName = isAlmacen
-        ? `${pTitle} (Inmueble Almacén Logístico)`
-        : `${pTitle} (Inmueble Nave Industrial)`;
+        ? `${pTitle} (Inmueble almacén logístico)`
+        : `${pTitle} (Inmueble nave industrial)`;
       syncVehicleToSupabase(fk).catch((e: any) => console.error(e));
     }
   }
@@ -9550,8 +10058,8 @@ app.get('/api/raw-materials/announcements', (req, res) => {
   res.json({ success: true, announcements: db.rawMaterialAnnouncements });
 });
 
-app.post('/api/raw-materials/announcements', (req, res) => {
-  const { materialType, title, presentation, unitWeightKg, isPallet, pricePerUnit, description, durationDays, stock, sellerId, sellerName, isDesTornillo: rawIsDesTornillo } = req.body;
+app.post('/api/raw-materials/announcements', async (req, res) => {
+  const { materialType, title, presentation, unitWeightKg, isPallet, pricePerUnit, description, durationDays, stock, sellerId, sellerName, sellerLocation, sellerMunicipality, sellerProvince, isDesTornillo: rawIsDesTornillo } = req.body;
   const db = readDb();
   if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
 
@@ -9564,6 +10072,11 @@ app.post('/api/raw-materials/announcements', (req, res) => {
     sName = user.role === 'teacher' ? 'BricoMaster Distribuciones, S.A.' : user.name;
     sLevel = user.role === 'teacher' ? 'official' : (user.level || 1);
   }
+
+  const userWh = (db.acquisitions || []).find((a: any) => a.studentId === sId && (a.propertyType === 'nave_industrial' || a.propertyType === 'almacen'));
+  const finalSellerLoc = sellerLocation || (userWh ? (userWh.location || userWh.municipality || userWh.propertyTitle) : ((user as any)?.location || ''));
+  const finalSellerMun = sellerMunicipality || (userWh ? userWh.municipality : ((user as any)?.municipality || (user as any)?.city || ''));
+  const finalSellerProv = sellerProvince || (userWh ? userWh.province : ((user as any)?.province || (user as any)?.provincia || ''));
 
   const isDesTornilloVal = !!rawIsDesTornillo || (user && user.level === 3);
 
@@ -9613,10 +10126,10 @@ app.post('/api/raw-materials/announcements', (req, res) => {
   const newAnn: RawMaterialAnnouncement = {
     id,
     materialType: finalMaterialType,
-    title: title || (isDesTornilloVal ? 'Anuncio El Des-Tornillo' : 'Producto Final Alumno'),
-    presentation: presentation || 'Pallet',
-    unitWeightKg: Number(unitWeightKg) || 1000,
-    isPallet: isPallet !== undefined ? !!isPallet : true,
+    title: title || (isDesTornilloVal ? 'Anuncio El Des-Tornillo' : 'Producto final alumno'),
+    presentation: presentation || 'Unidades',
+    unitWeightKg: (finalMaterialType === 'producto_final' || isDesTornilloVal || (title && title.toLowerCase().includes('destornillador'))) ? 0 : (Number(unitWeightKg) || 1000),
+    isPallet: isPallet !== undefined ? !!isPallet : (finalMaterialType !== 'producto_final'),
     pricePerUnit: Number(pricePerUnit) || 100,
     description: description || '',
     durationDays: durationDays || 'indefinido',
@@ -9626,11 +10139,14 @@ app.post('/api/raw-materials/announcements', (req, res) => {
     sellerId: sId,
     sellerName: sName,
     sellerLevel: sLevel,
+    sellerLocation: finalSellerLoc,
+    sellerMunicipality: finalSellerMun,
+    sellerProvince: finalSellerProv,
     isDesTornillo: isDesTornilloVal
   };
 
   db.rawMaterialAnnouncements.unshift(newAnn);
-  syncRawMaterialAnnouncementToSupabase(newAnn).catch(e => console.error(e));
+  await syncRawMaterialAnnouncementToSupabase(newAnn);
 
   const otherUsers = db.users.filter(u => u.id !== sId);
   otherUsers.forEach(u => {
@@ -9649,16 +10165,24 @@ app.post('/api/raw-materials/announcements', (req, res) => {
   res.json({ success: true, announcement: newAnn, message: 'Anuncio publicado con éxito en el Mercado.' });
 });
 
-app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], (req, res) => {
+app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], async (req, res) => {
   const { id } = req.params;
-  const { pricePerUnit, title, description, presentation, durationDays, stock, active, isDesTornillo } = req.body;
+  const { pricePerUnit, title, description, presentation, durationDays, stock, active, isDesTornillo, unitWeightKg, isPallet, materialType, sellerId, sellerName, sellerLevel, sellerLocation, sellerMunicipality, sellerProvince } = req.body;
   const db = readDb();
 
   if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
   const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
   if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
 
-  if (ann.sellerId && ann.sellerId !== 'proveedor-materia-prima' && ann.sellerId !== 'profesor-1') {
+  const isTeacherOrOfficial = 
+    ann.sellerId === 'proveedor-materia-prima' || 
+    ann.sellerId === 'profesor-1' || 
+    ann.sellerLevel === 'official' ||
+    sellerId === 'profesor-1' ||
+    ann.materialType !== 'producto_final' ||
+    (materialType && materialType !== 'producto_final');
+
+  if (!isTeacherOrOfficial && ann.sellerId) {
     const sellerInv = checkAndCalculateProduction(db, ann.sellerId);
     const annTitle = title || ann.title || '';
     const titleLower = annTitle.toLowerCase();
@@ -9703,21 +10227,33 @@ app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/ann
     }
   }
   if (title) ann.title = title;
-  if (description) ann.description = description;
-  if (presentation) ann.presentation = presentation;
+  if (description !== undefined) ann.description = description;
+  if (presentation !== undefined) ann.presentation = presentation;
+  if (unitWeightKg !== undefined) {
+    const isProdFinal = ann.materialType === 'producto_final' || ann.isDesTornillo || (ann.title && ann.title.toLowerCase().includes('destornillador')) || (title && title.toLowerCase().includes('destornillador'));
+    ann.unitWeightKg = isProdFinal ? 0 : Number(unitWeightKg);
+  }
+  if (isPallet !== undefined) ann.isPallet = !!isPallet;
+  if (materialType !== undefined) ann.materialType = materialType;
   if (durationDays !== undefined) ann.durationDays = durationDays;
   if (stock !== undefined) ann.stock = stock;
   if (active !== undefined) ann.active = !!active;
   if (isDesTornillo !== undefined) ann.isDesTornillo = !!isDesTornillo;
+  if (sellerId !== undefined) ann.sellerId = sellerId;
+  if (sellerName !== undefined) ann.sellerName = sellerName;
+  if (sellerLevel !== undefined) ann.sellerLevel = sellerLevel;
+  if (sellerLocation !== undefined) ann.sellerLocation = sellerLocation;
+  if (sellerMunicipality !== undefined) ann.sellerMunicipality = sellerMunicipality;
+  if (sellerProvince !== undefined) ann.sellerProvince = sellerProvince;
   ann.updatedAt = new Date().toISOString();
 
-  syncRawMaterialAnnouncementToSupabase(ann).catch(e => console.error(e));
+  await syncRawMaterialAnnouncementToSupabase(ann);
 
   writeDb(db);
   res.json({ success: true, announcement: ann });
 });
 
-app.post('/api/raw-materials/announcements/:id/price-alert', (req, res) => {
+app.post('/api/raw-materials/announcements/:id/price-alert', async (req, res) => {
   const { id } = req.params;
   const { message, suggestedPrice, teacherName } = req.body;
   const db = readDb();
@@ -9744,7 +10280,7 @@ app.post('/api/raw-materials/announcements/:id/price-alert', (req, res) => {
   };
   ann.updatedAt = new Date().toISOString();
 
-  syncRawMaterialAnnouncementToSupabase(ann).catch(e => console.error(e));
+  await syncRawMaterialAnnouncementToSupabase(ann);
 
   // Notify the student seller
   if (ann.sellerId) {
@@ -9763,7 +10299,7 @@ app.post('/api/raw-materials/announcements/:id/price-alert', (req, res) => {
   res.json({ success: true, announcement: ann, message: 'Aviso de precio excesivo enviado al alumno.' });
 });
 
-app.delete('/api/raw-materials/announcements/:id/price-alert', (req, res) => {
+app.delete('/api/raw-materials/announcements/:id/price-alert', async (req, res) => {
   const { id } = req.params;
   const db = readDb();
 
@@ -9774,19 +10310,19 @@ app.delete('/api/raw-materials/announcements/:id/price-alert', (req, res) => {
   delete ann.priceAlert;
   ann.updatedAt = new Date().toISOString();
 
-  syncRawMaterialAnnouncementToSupabase(ann).catch(e => console.error(e));
+  await syncRawMaterialAnnouncementToSupabase(ann);
   writeDb(db);
   res.json({ success: true, announcement: ann, message: 'Aviso de precio retirado.' });
 });
 
-app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], (req, res) => {
+app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   if (db.rawMaterialAnnouncements) {
     db.rawMaterialAnnouncements = db.rawMaterialAnnouncements.filter(a => a.id !== id);
     writeDb(db);
   }
-  deleteRawMaterialAnnouncementFromSupabase(id).catch(e => console.error(e));
+  await deleteRawMaterialAnnouncementFromSupabase(id);
   res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
 });
 
@@ -9904,7 +10440,7 @@ function ensureTransportInvoicesForTransfers(db: any) {
 
     if (exists) continue;
 
-    const sellerName = isEstacionServicio ? 'Estación de Servicio - Suministro de Combustible' : 'Agencia de Logística y Transportes Express S.A.';
+    const sellerName = isEstacionServicio ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.';
     const basePrice = Math.round(((t.amount || 0) / 1.21) * 100) / 100;
     const ivaAmount = Math.round(((t.amount || 0) - basePrice) * 100) / 100;
 
@@ -9923,7 +10459,7 @@ function ensureTransportInvoicesForTransfers(db: any) {
       sellerLevel: 'official',
       announcementId: isEstacionServicio ? `gaso-inv-${t.id}` : `trans-inv-${t.id}`,
       materialType: isEstacionServicio ? 'combustible' : 'transporte',
-      materialTitle: t.concept || (isEstacionServicio ? 'Gasto de Suministro - Combustible Camión' : 'Servicio Exterior de Transporte - Traslado de existencias'),
+      materialTitle: t.concept || (isEstacionServicio ? 'Gasto de suministro - combustible camión' : 'Servicio exterior de transporte - traslado de existencias'),
       quantity: 1,
       unitWeightKg: 0,
       totalKg: 0,
@@ -9937,7 +10473,7 @@ function ensureTransportInvoicesForTransfers(db: any) {
       transportMethod: 'vendedor_envio',
       totalAmount: t.amount,
       needsTransport: false,
-      deliveryAddress: 'Inmueble de Destino del Alumno',
+      deliveryAddress: 'Inmueble de destino del alumno',
       status: 'facturado',
       invoiceNumber: `FACT-2026-${num}`,
       requestedAt: t.timestamp || new Date().toISOString(),
@@ -9948,7 +10484,7 @@ function ensureTransportInvoicesForTransfers(db: any) {
       items: [{
         announcementId: isEstacionServicio ? `gaso-inv-${t.id}` : `trans-inv-${t.id}`,
         materialType: isEstacionServicio ? 'combustible' : 'transporte',
-        materialTitle: t.concept || (isEstacionServicio ? 'Gasto de Suministro - Combustible Camión' : 'Servicio Exterior de Transporte - Traslado de existencias'),
+        materialTitle: t.concept || (isEstacionServicio ? 'Gasto de suministro - combustible camión' : 'Servicio exterior de transporte - traslado de existencias'),
         quantity: 1,
         unitWeightKg: 0,
         totalKg: 0,
@@ -10167,10 +10703,17 @@ app.post('/api/raw-materials/orders', (req, res) => {
     if (!ann) return res.status(404).json({ error: `Materia prima no encontrada (ID: ${itemInput.announcementId}).` });
 
     const qty = itemInput.quantity;
-    const itemTotalKg = ann.unitWeightKg * qty;
+    const isScrewdriver = ann.materialType === 'producto_final' || ann.isDesTornillo || (ann.title && ann.title.toLowerCase().includes('destornillador'));
+    const itemTotalKg = isScrewdriver ? 0 : (ann.unitWeightKg * qty);
     const itemBasePrice = Math.round((ann.pricePerUnit * qty) * 100) / 100;
 
-    if (ann.isPallet) totalRequestedPallets += qty;
+    let itemRequestedPallets = 0;
+    if (isScrewdriver) {
+      itemRequestedPallets = qty / 10000;
+    } else {
+      itemRequestedPallets = itemTotalKg / 1000;
+    }
+    totalRequestedPallets += itemRequestedPallets;
     totalKg += itemTotalKg;
     basePrice += itemBasePrice;
 
@@ -10179,7 +10722,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
       materialType: ann.materialType,
       materialTitle: ann.title,
       quantity: qty,
-      unitWeightKg: ann.unitWeightKg,
+      unitWeightKg: isScrewdriver ? 0 : ann.unitWeightKg,
       totalKg: itemTotalKg,
       basePrice: itemBasePrice,
       unitPrice: ann.pricePerUnit,
@@ -10191,34 +10734,61 @@ app.post('/api/raw-materials/orders', (req, res) => {
   basePrice = Math.round(basePrice * 100) / 100;
 
   if (!isTeacher && buyerLevel === 1) {
-    const floorPlans = getStudentFloorPlans(db, buyer.id);
-    const naveStorageM2 = floorPlans.reduce((sum, f) => {
-      const rawM2 = Number((f as any).rawMaterialsStorageM2);
-      if (!isNaN(rawM2) && rawM2 > 0) return sum + rawM2;
-      return sum + (Number(f.storageZoneM2) || 0);
-    }, 0);
-
     const studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === buyer.id);
-    const almacenAcquisitions = studentAcquisitions.filter(a => {
-      const t = (a.type || a.propertyType || '').toLowerCase();
+    const warehouseProperties = studentAcquisitions.filter(a => {
+      const pType = (a.propertyType || a.type || '').toLowerCase();
       const title = (a.propertyTitle || a.title || '').toLowerCase();
-      return t === 'almacen' || t === 'almacén' || title.includes('almacen') || title.includes('almacén');
+      return (
+        ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial', 'warehouse'].includes(pType) ||
+        title.includes('nave') ||
+        title.includes('almacen') ||
+        title.includes('almacén')
+      );
     });
-    const almacenStorageM2 = almacenAcquisitions.reduce((sum, a) => sum + (Number(a.surfaceM2) || 0), 0);
-    const totalWarehouseM2 = naveStorageM2 + almacenStorageM2;
 
-    const navesWithStorageCount = floorPlans.filter(f => {
-      const rawM2 = Number((f as any).rawMaterialsStorageM2);
-      if (!isNaN(rawM2) && rawM2 > 0) return true;
-      return (Number(f.storageZoneM2) || 0) > 0;
-    }).length;
-    const almacenesCount = almacenAcquisitions.length;
-    const totalRawMaterialWarehouses = navesWithStorageCount + almacenesCount;
+    const floorPlans = getStudentFloorPlans(db, buyer.id);
 
-    if (totalWarehouseM2 === 0 || totalRawMaterialWarehouses === 0) {
-      return res.status(400).json({
-        error: 'No tienes ningún almacén de materia prima configurado. Especifica los m² de la Zona de Almacén en el plano de tu nave industrial o alquila/compra un almacén en el portal inmobiliario.'
+    let totalStorageM2 = 0;
+    let maxTotalPalletsAllowed = 0;
+
+    if (warehouseProperties.length === 0) {
+      totalStorageM2 = 65;
+      maxTotalPalletsAllowed = Math.max(1, Math.floor((totalStorageM2 / 30) * 25));
+    } else {
+      warehouseProperties.forEach(acq => {
+        const pType = (acq.propertyType || acq.type || '').toLowerCase();
+        const isLogisticsWarehouse = pType.includes('almacen') || pType.includes('almacén');
+        let storageM2 = 0;
+        if (isLogisticsWarehouse) {
+          storageM2 = Number(acq.surfaceM2 || acq.m2 || 300);
+        } else {
+          const matchedPlan = floorPlans.find((p: any) =>
+            String(p.acquisitionId) === String(acq.id) ||
+            String(p.propertyId) === String(acq.id) ||
+            String(p.propertyId) === String(acq.propertyId) ||
+            (p.propertyTitle && acq.propertyTitle && p.propertyTitle.trim().toLowerCase() === acq.propertyTitle.trim().toLowerCase())
+          );
+          if (matchedPlan) {
+            const raw = Number((matchedPlan as any).rawMaterialsStorageM2);
+            const fin = Number((matchedPlan as any).finishedGoodsStorageM2);
+            const semi = Number((matchedPlan as any).semiFinishedStorageM2);
+            const totalPlanStorage = (isNaN(raw) ? 0 : raw) + (isNaN(fin) ? 0 : fin) + (isNaN(semi) ? 0 : semi);
+            storageM2 = totalPlanStorage > 0 ? totalPlanStorage : (Number((matchedPlan as any).storageZoneM2) || 65);
+          } else {
+            storageM2 = 65;
+          }
+        }
+        if (!storageM2 || storageM2 <= 0) {
+          storageM2 = 65;
+        }
+        totalStorageM2 += storageM2;
+        maxTotalPalletsAllowed += Math.max(1, Math.floor((storageM2 / 30) * 25));
       });
+    }
+
+    if (totalStorageM2 <= 0) {
+      totalStorageM2 = 65;
+      maxTotalPalletsAllowed = Math.max(1, Math.floor((totalStorageM2 / 30) * 25));
     }
 
     const targetNaveIdStr = String(selectedNave ? (selectedNave.id || selectedNave.propertyId) : '');
@@ -10238,22 +10808,26 @@ app.post('/api/raw-materials/orders', (req, res) => {
       });
     }
 
-    const maxPalletsAllowed = Math.floor((totalWarehouseM2 / 30) * 25);
-    const existingOrders = (db.rawMaterialOrders || []).filter(o => o.studentId === buyer.id && ['pendiente', 'en_negociacion', 'aprobado', 'entregado'].includes(o.status));
-    const currentPallets = existingOrders.reduce((sum, o) => {
-      if (o.items && o.items.length > 0) {
-        return sum + o.items.reduce((s, it) => {
-          const oAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === it.announcementId);
-          return s + (oAnn?.isPallet ? it.quantity : 0);
-        }, 0);
-      }
-      const oAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === o.announcementId);
-      return sum + (oAnn?.isPallet ? o.quantity : 0);
-    }, 0);
+    const inv = checkAndCalculateProduction(db, buyer.id);
+    const ironPallets = (inv.ironKg || 0) / 1000;
+    const plasticPallets = (inv.plasticKg || 0) / 1000;
+    const epoxiPallets = (inv.epoxiKg || 0) / 1000;
+    const currentRawStockPallets = ironPallets + plasticPallets + epoxiPallets;
 
-    if (totalRequestedPallets > 0 && (currentPallets + totalRequestedPallets) > maxPalletsAllowed) {
+    const starRods = ((inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0);
+    const flatRods = ((inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0);
+    const starScrewdrivers = ((inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0);
+    const flatScrewdrivers = ((inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0);
+
+    const rodsPallets = (buyerLevel === 1 ? (starRods + flatRods) : 0) / 10000;
+    const screwdriversPallets = (starScrewdrivers + flatScrewdrivers) / 10000;
+    const currentTotalStockPallets = currentRawStockPallets + rodsPallets + screwdriversPallets;
+
+    // Check warehouse capacity (identically aligned with Existencias in CompanyDashboard and Superficie y capacidad in Mercado)
+    if (totalRequestedPallets > 0 && (currentTotalStockPallets + totalRequestedPallets) > (maxTotalPalletsAllowed + 0.001)) {
+      const freePallets = Math.max(0, maxTotalPalletsAllowed - currentTotalStockPallets);
       return res.status(400).json({
-        error: `Exceso de capacidad: Tienes ${totalWarehouseM2} m² de almacén (límite: ${maxPalletsAllowed} pallets). Tienes actualmente ${currentPallets} pallets y no puedes superar los ${maxPalletsAllowed} pallets.`
+        error: `Exceso de capacidad en almacén: Tienes ${totalStorageM2} m² de zona de almacén (${maxTotalPalletsAllowed} palets de capacidad máxima). Tu stock actual ocupa ${currentTotalStockPallets.toFixed(2)} palets y el pedido suma ${totalRequestedPallets.toFixed(2)} palets, superando la capacidad máxima de ${maxTotalPalletsAllowed} palets (espacio libre actual: ${freePallets.toFixed(2)} palets).`
       });
     }
   }
@@ -10263,9 +10837,16 @@ app.post('/api/raw-materials/orders', (req, res) => {
   const taxableBase = basePrice - discountAmount;
   const insuranceFee = Math.max(0, Number(rawInsuranceFee) || 0);
 
+  // Unified Transport Calculation: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
+  // Partial pallets are charged as full pallets (Math.ceil)
+  const chargedPallets = totalRequestedPallets > 0 ? Math.max(1, Math.ceil(totalRequestedPallets)) : 0;
+  const buyerLoc = selectedNave || buyer;
+  const sellerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(sellerId)) || primaryAnn.sellerName || primaryAnn.sellerId || 'Almacén Central Oficial';
+  const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
+
   let transportCost = 0;
   if (transportMethod === 'vendedor_envio') {
-    transportCost = Math.round((60 + totalKg * 0.08) * 100) / 100;
+    transportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
   }
 
   // Insurance is not subject to VAT (exempt)
@@ -10306,6 +10887,8 @@ app.post('/api/raw-materials/orders', (req, res) => {
     discountPercentage,
     insuranceFee,
     transportCost,
+    distanceKm,
+    chargedPallets,
     transportMethod,
     totalAmount,
     note: note || 'Solicitud inicial de compra realizada'
@@ -10334,6 +10917,8 @@ app.post('/api/raw-materials/orders', (req, res) => {
     hasInsurance: insuranceFee > 0,
     ivaAmount,
     transportCost,
+    distanceKm,
+    chargedPallets,
     transportMethod,
     totalAmount,
     needsTransport: transportMethod === 'vendedor_envio',
@@ -10448,7 +11033,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
             studentName: sellerUser.name,
             buyerLevel: sellerUser.level || 1,
             sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-            sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de Servicio - Suministro de Combustible' : 'Agencia de Logística y Transportes Express S.A.',
+            sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
             sellerLevel: 'official',
             announcementId: `trans-inv-${txTransport}`,
             materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
@@ -10470,7 +11055,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
             transportMethod: 'vendedor_envio',
             totalAmount: transportExpense,
             needsTransport: false,
-            deliveryAddress: deliveryAddressStr || 'Dirección Comercial Registrada',
+            deliveryAddress: deliveryAddressStr || 'Dirección comercial registrada',
             status: 'facturado',
             invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
             requestedAt: now.toISOString(),
@@ -10491,7 +11076,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
             negotiationHistory: [{
               id: generateId('neg'),
               authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-              authorName: sellerHasTruck && sellerHasDriver ? 'Estación de Servicio - Suministro de Combustible' : 'Agencia de Logística y Transportes Express S.A.',
+              authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
               timestamp: now.toISOString(),
               action: 'propuesta_inicial',
               quantity: 1,
@@ -10549,7 +11134,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
     addNotification(
       db,
       buyer.id,
-      'Materia Prima Recibida',
+      'Materia prima recibida',
       `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € ha sido aprobada y entregada de forma inmediata a tu almacén.`,
       'order_approved',
       order.id
@@ -10576,7 +11161,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
   addNotification(
     db,
     sellerId,
-    'Nueva Solicitud de Compra',
+    'Nueva solicitud de compra',
     `${buyerName} ha enviado una solicitud de compra para "${summaryTitle}" por un importe total de ${totalAmount.toFixed(2)} €.`,
     'order_received',
     order.id
@@ -10645,9 +11230,19 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
   const newDiscountAmount = Math.round((newBasePrice * (newDiscount / 100)) * 100) / 100;
   const taxableBase = newBasePrice - newDiscountAmount;
 
+  // Unified Transport Calculation: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
+  // Partial pallets are charged as full pallets (Math.ceil)
+  const isFinalProduct = order.materialType === 'producto_final';
+  const itemTotalKg = order.totalKg || (order.unitWeightKg * newQty);
+  const calculatedPallets = isFinalProduct ? (newQty / 10000) : (itemTotalKg / 1000);
+  const chargedPallets = Math.max(1, Math.ceil(calculatedPallets));
+  const buyerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(order.studentId)) || order.studentName || order.studentId;
+  const sellerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(order.sellerId)) || order.sellerName || order.sellerId;
+  const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
+
   let newTransportCost = 0;
   if (transportMethod === 'vendedor_envio') {
-    newTransportCost = Math.round((60 + order.totalKg * 0.08) * 100) / 100;
+    newTransportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
   }
 
   // Insurance is not subject to VAT (exempt)
@@ -10661,6 +11256,8 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
   order.insuranceFee = newInsurance;
   order.hasInsurance = newInsurance > 0;
   order.transportCost = newTransportCost;
+  order.distanceKm = distanceKm;
+  order.chargedPallets = chargedPallets;
   order.transportMethod = transportMethod;
   order.needsTransport = transportMethod === 'vendedor_envio';
   order.ivaAmount = newIvaAmount;
@@ -10694,7 +11291,7 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
   addNotification(
     db,
     recipientId,
-    'Contraoferta Recibida',
+    'Contraoferta recibida',
     `${authorName} ha enviado una contraoferta para "${order.materialTitle}" por un total de ${newTotalAmount.toFixed(2)} €.`,
     'order_negotiating',
     order.id
@@ -10796,7 +11393,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
         studentName: seller.name,
         buyerLevel: seller.level || 1,
         sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-        sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de Servicio - Suministro de Combustible' : 'Agencia de Logística y Transportes Express S.A.',
+        sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
         sellerLevel: 'official',
         announcementId: `trans-inv-${txTransport}`,
         materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
@@ -10818,7 +11415,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
         transportMethod: 'vendedor_envio',
         totalAmount: transportExpense,
         needsTransport: false,
-        deliveryAddress: order.deliveryAddress || 'Dirección Comercial Registrada',
+        deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
         status: 'facturado',
         invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
         requestedAt: new Date().toISOString(),
@@ -10839,7 +11436,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
         negotiationHistory: [{
           id: generateId('neg'),
           authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-          authorName: sellerHasTruck && sellerHasDriver ? 'Estación de Servicio - Suministro de Combustible' : 'Agencia de Logística y Transportes Express S.A.',
+          authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
           timestamp: new Date().toISOString(),
           action: 'propuesta_inicial',
           quantity: 1,
@@ -10916,7 +11513,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
   addNotification(
     db,
     buyer.id,
-    isL1Raw ? 'Materia Prima Recibida' : 'Compra Formalizada',
+    isL1Raw ? 'Materia prima recibida' : 'Compra formalizada',
     isL1Raw
       ? `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} € ha sido aceptada por el profesor y entregada inmediatamente a tu almacén (Existencias).`
       : `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} € ha sido aceptada y formalizada.`,
@@ -10928,7 +11525,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
     addNotification(
       db,
       order.sellerId,
-      'Venta Aceptada',
+      'Venta aceptada',
       `Se ha formalizado la venta de "${order.materialTitle}" a ${buyerDisplayName} por ${order.totalAmount.toFixed(2)} €.`,
       'order_approved',
       order.id
@@ -10992,7 +11589,7 @@ app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
   addNotification(
     db,
     order.studentId,
-    'Solicitud Rechazada',
+    'Solicitud rechazada',
     `La solicitud de compra para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
     'order_rejected',
     order.id
@@ -11002,7 +11599,7 @@ app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
     addNotification(
       db,
       order.sellerId,
-      'Solicitud Rechazada',
+      'Solicitud rechazada',
       `La solicitud para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
       'order_rejected',
       order.id
@@ -11087,7 +11684,7 @@ app.post('/api/raw-materials/orders/:id/ship', (req, res) => {
   addNotification(
     db,
     order.studentId,
-    'Mercancía Enviada (En Tránsito)',
+    'Mercancía enviada (en tránsito)',
     `El vendedor ${order.sellerName || 'Suministrador'} ha realizado la expedición de "${order.materialTitle}". La mercancía está en tránsito hacia tu almacén.`,
     'order_approved',
     order.id
@@ -11130,7 +11727,7 @@ app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:i
     addNotification(
       db,
       order.sellerId,
-      'Recepción Confirmada por el Comprador',
+      'Recepción confirmada por el comprador',
       `${order.studentName} ha recibido la mercancía de "${order.materialTitle}" y ha sido agregada a su inventario.`,
       'order_approved',
       order.id
@@ -11170,7 +11767,7 @@ app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
   addNotification(
     db,
     order.studentId,
-    'Factura Comercial Recibida',
+    'Factura comercial recibida',
     `El vendedor ${order.sellerName || 'Profesor'} ha emitido y enviado la factura oficial ${invoiceNum} por ${order.totalAmount.toFixed(2)} €.`,
     'order_approved',
     order.id
@@ -11363,7 +11960,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     );
 
     if (!senderNaveForklift) {
-      const naveName = selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de Origen';
+      const naveName = selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen';
       return res.status(400).json({
         error: `Operación rechazada: No tienes asignada ninguna carretilla elevadora contrapesada a tu almacén de origen "${naveName}". Para poder expedir y cargar existencias desde esta ubicación, debes disponer de una carretilla elevadora asignada.`
       });
@@ -11424,16 +12021,14 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     );
     if (!hasTruck || !hasTruckDriver) {
       return res.status(400).json({
-        error: 'Para realizar el envío con transporte propio necesitas disponer de un Camión en tu flota y tener contratado un Camionero/Conductor en tu plantilla.'
+        error: 'Para realizar el envío con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.'
       });
     }
 
-    // Distance calculation between sender and recipient warehouses/locations
-    const sourceStr = selectedSenderNave ? ((selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Nave Remitente') + ' ' + (selectedSenderNave.location || 'Polígono')) : sender.name;
-    const targetStr = selectedRecipientNave ? ((selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Nave Destinatario') + ' ' + (selectedRecipientNave.location || 'Polígono')) : recipient.name;
-
-    const hash = Math.abs((sourceStr.length * 13 + targetStr.length * 23 + (senderId.charCodeAt(0) || 0) * 7 + (recipientId.charCodeAt(0) || 0) * 3) % 75);
-    distanceKm = 20 + hash; // e.g. 20 to 95 km
+    // Real road distance calculation between sender and recipient warehouses/locations in Spain
+    const senderLoc = selectedSenderNave || sender;
+    const recipientLoc = selectedRecipientNave || recipient;
+    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
 
     // No transport service fee, but supply expense for fuel based on distance
     fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
@@ -11456,7 +12051,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       senderName: sender.name,
       senderAccount: sender.accountNumber,
       receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
-      receiverName: 'Estación de Servicio - Suministro de Combustible',
+      receiverName: 'Estación de servicio - suministro de combustible',
       receiverAccount: 'ES00-0000-0000-0000-GASO',
       amount: fuelExpense,
       concept: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
@@ -11464,11 +12059,20 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     });
     syncMovimientoToSupabase(fuelMovId, sender.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`).catch(e => console.error(e));
   } else if (transportMethod === 'exterior') {
-    // Fee for hiring external logistics service
-    transportFee = Math.max(35, Math.round(qty * 0.10 * 100) / 100);
+    // Unified Logistics Fee: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
+    // Incomplete pallets charged as full pallets (Math.ceil)
+    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+
+    const senderLoc = selectedSenderNave || sender;
+    const recipientLoc = selectedRecipientNave || recipient;
+    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
+
+    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
     if (sender.balance < transportFee) {
       return res.status(400).json({
-        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} €). Tu saldo disponible es ${sender.balance.toFixed(2)} €.`
+        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${sender.balance.toFixed(2)} €.`
       });
     }
     // Deduct fee from sender bank account
@@ -11483,13 +12087,13 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       senderName: sender.name,
       senderAccount: sender.accountNumber,
       receiverId: 'LOGISTICA_EXTERIOR',
-      receiverName: 'Servicio Exterior de Transporte',
+      receiverName: 'Servicio exterior de transporte',
       receiverAccount: 'ES00-0000-0000-0000-LOGI',
       amount: transportFee,
-      concept: `Servicio Exterior de Transporte - Envío de existencias a ${recipient.name}`,
+      concept: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`,
       timestamp: nowIso
     });
-    syncMovimientoToSupabase(transMovId, sender.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio Exterior de Transporte - Envío de existencias a ${recipient.name}`).catch(e => console.error(e));
+    syncMovimientoToSupabase(transMovId, sender.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`).catch(e => console.error(e));
   }
 
   // Deduct stock from sender and add to recipient
@@ -11539,15 +12143,15 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
   };
 
   const recipientNaveInv = getRecipientNaveInv();
-  const originNaveName = selectedSenderNave ? (selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de Origen') : 'Almacén de Origen';
+  const originNaveName = selectedSenderNave ? (selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen') : 'Almacén de origen';
 
   let itemLabel = itemKey;
 
   if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
-    itemLabel = 'Varillas con Punta Estrella';
+    itemLabel = 'Varillas con punta estrella';
     const currentStock = (senderNaveInv as any).producedStarRodsUnits ?? (senderNaveInv as any).producedIronRodsUnits ?? 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Varillas con Punta Estrella en ${originNaveName} (${currentStock} u. disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de varillas con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
     }
     (senderNaveInv as any).producedStarRodsUnits = Math.max(0, currentStock - qty);
     (senderNaveInv as any).producedIronRodsUnits = Math.max(0, currentStock - qty);
@@ -11557,10 +12161,10 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     (recipientNaveInv as any).producedIronRodsUnits = ((recipientNaveInv as any).producedIronRodsUnits || 0) + qty;
     recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
   } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
-    itemLabel = 'Varillas con Punta Plana';
+    itemLabel = 'Varillas con punta plana';
     const currentStock = (senderNaveInv as any).producedFlatRodsUnits ?? (senderNaveInv as any).producedMetalRodsUnits ?? 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Varillas con Punta Plana en ${originNaveName} (${currentStock} u. disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de varillas con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
     }
     (senderNaveInv as any).producedFlatRodsUnits = Math.max(0, currentStock - qty);
     (senderNaveInv as any).producedMetalRodsUnits = Math.max(0, currentStock - qty);
@@ -11570,10 +12174,10 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     (recipientNaveInv as any).producedMetalRodsUnits = ((recipientNaveInv as any).producedMetalRodsUnits || 0) + qty;
     recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
   } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro' || itemKey === 'ironScrewdriversUnits') {
-    itemLabel = 'Destornilladores con Punta Estrella';
+    itemLabel = 'Destornilladores con punta estrella';
     const currentStock = (senderNaveInv as any).starScrewdriversUnits ?? (senderNaveInv as any).ironScrewdriversUnits ?? 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Destornilladores con Punta Estrella en ${originNaveName} (${currentStock} u. disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
     }
     (senderNaveInv as any).starScrewdriversUnits = Math.max(0, currentStock - qty);
     (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, currentStock - qty);
@@ -11583,10 +12187,10 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
     recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
   } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal' || itemKey === 'metalScrewdriversUnits') {
-    itemLabel = 'Destornilladores con Punta Plana';
+    itemLabel = 'Destornilladores con punta plana';
     const currentStock = (senderNaveInv as any).flatScrewdriversUnits ?? (senderNaveInv as any).metalScrewdriversUnits ?? 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Destornilladores con Punta Plana en ${originNaveName} (${currentStock} u. disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
     }
     (senderNaveInv as any).flatScrewdriversUnits = Math.max(0, currentStock - qty);
     (senderNaveInv as any).metalScrewdriversUnits = Math.max(0, currentStock - qty);
@@ -11596,10 +12200,10 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     (recipientNaveInv as any).metalScrewdriversUnits = ((recipientNaveInv as any).metalScrewdriversUnits || 0) + qty;
     recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
   } else if (itemKey === 'productos_ensamblados' || itemKey === 'producedScrewdriversUnits') {
-    itemLabel = 'Productos Ensamblados (Destornilladores)';
+    itemLabel = 'Productos ensamblados (destornilladores)';
     const currentStock = (senderNaveInv as any).producedScrewdriversUnits || 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Productos Ensamblados en ${originNaveName} (${currentStock} u. disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de productos ensamblados en ${originNaveName} (${currentStock} u. disponibles).` });
     }
     senderNaveInv.producedScrewdriversUnits = Math.max(0, currentStock - qty);
     (senderNaveInv as any).starScrewdriversUnits = Math.max(0, ((senderNaveInv as any).starScrewdriversUnits || 0) - qty);
@@ -11609,34 +12213,34 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
     (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
   } else if (itemKey === 'ironKg') {
-    itemLabel = 'Fragmentos de Hierro (Kg)';
+    itemLabel = 'Fragmentos de hierro (kg)';
     const currentStock = (senderNaveInv as any).ironKg || 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Hierro en ${originNaveName} (${currentStock} kg disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de fragmentos de hierro en ${originNaveName} (${currentStock} kg disponibles).` });
     }
     senderNaveInv.ironKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
     recipientNaveInv.ironKg = Math.round(((recipientNaveInv.ironKg || 0) + qty) * 1000) / 1000;
   } else if (itemKey === 'metalKg') {
-    itemLabel = 'Fragmentos de Metal (Kg)';
+    itemLabel = 'Fragmentos de metal (kg)';
     const currentStock = (senderNaveInv as any).metalKg || 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Metal en ${originNaveName} (${currentStock} kg disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de fragmentos de metal en ${originNaveName} (${currentStock} kg disponibles).` });
     }
     senderNaveInv.metalKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
     recipientNaveInv.metalKg = Math.round(((recipientNaveInv.metalKg || 0) + qty) * 1000) / 1000;
   } else if (itemKey === 'plasticKg') {
-    itemLabel = 'Pellets de Plástico (Kg)';
+    itemLabel = 'Pellets de plástico (kg)';
     const currentStock = (senderNaveInv as any).plasticKg || 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Pellets de Plástico en ${originNaveName} (${currentStock} kg disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de pellets de plástico en ${originNaveName} (${currentStock} kg disponibles).` });
     }
     senderNaveInv.plasticKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
     recipientNaveInv.plasticKg = Math.round(((recipientNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
   } else if (itemKey === 'epoxiKg') {
-    itemLabel = 'Pegamento Epoxi (Kg)';
+    itemLabel = 'Pegamento epoxi (kg)';
     const currentStock = (senderNaveInv as any).epoxiKg || 0;
     if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Pegamento Epoxi en ${originNaveName} (${currentStock} kg disponibles).` });
+      return res.status(400).json({ error: `Stock insuficiente de pegamento epoxi en ${originNaveName} (${currentStock} kg disponibles).` });
     }
     senderNaveInv.epoxiKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
     recipientNaveInv.epoxiKg = Math.round(((recipientNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
@@ -11729,7 +12333,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     const recipientAcqs = (db.acquisitions || []).filter(a => String(a.studentId) === String(recipient.id));
     const recipientProp = recipientAcqs[0];
     const recipientAddress = recipientProp 
-      ? (recipientProp.location || recipientProp.propertyTitle || 'Almacén Principal del Destinatario')
+      ? (recipientProp.location || recipientProp.propertyTitle || 'Almacén principal del destinatario')
       : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
 
     const basePrice = Math.round((transportFee / 1.21) * 100) / 100;
@@ -11740,11 +12344,11 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       studentName: sender.name,
       buyerLevel: sender.level || 1,
       sellerId: 'LOGISTICA_EXTERIOR',
-      sellerName: 'Servicio Exterior de Transporte',
+      sellerName: 'Servicio exterior de transporte',
       sellerLevel: 'official',
       announcementId: `trans-inv-${transMovId}`,
       materialType,
-      materialTitle: `Servicio Exterior de Transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
+      materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
       quantity: 1,
       unitWeightKg: 0,
       totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
@@ -11769,7 +12373,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       items: [{
         announcementId: `trans-inv-${transMovId}`,
         materialType,
-        materialTitle: `Servicio Exterior de Transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
+        materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
         quantity: 1,
         unitWeightKg: 0,
         totalKg: 0,
@@ -11780,7 +12384,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       negotiationHistory: [{
         id: `neg_${transMovId}`,
         authorId: 'LOGISTICA_EXTERIOR',
-        authorName: 'Servicio Exterior de Transporte',
+        authorName: 'Servicio exterior de transporte',
         timestamp: nowIso,
         action: 'propuesta_inicial',
         quantity: 1,
@@ -11790,7 +12394,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
         transportCost: 0,
         transportMethod: 'vendedor_envio',
         totalAmount: transportFee,
-        note: `Factura del Servicio Exterior de Transporte por envío de existencias a ${recipient.name}`
+        note: `Factura del Servicio exterior de transporte por envío de existencias a ${recipient.name}`
       }]
     };
     db.rawMaterialOrders.unshift(transportInvoiceOrder);
@@ -11804,7 +12408,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       studentName: sender.name,
       buyerLevel: sender.level || 1,
       sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
-      sellerName: 'Estación de Servicio - Suministro de Combustible',
+      sellerName: 'Estación de servicio - suministro de combustible',
       sellerLevel: 'official',
       announcementId: `gaso-inv-${fuelMovId}`,
       materialType: 'combustible',
@@ -11822,7 +12426,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       transportMethod: 'vendedor_envio',
       totalAmount: fuelExpense,
       needsTransport: false,
-      deliveryAddress: 'Inmueble de Destino del Alumno',
+      deliveryAddress: 'Inmueble de destino del alumno',
       status: 'facturado',
       invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
       requestedAt: nowIso,
@@ -11844,7 +12448,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
       negotiationHistory: [{
         id: `neg_${fuelMovId}`,
         authorId: 'SUMINISTROS_ESTACION_SERVICIO',
-        authorName: 'Estación de Servicio - Suministro de Combustible',
+        authorName: 'Estación de servicio - suministro de combustible',
         timestamp: nowIso,
         action: 'propuesta_inicial',
         quantity: 1,
@@ -11854,7 +12458,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
         transportCost: 0,
         transportMethod: 'vendedor_envio',
         totalAmount: fuelExpense,
-        note: `Factura de Suministro de Combustible Camión (${distanceKm} km a ${recipient.name})`
+        note: `Factura de suministro de combustible camión (${distanceKm} km a ${recipient.name})`
       }]
     };
     db.rawMaterialOrders.unshift(fuelInvoiceOrder);
@@ -11864,7 +12468,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
   addNotification(
     db,
     recipientId,
-    'Envío de Existencias Recibido',
+    'Envío de existencias recibido',
     `Has recibido ${qty} unidades de "${itemLabel}" enviadas por ${sender.name} (${transportMethod === 'propio' ? 'Transporte propio del remitente' : 'Servicio exterior de transporte'}).`,
     'order_approved'
   );
@@ -11872,7 +12476,7 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
   addNotification(
     db,
     senderId,
-    'Envío de Existencias Realizado',
+    'Envío de existencias realizado',
     `Has enviado ${qty} unidades de "${itemLabel}" a ${recipient.name} correctamente.`,
     'order_approved'
   );
@@ -11931,7 +12535,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
   );
 
   if (!toNaveForklift) {
-    const naveName = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén Destino') : 'Almacén Destino';
+    const naveName = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
     return res.status(400).json({
       error: `Operación rechazada: El almacén de destino "${naveName}" no tiene asignada ninguna carretilla elevadora contrapesada. Para poder recibir existencias en un traslado entre almacenes propios, la nave de destino debe disponer de una carretilla elevadora asignada.`
     });
@@ -11951,18 +12555,13 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
     );
     if (!hasTruck || !hasTruckDriver) {
       return res.status(400).json({
-        error: 'Para realizar el traslado con transporte propio necesitas disponer de un Camión en tu flota y tener contratado un Camionero/Conductor en tu plantilla.'
+        error: 'Para realizar el traslado con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.'
       });
     }
 
     const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
     const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
-
-    const sourceStr = (fromNave?.propertyTitle || fromNave?.title || 'Nave Origen') + ' ' + (fromNave?.location || '');
-    const targetStr = (toNave?.propertyTitle || toNave?.title || 'Nave Destino') + ' ' + (toNave?.location || '');
-
-    const hash = Math.abs((sourceStr.length * 11 + targetStr.length * 17 + (fromNaveId.charCodeAt(0) || 0) * 5 + (toNaveId.charCodeAt(0) || 0) * 3) % 55);
-    distanceKm = 15 + hash; // e.g. 15 to 70 km
+    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
 
     // No transport service fee, but supply expense for fuel based on distance
     fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
@@ -11985,18 +12584,18 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       senderName: student.name,
       senderAccount: student.accountNumber,
       receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
-      receiverName: 'Estación de Servicio - Suministro de Combustible',
+      receiverName: 'Estación de servicio - suministro de combustible',
       receiverAccount: 'ES00-0000-0000-0000-GASO',
       amount: fuelExpense,
-      concept: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre almacenes)`,
+      concept: `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`,
       timestamp: nowIso
     });
-    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre almacenes)`).catch(e => console.error(e));
+    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`).catch(e => console.error(e));
 
-    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén Origen') : 'Almacén Origen';
-    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén Destino') : 'Almacén Destino';
+    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén de origen') : 'Almacén de origen';
+    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
     const toNaveAddress = toNave
-      ? (toNave.location || toNave.propertyTitle || 'Almacén Destino del Alumno')
+      ? (toNave.location || toNave.propertyTitle || 'Almacén de destino del alumno')
       : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
 
     const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
@@ -12007,7 +12606,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       studentName: student.name,
       buyerLevel: student.level || 1,
       sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
-      sellerName: 'Estación de Servicio - Suministro de Combustible',
+      sellerName: 'Estación de servicio - suministro de combustible',
       sellerLevel: 'official',
       announcementId: `gaso-inv-${movId}`,
       materialType: 'combustible',
@@ -12047,7 +12646,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       negotiationHistory: [{
         id: `neg_${movId}`,
         authorId: 'SUMINISTROS_ESTACION_SERVICIO',
-        authorName: 'Estación de Servicio - Suministro de Combustible',
+        authorName: 'Estación de servicio - suministro de combustible',
         timestamp: nowIso,
         action: 'propuesta_inicial',
         quantity: 1,
@@ -12065,11 +12664,20 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
     db.rawMaterialOrders.unshift(fuelInvoiceOrder);
     syncRawMaterialOrderToSupabase(fuelInvoiceOrder).catch(e => console.error(e));
   } else if (transportMethod === 'exterior') {
-    // Fee for hiring external logistics service
-    transportFee = Math.max(35, Math.round(qty * 0.10 * 100) / 100);
+    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
+    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
+    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
+
+    // Unified Logistics Fee: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
+    // Incomplete pallets charged as full pallets (Math.ceil)
+    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+
+    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
     if (student.balance < transportFee) {
       return res.status(400).json({
-        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} €). Tu saldo disponible es ${student.balance.toFixed(2)} €.`
+        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${student.balance.toFixed(2)} €.`
       });
     }
     // Deduct fee from student bank account
@@ -12084,20 +12692,18 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       senderName: student.name,
       senderAccount: student.accountNumber,
       receiverId: 'LOGISTICA_EXTERIOR',
-      receiverName: 'Servicio Exterior de Transporte',
+      receiverName: 'Servicio exterior de transporte',
       receiverAccount: 'ES00-0000-0000-0000-LOGI',
       amount: transportFee,
-      concept: `Servicio Exterior de Transporte - Traslado de existencias entre naves`,
+      concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`,
       timestamp: nowIso
     });
-    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio Exterior de Transporte - Traslado de existencias entre naves`).catch(e => console.error(e));
+    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`).catch(e => console.error(e));
 
-    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
-    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
-    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén Origen') : 'Almacén Origen';
-    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén Destino') : 'Almacén Destino';
+    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén de origen') : 'Almacén de origen';
+    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
     const toNaveAddress = toNave
-      ? (toNave.location || toNave.propertyTitle || 'Almacén Destino del Alumno')
+      ? (toNave.location || toNave.propertyTitle || 'Almacén de destino del alumno')
       : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
 
     const basePriceExterior = Math.round((transportFee / 1.21) * 100) / 100;
@@ -12108,11 +12714,11 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       studentName: student.name,
       buyerLevel: student.level || 1,
       sellerId: 'LOGISTICA_EXTERIOR',
-      sellerName: 'Servicio Exterior de Transporte',
+      sellerName: 'Servicio exterior de transporte',
       sellerLevel: 'official',
       announcementId: `trans-inv-${movId}`,
       materialType: (itemKey as any) || 'transporte',
-      materialTitle: `Servicio Exterior de Transporte - Traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
+      materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
       quantity: 1,
       unitWeightKg: 0,
       totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
@@ -12137,7 +12743,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       items: [{
         announcementId: `trans-inv-${movId}`,
         materialType: (itemKey as any) || 'transporte',
-        materialTitle: `Servicio Exterior de Transporte - Traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
+        materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
         quantity: 1,
         unitWeightKg: 0,
         totalKg: 0,
@@ -12148,7 +12754,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
       negotiationHistory: [{
         id: `neg_${movId}`,
         authorId: 'LOGISTICA_EXTERIOR',
-        authorName: 'Servicio Exterior de Transporte',
+        authorName: 'Servicio exterior de transporte',
         timestamp: nowIso,
         action: 'propuesta_inicial',
         quantity: 1,
@@ -12158,7 +12764,7 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
         transportCost: 0,
         transportMethod: 'vendedor_envio',
         totalAmount: transportFee,
-        note: `Factura del Servicio Exterior de Transporte por traslado entre almacenes (${fromNaveTitle} -> ${toNaveTitle})`
+        note: `Factura del Servicio exterior de transporte por traslado entre almacenes (${fromNaveTitle} -> ${toNaveTitle})`
       }]
     };
 
@@ -12583,7 +13189,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       const q = Math.max(1, Number(i.quantity) || 1);
       const p = Math.max(0, Number(i.unitPrice) || 0);
       return {
-        title: String(i.title || 'Concepto Comercial').trim(),
+        title: String(i.title || 'Concepto comercial').trim(),
         quantity: q,
         unitPrice: p,
         subtotal: q * p
@@ -12591,7 +13197,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
     });
   } else {
     items = [{
-      title: String(concept || 'Servicios / Productos Comerciales').trim(),
+      title: String(concept || 'Servicios / productos comerciales').trim(),
       quantity: 1,
       unitPrice: 100,
       subtotal: 100
@@ -12619,7 +13225,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       linkedOrder.invoicedAt = now.toISOString();
       linkedOrder.sellerLevel = sender.level || linkedOrder.sellerLevel || 1;
       linkedOrder.buyerLevel = recipient.level || linkedOrder.buyerLevel || 1;
-      linkedOrder.deliveryAddress = linkedOrder.deliveryAddress || 'Dirección Comercial Registrada';
+      linkedOrder.deliveryAddress = linkedOrder.deliveryAddress || 'Dirección comercial registrada';
       linkedOrder.subtotalAmount = itemsSubtotal;
       linkedOrder.discountAmount = discountAmount;
       linkedOrder.transportCost = transportCost;
@@ -12659,7 +13265,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       buyerLevel: recipient.level || 1,
       announcementId: 'manual_invoice',
       materialType: 'hierro',
-      materialTitle: concept || items[0]?.title || 'Factura Comercial',
+      materialTitle: concept || items[0]?.title || 'Factura comercial',
       quantity: totalQuantity,
       unitWeightKg: 1,
       totalKg: totalQuantity,
@@ -12688,7 +13294,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       invoiceNumber: invoiceNum,
       invoicedAt: now.toISOString(),
       requestedAt: now.toISOString(),
-      deliveryAddress: 'Dirección Comercial Registrada',
+      deliveryAddress: 'Dirección comercial registrada',
       note: concept || 'Factura emitida manualmente por chat de mensajería',
       isDirectMessageInvoice: true,
       isChatInvoice: true,
@@ -12715,7 +13321,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       id: linkedOrder.id,
       orderId: linkedOrder.id,
       invoiceNumber: invoiceNum,
-      concept: concept || items[0]?.title || 'Factura Comercial',
+      concept: concept || items[0]?.title || 'Factura comercial',
       items: items.map(i => ({
         announcementId: 'manual_item',
         materialTitle: i.title,
@@ -12740,8 +13346,8 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       buyerId: recipientId,
       buyerName: recipient.name,
       buyerLevel: recipient.level || 1,
-      deliveryAddress: 'Dirección Comercial Registrada',
-      paymentMethod: 'Transferencia Bancaria Directa',
+      deliveryAddress: 'Dirección comercial registrada',
+      paymentMethod: 'Transferencia bancaria directa',
       status: 'facturado'
     }
   };
@@ -12752,8 +13358,8 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
   addNotification(
     db,
     recipientId,
-    'Nueva Factura Recibida en Chat',
-    `${sender.name} te ha enviado la factura oficial ${invoiceNum} por un importe total de ${totalAmount.toFixed(2)} € en Mensajería Directa.`,
+    'Nueva factura recibida en chat',
+    `${sender.name} te ha enviado la factura oficial ${invoiceNum} por un importe total de ${totalAmount.toFixed(2)} € en mensajería directa.`,
     'order_approved',
     linkedOrder.id
   );
@@ -12823,7 +13429,7 @@ app.post('/api/market/messages/sign-promissory-note', (req, res) => {
 
   const senderNif = String(req.body.issuerNif || (sender.id?.startsWith('user-') ? sender.id : `user-${sender.id}`)).trim();
   const recipientNif = String(req.body.beneficiaryNif || (recipient.id?.startsWith('user-') ? recipient.id : `user-${recipient.id}`)).trim();
-  const senderAddress = (sender as any).address || 'Domicilio Social Registrado, Madrid';
+  const senderAddress = (sender as any).address || 'Domicilio social registrado, Madrid';
 
   // 1. Generate unique Promissory Note ID
   const promissoryId = generateId('pn');
@@ -13607,7 +14213,7 @@ app.get('/api/court/unpaid-notes', (req, res) => {
   res.json({ success: true, notes: eligibleNotes });
 });
 
-// File a new lawsuit (Demanda Ordinaria o Cambiaria)
+// File a new lawsuit (Demanda ordinaria o Cambiaria)
 app.post('/api/court/lawsuits', (req, res) => {
   const {
     type,
@@ -13760,8 +14366,8 @@ app.post('/api/court/lawsuits', (req, res) => {
   addNotification(
     db,
     plaintiff.id,
-    '⚖️ Demanda Presentada y Minuta Abonada',
-    `Has presentado la demanda con Autos nº ${caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${lawyerFeeInvoiceNum}). El procedimiento queda pendiente de Auto de Admisión a Trámite por el Juez.`,
+    '⚖️ Demanda presentada y minuta abonada',
+    `Has presentado la demanda con Autos nº ${caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${lawyerFeeInvoiceNum}). El procedimiento queda pendiente de Auto de admisión a trámite por el Juez.`,
     'transfer_received',
     feeTxId
   );
@@ -13772,8 +14378,8 @@ app.post('/api/court/lawsuits', (req, res) => {
     addNotification(
       db,
       judgeUser.id,
-      '⚖️ Nueva Demanda Pendiente de Admisión a Trámite',
-      `El actor ${plaintiff.name} ha interpuesto la ${type === 'cambiaria' ? 'Demanda Cambiaria' : 'Demanda Ordinaria'} (${caseNumber}) contra ${defendant.name} por ${formatNumber(numAmount)} €. Pendiente de dictar Auto de Admisión a Trámite o Inadmisión.`,
+      '⚖️ Nueva demanda pendiente de admisión a trámite',
+      `El actor ${plaintiff.name} ha interpuesto la ${type === 'cambiaria' ? 'Demanda cambiaria' : 'Demanda ordinaria'} (${caseNumber}) contra ${defendant.name} por ${formatNumber(numAmount)} €. Pendiente de dictar Auto de admisión a trámite o Inadmisión.`,
       'transfer_received',
       lawsuit.id
     );
@@ -13800,7 +14406,7 @@ app.post('/api/court/lawsuits', (req, res) => {
   });
 });
 
-// Teacher / Judge: Auto de Admisión a Trámite o Inadmisión de Demanda
+// Teacher / Judge: Auto de admisión a trámite o Inadmisión de Demanda
 app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
   const { id } = req.params;
   const { admission, notes, judgeId } = req.body;
@@ -13826,14 +14432,14 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
     lawsuit.status = 'admitida';
     lawsuit.admissionDate = now.toISOString();
     lawsuit.defendantDeadlineDate = addBusinessDays(now, 20).toISOString();
-    lawsuit.admissionNotes = notes || 'Auto de Admisión a Trámite dictado por el Magistrado-Juez del Juzgado de 1ª Instancia al concurrir los presupuestos procesales y aportación de principios de prueba (LEC). Plazo legal de 20 días hábiles conferido para contestación.';
+    lawsuit.admissionNotes = notes || 'Auto de admisión a trámite dictado por el Magistrado-Juez del Juzgado de 1ª Instancia al concurrir los presupuestos procesales y aportación de principios de prueba (LEC). Plazo legal de 20 días hábiles conferido para contestación.';
     lawsuit.updatedAt = now.toISOString();
 
     if (plaintiff) {
       addNotification(
         db,
         plaintiff.id,
-        '⚖️ Auto de Admisión a Trámite',
+        '⚖️ Auto de admisión a trámite',
         `El Magistrado-Juez ha dictado Auto admitiendo a trámite tu demanda en los Autos ${lawsuit.caseNumber}. Se ha conferido traslado y emplazado al demandado ${defendant?.name || 'demandado'} (Plazo: 20 días hábiles).`,
         'transfer_received',
         lawsuit.id
@@ -13844,8 +14450,8 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
       addNotification(
         db,
         defendant.id,
-        '⚖️ Emplazamiento de Demanda Judicial',
-        `Se ha admitido a trámite la ${lawsuit.type === 'cambiaria' ? 'Demanda de Juicio Cambiario' : 'Demanda Ordinaria'} (${lawsuit.caseNumber}) promovida por ${lawsuit.plaintiffName} por ${formatNumber(lawsuit.claimedAmount)} € (+costas). Dispones de 20 días hábiles para contestar a la demanda o personarte en los autos.`,
+        '⚖️ Emplazamiento de demanda judicial',
+        `Se ha admitido a trámite la ${lawsuit.type === 'cambiaria' ? 'Demanda de juicio cambiario' : 'Demanda ordinaria'} (${lawsuit.caseNumber}) promovida por ${lawsuit.plaintiffName} por ${formatNumber(lawsuit.claimedAmount)} € (+costas). Dispones de 20 días hábiles para contestar a la demanda o personarte en los autos.`,
         'transfer_received',
         lawsuit.id
       );
@@ -13860,7 +14466,7 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
       addNotification(
         db,
         plaintiff.id,
-        '⚖️ Auto de Inadmisión de Demanda',
+        '⚖️ Auto de inadmisión de demanda',
         `El Magistrado-Juez ha rechazado la admisión a trámite de la demanda ${lawsuit.caseNumber}. Motivo: ${lawsuit.resolutionNotes}.`,
         'transfer_received',
         lawsuit.id
@@ -13874,7 +14480,7 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
   res.json({
     success: true,
     message: admission === 'admitir' 
-      ? `Auto de Admisión a Trámite dictado con éxito en los Autos ${lawsuit.caseNumber}. Demandado emplazado.`
+      ? `Auto de admisión a trámite dictado con éxito en los Autos ${lawsuit.caseNumber}. Demandado emplazado.`
       : `Auto de Inadmisión dictado en los Autos ${lawsuit.caseNumber}. Procedimiento archivado.`,
     lawsuit
   });
@@ -13943,7 +14549,7 @@ app.post('/api/court/lawsuits/:id/preventative-embargo', (req, res) => {
   addNotification(
     db,
     defendant.id,
-    '⚖️ Auto de Embargo Preventivo Cautelar',
+    '⚖️ Auto de embargo preventivo cautelar',
     `El Magistrado-Juez ha decretado el embargo preventivo inmediato de ${formatNumber(totalToEmbargo)} € en tus cuentas bancarias en los Autos Cambiarios ${lawsuit.caseNumber} (Art. 821 LEC).`,
     'transfer_received',
     embargoTxId
@@ -13952,7 +14558,7 @@ app.post('/api/court/lawsuits/:id/preventative-embargo', (req, res) => {
   addNotification(
     db,
     plaintiff.id,
-    '⚖️ Embargo Preventivo Trabado con Éxito',
+    '⚖️ Embargo preventivo trabado con éxito',
     `Se ha ejecutado la traba de embargo preventivo cautelar por ${formatNumber(totalToEmbargo)} € sobre los saldos del demandado ${defendant.name} en el Juicio Cambiario ${lawsuit.caseNumber} (Art. 821 LEC).`,
     'transfer_received',
     embargoTxId
@@ -14055,7 +14661,7 @@ app.post('/api/court/lawsuits/:id/pay-settle', (req, res) => {
   addNotification(
     db,
     plaintiff.id,
-    '⚖️ Cobro de Demanda Judicial',
+    '⚖️ Cobro de demanda judicial',
     `El demandado ${defendant.name} ha satisfecho íntegramente la deuda de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. Saldo abonado en tu cuenta.`,
     'transfer_received',
     txId
@@ -14064,7 +14670,7 @@ app.post('/api/court/lawsuits/:id/pay-settle', (req, res) => {
   addNotification(
     db,
     defendant.id,
-    '⚖️ Demanda Judicial Liquidada',
+    '⚖️ Demanda judicial liquidada',
     `Has satisfecho la cantidad de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. El procedimiento ha quedado archivado por allanamiento.`,
     'transfer_received',
     txId
@@ -14167,7 +14773,7 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
 
     const feeTxId = generateId('tx');
     const feeConcept = answerType === 'ordinaria_contestacion'
-      ? `Minuta Letrado Defensa (15% s/ ${formatNumber(lawsuit.claimedAmount)} €) + IVA 21% - Contestación Demanda Ordinaria ${lawsuit.caseNumber} [Factura ${invNum}]`
+      ? `Minuta Letrado Defensa (15% s/ ${formatNumber(lawsuit.claimedAmount)} €) + IVA 21% - Contestación Demanda ordinaria ${lawsuit.caseNumber} [Factura ${invNum}]`
       : `Minuta Letrado Oposición Cambiaria (15% s/ ${formatNumber(lawsuit.claimedAmount)} €) + IVA 21% - Oposición Juicio Cambiario ${lawsuit.caseNumber} [Factura ${invNum}]`;
 
     const lawyerTransfer: Transfer = {
@@ -14200,7 +14806,7 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     addNotification(
       db,
       defendant.id,
-      answerType === 'ordinaria_contestacion' ? '⚖️ Contestación a la Demanda Presentada' : '⚖️ Oposición Cambiaria Presentada',
+      answerType === 'ordinaria_contestacion' ? '⚖️ Contestación a la demanda presentada' : '⚖️ Oposición cambiaria presentada',
       `Has presentado la contestación en los Autos ${lawsuit.caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${invNum}).`,
       'transfer_received',
       feeTxId
@@ -14209,7 +14815,7 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     addNotification(
       db,
       plaintiff.id,
-      '⚖️ Traslado de Contestación de Demanda',
+      '⚖️ Traslado de contestación de demanda',
       `El demandado ${defendant.name} ha formalizado su contestación en los Autos ${lawsuit.caseNumber} con alegaciones y ${validAttachments.length} documento(s) PDF.`,
       'transfer_received',
       lawsuit.id
@@ -14329,7 +14935,7 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     addNotification(
       db,
       plaintiff.id,
-      '⚖️ Pago Judicial de Pagaré Recibido',
+      '⚖️ Pago judicial de pagaré recibido',
       `El demandado ${defendant.name} ha comparecido abonando íntegramente los ${formatNumber(amountToPay)} € del pagaré en los Autos ${lawsuit.caseNumber}. Saldo ingresado en tu cuenta.`,
       'transfer_received',
       payTxId
@@ -14338,7 +14944,7 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     addNotification(
       db,
       defendant.id,
-      '⚖️ Pagaré Judicial Abonado y Autos Archivados',
+      '⚖️ Pagaré judicial abonado y autos archivados',
       `Has abonado ${formatNumber(amountToPay)} € en los Autos Cambiarios ${lawsuit.caseNumber}. Procedimiento archivado por allanamiento y pago.`,
       'transfer_received',
       payTxId
@@ -14459,7 +15065,7 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
     addNotification(
       db,
       plaintiff.id,
-      '⚖️ Sentencia Judicial Estimatoria',
+      '⚖️ Sentencia judicial estimatoria',
       `El Magistrado-Juez ha dictado sentencia estimatoria en los Autos ${lawsuit.caseNumber}. Se han transferido ${formatNumber(totalToDebit)} € a tu cuenta.`,
       'transfer_received',
       txId
@@ -14468,7 +15074,7 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
     addNotification(
       db,
       defendant.id,
-      '⚖️ Notificación de Sentencia y Ejecución',
+      '⚖️ Notificación de sentencia y ejecución',
       `El Magistrado-Juez ha dictado sentencia y ejecutado el cargo en los Autos ${lawsuit.caseNumber} por ${formatNumber(totalToDebit)} €.`,
       'transfer_received',
       txId
@@ -14545,7 +15151,7 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
     addNotification(
       db,
       plaintiff.id,
-      '⚖️ Sentencia Desestimatoria - Condena en Costas',
+      '⚖️ Sentencia desestimatoria - condena en costas',
       `El Magistrado-Juez ha desestimado tu demanda en los Autos ${lawsuit.caseNumber} con expresa condena en costas. Se han transferido ${formatNumber(costsTotal)} € de tu cuenta a favor de ${defendant.name} en concepto de costas procesales.`,
       'transfer_received',
       costsTxId
@@ -14554,7 +15160,7 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
     addNotification(
       db,
       defendant.id,
-      '⚖️ Demanda Desestimada - Abono de Costas',
+      '⚖️ Demanda desestimada - abono de costas',
       `La demanda deducida contra tu empresa en los Autos ${lawsuit.caseNumber} ha sido desestimada con condena en costas al actor. Se han abonado ${formatNumber(costsTotal)} € en tu cuenta bancaria en concepto de costas procesales (minuta letrada 15% + IVA). ${lawsuit.embargoAmount ? 'Asimismo, se han devuelto los fondos embargados cautelarmente a tu cuenta.' : ''}`,
       'transfer_received',
       costsTxId

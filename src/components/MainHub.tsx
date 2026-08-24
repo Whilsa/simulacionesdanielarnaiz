@@ -142,6 +142,11 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
   });
 
   const hasForklift = purchasedVehicles.some((v: any) => v.vehicleType === 'carretilla_elevadora');
+  const hasWarehouseWorker = employees.some((e: any) => {
+    const role = (e.role || '').toLowerCase();
+    const title = (e.title || e.jobTitle || '').toLowerCase();
+    return role === 'mozo_almacen' || role === 'mozo' || title.includes('mozo');
+  });
 
   const userLevel = currentUser.level || 1;
   let canAccessMarket = false;
@@ -151,7 +156,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
     canAccessMarket = hasTelecomContract && hasOfficeDevice;
   } else {
     // Level 2 & Level 3 requirement
-    canAccessMarket = hasTelecomContract && hasOfficeDevice && hasWarehouse && hasElectricityInWarehouse && hasForklift;
+    canAccessMarket = hasTelecomContract && hasOfficeDevice && hasWarehouse && hasElectricityInWarehouse && hasForklift && hasWarehouseWorker;
   }
 
   const handleCardClick = (moduleId: ModuleType) => {
@@ -250,7 +255,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           iconBg: 'bg-amber-50 text-amber-600 border-amber-100',
           Icon: Landmark,
           description: 'Acceso al simulador bancario corporativo. Realiza transferencias, gestiona tu IBAN, consulta extractos de movimientos e historial de cobros y pagos.',
-          statLabel: 'Saldo Disponible',
+          statLabel: 'Saldo disponible',
           statValue: `${formatNumber(currentUser.balance)} €`
         };
       case 'company':
@@ -264,7 +269,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           hoverText: 'group-hover:text-emerald-600',
           iconBg: 'bg-emerald-50 text-emerald-600 border-emerald-100',
           Icon: Briefcase,
-          description: 'Resumen corporativo: saldo bancario, inmuebles en propiedad (% Suelo/Edificación y amortizaciones), contratos de alquiler, máquinas y nóminas.',
+          description: 'Resumen corporativo: inmuebles en propiedad y alquiler, maquinaria, vehículos, existencias, empleados, préstamos, suministros, muebles e informática.',
           statLabel: 'Empresa',
           statValue: currentUser.name
         };
@@ -280,8 +285,8 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
           Icon: Building2,
           description: 'Mercado de naves industriales, almacenes y locales comerciales. Compra o alquila inmuebles con opción de pago aplazado o fianza.',
-          statLabel: 'Ofertas Activas',
-          statValue: `${availablePropertiesCount} Disponibles`
+          statLabel: 'Ofertas activas',
+          statValue: `${availablePropertiesCount} disponibles`
         };
       case 'machinery':
         return {
@@ -294,9 +299,9 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           hoverText: 'group-hover:text-amber-600',
           iconBg: 'bg-amber-50 text-amber-700 border-amber-200',
           Icon: Wrench,
-          description: 'Adquisición de lotes de maquinaria para producción (Metal/Hierro y Plástico/Ensamblaje) e instalación dentro de Nave Industrial.',
-          statLabel: 'Lotes de Fabricación',
-          statValue: '2 Líneas Disponibles'
+          description: 'Adquisición de lotes de maquinaria para producción (metal/hierro y plástico/ensamblaje) e instalación dentro de nave industrial.',
+          statLabel: 'Lotes de fabricación',
+          statValue: '2 líneas disponibles'
         };
       case 'jobs':
         return {
@@ -309,14 +314,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           hoverText: 'group-hover:text-violet-600',
           iconBg: 'bg-violet-50 text-violet-700 border-violet-200',
           Icon: Users,
-          description: 'Contratación de empleados operarios publicados por el Profesor y asignación a máquinas para cubrir los turnos de trabajo.',
-          statLabel: 'Bolsa de Empleo',
-          statValue: 'Contratación Activa'
+          description: 'Contratación de empleados operarios publicados por el profesor y asignación a máquinas para cubrir los turnos de trabajo.',
+          statLabel: 'Bolsa de empleo',
+          statValue: 'Contratación activa'
         };
       case 'electricity':
         return {
           id: 'electricity' as ModuleType,
-          title: 'Suministro Eléctrico',
+          title: 'Suministro eléctrico',
           badge: 'Energía',
           badgeStyle: 'bg-amber-50 text-amber-800 border-amber-200/80',
           hoverBorder: 'hover:border-amber-500',
@@ -325,15 +330,15 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           iconBg: 'bg-amber-50 text-amber-700 border-amber-200',
           Icon: Zap,
           description: 'Contratación de potencia, asesoría energética, facturación y configuración del suministro eléctrico individual para cada uno de los inmuebles.',
-          statLabel: 'Suministros por Inmueble',
+          statLabel: 'Suministros por inmueble',
           statValue: electricityContracts.length > 0 
-            ? `${electricityContracts.length} ${electricityContracts.length === 1 ? 'Contrato Activo' : 'Contratos Activos'}`
-            : 'Contratación Activa'
+            ? `${electricityContracts.length} ${electricityContracts.length === 1 ? 'contrato activo' : 'contratos activos'}`
+            : 'Contratación activa'
         };
       case 'telecom':
         return {
           id: 'telecom' as ModuleType,
-          title: 'Servicios de Teléfono e Internet',
+          title: 'Servicios de teléfono e internet',
           badge: 'Telecom',
           badgeStyle: 'bg-blue-50 text-blue-800 border-blue-200/80',
           hoverBorder: 'hover:border-blue-500',
@@ -342,14 +347,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
           Icon: PhoneCall,
           description: 'Contratación de ofertas realistas de teléfono, fibra simétrica de alta velocidad y centralitas para empresas. Pago automático el 1 de cada mes con facturas descargables en PDF.',
-          statLabel: 'Comunicaciones Pyme',
-          statValue: 'Fibra & Teléfono'
+          statLabel: 'Comunicaciones pyme',
+          statValue: 'Fibra y teléfono'
         };
       case 'office_store':
         return {
           id: 'office_store' as ModuleType,
-          title: 'Tienda de Equipamiento e Informática',
-          badge: 'Mobiliario & IT',
+          title: 'Tienda de equipamiento e informática',
+          badge: 'Mobiliario y tecnología',
           badgeStyle: 'bg-amber-50 text-amber-900 border-amber-200/80',
           hoverBorder: 'hover:border-amber-500',
           hoverBg: 'group-hover:bg-amber-500',
@@ -357,14 +362,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           iconBg: 'bg-amber-50 text-amber-800 border-amber-200',
           Icon: ShoppingBag,
           description: 'Tienda en línea corporativa con estanterías, mesas, sillas, ordenadores de sobremesa y portátiles, periféricos, impresoras, software contable y de texto, y teléfonos.',
-          statLabel: 'Muebles e Informática',
-          statValue: 'Catálogo de Oficina'
+          statLabel: 'Muebles e informática',
+          statValue: 'Catálogo de oficina'
         };
       case 'vehicles':
         return {
           id: 'vehicles' as ModuleType,
-          title: 'Concesionario de Vehículos',
-          badge: 'Automoción & Flota',
+          title: 'Concesionario de vehículos',
+          badge: 'Automoción y flota',
           badgeStyle: 'bg-blue-50 text-blue-900 border-blue-200/80',
           hoverBorder: 'hover:border-blue-500',
           hoverBg: 'group-hover:bg-blue-600',
@@ -373,28 +378,28 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           Icon: Truck,
           description: 'Venta de vehículos corporativos e industriales: camiones con tráiler para logística, carretillas elevadoras contrapesadas para almacenes y coches de empresa.',
           statLabel: 'Concesionario',
-          statValue: '3 Categorías'
+          statValue: '3 categorías'
         };
       case 'raw_materials':
         return {
           id: 'raw_materials' as ModuleType,
           title: 'Mercado',
-          badge: canAccessMarket ? 'Suministros' : '🔒 Requisitos Previos',
+          badge: canAccessMarket ? 'Suministros' : '🔒 Requisitos previos',
           badgeStyle: canAccessMarket ? 'bg-emerald-50 text-emerald-900 border-emerald-200/80' : 'bg-amber-100 text-amber-900 border-amber-300 font-bold',
           hoverBorder: 'hover:border-emerald-500',
           hoverBg: 'group-hover:bg-emerald-600',
           hoverText: 'group-hover:text-emerald-600',
           iconBg: canAccessMarket ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200',
           Icon: Package,
-          description: 'Adquisición de fragmentos de hierro y metal, pellets de plástico y pegamento epoxi para las líneas de fabricación.',
-          statLabel: 'Suministro Industrial',
-          statValue: canAccessMarket ? 'Catálogo de Suministros' : '🔒 Requiere Teléfono/Informática'
+          description: 'Adquisición de fragmentos de hierro, pellets de plástico y pegamento epoxi para las líneas de fabricación.',
+          statLabel: 'Suministro industrial',
+          statValue: canAccessMarket ? 'Catálogo de suministros' : (userLevel === 1 ? '🔒 Requiere teléfono e informática' : '🔒 Requiere almacén, suministros y mozo')
         };
       case 'court':
         return {
           id: 'court' as ModuleType,
-          title: 'Juzgado de 1ª Instancia',
-          badge: 'Sede Judicial',
+          title: 'Juzgado de 1ª instancia',
+          badge: 'Sede judicial',
           badgeStyle: 'bg-amber-50 text-amber-900 border-amber-200/80',
           hoverBorder: 'hover:border-amber-500',
           hoverBg: 'group-hover:bg-amber-600',
@@ -403,7 +408,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           Icon: Scale,
           description: 'Sede judicial para interponer demandas ordinarias por incumplimiento contractual (falta de pago o entrega en compraventas) y demandas de juicio cambiario por pagarés impagados.',
           statLabel: 'Procedimientos',
-          statValue: 'Sede Judicial & Litigios'
+          statValue: 'Sede judicial y litigios'
         };
     }
   };
@@ -419,7 +424,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-white">ContaLab</h1>
-              <p className="text-xs text-slate-400 font-medium">Simulador de negocios para contabilidad</p>
+              <p className="text-xs text-slate-400 font-medium">Simulador de negocios para contabilidad de Daniel Arnaiz Boluda</p>
             </div>
           </div>
 
@@ -437,7 +442,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 onSelectModule('court');
               }}
               className="relative flex items-center gap-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 px-3 py-1.5 rounded-xl border border-amber-500/40 transition cursor-pointer group shadow-sm"
-              title="Acceder a Sede Judicial / Abogado y Notificaciones de Litigios"
+              title="Acceder a sede judicial / abogado y notificaciones de litigios"
             >
               <Scale className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
               <span className="text-xs font-bold hidden sm:inline">Abogado</span>
@@ -451,6 +456,10 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
             <button
               type="button"
               onClick={() => {
+                if (!canAccessMarket) {
+                  setShowMarketLockModal(true);
+                  return;
+                }
                 if (onOpenDirectMessaging) {
                   onOpenDirectMessaging();
                 } else {
@@ -458,7 +467,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 }
               }}
               className="relative flex items-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-200 px-3 py-1.5 rounded-xl border border-indigo-500/40 transition cursor-pointer group shadow-sm"
-              title="Acceder a Mensajería Directa"
+              title="Acceder a mensajería directa"
             >
               <MessageSquare className="w-3.5 h-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
               <span className="text-xs font-bold hidden sm:inline">Mensajería directa</span>
@@ -505,7 +514,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 text-xs font-semibold mb-3">
               <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Panel Principal de Operaciones</span>
+              <span>Panel principal de operaciones</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
               Bienvenido, {currentUser.name}
@@ -597,20 +606,6 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
             );
           })}
         </div>
-
-        {/* Informational Footer Note */}
-        <div className="mt-12 bg-slate-200/60 rounded-2xl p-4 sm:p-6 border border-slate-300/60 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white rounded-xl text-slate-700 shadow-xs border border-slate-200">
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-slate-800">Sincronización Contable en Tiempo Real</h4>
-              <p className="text-xs text-slate-600">Cualquier alquiler, compra de inmueble o pago de pagaré reflejará el cargo directamente en la cuenta bancaria.</p>
-            </div>
-          </div>
-          <div className="text-xs text-slate-500 font-mono">v1.2.2 • Academic</div>
-        </div>
       </main>
 
       <Footer />
@@ -624,7 +619,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 <Lock className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-slate-900">Acceso Restringido a Mercado</h3>
+                <h3 className="text-xl font-bold text-slate-900">Acceso restringido a mercado y mensajería directa</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {userLevel === 1 ? 'Requisitos obligatorios (Nivel 1)' : `Requisitos obligatorios (Nivel ${userLevel})`}
                 </p>
@@ -633,8 +628,8 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
 
             <p className="text-xs text-slate-600 leading-relaxed">
               {userLevel === 1 
-                ? 'Para poder gestionar compras y pedidos en el Mercado de materias primas, tu empresa debe disponer de línea de comunicación y equipamiento informático para tramitar los pedidos:'
-                : 'Para poder acceder al Mercado en Nivel 2/3, tu empresa debe disponer de comunicaciones, equipamiento, un almacén con contrato de luz activo y una carretilla elevadora:'}
+                ? 'Para poder gestionar compras y pedidos en el mercado de materias primas y acceder a la mensajería directa, tu empresa debe disponer de línea de comunicación y equipamiento informático para tramitar los pedidos:'
+                : 'Para poder acceder al mercado y a la mensajería directa en nivel 2/3, tu empresa debe disponer de comunicaciones, equipamiento, un almacén con contrato de luz activo, una carretilla elevadora y al menos un mozo de almacén contratado:'}
             </p>
 
             <div className="space-y-3">
@@ -643,7 +638,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 hasTelecomContract ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
               }`}>
                 <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-slate-900 block">1. Servicio de Teléfono e Internet</span>
+                  <span className="text-xs font-bold text-slate-900 block">1. Servicio de teléfono e internet</span>
                   <p className="text-[11px] text-slate-500">
                     {hasTelecomContract ? "✓ Plan activo contratado" : "✕ Sin contrato de teléfono/internet activo"}
                   </p>
@@ -668,7 +663,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 hasOfficeDevice ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
               }`}>
                 <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-slate-900 block">2. Ordenador o Teléfono de Oficina</span>
+                  <span className="text-xs font-bold text-slate-900 block">2. Ordenador o teléfono de oficina</span>
                   <p className="text-[11px] text-slate-500">
                     {hasOfficeDevice ? "✓ Equipamiento adquirido" : "✕ Se requiere mín. 1 ordenador o teléfono"}
                   </p>
@@ -696,7 +691,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                     hasWarehouse ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
                   }`}>
                     <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-900 block">3. Almacén Adquirido (Inmueble)</span>
+                      <span className="text-xs font-bold text-slate-900 block">3. Almacén adquirido (inmueble)</span>
                       <p className="text-[11px] text-slate-500">
                         {hasWarehouse ? "✓ Dispones de un almacén/nave" : "✕ Se requiere comprar o alquilar un almacén"}
                       </p>
@@ -721,7 +716,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                     hasElectricityInWarehouse ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
                   }`}>
                     <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-900 block">4. Luz Contratada en el Almacén</span>
+                      <span className="text-xs font-bold text-slate-900 block">4. Luz contratada en el almacén</span>
                       <p className="text-[11px] text-slate-500">
                         {hasElectricityInWarehouse ? "✓ Contrato eléctrico activo en el almacén" : "✕ Se requiere contratar luz para el almacén"}
                       </p>
@@ -746,7 +741,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                     hasForklift ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
                   }`}>
                     <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-900 block">5. Carretilla Elevadora</span>
+                      <span className="text-xs font-bold text-slate-900 block">5. Carretilla elevadora</span>
                       <p className="text-[11px] text-slate-500">
                         {hasForklift ? "✓ Dispones de carretilla elevadora" : "✕ Se requiere adquirir una carretilla elevadora"}
                       </p>
@@ -765,6 +760,31 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                       <span className="text-emerald-700 text-xs font-extrabold px-2.5 py-1 bg-emerald-100 rounded-lg shrink-0">Completado</span>
                     )}
                   </div>
+
+                  {/* Requirement 6: Mozo de almacén */}
+                  <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                    hasWarehouseWorker ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"
+                  }`}>
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold text-slate-900 block">6. Mozo de almacén en plantilla</span>
+                      <p className="text-[11px] text-slate-500">
+                        {hasWarehouseWorker ? "✓ Dispones de mozo de almacén contratado" : "✕ Se requiere contratar al menos 1 mozo de almacén"}
+                      </p>
+                    </div>
+                    {!hasWarehouseWorker ? (
+                      <button
+                        onClick={() => {
+                          setShowMarketLockModal(false);
+                          onSelectModule("jobs");
+                        }}
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shrink-0 cursor-pointer"
+                      >
+                        Contratar
+                      </button>
+                    ) : (
+                      <span className="text-emerald-700 text-xs font-extrabold px-2.5 py-1 bg-emerald-100 rounded-lg shrink-0">Completado</span>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -774,7 +794,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 onClick={() => setShowMarketLockModal(false)}
                 className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
               >
-                Entendido / Cerrar
+                Entendido / cerrar
               </button>
             </div>
           </div>

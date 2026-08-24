@@ -115,14 +115,14 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
     if (formType === 'cambiaria') {
       setFormSubtype('impago_pagare');
       setFormLegalBasis(
-        '1. Artículos 819 a 827 de la Ley de Enjuiciamiento Civil (LEC), reguladores del Juicio Cambiario especial y sumario.\n' +
+        '1. Artículos 819 a 827 de la Ley de Enjuiciamiento Civil (LEC), reguladores del juicio cambiario especial y sumario.\n' +
         '2. Artículos 49, 94 y concordantes de la Ley 19/1985 Cambiaria y del Cheque (LCCh), relativos a la fuerza ejecutiva del pagaré y la legitimación del tomador/tenedor.\n' +
         '3. Artículo 821.2 de la LEC, que prescribe el requerimiento judicial de pago en diez días y el embargo preventivo cautelar inmediato de bienes del deudor para cubrir principal, intereses y costas.'
       );
       setFormPetitum(
-        'SUPLICO AL JUZGADO: Que teniendo por presentado este escrito junto con el pagaré original y documentos adjuntos, se sirva admitir a trámite la presente DEMANDA DE JUICIO CAMBIARIO, requiriendo de pago al demandado por la suma de ' +
-        (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[CUANTÍA]') +
-        ' de principal, más el 30% fijado por ley para intereses de demora procesal y costas; decretándose de forma inmediata e inaudita parte el EMBARGO PREVENTIVO de los saldos de sus cuentas bancarias y bienes.'
+        'Suplico al juzgado: que teniendo por presentado este escrito junto con el pagaré original y documentos adjuntos, se sirva admitir a trámite la presente demanda de juicio cambiario, requiriendo de pago al demandado por la suma de ' +
+        (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[cuantía]') +
+        ' de principal, más el 30% fijado por ley para intereses de demora procesal y costas; decretándose de forma inmediata e inaudita parte el embargo preventivo de los saldos de sus cuentas bancarias y bienes.'
       );
       setFormEvidence('1. Pagaré oficial emitido con firma electrónica y certificación cambiaria.\n2. Justificante de presentación al cobro y rechazo por falta de fondos bancarios.\n3. Extracto bancario acreditativo.');
     } else {
@@ -133,8 +133,8 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
           '3. Artículos 1089, 1091, 1100, 1108 y 1124 del Código Civil, sobre la exigibilidad de los contratos y la indemnización de daños y perjuicios moratorios.'
         );
         setFormPetitum(
-          'SUPLICO AL JUZGADO: Que se dicte sentencia por la que se declare la plena validez y eficacia del título contractual de compraventa y se condene al demandado al abono íntegro de la cantidad reclamada de ' +
-          (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[CUANTÍA]') +
+          'Suplico al juzgado: que se dicte sentencia por la que se declare la plena validez y eficacia del título contractual de compraventa y se condene al demandado al abono íntegro de la cantidad reclamada de ' +
+          (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[cuantía]') +
           ', más los intereses legales desde la fecha de devengo e imposición de las costas procesales.'
         );
         setFormEvidence('1. Registro de pedido y acuerdo mercantil formalizado en el portal de mercado.\n2. Mensajería instantánea y comunicaciones directas entre las partes.\n3. Factura mercantil emitida y extractos contables acreditativos.');
@@ -145,8 +145,8 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
           '3. Artículo 1124 del Código Civil sobre la resolución o cumplimiento forzoso del contrato con resarcimiento de daños.'
         );
         setFormPetitum(
-          'SUPLICO AL JUZGADO: Que se dicte sentencia estimatoria reconociendo el título contractual de compraventa y condenando a la parte demandada a la entrega inmediata de los bienes pactados o, subsidiariamente, a la devolución y pago de ' +
-          (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[CUANTÍA]') +
+          'Suplico al juzgado: que se dicte sentencia estimatoria reconociendo el título contractual de compraventa y condenando a la parte demandada a la entrega inmediata de los bienes pactados o, subsidiariamente, a la devolución y pago de ' +
+          (formClaimedAmount ? `${formatNumber(Number(formClaimedAmount))} €` : '[cuantía]') +
           ' correspondientes a los fondos transferidos y daños causados, con intereses y costas.'
         );
         setFormEvidence('1. Justificante de transferencia bancaria emitida.\n2. Pedido aceptado en el mercado de suministros.\n3. Reclamaciones enviadas a través del chat corporativo.');
@@ -161,12 +161,12 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
     setFormSubtype('impago_pagare');
     setFormDefendantId(note.issuerId);
     setFormClaimedAmount(String(note.amount));
-    setFormGoodsDescription(`Pagaré Cambiario Oficial Nº ${note.promissoryNoteNumber} (Vto: ${new Date(note.dueDate).toLocaleDateString('es-ES')}) - Concepto: ${note.concept || 'Compraventa de suministros'}`);
+    setFormGoodsDescription(`Pagaré cambiario oficial n.º ${note.promissoryNoteNumber} (vto: ${new Date(note.dueDate).toLocaleDateString('es-ES')}) - concepto: ${note.concept || 'Compraventa de suministros'}`);
     setFormContractDate(note.issueDate.slice(0, 10));
     setFormFacts(
-      `I. El demandado (${note.issuerName}) emitió a favor de esta parte el Pagaré oficial cambiario nº ${note.promissoryNoteNumber} por importe de ${formatNumber(note.amount)} € con vencimiento el ${new Date(note.dueDate).toLocaleDateString('es-ES')}.\n\n` +
+      `I. El demandado (${note.issuerName}) emitió a favor de esta parte el pagaré oficial cambiario n.º ${note.promissoryNoteNumber} por importe de ${formatNumber(note.amount)} € con vencimiento el ${new Date(note.dueDate).toLocaleDateString('es-ES')}.\n\n` +
       `II. Llegada la fecha de vencimiento, esta parte procedió a presentar formalmente el efecto al cobro en la entidad bancaria librada.\n\n` +
-      `III. La entidad bancaria devolvió el efecto por FALTA DE FONDOS suficientes en la cuenta del librador, resultando la deuda líquida, vencida y plenamente exigible por la vía ejecutiva cambiaria.`
+      `III. La entidad bancaria devolvió el efecto por falta de fondos suficientes en la cuenta del librador, resultando la deuda líquida, vencida y plenamente exigible por la vía ejecutiva cambiaria.`
     );
   };
 
@@ -386,7 +386,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
       setFeedbackMsg({
         type: 'success',
-        text: `✓ Demanda interpuesta formalmente con Autos nº ${data.lawsuit.caseNumber}.${lawyerFeeMsg} El procedimiento queda pendiente de Auto de Admisión a Trámite por el Magistrado-Juez.`
+        text: `✓ Demanda interpuesta formalmente con autos n.º ${data.lawsuit.caseNumber}.${lawyerFeeMsg} El procedimiento queda pendiente de auto de admisión a trámite por el magistrado-juez.`
       });
 
       if (onUserBalanceUpdated && typeof data.newBalance === 'number') {
@@ -410,7 +410,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
     }
   };
 
-  // Teacher / Judge: Auto de Admisión a Trámite o Inadmisión
+  // Teacher / Judge: Auto de admisión a trámite o Inadmisión
   const handleJudgeAdmission = async (lawsuit: CourtLawsuit, admission: 'admitir' | 'rechazar') => {
     setIsSubmitting(true);
     setFeedbackMsg(null);
@@ -431,7 +431,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
       setFeedbackMsg({
         type: 'success',
-        text: `✓ ${data.message || (admission === 'admitir' ? `Auto de Admisión dictado en los Autos ${lawsuit.caseNumber}. Demandado emplazado.` : `Auto de Inadmisión dictado en los Autos ${lawsuit.caseNumber}.`)}`
+        text: `✓ ${data.message || (admission === 'admitir' ? `Auto de admisión dictado en los autos ${lawsuit.caseNumber}. Demandado emplazado.` : `Auto de inadmisión dictado en los autos ${lawsuit.caseNumber}.`)}`
       });
 
       fetchCourtData();
@@ -465,7 +465,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
       setFeedbackMsg({
         type: 'success',
-        text: `✓ ${data.message || `Auto de Embargo Preventivo (Art. 821 LEC) dictado en los Autos ${lawsuit.caseNumber}. Fondos consignados en depósito judicial.`}`
+        text: `✓ ${data.message || `Auto de embargo preventivo (art. 821 LEC) dictado en los autos ${lawsuit.caseNumber}. Fondos consignados en depósito judicial.`}`
       });
 
       fetchCourtData();
@@ -539,7 +539,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
       setFeedbackMsg({
         type: 'success',
-        text: `✓ Resolución judicial dictada en los Autos ${rulingLawsuit.caseNumber} (${rulingType === 'estimatoria' ? 'Estimada con Ejecución' : 'Desestimada'}).`
+        text: `✓ Resolución judicial dictada en los autos ${rulingLawsuit.caseNumber} (${rulingType === 'estimatoria' ? 'Estimada con ejecución' : 'Desestimada'}).`
       });
 
       setRulingLawsuit(null);
@@ -564,7 +564,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
       <html lang="es">
       <head>
         <meta charset="utf-8">
-        <title>Escrito Judicial - Autos ${lawsuit.caseNumber}</title>
+        <title>Escrito judicial - Autos ${lawsuit.caseNumber}</title>
         <style>
           @page { size: A4 portrait; margin: 20mm; }
           body { font-family: 'Times New Roman', Times, serif; font-size: 12pt; line-height: 1.5; color: #111; margin: 0; padding: 20px; }
@@ -585,59 +585,59 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
       <body>
         <div class="no-print" style="margin-bottom: 20px; text-align: right;">
           <button onclick="window.print()" style="padding: 10px 20px; background: #1e293b; color: #fff; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;">
-            🖨️ Imprimir / Guardar en PDF
+            🖨️ Imprimir / guardar en PDF
           </button>
         </div>
 
         <div class="header">
-          <div class="court-title">ADMINISTRACIÓN DE JUSTICIA</div>
+          <div class="court-title">Administración de justicia</div>
           <div class="court-title" style="font-size: 13pt; margin-top: 4px;">${lawsuit.courtName}</div>
-          <div class="court-sub">SEDE ELECTRÓNICA JUDICIAL Y REGISTRO DE PROCEDIMIENTOS CIVILES Y MERCANTILES</div>
-          <div class="case-badge">AUTOS Nº: ${lawsuit.caseNumber}</div>
+          <div class="court-sub">Sede electrónica judicial y registro de procedimientos civiles y mercantiles</div>
+          <div class="case-badge">Autos n.º: ${lawsuit.caseNumber}</div>
         </div>
 
         <div class="meta-box">
-          <div class="meta-row"><span class="meta-label">CLASE DE PROCEDIMIENTO:</span> <span>${lawsuit.type === 'cambiaria' ? 'JUICIO CAMBIARIO (Título Ejecutivo Cambiario)' : 'JUICIO DECLARATIVO ORDINARIO (Incumplimiento Contractual)'}</span></div>
-          <div class="meta-row"><span class="meta-label">PARTE DEMANDANTE (ACTOR):</span> <span>${lawsuit.plaintiffName} (${lawsuit.plaintiffNif || 'NIF-ES'})</span></div>
-          <div class="meta-row"><span class="meta-label">PARTE DEMANDADA:</span> <span>${lawsuit.defendantName} (${lawsuit.defendantNif || 'NIF-ES'})</span></div>
-          <div class="meta-row"><span class="meta-label">CUANTÍA PRINCIPAL RECLAMADA:</span> <span>${lawsuit.claimedAmount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span></div>
-          <div class="meta-row"><span class="meta-label">INTERESES Y COSTAS PREVISTAS:</span> <span>${lawsuit.interestAndCostsAmount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span></div>
-          <div class="meta-row"><span class="meta-label">FECHA DE REGISTRO JUDICIAL:</span> <span>${new Date(lawsuit.createdAt).toLocaleDateString('es-ES')}</span></div>
-          <div class="meta-row"><span class="meta-label">ESTADO PROCESAL ACTUAL:</span> <span style="font-weight: bold; text-transform: uppercase;">${lawsuit.status.replace('_', ' ')}</span></div>
+          <div class="meta-row"><span class="meta-label">Clase de procedimiento:</span> <span>${lawsuit.type === 'cambiaria' ? 'Juicio cambiario (título ejecutivo cambiario)' : 'Juicio declarativo ordinario (incumplimiento contractual)'}</span></div>
+          <div class="meta-row"><span class="meta-label">Parte demandante (actor):</span> <span>${lawsuit.plaintiffName} (${lawsuit.plaintiffNif || 'NIF-ES'})</span></div>
+          <div class="meta-row"><span class="meta-label">Parte demandada:</span> <span>${lawsuit.defendantName} (${lawsuit.defendantNif || 'NIF-ES'})</span></div>
+          <div class="meta-row"><span class="meta-label">Cuantía principal reclamada:</span> <span>${lawsuit.claimedAmount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span></div>
+          <div class="meta-row"><span class="meta-label">Intereses y costas previstas:</span> <span>${lawsuit.interestAndCostsAmount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</span></div>
+          <div class="meta-row"><span class="meta-label">Fecha de registro judicial:</span> <span>${new Date(lawsuit.createdAt).toLocaleDateString('es-ES')}</span></div>
+          <div class="meta-row"><span class="meta-label">Estado procesal actual:</span> <span style="font-weight: bold;">${lawsuit.status.replace('_', ' ')}</span></div>
         </div>
 
-        <p><strong>AL JUZGADO DE PRIMERA INSTANCIA</strong></p>
+        <p><strong>Al Juzgado de Primera Instancia</strong></p>
         <p>
-          D./Dña. <strong>${lawsuit.plaintiffName}</strong>, en su propio nombre y representación, comparece en autos y como mejor proceda en Derecho, <strong>DICE:</strong>
+          D./Dña. <strong>${lawsuit.plaintiffName}</strong>, en su propio nombre y representación, comparece en autos y como mejor proceda en Derecho, <strong>dice:</strong>
         </p>
         <p>
-          Que por medio del presente escrito formula <strong>${lawsuit.type === 'cambiaria' ? 'DEMANDA DE JUICIO CAMBIARIO' : 'DEMANDA ORDINARIA DE RECLAMACIÓN CONTRACTUAL Y DE CANTIDAD'}</strong> contra <strong>${lawsuit.defendantName}</strong>, en base a los siguientes:
+          Que por medio del presente escrito formula <strong>${lawsuit.type === 'cambiaria' ? 'demanda de juicio cambiario' : 'demanda ordinaria de reclamación contractual y de cantidad'}</strong> contra <strong>${lawsuit.defendantName}</strong>, en base a los siguientes:
         </p>
 
-        <h2>I. HECHOS</h2>
+        <h2>I. Hechos</h2>
         <p style="white-space: pre-line;">${lawsuit.facts}</p>
 
-        <h2>II. FUNDAMENTOS DE DERECHO</h2>
+        <h2>II. Fundamentos de derecho</h2>
         <p style="white-space: pre-line;">${lawsuit.legalBasis}</p>
 
-        <h2>III. MEDIOS DE PRUEBA APORTADOS</h2>
+        <h2>III. Medios de prueba aportados</h2>
         <p style="white-space: pre-line;">${lawsuit.evidenceSummary}</p>
 
-        <h2>IV. DOCUMENTOS PROBATORIOS ADJUNTOS (FORMATO PDF)</h2>
+        <h2>IV. Documentos probatorios adjuntos (formato PDF)</h2>
         ${
           lawsuit.attachments && lawsuit.attachments.length > 0
             ? `<ul style="margin: 8px 0; padding-left: 20px;">
                 ${lawsuit.attachments
                   .map(
                     (att, idx) =>
-                      `<li style="margin-bottom: 4px;"><strong>Doc. Nº ${idx + 1}:</strong> ${att.name} (${(att.size / 1024).toFixed(1)} KB) - Registrado digitalmente</li>`
+                      `<li style="margin-bottom: 4px;"><strong>Doc. n.º ${idx + 1}:</strong> ${att.name} (${(att.size / 1024).toFixed(1)} KB) - Registrado digitalmente</li>`
                   )
                   .join('')}
               </ul>`
             : '<p><em>No se adjuntaron ficheros complementarios en el momento de la interposición.</em></p>'
         }
 
-        <h2>V. SUPLICO AL JUZGADO</h2>
+        <h2>V. Suplico al juzgado</h2>
         <p style="white-space: pre-line;">${lawsuit.petitum}</p>
 
         ${
@@ -645,36 +645,36 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
             ? `
             <div style="margin-top: 35px; border-top: 2px solid #111; padding-top: 20px;">
               <div style="font-size: 13pt; font-weight: bold; text-align: center; margin-bottom: 10px;">
-                ESCRITO DE CONTESTACIÓN Y ALEGACIONES DE LA PARTE DEMANDADA
+                Escrito de contestación y alegaciones de la parte demandada
               </div>
               <div class="meta-box" style="background-color: #f1f5f9;">
-                <div class="meta-row"><span class="meta-label">PARTE QUE CONTESTA:</span> <span>${lawsuit.defendantName} (${lawsuit.defendantNif || 'NIF-ES'})</span></div>
-                <div class="meta-row"><span class="meta-label">MODALIDAD DE RESPUESTA:</span> <span>${
+                <div class="meta-row"><span class="meta-label">Parte que contesta:</span> <span>${lawsuit.defendantName} (${lawsuit.defendantNif || 'NIF-ES'})</span></div>
+                <div class="meta-row"><span class="meta-label">Modalidad de respuesta:</span> <span>${
                   lawsuit.defendantAnswerType === 'ordinaria_contestacion'
-                    ? 'CONTESTACIÓN A LA DEMANDA ORDINARIA (Plazo 20 días hábiles)'
+                    ? 'Contestación a la demanda ordinaria (plazo 20 días hábiles)'
                     : lawsuit.defendantAnswerType === 'cambiaria_ya_pagado'
-                    ? 'OPOSICIÓN CAMBIARIA POR PAGO PREVIO EXTINTIVO (Art. 824 LEC)'
-                    : 'ALLANAMIENTO Y PAGO VOLUNTARIO'
+                    ? 'Oposición cambiaria por pago previo extintivo (art. 824 LEC)'
+                    : 'Allanamiento y pago voluntario'
                 }</span></div>
-                <div class="meta-row"><span class="meta-label">FECHA DE PRESENTACIÓN:</span> <span>${lawsuit.defendantAnswerDate ? new Date(lawsuit.defendantAnswerDate).toLocaleDateString('es-ES') : '-'}</span></div>
+                <div class="meta-row"><span class="meta-label">Fecha de presentación:</span> <span>${lawsuit.defendantAnswerDate ? new Date(lawsuit.defendantAnswerDate).toLocaleDateString('es-ES') : '-'}</span></div>
                 ${
                   lawsuit.defendantLawyerFeeTotal && lawsuit.defendantLawyerFeeTotal > 0
-                    ? `<div class="meta-row"><span class="meta-label">MINUTA LETRADO DE LA DEFENSA:</span> <span>${lawsuit.defendantLawyerFeeTotal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € (15% + IVA) - Fra: ${lawsuit.defendantLawyerFeeInvoiceNumber || 'FRA-ABOG'}</span></div>`
+                    ? `<div class="meta-row"><span class="meta-label">Minuta letrado de la defensa:</span> <span>${lawsuit.defendantLawyerFeeTotal.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € (15% + IVA) - Fra: ${lawsuit.defendantLawyerFeeInvoiceNumber || 'FRA-ABOG'}</span></div>`
                     : ''
                 }
               </div>
 
-              <h2>VI. ALEGACIONES Y HECHOS DE LA DEFENSA</h2>
+              <h2>VI. Alegaciones y hechos de la defensa</h2>
               <p style="white-space: pre-line;">${lawsuit.defendantAnswerFacts || 'Sin alegaciones adicionales redactadas.'}</p>
 
-              <h2>VII. DOCUMENTOS PROBATORIOS APORTADOS POR LA DEFENSA (PDF)</h2>
+              <h2>VII. Documentos probatorios aportados por la defensa (PDF)</h2>
               ${
                 lawsuit.defendantAnswerAttachments && lawsuit.defendantAnswerAttachments.length > 0
                   ? `<ul style="margin: 8px 0; padding-left: 20px;">
                       ${lawsuit.defendantAnswerAttachments
                         .map(
                           (att, idx) =>
-                            `<li style="margin-bottom: 4px;"><strong>Doc. Defensa Nº ${idx + 1}:</strong> ${att.name} (${(att.size / 1024).toFixed(1)} KB) - Registrado digitalmente</li>`
+                            `<li style="margin-bottom: 4px;"><strong>Doc. defensa n.º ${idx + 1}:</strong> ${att.name} (${(att.size / 1024).toFixed(1)} KB) - Registrado digitalmente</li>`
                         )
                         .join('')}
                     </ul>`
@@ -690,22 +690,22 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
             ? `
             <div style="margin-top: 35px; border-top: 2px solid #111; padding-top: 20px;">
               <div style="font-size: 13pt; font-weight: bold; text-align: center; margin-bottom: 10px;">
-                FALLO / RESOLUCIÓN JUDICIAL DEFINITIVA
+                Fallo / resolución judicial definitiva
               </div>
               <div class="meta-box" style="background-color: ${lawsuit.status === 'desestimada' ? '#fff1f2' : '#f0fdf4'}; border-color: ${lawsuit.status === 'desestimada' ? '#f43f5e' : '#22c55e'};">
-                <div class="meta-row"><span class="meta-label">ESTADO PROCESAL:</span> <span style="font-weight: bold; color: ${lawsuit.status === 'desestimada' ? '#b91c1c' : '#15803d'};">${
-                  lawsuit.status === 'desestimada' ? 'SENTENCIA DESESTIMATORIA (CON CONDENA EN COSTAS AL ACTOR)' : lawsuit.status === 'ejecutada' ? 'SENTENCIA ESTIMATORIA FIRME' : 'AUTO DE INADMISIÓN'
+                <div class="meta-row"><span class="meta-label">Estado procesal:</span> <span style="font-weight: bold; color: ${lawsuit.status === 'desestimada' ? '#b91c1c' : '#15803d'};">${
+                  lawsuit.status === 'desestimada' ? 'Sentencia desestimatoria (con condena en costas al actor)' : lawsuit.status === 'ejecutada' ? 'Sentencia estimatoria firme' : 'Auto de inadmisión'
                 }</span></div>
-                <div class="meta-row"><span class="meta-label">FECHA DE RESOLUCIÓN:</span> <span>${lawsuit.resolutionDate ? new Date(lawsuit.resolutionDate).toLocaleDateString('es-ES') : '-'}</span></div>
+                <div class="meta-row"><span class="meta-label">Fecha de resolución:</span> <span>${lawsuit.resolutionDate ? new Date(lawsuit.resolutionDate).toLocaleDateString('es-ES') : '-'}</span></div>
                 ${
                   lawsuit.status === 'desestimada' && lawsuit.costsPaid
-                    ? `<div class="meta-row"><span class="meta-label">COSTAS PROCESALES DEVENGADAS:</span> <span style="font-weight: bold;">${lawsuit.costsPaid.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € (Abonadas por el demandante ${lawsuit.plaintiffName} al demandado ${lawsuit.defendantName})</span></div>`
+                    ? `<div class="meta-row"><span class="meta-label">Costas procesales devengadas:</span> <span style="font-weight: bold;">${lawsuit.costsPaid.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € (abonadas por el demandante ${lawsuit.plaintiffName} al demandado ${lawsuit.defendantName})</span></div>`
                     : ''
                 }
               </div>
-              <h2>VIII. FUNDAMENTACIÓN Y PRONUNCIAMIENTO JUDICIAL</h2>
+              <h2>VIII. Fundamentación y pronunciamiento judicial</h2>
               <p style="white-space: pre-line;">${lawsuit.resolutionNotes}</p>
-              ${lawsuit.judgeComments ? `<p style="margin-top: 8px; font-style: italic;"><strong>Observaciones del Juzgado:</strong> ${lawsuit.judgeComments}</p>` : ''}
+              ${lawsuit.judgeComments ? `<p style="margin-top: 8px; font-style: italic;"><strong>Observaciones del juzgado:</strong> ${lawsuit.judgeComments}</p>` : ''}
             </div>
             `
             : ''
@@ -714,9 +714,9 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
         <div style="margin-top: 40px;">
           <p>En la Sede Judicial, a ${new Date(lawsuit.resolutionDate || lawsuit.createdAt).toLocaleDateString('es-ES')}.</p>
           <div class="stamp">
-            <div class="seal-text">⚖️ REGISTRO ELECTRÓNICO JUDICIAL</div>
+            <div class="seal-text">⚖️ Registro electrónico judicial</div>
             <div style="font-size: 8pt; font-family: monospace; margin-top: 5px;">HASH: ${lawsuit.id.slice(0, 16)}</div>
-            <div style="font-size: 8pt; color: #444; margin-top: 4px;">Firma Digital Verificada</div>
+            <div style="font-size: 8pt; color: #444; margin-top: 4px;">Firma digital verificada</div>
           </div>
         </div>
       </body>
@@ -757,7 +757,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition border border-slate-700 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Volver al Hub</span>
+              <span>Volver al menú principal</span>
             </button>
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
@@ -767,10 +767,10 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <h1 className="text-sm sm:text-base font-extrabold text-white leading-tight flex items-center gap-2">
                   <span>Juzgado de 1ª Instancia e Instrucción</span>
                   <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-500/30">
-                    Sede Judicial
+                    Sede judicial
                   </span>
                 </h1>
-                <p className="text-[11px] text-slate-400">Portal Electrónico de Litigios Mercantiles y Juicios Cambiarios</p>
+                <p className="text-[11px] text-slate-400">Portal electrónico de litigios mercantiles y juicios cambiarios</p>
               </div>
             </div>
           </div>
@@ -828,14 +828,14 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-black text-amber-300 uppercase tracking-wider">
-                    🏛️ Sala de Gobierno Jurisdiccional · Magistrado-Juez Titular
+                    🏛️ Sala de gobierno jurisdiccional · Magistrado-juez titular
                   </span>
                   <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-0.5 rounded-full shadow">
-                    Perfil: Magistrado Titular
+                    Perfil: Magistrado titular
                   </span>
                 </div>
                 <p className="text-xs text-slate-300">
-                  Simulación de Juez activa: Tienes la potestad exclusiva de admitir, examinar y dictar sentencia firme con ejecución forzosa en todos los procedimientos del simulador.
+                  Simulación de juez activa: Tienes la potestad exclusiva de admitir, examinar y dictar sentencia firme con ejecución forzosa en todos los procedimientos del simulador.
                 </p>
               </div>
             </div>
@@ -862,7 +862,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               }`}
             >
               <FileText className="w-4 h-4" />
-              <span>Autos y Expedientes</span>
+              <span>Autos y expedientes</span>
               {lawsuits.length > 0 && (
                 <span className={`px-2 py-0.5 text-[10px] rounded-full font-black ${activeTab === 'demandas' ? 'bg-slate-950 text-amber-400' : 'bg-slate-800 text-slate-300'}`}>
                   {lawsuits.length}
@@ -879,7 +879,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               }`}
             >
               <PlusCircle className="w-4 h-4" />
-              <span>Interponer Demanda</span>
+              <span>Interponer demanda</span>
             </button>
 
             <button
@@ -891,13 +891,13 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               }`}
             >
               <HelpCircle className="w-4 h-4" />
-              <span>Guía Procesal y Tipos de Demanda</span>
+              <span>Guía procesal y tipos de demanda</span>
             </button>
           </div>
 
           <div className="text-xs text-slate-400 flex items-center gap-1.5">
             <Landmark className="w-3.5 h-3.5 text-amber-400" />
-            <span>Jurisdicción Civil y Mercantil</span>
+            <span>Jurisdicción civil y mercantil</span>
           </div>
         </div>
 
@@ -921,7 +921,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                     filterType === 'plaintiff' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Como Demandante ({lawsuits.filter(l => l.plaintiffId === currentUser.id).length})
+                  Como demandante ({lawsuits.filter(l => l.plaintiffId === currentUser.id).length})
                 </button>
                 <button
                   onClick={() => setFilterType('defendant')}
@@ -937,7 +937,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                     filterType === 'cambiaria' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Juicios Cambiarios ({lawsuits.filter(l => l.type === 'cambiaria').length})
+                  Juicios cambiarios ({lawsuits.filter(l => l.type === 'cambiaria').length})
                 </button>
               </div>
 
@@ -970,7 +970,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs transition inline-flex items-center gap-2 cursor-pointer shadow-lg"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>Interponer Nueva Demanda</span>
+                  <span>Interponer nueva demanda</span>
                 </button>
               </div>
             ) : (
@@ -1005,7 +1005,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                                     : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                 }`}
                               >
-                                {lawsuit.type === 'cambiaria' ? 'Juicio Cambiario (Pagaré)' : 'Demanda Ordinaria'}
+                                {lawsuit.type === 'cambiaria' ? 'Juicio cambiario (pagaré)' : 'Demanda ordinaria'}
                               </span>
                             </div>
                             <div className="text-[11px] text-slate-400 mt-1">
@@ -1018,43 +1018,43 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                             {lawsuit.status === 'pendiente_admision' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
                                 <Clock className="w-3 h-3 text-amber-400" />
-                                <span>Pendiente de Admisión</span>
+                                <span>Pendiente de admisión</span>
                               </span>
                             )}
                             {lawsuit.status === 'admitida' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/40">
                                 <Clock className="w-3 h-3 text-blue-400" />
-                                <span>Admitida a Trámite</span>
+                                <span>Admitida a trámite</span>
                               </span>
                             )}
                             {lawsuit.status === 'embargo_preventivo' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40">
                                 <ShieldAlert className="w-3 h-3 text-amber-400" />
-                                <span>Embargo Preventivo (Art. 821 LEC)</span>
+                                <span>Embargo preventivo (art. 821 LEC)</span>
                               </span>
                             )}
                             {lawsuit.status === 'inadmitida' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40">
                                 <X className="w-3 h-3 text-rose-400" />
-                                <span>Inadmitida / Rechazada</span>
+                                <span>Inadmitida / rechazada</span>
                               </span>
                             )}
                             {lawsuit.status === 'allanada_pagada' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                                 <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                                <span>Allanada / Pagada</span>
+                                <span>Allanada / pagada</span>
                               </span>
                             )}
                             {lawsuit.status === 'ejecutada' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/40">
                                 <Gavel className="w-3 h-3 text-purple-400" />
-                                <span>Sentencia Estimatoria Firme</span>
+                                <span>Sentencia estimatoria firme</span>
                               </span>
                             )}
                             {lawsuit.status === 'desestimada' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-300 border border-slate-600">
                                 <X className="w-3 h-3" />
-                                <span>Sentencia Desestimatoria</span>
+                                <span>Sentencia desestimatoria</span>
                               </span>
                             )}
                           </div>
@@ -1064,21 +1064,21 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                         <div className="grid grid-cols-2 gap-3 mt-3.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
                           <div>
                             <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
-                              <span>Demandante (Actor)</span>
-                              {isPlaintiff && <span className="text-amber-400 text-[9px] font-black">(TÚ)</span>}
+                              <span>Demandante (actor)</span>
+                              {isPlaintiff && <span className="text-amber-400 text-[9px] font-black">(tú)</span>}
                             </div>
                             <div className="text-xs font-semibold text-white truncate">{lawsuit.plaintiffName}</div>
                           </div>
                           <div>
                             <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
                               <span>Demandado</span>
-                              {isDefendant && <span className="text-rose-400 text-[9px] font-black">(TÚ)</span>}
+                              {isDefendant && <span className="text-rose-400 text-[9px] font-black">(tú)</span>}
                             </div>
                             <div className="text-xs font-semibold text-rose-300 truncate">{lawsuit.defendantName}</div>
                           </div>
 
                           <div className="col-span-2 pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
-                            <span className="text-slate-400">Cuantía Reclamada:</span>
+                            <span className="text-slate-400">Cuantía reclamada:</span>
                             <span className="font-black text-amber-400 font-mono text-sm">
                               {formatNumber(lawsuit.claimedAmount)} €
                               {lawsuit.interestAndCostsAmount > 0 && (
@@ -1123,7 +1123,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                                 <div className="flex items-center justify-between text-xs font-bold">
                                   <span className="text-emerald-400 flex items-center gap-1">
                                     <FileCheck className="w-3.5 h-3.5" />
-                                    <span>Contestación Formalizada en Autos</span>
+                                    <span>Contestación formalizada en autos</span>
                                   </span>
                                   <span className="text-[10px] text-slate-400">
                                     {lawsuit.defendantAnswerDate ? new Date(lawsuit.defendantAnswerDate).toLocaleDateString('es-ES') : ''}
@@ -1134,7 +1134,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                                   {lawsuit.defendantAnswerType === 'ordinaria_contestacion'
                                     ? 'Contestación y alegaciones de oposición'
                                     : lawsuit.defendantAnswerType === 'cambiaria_ya_pagado'
-                                    ? 'Oposición cambiaria (Alegación de pago previo extintivo)'
+                                    ? 'Oposición cambiaria (alegación de pago previo extintivo)'
                                     : 'Allanamiento y pago voluntario'}
                                 </div>
                                 {lawsuit.defendantLawyerFeeTotal && lawsuit.defendantLawyerFeeTotal > 0 && (
@@ -1156,8 +1156,8 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                                     <Clock className="w-3.5 h-3.5" />
                                     <span>
                                       {lawsuit.type === 'cambiaria'
-                                        ? 'Plazo Oposición Cambiaria: 10 días hábiles'
-                                        : 'Plazo Contestación: 20 días hábiles'}
+                                        ? 'Plazo de oposición cambiaria: 10 días hábiles'
+                                        : 'Plazo de contestación: 20 días hábiles'}
                                     </span>
                                   </span>
                                   {lawsuit.defendantDeadlineDate && (
@@ -1183,7 +1183,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                           <div className="mt-2.5 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300">
                             <div className="font-bold text-amber-400 flex items-center gap-1">
                               <ShieldCheck className="w-3.5 h-3.5" />
-                              <span>Resolución Judicial:</span>
+                              <span>Resolución judicial:</span>
                             </div>
                             <p className="mt-0.5">{lawsuit.resolutionNotes}</p>
                           </div>
@@ -1199,7 +1199,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                             className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700 cursor-pointer"
                           >
                             <Eye className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Ver Escrito {lawsuit.defendantAnswered ? '& Contestación' : 'de Demanda'}</span>
+                            <span>Ver escrito {lawsuit.defendantAnswered ? 'y contestación' : 'de demanda'}</span>
                           </button>
 
                           <button
@@ -1224,7 +1224,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                             >
                               <FileCheck className="w-3.5 h-3.5" />
                               <span>
-                                {lawsuit.type === 'cambiaria' ? 'Contestar / Oponerse' : 'Contestar Demanda (20 días)'}
+                                {lawsuit.type === 'cambiaria' ? 'Contestar / oponerse' : 'Contestar demanda (20 días)'}
                               </span>
                             </button>
 
@@ -1252,7 +1252,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                               title="Admitir a trámite y emplazar a las partes"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Admitir a Trámite</span>
+                              <span>Admitir a trámite</span>
                             </button>
                             <button
                               type="button"
@@ -1262,7 +1262,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                               title="Inadmitir y archivar la demanda"
                             >
                               <X className="w-3.5 h-3.5" />
-                              <span>Inadmitir / Rechazar</span>
+                              <span>Inadmitir / rechazar</span>
                             </button>
                           </div>
                         )}
@@ -1280,7 +1280,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                                 title="Decretar e inmovilizar judicialmente los fondos en cuenta bancaria del deudor"
                               >
                                 <ShieldAlert className="w-3.5 h-3.5 text-blue-200" />
-                                <span>Embargo Preventivo (Art. 821 LEC)</span>
+                                <span>Embargo preventivo (art. 821 LEC)</span>
                               </button>
                             )}
 
@@ -1294,7 +1294,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-md cursor-pointer"
                             >
                               <Gavel className="w-3.5 h-3.5" />
-                              <span>Estimar Demanda</span>
+                              <span>Estimar demanda</span>
                             </button>
 
                             <button
@@ -1327,7 +1327,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               <div>
                 <h2 className="text-lg font-black text-white flex items-center gap-2">
                   <Gavel className="w-5 h-5 text-amber-400" />
-                  <span>Redacción y Presentación Oficial de Demanda Judicial</span>
+                  <span>Redacción y presentación oficial de demanda judicial</span>
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Sede judicial electrónica de Primera Instancia. Selecciona la modalidad procesal y cumplimenta los hechos y fundamentos.
@@ -1338,7 +1338,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 {/* Paso 1: Tipo de Demanda */}
                 <div className="space-y-3">
                   <label className="text-xs font-extrabold uppercase text-amber-400 tracking-wider">
-                    1. Modalidad de Demanda Judicial
+                    1. Modalidad de demanda judicial
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
@@ -1351,7 +1351,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-sm text-white">Demanda Ordinaria / Contractual</span>
+                        <span className="font-extrabold text-sm text-white">Demanda ordinaria / contractual</span>
                         <FileText className="w-5 h-5 text-amber-400" />
                       </div>
                       <p className="text-xs text-slate-300">
@@ -1370,11 +1370,11 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-sm text-white">Demanda de Juicio Cambiario</span>
+                        <span className="font-extrabold text-sm text-white">Demanda de juicio cambiario</span>
                         <Scale className="w-5 h-5 text-blue-400" />
                       </div>
                       <p className="text-xs text-slate-300">
-                        Acción especial y sumaria por <strong>impago de Pagaré Oficial</strong> al vencimiento. Incluye embargo preventivo de cuentas y bienes.
+                        Acción especial y sumaria por <strong>impago de pagaré oficial</strong> al vencimiento. Incluye embargo preventivo de cuentas y bienes.
                       </p>
                       <span className="text-[10px] text-blue-400 font-semibold">Arts. 819-827 LEC & Ley Cambiaria</span>
                     </button>
@@ -1417,7 +1417,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   <div className="space-y-2 bg-blue-950/30 p-4 rounded-2xl border border-blue-500/40">
                     <label className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
                       <Clock className="w-4 h-4 text-blue-400" />
-                      <span>Seleccionar Pagaré Impagado de tu cartera:</span>
+                      <span>Seleccionar pagaré impagado de tu cartera:</span>
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {unpaidNotes.map(note => (
@@ -1437,7 +1437,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                           </div>
                           <div className="text-[11px] opacity-80 mt-0.5">Librador: {note.issuerName}</div>
                           <div className="text-[10px] text-rose-300 mt-0.5">
-                            Vencido el {new Date(note.dueDate).toLocaleDateString('es-ES')} ({note.status.toUpperCase()})
+                            Vencido el {new Date(note.dueDate).toLocaleDateString('es-ES')} ({note.status === 'unpaid' ? 'impagado' : note.status})
                           </div>
                         </button>
                       ))}
@@ -1448,7 +1448,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 {/* Paso 2: Partes y Cuantía */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">Empresa / Alumno Demandado:</label>
+                    <label className="text-xs font-bold text-slate-300">Empresa / alumno demandado:</label>
                     <select
                       value={formDefendantId}
                       onChange={e => setFormDefendantId(e.target.value)}
@@ -1465,7 +1465,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">Cuantía Líquida Reclamada (€):</label>
+                    <label className="text-xs font-bold text-slate-300">Cuantía líquida reclamada (€):</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -1486,7 +1486,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                         <div className="font-bold flex items-center justify-between">
                           <span className="flex items-center gap-1">
                             <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Minuta Letrado (15% cuantía + 21% IVA):</span>
+                            <span>Minuta letrado (15% cuantía + 21% IVA):</span>
                           </span>
                           <span className="font-mono text-xs font-black text-amber-300">
                             {formatNumber(Number(formClaimedAmount) * 0.15 * 1.21)} €
@@ -1516,7 +1516,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 {/* Paso 3: Hechos y Fundamentos Procesales */}
                 <div className="space-y-4 pt-2 border-t border-slate-800">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">I. Hechos de la Demanda:</label>
+                    <label className="text-xs font-bold text-slate-300">I. Hechos de la demanda:</label>
                     <textarea
                       rows={4}
                       value={formFacts}
@@ -1528,7 +1528,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">II. Fundamentos de Derecho:</label>
+                    <label className="text-xs font-bold text-slate-300">II. Fundamentos de derecho:</label>
                     <textarea
                       rows={3}
                       value={formLegalBasis}
@@ -1538,7 +1538,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">III. Suplico al Juzgado (Petición de condena / embargo):</label>
+                    <label className="text-xs font-bold text-slate-300">III. Suplico al juzgado (petición de condena / embargo):</label>
                     <textarea
                       rows={3}
                       value={formPetitum}
@@ -1553,14 +1553,14 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-extrabold uppercase text-amber-400 tracking-wider flex items-center gap-1.5">
                       <Paperclip className="w-4 h-4 text-amber-400" />
-                      <span>IV. Documentación Probatoria Adjunta (Solo Formato PDF)</span>
+                      <span>IV. Documentación probatoria adjunta (solo formato PDF)</span>
                     </label>
                     <span className="text-[10px] bg-red-950/80 border border-red-500/40 text-red-300 font-black px-2 py-0.5 rounded-full">
-                      Exclusivo .PDF
+                      Exclusivo .pdf
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Aporta facturas mercantiles, extractos bancarios, pagarés escaneados o contratos en formato PDF para fundamentar probatoriamente la pretensión ante el Juez.
+                    Aporta facturas mercantiles, extractos bancarios, pagarés escaneados o contratos en formato PDF para fundamentar probatoriamente la pretensión ante el juez.
                   </p>
 
                   {/* PDF Upload Error message */}
@@ -1705,7 +1705,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="flex-1 sm:flex-none px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-lg transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                       <Send className="w-4 h-4" />
-                      <span>{isSubmitting ? 'Registrando Autos...' : 'Presentar Demanda Oficial'}</span>
+                      <span>{isSubmitting ? 'Registrando autos...' : 'Presentar demanda oficial'}</span>
                     </button>
                   </div>
                 </div>
@@ -1721,7 +1721,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               <div>
                 <h2 className="text-lg font-black text-white flex items-center gap-2">
                   <Scale className="w-5 h-5 text-amber-400" />
-                  <span>Guía Procesal de Litigios en el Simulador Empresarial</span>
+                  <span>Guía procesal de litigios en el simulador empresarial</span>
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Conceptos jurídicos fundamentales sobre reclamaciones contractuales y juicios cambiarios en el Derecho Procesal español (LEC y Código de Comercio).
@@ -1729,24 +1729,24 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Demanda Ordinaria Card */}
+                {/* Demanda ordinaria Card */}
                 <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
                   <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
                     <FileText className="w-4 h-4" />
-                    <span>1. Demanda Declarativa Ordinaria</span>
+                    <span>1. Demanda declarativa ordinaria</span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
                     Se utiliza cuando surge una controversia sobre un contrato o compraventa mercantil y no se dispone de un título ejecutivo cambiario:
                   </p>
                   <ul className="text-xs text-slate-400 space-y-2 list-disc list-inside">
                     <li>
-                      <strong className="text-slate-200">Falta de Pago:</strong> El vendedor formalizó la venta o entregó los bienes y el comprador no abona el precio pactado.
+                      <strong className="text-slate-200">Falta de pago:</strong> El vendedor formalizó la venta o entregó los bienes y el comprador no abona el precio pactado.
                     </li>
                     <li>
-                      <strong className="text-slate-200">Falta de Entrega:</strong> El comprador transfirió los fondos o pactó la entrega y el vendedor incumple el plazo o la entrega del bien.
+                      <strong className="text-slate-200">Falta de entrega:</strong> El comprador transfirió los fondos o pactó la entrega y el vendedor incumple el plazo o la entrega del bien.
                     </li>
                     <li>
-                      <strong className="text-slate-200">Procedimiento:</strong> Se solicita al Juez que declare la existencia de la obligación contractual y condene al demandado al pago o cumplimiento forzoso más intereses legales y costas.
+                      <strong className="text-slate-200">Procedimiento:</strong> Se solicita al juez que declare la existencia de la obligación contractual y condene al demandado al pago o cumplimiento forzoso más intereses legales y costas.
                     </li>
                   </ul>
                 </div>
@@ -1755,17 +1755,17 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="p-5 rounded-2xl bg-blue-950/20 border border-blue-500/40 space-y-3">
                   <div className="flex items-center gap-2 text-blue-400 font-bold text-sm">
                     <Scale className="w-4 h-4" />
-                    <span>2. Demanda de Juicio Cambiario (Pagaré)</span>
+                    <span>2. Demanda de juicio cambiario (pagaré)</span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
                     Procedimiento especial, sumario y sumamente ágil regulado en los artículos 819 a 827 de la LEC para el cobro forzoso de títulos valores:
                   </p>
                   <ul className="text-xs text-slate-400 space-y-2 list-disc list-inside">
                     <li>
-                      <strong className="text-slate-200">Fuerza Ejecutiva:</strong> El pagaré cambiario lleva aparejada ejecución directa sobre el patrimonio del librador.
+                      <strong className="text-slate-200">Fuerza ejecutiva:</strong> El pagaré cambiario lleva aparejada ejecución directa sobre el patrimonio del librador.
                     </li>
                     <li>
-                      <strong className="text-slate-200">Embargo Inmediato:</strong> El Juzgado decreta de oficio e inaudita parte el requerimiento de pago en 10 días y el embargo preventivo cautelar sobre las cuentas bancarias del deudor.
+                      <strong className="text-slate-200">Embargo inmediato:</strong> El juzgado decreta de oficio e inaudita parte el requerimiento de pago en 10 días y el embargo preventivo cautelar sobre las cuentas bancarias del deudor.
                     </li>
                     <li>
                       <strong className="text-slate-200">Recargo del 30%:</strong> La ley prevé un 30% adicional calculado sobre el principal para responder de intereses de demora procesal y costas judiciales.
@@ -1786,8 +1786,8 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               <div className="flex items-center gap-2.5">
                 <Scale className="w-5 h-5 text-amber-400" />
                 <div>
-                  <h3 className="text-sm font-bold text-white">Escrito Procesal de Demanda</h3>
-                  <div className="text-xs text-amber-400 font-mono font-bold">Autos Nº {selectedLawsuitForView.caseNumber}</div>
+                  <h3 className="text-sm font-bold text-white">Escrito procesal de demanda</h3>
+                  <div className="text-xs text-amber-400 font-mono font-bold">Autos n.º {selectedLawsuitForView.caseNumber}</div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1812,7 +1812,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
             <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-200 font-sans">
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Demandante (Actor):</span>
+                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Demandante (actor):</span>
                   <span className="font-bold text-white text-sm">{selectedLawsuitForView.plaintiffName}</span>
                 </div>
                 <div>
@@ -1820,13 +1820,13 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   <span className="font-bold text-rose-300 text-sm">{selectedLawsuitForView.defendantName}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Clase de Procedimiento:</span>
+                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Clase de procedimiento:</span>
                   <span className="font-semibold text-amber-400 uppercase">
-                    {selectedLawsuitForView.type === 'cambiaria' ? 'Juicio Cambiario Especial' : 'Juicio Declarativo Ordinario'}
+                    {selectedLawsuitForView.type === 'cambiaria' ? 'Juicio cambiario especial' : 'Juicio declarativo ordinario'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Cuantía Total Reclamada:</span>
+                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Cuantía total reclamada:</span>
                   <span className="font-bold text-emerald-400 font-mono text-sm">
                     {formatNumber(selectedLawsuitForView.totalClaimAmount || selectedLawsuitForView.claimedAmount)} €
                   </span>
@@ -1841,14 +1841,14 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               </div>
 
               <div className="space-y-2">
-                <h4 className="font-extrabold uppercase text-amber-400 tracking-wider text-[11px]">II. Fundamentos de Derecho</h4>
+                <h4 className="font-extrabold uppercase text-amber-400 tracking-wider text-[11px]">II. Fundamentos de derecho</h4>
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 leading-relaxed whitespace-pre-line font-mono text-[11px] text-slate-400">
                   {selectedLawsuitForView.legalBasis}
                 </div>
               </div>
 
               <div className="space-y-2">
-                <h4 className="font-extrabold uppercase text-amber-400 tracking-wider text-[11px]">III. Suplico al Juzgado</h4>
+                <h4 className="font-extrabold uppercase text-amber-400 tracking-wider text-[11px]">III. Suplico al juzgado</h4>
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 leading-relaxed whitespace-pre-line text-slate-200 font-semibold">
                   {selectedLawsuitForView.petitum}
                 </div>
@@ -1859,7 +1859,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="flex items-center justify-between">
                   <h4 className="font-extrabold uppercase text-amber-400 tracking-wider text-[11px] flex items-center gap-1.5">
                     <Paperclip className="w-3.5 h-3.5" />
-                    <span>IV. Documentación Probatoria Aportada (Archivos PDF)</span>
+                    <span>IV. Documentación probatoria aportada (archivos PDF)</span>
                   </h4>
                   <span className="text-[10px] text-slate-400">
                     {selectedLawsuitForView.attachments?.length || 0} {(selectedLawsuitForView.attachments?.length || 0) === 1 ? 'documento' : 'documentos'}
@@ -1928,7 +1928,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                     <div className="flex items-center gap-2">
                       <FileCheck className="w-4 h-4 text-emerald-400" />
                       <h4 className="font-extrabold uppercase text-emerald-400 tracking-wider text-[11px]">
-                        V. Contestación a la Demanda y Alegaciones de la Parte Demandada
+                        V. Contestación a la demanda y alegaciones de la parte demandada
                       </h4>
                     </div>
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded">
@@ -1938,18 +1938,18 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
                     <div>
-                      <span className="text-slate-400 block font-semibold text-[10px]">TIPO DE RESPUESTA:</span>
+                      <span className="text-slate-400 block font-semibold text-[10px]">Tipo de respuesta:</span>
                       <span className="font-bold text-white">
                         {selectedLawsuitForView.defendantAnswerType === 'ordinaria_contestacion'
-                          ? 'Contestación a la Demanda Ordinaria'
+                          ? 'Contestación a la demanda ordinaria'
                           : selectedLawsuitForView.defendantAnswerType === 'cambiaria_ya_pagado'
-                          ? 'Oposición Cambiaria (Alegación de Pago Previo Extintivo)'
-                          : 'Allanamiento y Pago Voluntario'}
+                          ? 'Oposición cambiaria (alegación de pago previo extintivo)'
+                          : 'Allanamiento y pago voluntario'}
                       </span>
                     </div>
                     {selectedLawsuitForView.defendantLawyerFeeTotal && selectedLawsuitForView.defendantLawyerFeeTotal > 0 ? (
                       <div>
-                        <span className="text-slate-400 block font-semibold text-[10px]">MINUTA LETRADO DEFENSOR (15% + IVA):</span>
+                        <span className="text-slate-400 block font-semibold text-[10px]">Minuta letrado defensor (15% + IVA):</span>
                         <span className="font-bold text-emerald-400">
                           {formatNumber(selectedLawsuitForView.defendantLawyerFeeTotal)} € (Fra: {selectedLawsuitForView.defendantLawyerFeeInvoiceNumber})
                         </span>
@@ -1958,7 +1958,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   </div>
 
                   <div className="space-y-1">
-                    <span className="text-slate-400 font-semibold block text-[10px] uppercase">ALEGACIONES FORMULADAS POR EL DEMANDADO:</span>
+                    <span className="text-slate-400 font-semibold block text-[10px] uppercase">Alegaciones formuladas por el demandado:</span>
                     <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 whitespace-pre-line leading-relaxed text-xs">
                       {selectedLawsuitForView.defendantAnswerFacts || 'Sin alegaciones de texto adicionales.'}
                     </div>
@@ -2036,7 +2036,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-1.5 border border-slate-700 cursor-pointer"
                 >
                   <Printer className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Imprimir / Exportar</span>
+                  <span>Imprimir / exportar</span>
                 </button>
 
                 {/* Defendant action from inside modal if not answered */}
@@ -2053,7 +2053,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition flex items-center gap-1.5 shadow cursor-pointer"
                     >
                       <FileCheck className="w-3.5 h-3.5" />
-                      <span>Contestar a la Demanda</span>
+                      <span>Contestar a la demanda</span>
                     </button>
                   )}
 
@@ -2067,7 +2067,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Admitir a Trámite</span>
+                      <span>Admitir a trámite</span>
                     </button>
                     <button
                       type="button"
@@ -2076,7 +2076,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-black transition flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
                     >
                       <X className="w-3.5 h-3.5" />
-                      <span>Inadmitir / Rechazar</span>
+                      <span>Inadmitir / rechazar</span>
                     </button>
                   </>
                 )}
@@ -2091,7 +2091,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                         className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
                       >
                         <ShieldAlert className="w-3.5 h-3.5 text-blue-200" />
-                        <span>Embargo Preventivo (Art. 821 LEC)</span>
+                        <span>Embargo preventivo (art. 821 LEC)</span>
                       </button>
                     )}
                     <button
@@ -2105,7 +2105,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition flex items-center gap-1.5 shadow cursor-pointer"
                     >
                       <Gavel className="w-3.5 h-3.5" />
-                      <span>Estimar Demanda</span>
+                      <span>Estimar demanda</span>
                     </button>
                     <button
                       type="button"
@@ -2149,11 +2149,11 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div>
                   <h3 className="text-base font-black text-white">
                     {answeringLawsuit.type === 'cambiaria'
-                      ? 'Oposición / Contestación a Juicio Cambiario'
-                      : 'Escrito de Contestación a la Demanda'}
+                      ? 'Oposición / contestación a juicio cambiario'
+                      : 'Escrito de contestación a la demanda'}
                   </h3>
                   <div className="text-xs text-amber-400 font-mono font-bold">
-                    Autos Nº {answeringLawsuit.caseNumber} · Juzgado de 1ª Instancia
+                    Autos n.º {answeringLawsuit.caseNumber} · Juzgado de 1ª Instancia
                   </div>
                 </div>
               </div>
@@ -2171,19 +2171,19 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               {/* Case Summary Card */}
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <div>
-                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Demandante (Actor):</span>
+                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Demandante (actor):</span>
                   <span className="font-bold text-white text-xs">{answeringLawsuit.plaintiffName}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Cuantía Reclamada:</span>
+                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Cuantía reclamada:</span>
                   <span className="font-bold text-rose-400 font-mono text-xs">
                     {formatNumber(answeringLawsuit.claimedAmount)} €
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Plazo Legal:</span>
+                  <span className="text-slate-400 block font-semibold text-[10px] uppercase">Plazo legal:</span>
                   <span className="font-bold text-amber-400 text-xs">
-                    {answeringLawsuit.type === 'cambiaria' ? '10 días (Art. 824 LEC)' : '20 días hábiles (Art. 404 LEC)'}
+                    {answeringLawsuit.type === 'cambiaria' ? '10 días (art. 824 LEC)' : '20 días hábiles (art. 404 LEC)'}
                   </span>
                 </div>
               </div>
@@ -2193,7 +2193,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="flex items-center justify-between">
                   <span className="font-extrabold text-amber-400 flex items-center gap-1.5 text-xs">
                     <Receipt className="w-4 h-4" />
-                    <span>Minuta de Honorarios de Abogado de la Defensa</span>
+                    <span>Minuta de honorarios de abogado de la defensa</span>
                   </span>
                   <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded">
                     15% + 21% IVA
@@ -2223,7 +2223,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                         </div>
                       </div>
                       <div className="p-2 rounded-xl bg-amber-950/40 border border-amber-500/40">
-                        <div className="text-[10px] text-amber-400 uppercase font-bold">Total Minuta</div>
+                        <div className="text-[10px] text-amber-400 uppercase font-bold">Total minuta</div>
                         <div className="font-extrabold text-amber-300 mt-0.5">
                           {formatNumber(answeringLawsuit.claimedAmount * 0.15 * 1.21)} €
                         </div>
@@ -2237,7 +2237,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               {answeringLawsuit.type === 'cambiaria' && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-200 block">
-                    Selecciona tu motivo de oposición / respuesta legal (LEC Art. 824):
+                    Selecciona tu motivo de oposición / respuesta legal (art. 824 LEC):
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <label
@@ -2304,10 +2304,10 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <label className="text-xs font-bold text-slate-200 flex items-center justify-between">
                   <span>
                     {answeringLawsuit.type === 'cambiaria' && answerType === 'cambiaria_ya_pagado'
-                      ? 'Detalles y Alegación del Pago Previo Extintivo:'
+                      ? 'Detalles y alegación del pago previo extintivo:'
                       : answeringLawsuit.type === 'cambiaria' && answerType === 'cambiaria_pago_ahora'
-                      ? 'Manifestación de Allanamiento y Pago:'
-                      : 'Alegaciones de Hecho y Motivos de Oposición (Defensa):'}
+                      ? 'Manifestación de allanamiento y pago:'
+                      : 'Alegaciones de hecho y motivos de oposición (defensa):'}
                   </span>
                   <span className="text-[10px] text-slate-400 font-normal">
                     {answerFacts.length} caracteres
@@ -2333,9 +2333,9 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
                     <Paperclip className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Aportar Documentación Adicional en PDF:</span>
+                    <span>Aportar documentación adicional en PDF:</span>
                   </label>
-                  <span className="text-[10px] text-slate-400">Sólo archivos .pdf (Máx. 15MB)</span>
+                  <span className="text-[10px] text-slate-400">Solo archivos .pdf (máx. 15 MB)</span>
                 </div>
 
                 {/* Dropzone */}
@@ -2445,10 +2445,10 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <Send className="w-4 h-4" />
                 <span>
                   {isSubmitting
-                    ? 'Presentando Contestación...'
+                    ? 'Presentando contestación...'
                     : answerType === 'cambiaria_pago_ahora'
-                    ? `Pagar ${formatNumber(answeringLawsuit.claimedAmount)} € y Archivar Autos`
-                    : 'Firmar y Presentar Contestación'}
+                    ? `Pagar ${formatNumber(answeringLawsuit.claimedAmount)} € y archivar autos`
+                    : 'Firmar y presentar contestación'}
                 </span>
               </button>
             </div>
@@ -2464,8 +2464,8 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               <div className="flex items-center gap-2">
                 <Gavel className="w-5 h-5 text-amber-400" />
                 <div>
-                  <h3 className="text-sm font-bold text-white">Dictar Sentencia / Resolución Judicial</h3>
-                  <p className="text-[11px] text-amber-400 font-semibold">Magistrado-Juez del Juzgado de 1ª Instancia</p>
+                  <h3 className="text-sm font-bold text-white">Dictar sentencia / resolución judicial</h3>
+                  <p className="text-[11px] text-amber-400 font-semibold">Magistrado-juez del Juzgado de 1ª Instancia</p>
                 </div>
               </div>
               <button onClick={() => setRulingLawsuit(null)} className="text-slate-400 hover:text-white p-1">
@@ -2486,7 +2486,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
                   <div className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
                     <Paperclip className="w-3.5 h-3.5" />
-                    <span>Pruebas del Actor ({rulingLawsuit.attachments.length} archivos PDF):</span>
+                    <span>Pruebas del actor ({rulingLawsuit.attachments.length} archivos PDF):</span>
                   </div>
                   <div className="space-y-1 max-h-28 overflow-y-auto">
                     {rulingLawsuit.attachments.map((att, idx) => (
@@ -2515,7 +2515,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   <div className="text-[11px] font-bold text-emerald-400 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <FileCheck className="w-3.5 h-3.5" />
-                      <span>Contestación Formal del Demandado:</span>
+                      <span>Contestación formal del demandado:</span>
                     </span>
                     <span className="text-[10px] text-slate-400">
                       {rulingLawsuit.defendantAnswerDate ? new Date(rulingLawsuit.defendantAnswerDate).toLocaleDateString('es-ES') : ''}
@@ -2562,7 +2562,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
 
             <form onSubmit={handleJudgeRuling} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-300">Fallo Judicial:</label>
+                <label className="text-xs font-bold text-slate-300">Fallo judicial:</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <label className={`flex items-start gap-2 p-3 rounded-xl border text-xs font-semibold cursor-pointer transition ${rulingType === 'estimatoria' ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
                     <input
@@ -2577,7 +2577,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="mt-0.5"
                     />
                     <div>
-                      <span className="font-bold block text-emerald-400">Sentencia Estimatoria</span>
+                      <span className="font-bold block text-emerald-400">Sentencia estimatoria</span>
                       <span className="text-[11px] text-slate-300 font-normal">
                         Ejecutar cobro forzoso al demandado por {formatNumber(rulingLawsuit.totalClaimAmount || rulingLawsuit.claimedAmount)} € en favor del actor.
                       </span>
@@ -2596,7 +2596,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                       className="mt-0.5"
                     />
                     <div>
-                      <span className="font-bold block text-rose-400">Desestimar Demanda</span>
+                      <span className="font-bold block text-rose-400">Desestimar demanda</span>
                       <span className="text-[11px] text-slate-300 font-normal">
                         Condena en costas al demandante por {formatNumber(rulingLawsuit.defendantLawyerFeeTotal || Number(((rulingLawsuit.claimedAmount * 0.15) * 1.21).toFixed(2)))} € (15% + IVA) abonadas al demandado.
                       </span>
@@ -2610,7 +2610,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                 <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs space-y-1">
                   <div className="font-bold flex items-center gap-1 text-amber-300">
                     <Scale className="w-3.5 h-3.5" />
-                    <span>Principio del Vencimiento Objetivo (Art. 394 LEC):</span>
+                    <span>Principio del vencimiento objetivo (art. 394 LEC):</span>
                   </div>
                   <p className="text-[11px] text-amber-100/90 leading-relaxed">
                     Al desestimar la demanda, el demandante (<strong>{rulingLawsuit.plaintiffName}</strong>) pagará automáticamente a la parte demandada (<strong>{rulingLawsuit.defendantName}</strong>) las costas procesales causadas por importe de <strong>{formatNumber(rulingLawsuit.defendantLawyerFeeTotal || Number(((rulingLawsuit.claimedAmount * 0.15) * 1.21).toFixed(2)))} €</strong> (15% del principal reclamado + 21% IVA).
@@ -2619,7 +2619,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               )}
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-300">Motivación y Comentarios del Magistrado:</label>
+                <label className="text-xs font-bold text-slate-300">Motivación y comentarios del magistrado:</label>
                 <textarea
                   rows={3}
                   value={rulingComments}
@@ -2642,7 +2642,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
                   disabled={isSubmitting}
                   className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-lg cursor-pointer disabled:opacity-50"
                 >
-                  {isSubmitting ? 'Dictando...' : 'Firmar y Dictar Sentencia'}
+                  {isSubmitting ? 'Dictando...' : 'Firmar y dictar sentencia'}
                 </button>
               </div>
             </form>

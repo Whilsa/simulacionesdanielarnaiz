@@ -119,17 +119,17 @@ export default function TeacherLoanManagement() {
               <Landmark className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-display font-bold text-slate-900 text-lg">Gestión de Préstamos Hipotecarios</h2>
-              <p className="text-xs text-slate-500">Supervisión de solicitudes de financiación de los alumnos (Segundos préstamos y revisiones)</p>
+              <h2 className="font-display font-bold text-slate-900 text-lg">Gestión de préstamos hipotecarios</h2>
+              <p className="text-xs text-slate-500">Supervisión de solicitudes de financiación de los alumnos (segundos préstamos y revisiones)</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
             <span className="bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-full text-xs font-bold">
-              {pendingCount} Pendientes de Profesor
+              {pendingCount} pendientes de profesor
             </span>
             <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full text-xs font-bold">
-              {activeCount} Concedidos Activos
+              {activeCount} concedidos activos
             </span>
           </div>
         </div>
@@ -173,7 +173,7 @@ export default function TeacherLoanManagement() {
                 selectedTab === 'offered' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              Ofertas Enviadas
+              Ofertas enviadas
             </button>
             <button
               onClick={() => setSelectedTab('all')}
@@ -189,7 +189,7 @@ export default function TeacherLoanManagement() {
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Buscar por alumno o Ref..."
+              placeholder="Buscar por alumno o ref..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 w-full sm:w-64"
@@ -225,7 +225,7 @@ export default function TeacherLoanManagement() {
                       {isPendingTeacher && (
                         <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <Clock className="w-3 h-3 mr-1" />
-                          Requiere Revisión del Profesor
+                          Requiere revisión del profesor
                         </span>
                       )}
                       {isActive && (
@@ -240,7 +240,7 @@ export default function TeacherLoanManagement() {
                         {loan.collateral.type === 'property' 
                           ? (loan.collateral.propertyTitle || 'Inmueble comercial') 
                           : `Vivienda privada (${loan.collateral.surfaceM2} m²)`}
-                      </strong> • Valor Tasación: <strong className="font-mono text-slate-800">{formatNumber(loan.collateral.appraisalValue)} €</strong>
+                      </strong> • Valor tasación: <strong className="font-mono text-slate-800">{formatNumber(loan.collateral.appraisalValue)} €</strong>
                     </p>
                   </div>
 
@@ -259,7 +259,7 @@ export default function TeacherLoanManagement() {
                         className="bg-amber-800 hover:bg-amber-900 text-white px-4 py-1.5 rounded-xl font-bold text-xs transition flex items-center space-x-1 cursor-pointer"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
-                        <span>Revisar y Aprobar</span>
+                        <span>Revisar y aprobar</span>
                       </button>
                     )}
                   </div>
@@ -292,7 +292,7 @@ export default function TeacherLoanManagement() {
                     </span>
                   </div>
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota Mensual</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota mensual</span>
                     <span className="text-xs font-bold font-mono text-amber-800">
                       {formatNumber(loan.monthlyPayment)} €
                     </span>
@@ -301,7 +301,7 @@ export default function TeacherLoanManagement() {
 
                 {loan.teacherNotes && (
                   <div className="mt-3 text-[11px] bg-amber-50/60 p-2.5 rounded-xl border border-amber-100 text-amber-900">
-                    <strong>Observaciones del Profesor:</strong> {loan.teacherNotes}
+                    <strong>Observaciones del profesor:</strong> {loan.teacherNotes}
                   </div>
                 )}
               </div>
@@ -317,7 +317,7 @@ export default function TeacherLoanManagement() {
             
             <div className="bg-gradient-to-r from-amber-800 to-amber-900 text-white p-6 flex justify-between items-start">
               <div>
-                <h3 className="text-lg font-bold font-display">Revisión de Préstamo • {reviewLoan.studentName}</h3>
+                <h3 className="text-lg font-bold font-display">Revisión de préstamo • {reviewLoan.studentName}</h3>
                 <p className="text-xs text-amber-200">Ajusta o confirma las condiciones de financiación antes de enviarlas al alumno</p>
               </div>
               <button onClick={() => setReviewLoan(null)} className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white transition">
@@ -328,7 +328,7 @@ export default function TeacherLoanManagement() {
             <div className="p-6 space-y-4 text-xs">
               
               <div className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-amber-900 text-xs">
-                <p className="font-bold">Garantía Hipotecaria presentada:</p>
+                <p className="font-bold">Garantía hipotecaria presentada:</p>
                 <p className="mt-0.5">
                   Tasación de <strong className="font-mono">{formatNumber(reviewLoan.collateral.appraisalValue)} €</strong>. El importe solicitado es de {formatNumber(reviewLoan.requestedAmount)} €.
                 </p>
@@ -336,7 +336,7 @@ export default function TeacherLoanManagement() {
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                  Importe Concedido (€)
+                  Importe concedido (€)
                 </label>
                 <input
                   type="number"
@@ -349,7 +349,7 @@ export default function TeacherLoanManagement() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    Tipo de Interés Anual (%)
+                    Tipo de interés anual (%)
                   </label>
                   <input
                     type="number"
@@ -361,7 +361,7 @@ export default function TeacherLoanManagement() {
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    Plazo (Meses)
+                    Plazo (meses)
                   </label>
                   <input
                     type="number"
@@ -374,7 +374,7 @@ export default function TeacherLoanManagement() {
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                  Notas / Justificación del Profesor
+                  Notas / justificación del Profesor
                 </label>
                 <textarea
                   rows={3}
@@ -392,7 +392,7 @@ export default function TeacherLoanManagement() {
                   onClick={() => handleReviewSubmit('deny')}
                   className="px-4 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold rounded-xl transition cursor-pointer"
                 >
-                  Denegar Préstamo
+                  Denegar préstamo
                 </button>
                 <button
                   type="button"
@@ -400,7 +400,7 @@ export default function TeacherLoanManagement() {
                   onClick={() => handleReviewSubmit('approve')}
                   className="px-5 py-2 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl transition cursor-pointer flex items-center space-x-1"
                 >
-                  <span>Aprobar y Enviar Oferta</span>
+                  <span>Aprobar y enviar oferta</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>

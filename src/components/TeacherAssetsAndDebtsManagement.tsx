@@ -183,12 +183,12 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
       <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-xs">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-900 font-display">Administración de Activos, Deudas y Pasivos</h2>
-            <p className="text-xs text-slate-500">Edita o elimina los elementos del balance contable de cada alumno (Inmuebles, Maquinaria, Deudas y Préstamos).</p>
+            <h2 className="text-lg font-bold text-slate-900 font-display">Administración de activos, deudas y pasivos</h2>
+            <p className="text-xs text-slate-500">Edita o elimina los elementos del balance contable de cada alumno (inmuebles, maquinaria, deudas y préstamos).</p>
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="text-xs font-bold text-slate-700">Seleccionar Alumno:</label>
+            <label className="text-xs font-bold text-slate-700">Seleccionar alumno:</label>
             <select
               value={selectedStudentId}
               onChange={e => setSelectedStudentId(e.target.value)}
@@ -222,7 +222,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
             }`}
           >
             <ShieldAlert className="w-4 h-4" />
-            <span>Deudas y Vencimientos ({obligationsList.length})</span>
+            <span>Deudas y vencimientos ({obligationsList.length})</span>
           </button>
 
           <button
@@ -232,7 +232,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
             }`}
           >
             <Building2 className="w-4 h-4" />
-            <span>Inmuebles Propiedad / Alquiler ({acquisitionsList.length})</span>
+            <span>Inmuebles propiedad / alquiler ({acquisitionsList.length})</span>
           </button>
 
           <button
@@ -242,7 +242,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
             }`}
           >
             <Wrench className="w-4 h-4" />
-            <span>Maquinaria Industrial ({machineryList.length})</span>
+            <span>Maquinaria industrial ({machineryList.length})</span>
           </button>
 
           <button
@@ -252,7 +252,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
             }`}
           >
             <Landmark className="w-4 h-4" />
-            <span>Préstamos Bancarios ({loansList.length})</span>
+            <span>Préstamos bancarios ({loansList.length})</span>
           </button>
         </div>
       </div>
@@ -274,7 +274,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
                         <th className="py-3 px-2">Ref. / Finca</th>
-                        <th className="py-3 px-2">Tipo Instrumento</th>
+                        <th className="py-3 px-2">Tipo instrumento</th>
                         <th className="py-3 px-2">Vencimiento</th>
                         <th className="py-3 px-2 text-right">Importe (€)</th>
                         <th className="py-3 px-2">Estado</th>
@@ -284,7 +284,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                     <tbody className="divide-y divide-slate-50">
                       {obligationsList.map((ob: any) => (
                         <tr key={ob.id} className="hover:bg-slate-50 text-slate-700">
-                          <td className="py-3 px-2 font-bold">{ob.propertyTitle || 'Obligación Pendiente'}</td>
+                          <td className="py-3 px-2 font-bold">{ob.propertyTitle || 'Obligación pendiente'}</td>
                           <td className="py-3 px-2 uppercase font-mono text-[11px] text-amber-800">{ob.type}</td>
                           <td className="py-3 px-2">{new Date(ob.dueDate).toLocaleDateString('es-ES')}</td>
                           <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(ob.amount)} €</td>
@@ -299,7 +299,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                             <button
                               onClick={() => handleDeleteObligation(ob.id)}
                               className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                              title="Eliminar Deuda"
+                              title="Eliminar deuda"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -323,10 +323,10 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
-                        <th className="py-3 px-2">Inmueble / Alquiler</th>
+                        <th className="py-3 px-2">Inmueble / alquiler</th>
                         <th className="py-3 px-2">Operación</th>
-                        <th className="py-3 px-2 text-right">Precio Base (€)</th>
-                        <th className="py-3 px-2 text-right">Saldo Pendiente (€)</th>
+                        <th className="py-3 px-2 text-right">Precio base (€)</th>
+                        <th className="py-3 px-2 text-right">Saldo pendiente (€)</th>
                         <th className="py-3 px-2 text-center">Acciones</th>
                       </tr>
                     </thead>
@@ -342,14 +342,14 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                               <button
                                 onClick={() => handleOpenEdit('acquisition', acq)}
                                 className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition cursor-pointer"
-                                title="Editar Inmueble"
+                                title="Editar inmueble"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
                               <button
                                 onClick={() => handleDeleteAcquisition(acq.id)}
                                 className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                                title="Eliminar Inmueble"
+                                title="Eliminar inmueble"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -374,10 +374,10 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
-                        <th className="py-3 px-2">Línea de Maquinaria</th>
-                        <th className="py-3 px-2">Nave Instalada</th>
-                        <th className="py-3 px-2 text-right">Precio Total (€)</th>
-                        <th className="py-3 px-2 text-right">Saldo Pendiente (€)</th>
+                        <th className="py-3 px-2">Línea de maquinaria</th>
+                        <th className="py-3 px-2">Nave instalada</th>
+                        <th className="py-3 px-2 text-right">Precio total (€)</th>
+                        <th className="py-3 px-2 text-right">Saldo pendiente (€)</th>
                         <th className="py-3 px-2 text-center">Acciones</th>
                       </tr>
                     </thead>
@@ -385,7 +385,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                       {machineryList.map((mac: any) => (
                         <tr key={mac.id} className="hover:bg-slate-50 text-slate-700">
                           <td className="py-3 px-2 font-bold">{mac.lineTitle || mac.title}</td>
-                          <td className="py-3 px-2 text-slate-500">{mac.installedNaveTitle || 'Nave Industrial'}</td>
+                          <td className="py-3 px-2 text-slate-500">{mac.installedNaveTitle || 'Nave industrial'}</td>
                           <td className="py-3 px-2 text-right font-bold text-slate-900">{formatNumber(mac.totalPrice || mac.basePrice)} €</td>
                           <td className="py-3 px-2 text-right font-bold text-amber-800">{formatNumber(mac.pendingBalance || 0)} €</td>
                           <td className="py-3 px-2 text-center">
@@ -393,14 +393,14 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                               <button
                                 onClick={() => handleOpenEdit('machinery', mac)}
                                 className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition cursor-pointer"
-                                title="Editar Maquinaria"
+                                title="Editar maquinaria"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
                               <button
                                 onClick={() => handleDeleteMachinery(mac.id)}
                                 className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                                title="Eliminar Maquinaria"
+                                title="Eliminar maquinaria"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -425,9 +425,9 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
-                        <th className="py-3 px-2">Ref. Préstamo</th>
-                        <th className="py-3 px-2">TIN % / Plazo</th>
-                        <th className="py-3 px-2 text-right">Importe Concedido (€)</th>
+                        <th className="py-3 px-2">Ref. préstamo</th>
+                        <th className="py-3 px-2">TIN % / plazo</th>
+                        <th className="py-3 px-2 text-right">Importe concedido (€)</th>
                         <th className="py-3 px-2">Estado</th>
                         <th className="py-3 px-2 text-center">Acciones</th>
                       </tr>
@@ -448,14 +448,14 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                               <button
                                 onClick={() => handleOpenEdit('loan', loan)}
                                 className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition cursor-pointer"
-                                title="Editar Préstamo"
+                                title="Editar préstamo"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
                               <button
                                 onClick={() => handleDeleteLoan(loan.id)}
                                 className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                                title="Eliminar Préstamo"
+                                title="Eliminar préstamo"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -479,7 +479,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-slate-900">
-                Editar {editingItem.type === 'acquisition' ? 'Inmueble' : editingItem.type === 'machinery' ? 'Maquinaria' : 'Préstamo'}
+                Editar {editingItem.type === 'acquisition' ? 'inmueble' : editingItem.type === 'machinery' ? 'maquinaria' : 'préstamo'}
               </h3>
               <button onClick={() => setEditingItem(null)} className="p-1 text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -488,7 +488,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
 
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Título / Denominación</label>
+                <label className="block font-semibold text-slate-700 mb-1">Título / denominación</label>
                 <input
                   type="text"
                   required
@@ -499,7 +499,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Precio Total / Importe Concedido (€)</label>
+                <label className="block font-semibold text-slate-700 mb-1">Precio total / importe concedido (€)</label>
                 <input
                   type="number"
                   step="100"
@@ -512,7 +512,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
 
               {editingItem.type !== 'loan' && (
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Saldo Pendiente (€)</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Saldo pendiente (€)</label>
                   <input
                     type="number"
                     step="100"
@@ -537,7 +537,7 @@ export default function TeacherAssetsAndDebtsManagement({ students }: TeacherAss
                   disabled={isSaving}
                   className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-xs disabled:opacity-50"
                 >
-                  {isSaving ? 'Guardando...' : 'Guardar Cambios'}
+                  {isSaving ? 'Guardando...' : 'Guardar cambios'}
                 </button>
               </div>
             </form>

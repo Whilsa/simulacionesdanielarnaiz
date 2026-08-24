@@ -42,7 +42,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
             </div>
             <div>
               <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-                <span>Suministro Eléctrico — IberLuz Comercializadora</span>
+                <span>Suministro eléctrico — IberLuz Comercializadora</span>
               </h3>
               <p className="text-xs text-slate-400">
                 Resumen de contratos y facturación de energía por inmueble
@@ -53,16 +53,16 @@ export const ElectricityAssetTab: React.FC<Props> = ({
           {activeContracts.length > 0 ? (
             <div className="flex items-center space-x-3">
               <span className="bg-emerald-950 text-emerald-400 border border-emerald-800/80 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" /> {activeContracts.length} Contrato{activeContracts.length > 1 ? 's' : ''} Activo{activeContracts.length > 1 ? 's' : ''}
+                <CheckCircle2 className="w-3.5 h-3.5" /> {activeContracts.length} contrato{activeContracts.length > 1 ? 's' : ''} activo{activeContracts.length > 1 ? 's' : ''}
               </span>
               <span className="text-xs font-mono bg-slate-800 text-amber-300 px-3 py-1 rounded-lg border border-slate-700">
-                Total Potencia: {totalContractedPower} kW
+                Total potencia: {totalContractedPower} kW
               </span>
             </div>
           ) : (
             <div className="flex items-center space-x-3">
               <span className="text-xs text-amber-400 bg-amber-950/80 border border-amber-800 px-3 py-1 rounded-full">
-                Sin Contratos Activos
+                Sin contratos activos
               </span>
             </div>
           )}
@@ -72,25 +72,25 @@ export const ElectricityAssetTab: React.FC<Props> = ({
         {activeContracts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
             <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
-              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Potencia Total Contratada</span>
+              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Potencia total contratada</span>
               <p className="text-2xl font-black text-amber-400 font-mono mt-1">{totalContractedPower} kW</p>
               <span className="text-[10px] text-slate-500">Tarifa IberLuz 3.0TD</span>
             </div>
 
             <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
-              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Término Potencia</span>
+              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Término potencia</span>
               <p className="text-xl font-bold text-slate-200 font-mono mt-1">0,11 €/kW/día</p>
               <span className="text-[10px] text-slate-500">IberLuz Comercializadora</span>
             </div>
 
             <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
-              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Término Energía</span>
+              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Término energía</span>
               <p className="text-xl font-bold text-slate-200 font-mono mt-1">0,14 €/kWh</p>
               <span className="text-[10px] text-slate-500">Precio fijo garantizado</span>
             </div>
 
             <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
-              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Cobro de Facturas</span>
+              <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Cobro de facturas</span>
               <p className="text-xl font-bold text-emerald-400 mt-1">Día 5 de mes</p>
               <span className="text-[10px] text-slate-500">Domiciliación bancaria automática</span>
             </div>
@@ -105,19 +105,19 @@ export const ElectricityAssetTab: React.FC<Props> = ({
         <div className="bg-slate-950 border border-amber-500/30 rounded-xl p-4 text-xs space-y-3 mt-3">
           <div className="flex items-center space-x-2 text-amber-300 font-bold border-b border-slate-800 pb-2">
             <Zap className="w-4 h-4 text-amber-400" />
-            <span>¿Por qué varía el Gasto Previsto de Electricidad en el Banco?</span>
+            <span>¿Por qué varía el gasto previsto de electricidad en el banco?</span>
           </div>
           <p className="text-slate-300 leading-relaxed">
-            El recibo mensual no solo incluye el <strong className="text-amber-300">Término Fijo de Potencia</strong> (95 kW × 30,4 días × 0,11 € = 317,68 €), sino principalmente el <strong className="text-amber-300">Término Variable de Energía</strong> (0,14 €/kWh), la <strong className="text-purple-300">Asignación de Operarios/Turnos</strong> y los <strong className="text-emerald-300">Impuestos Estatales (IEE 5,11% e IVA 21%)</strong>.
+            El recibo mensual no solo incluye el <strong className="text-amber-300">término fijo de potencia</strong> (95 kW × 30,4 días × 0,11 € = 317,68 €), sino principalmente el <strong className="text-amber-300">término variable de energía</strong> (0,14 €/kWh), la <strong className="text-purple-300">asignación de operarios/turnos</strong> y los <strong className="text-emerald-300">impuestos estatales (IEE 5,11% e IVA 21%)</strong>.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px]">
             <div className="bg-slate-900 p-2.5 rounded border border-slate-800">
-              <span className="text-slate-400 block font-sans font-semibold">• Operativa en 1 Turno (8h/día - 160h/mes):</span>
-              <span className="text-slate-200">Consumo ~15.200 kWh → Factura Total: <strong>2.732,38 €</strong> (2.446,53 € base + 285,85 € impuestos)</span>
+              <span className="text-slate-400 block font-sans font-semibold">• Operativa en 1 turno (8h/día - 160h/mes):</span>
+              <span className="text-slate-200">Consumo ~15.200 kWh → Factura total: <strong>2.732,38 €</strong> (2.446,53 € base + 285,85 € impuestos)</span>
             </div>
             <div className="bg-amber-950/60 p-2.5 rounded border border-amber-800/80 text-amber-300">
-              <span className="text-amber-400 block font-sans font-semibold">• Operativa en 2 Turnos (16h/día - 320h/mes):</span>
-              <span>Consumo ~30.400 kWh → Factura Total: <strong className="text-amber-200">5.748,99 €</strong> (4.574,53 € base + 1.174,46 € impuestos)</span>
+              <span className="text-amber-400 block font-sans font-semibold">• Operativa en 2 turnos (16h/día - 320h/mes):</span>
+              <span>Consumo ~30.400 kWh → Factura total: <strong className="text-amber-200">5.748,99 €</strong> (4.574,53 € base + 1.174,46 € impuestos)</span>
             </div>
           </div>
         </div>
@@ -127,7 +127,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-xl space-y-4">
         <h4 className="font-bold text-base text-white flex items-center space-x-2">
           <Building2 className="w-5 h-5 text-blue-400" />
-          <span>Estado del Suministro Eléctrico por Inmueble</span>
+          <span>Estado del suministro eléctrico por inmueble</span>
         </h4>
 
         {acquisitions.length === 0 ? (
@@ -190,7 +190,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
                     <div>
                       <h5 className="font-bold text-slate-200 text-sm">{pTitle}</h5>
                       <span className="text-[10px] text-slate-400 uppercase tracking-wider">
-                        {isNave ? 'Nave Industrial' : isLocal ? 'Local Comercial' : isAlmacen ? 'Almacén' : 'Inmueble'} • {prop.surfaceM2} m²
+                        {isNave ? 'Nave industrial' : isLocal ? 'Local comercial' : isAlmacen ? 'Almacén' : 'Inmueble'} • {prop.surfaceM2} m²
                       </span>
                     </div>
                     {propContract ? (
@@ -207,16 +207,16 @@ export const ElectricityAssetTab: React.FC<Props> = ({
                   <div className="space-y-1.5 text-xs text-slate-300 border-t border-slate-800/80 pt-2 font-mono">
                     {isNave && (
                       <div className="flex justify-between">
-                        <span className="text-slate-400">Maquinaria en Inmueble:</span>
+                        <span className="text-slate-400">Maquinaria en inmueble:</span>
                         <span className="text-blue-300 font-bold">{propMachineryKw} kW ({propMachinery.length} línea{propMachinery.length !== 1 ? 's' : ''})</span>
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Potencia Recomendada:</span>
+                      <span className="text-slate-400">Potencia recomendada:</span>
                       <span className="text-amber-400 font-bold">{propRecommendedPower} kW</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Potencia Contratada:</span>
+                      <span className="text-slate-400">Potencia contratada:</span>
                       <span className="text-amber-300 font-bold">
                         {propContract ? `${propContract.contractedPowerKw} kW` : 'No contratada'}
                       </span>
@@ -244,7 +244,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
         <div className="flex items-center justify-between">
           <h4 className="font-bold text-base text-white flex items-center space-x-2">
             <FileText className="w-5 h-5 text-amber-400" />
-            <span>Histórico de Facturas de Electricidad (IberLuz Comercializadora)</span>
+            <span>Histórico de facturas de electricidad (IberLuz Comercializadora)</span>
           </h4>
           <span className="text-xs text-slate-400 font-mono">Pago automático el día 5 de cada mes</span>
         </div>
@@ -262,12 +262,12 @@ export const ElectricityAssetTab: React.FC<Props> = ({
             <table className="w-full text-xs text-left border-collapse">
               <thead>
                 <tr className="bg-slate-950 text-slate-400 uppercase font-semibold border-b border-slate-800">
-                  <th className="p-3">Nº Factura</th>
-                  <th className="p-3">Período / Mes</th>
-                  <th className="p-3 text-right">kWh Consumidos</th>
+                  <th className="p-3">Nº factura</th>
+                  <th className="p-3">Período / mes</th>
+                  <th className="p-3 text-right">kWh consumidos</th>
                   <th className="p-3 text-right">Impuestos (IEE + IVA)</th>
-                  <th className="p-3 text-right">Total Factura</th>
-                  <th className="p-3 text-center">Estado de Pago</th>
+                  <th className="p-3 text-right">Total factura</th>
+                  <th className="p-3 text-center">Estado de pago</th>
                   <th className="p-3 text-right">Acción</th>
                 </tr>
               </thead>
@@ -306,7 +306,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
                         className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-lg text-xs font-semibold transition"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        <span>Ver Factura PDF</span>
+                        <span>Ver factura PDF</span>
                       </button>
                     </td>
                   </tr>

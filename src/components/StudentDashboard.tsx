@@ -251,7 +251,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 <button
                   onClick={onBackToHub}
                   className="p-2 bg-white/10 hover:bg-white/20 rounded-xl text-white transition cursor-pointer border border-white/10"
-                  title="Volver al Menú Principal"
+                  title="Volver al menú principal"
                 >
                   <ArrowDownLeft className="w-4 h-4 transform rotate-45" />
                 </button>
@@ -261,7 +261,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
               <div>
                 <span className="font-display font-bold text-lg tracking-tight block">ContaLab</span>
-                <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Banco Simulado • Alumno</span>
+                <span className="text-[10px] text-amber-200 font-semibold tracking-wider uppercase">Banco simulado • Alumno</span>
               </div>
             </div>
             
@@ -273,7 +273,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               <button
                 onClick={() => setShowPasswordModal(true)}
                 className="flex items-center space-x-1.5 bg-amber-800/80 hover:bg-amber-700/80 px-3 py-2 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer border border-amber-600/50"
-                title="Cambiar Contraseña"
+                title="Cambiar contraseña"
               >
                 <span>Clave</span>
               </button>
@@ -308,9 +308,9 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
               <div>
                 <h3 className="font-bold text-base flex items-center gap-2">
-                  <span>⛔ Salidas de Dinero Bloqueadas por Mora</span>
+                  <span>⛔ Salidas de dinero bloqueadas por mora</span>
                   <span className="text-xs bg-white text-rose-900 px-2.5 py-0.5 rounded-full font-mono font-extrabold">
-                    5% Int. Demora
+                    5% int. demora
                   </span>
                 </h3>
                 <p className="text-xs text-rose-100 mt-1 leading-relaxed">
@@ -332,7 +332,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               <div className="space-y-1">
                 <p className="text-xs font-bold text-amber-200 uppercase tracking-widest flex items-center">
                   <Wallet className="w-3.5 h-3.5 mr-1.5" />
-                  Saldo Disponible Total
+                  Saldo disponible total
                 </p>
                 <h2 className="text-4xl sm:text-5xl font-extrabold font-display tracking-tight font-mono">
                   {formatNumber(balance)} <span className="text-2xl font-semibold">€</span>
@@ -351,7 +351,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
               <div className="flex items-center space-x-2">
                 <div className="bg-white/10 p-2 rounded-xl text-left">
-                  <p className="text-amber-200 font-medium text-[10px] uppercase">Tu IBAN de Alumno:</p>
+                  <p className="text-amber-200 font-medium text-[10px] uppercase">Tu IBAN de alumno:</p>
                   <div className="flex items-center space-x-2 mt-0.5">
                     <span className="font-mono text-white font-semibold">{currentUser.accountNumber}</span>
                     <button 
@@ -380,7 +380,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
             }`}
           >
             <Send className="w-4 h-4 text-amber-500" />
-            <span>Operaciones y Transferencias</span>
+            <span>Operaciones y transferencias</span>
           </button>
 
           <button
@@ -455,21 +455,9 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   </div>
                 )}
 
-                {paymentStatus && paymentStatus.totalUpcoming30DaysAmount > 0 && (
-                  <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-amber-900 text-[11px] font-medium space-y-0.5">
-                    <span className="font-bold flex items-center gap-1 text-amber-950">
-                      <Clock className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Aviso de Cobros Domiciliados a 30 días:</span>
-                    </span>
-                    <p>
-                      Tienes <strong>{formatNumber(paymentStatus.totalUpcoming30DaysAmount)} €</strong> en pagos automáticos previstos en los próximos 30 días. Procura no agotar tu saldo disponible.
-                    </p>
-                  </div>
-                )}
-
                 <div>
                   <label htmlFor="recipient-iban" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Número de Cuenta / IBAN del Destinatario
+                    Número de cuenta / IBAN del destinatario
                   </label>
                   <input
                     id="recipient-iban"
@@ -477,7 +465,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                     required
                     value={customIBAN}
                     onChange={(e) => setCustomIBAN(e.target.value)}
-                    placeholder="ej. ES001234..."
+                    placeholder="Ej. ES001234..."
                     className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-slate-900"
                   />
                   <p className="mt-1.5 text-[11px] text-slate-400 italic">
@@ -509,7 +497,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
 
                 <div>
                   <label htmlFor="concept" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Concepto Contable
+                    Concepto contable
                   </label>
                   <input
                     id="concept"
@@ -517,7 +505,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                     required
                     value={transferConcept}
                     onChange={(e) => setTransferConcept(e.target.value)}
-                    placeholder="ej. Factura F-01, Pago materiales"
+                    placeholder="Ej. Factura F-01, pago de materiales"
                     className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-900"
                   />
                 </div>
@@ -601,7 +589,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                             <button
                               onClick={() => setSelectedExtractTx(tx)}
                               className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
-                              title="Descargar Extracto Bancario"
+                              title="Descargar extracto bancario"
                             >
                               <FileText className="w-3 h-3 text-indigo-600" />
                               <span>Extracto</span>
@@ -635,7 +623,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">Cambiar mi Contraseña</h3>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Cambiar mi contraseña</h3>
             <p className="text-xs text-slate-500 mb-4">Actualiza la contraseña de acceso a tu cuenta bancaria y de alumno.</p>
 
             {passError && (
@@ -652,7 +640,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
 
             <form onSubmit={handleChangePassword} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Contraseña Actual (opcional)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Contraseña actual (opcional)</label>
                 <input
                   type="password"
                   value={currentPassInput}
@@ -663,7 +651,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Nueva Contraseña (*)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Nueva contraseña (*)</label>
                 <input
                   type="password"
                   required
@@ -691,7 +679,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   disabled={isChangingPass}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white cursor-pointer shadow-xs disabled:opacity-50"
                 >
-                  {isChangingPass ? 'Guardando...' : 'Guardar Nueva Contraseña'}
+                  {isChangingPass ? 'Guardando...' : 'Guardar nueva contraseña'}
                 </button>
               </div>
             </form>

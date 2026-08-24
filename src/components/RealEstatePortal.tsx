@@ -7,7 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { PropertyListing, User, PropertyType, OperationType, LocationScope, DeferredPaymentConfig } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import { SPANISH_REGIONS } from '../lib/realEstateData.js';
-import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import { 
   Building2, Store, Warehouse, Factory, Search, Filter, Plus, Trash2, 
   CheckCircle2, ArrowLeft, Euro, MapPin, SlidersHorizontal, Sparkles, 
@@ -158,7 +157,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
     const payload = {
       mode: 'single',
       property: {
-        title: singleForm.title || `${singleForm.type === 'nave_industrial' ? 'Nave Industrial' : singleForm.type === 'almacen' ? 'Almacén' : 'Local Comercial'} en ${singleForm.municipality}`,
+        title: singleForm.title || `${singleForm.type === 'nave_industrial' ? 'Nave industrial' : singleForm.type === 'almacen' ? 'Almacén' : 'Local comercial'} en ${singleForm.municipality}`,
         type: singleForm.type,
         operation: singleForm.operation,
         surfaceM2: singleForm.surfaceM2,
@@ -279,8 +278,8 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
 
   const getPropertyTypeLabel = (type: PropertyType) => {
     switch (type) {
-      case 'nave_industrial': return 'Nave Industrial';
-      case 'almacen': return 'Almacén Logístico';
+      case 'nave_industrial': return 'Nave industrial';
+      case 'almacen': return 'Almacén logístico';
       case 'oficina': return 'Oficina';
       case 'local_comercial': return 'Oficina';
       default: return 'Oficina';
@@ -315,15 +314,15 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <h1 className="text-base font-bold text-white tracking-tight">Portal Inmobiliario</h1>
-                <p className="text-[11px] text-slate-400">Oferta de Inmuebles Industriales y Comerciales</p>
+                <h1 className="text-base font-bold text-white tracking-tight">Portal inmobiliario</h1>
+                <p className="text-[11px] text-slate-400">Oferta de inmuebles industriales y comerciales</p>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="hidden sm:flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl border border-slate-700">
-              <span className="text-xs text-slate-400">Saldo Empresa:</span>
+              <span className="text-xs text-slate-400">Saldo empresa:</span>
               <span className="text-xs font-bold text-emerald-400">
                 {formatNumber(currentUser.balance)} €
               </span>
@@ -337,7 +336,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-xl shadow-xs transition cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Publicar Ofertas</span>
+                  <span>Publicar ofertas</span>
                 </button>
 
                 {properties.length > 0 && (
@@ -348,7 +347,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     title="Eliminar todos los inmuebles del portal"
                   >
                     <Trash2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">Eliminar Todos</span>
+                    <span className="hidden sm:inline">Eliminar todos</span>
                   </button>
                 )}
               </div>
@@ -402,9 +401,9 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 onChange={(e) => setSelectedType(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
               >
-                <option value="all">Todos los Tipos (Naves, Almacenes, Oficinas)</option>
-                <option value="nave_industrial">Naves Industriales</option>
-                <option value="almacen">Almacenes Logísticos</option>
+                <option value="all">Todos los tipos (naves, almacenes, oficinas)</option>
+                <option value="nave_industrial">Naves industriales</option>
+                <option value="almacen">Almacenes logísticos</option>
                 <option value="oficina">Oficinas</option>
               </select>
             </div>
@@ -416,9 +415,9 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 onChange={(e) => setSelectedOperation(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
               >
-                <option value="all">Todas las Operaciones (Compra y Alquiler)</option>
-                <option value="compra">En Venta (Compra)</option>
-                <option value="alquiler">En Alquiler Mensual</option>
+                <option value="all">Todas las operaciones (compra y alquiler)</option>
+                <option value="compra">En venta (compra)</option>
+                <option value="alquiler">En alquiler mensual</option>
               </select>
             </div>
 
@@ -429,7 +428,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 onChange={(e) => setSelectedCommunity(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
               >
-                <option value="all">Todas las Comunidades Autónomas</option>
+                <option value="all">Todas las comunidades autónomas</option>
                 {SPANISH_REGIONS.map(r => (
                   <option key={r.community} value={r.community}>{r.community}</option>
                 ))}
@@ -450,7 +449,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             <h3 className="text-base font-bold text-slate-800">No hay inmuebles disponibles</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
               {isTeacher
-                ? 'No se han publicado inmuebles con estos filtros. Utiliza el botón "Publicar Ofertas" para añadir anuncios.'
+                ? 'No se han publicado inmuebles con estos filtros. Utiliza el botón "Publicar ofertas" para añadir anuncios.'
                 : 'Actualmente no existen ofertas que coincidan con los criterios de búsqueda.'}
             </p>
           </div>
@@ -470,29 +469,16 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     !isAvailable ? 'opacity-65 bg-slate-50' : ''
                   }`}
                 >
-                  <div>
-                    {/* Image Header */}
-                    <div className="relative h-48 bg-slate-900 overflow-hidden">
-                      <img
-                        src={resolveImageUrl(prop.imageUrl, 'property', `${prop.title} ${prop.propertyType}`)}
-                        alt={prop.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          const target = e.currentTarget as HTMLImageElement;
-                          if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
-                        }}
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
-
-                      {/* Operation Badge */}
-                      <div className="absolute top-3 left-3 flex gap-1.5 flex-wrap">
+                  <div className="p-5">
+                    {/* Top Badges & Controls Header */}
+                    <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full text-white ${
                           isRent ? 'bg-indigo-600' : 'bg-emerald-600'
                         }`}>
-                          {isRent ? 'Alquiler Mensual' : 'En Venta'}
+                          {isRent ? 'Alquiler mensual' : 'En venta'}
                         </span>
-                        <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-slate-900/80 text-slate-200 backdrop-blur-xs border border-white/20 flex items-center gap-1">
+                        <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">
                           {getPropertyTypeIcon(prop.type)}
                           <span>{getPropertyTypeLabel(prop.type)}</span>
                         </span>
@@ -506,37 +492,36 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                             e.stopPropagation();
                             handleDeleteProperty(prop.id);
                           }}
-                          className="absolute top-3 right-3 z-20 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-md flex items-center gap-1 border border-white/20"
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs flex items-center gap-1"
                           title="Eliminar anuncio"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                           <span className="hidden sm:inline">Eliminar</span>
                         </button>
                       )}
-
-                      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs">
-                        <div className="flex items-center gap-1 text-slate-200 line-clamp-1">
-                          <MapPin className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                          <span className="truncate">{prop.municipality}, {prop.community}</span>
-                        </div>
-                        <span className="font-extrabold bg-slate-900/90 px-2 py-0.5 rounded-md border border-slate-700">
-                          {prop.surfaceM2} m²
-                        </span>
-                      </div>
                     </div>
 
                     {/* Content Details */}
-                    <div className="p-5">
-                      <h3 className="text-sm font-bold text-slate-900 mb-1 line-clamp-2" title={prop.title}>
-                        {prop.title}
-                      </h3>
-                      <p className="text-[11px] text-slate-500 mb-4 line-clamp-1">{prop.address}</p>
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h3 className="text-sm font-bold text-slate-900 line-clamp-2" title={prop.title}>
+                          {prop.title}
+                        </h3>
+                        <span className="font-extrabold text-xs text-slate-800 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md shrink-0">
+                          {prop.surfaceM2} m²
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-1 text-[11px] text-slate-500 mb-3 line-clamp-1">
+                        <MapPin className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                        <span className="truncate">{prop.address}, {prop.municipality} ({prop.community})</span>
+                      </div>
 
                       {/* Key Indicators */}
                       <div className="grid grid-cols-2 gap-2 p-2.5 bg-slate-50 rounded-xl text-xs mb-4 border border-slate-100">
                         <div>
-                          <span className="text-[10px] text-slate-400 block uppercase font-medium">Porcentaje Suelo</span>
-                          <span className="font-bold text-slate-800">{prop.landPercentage}% (Terreno)</span>
+                          <span className="text-[10px] text-slate-400 block uppercase font-medium">Porcentaje suelo</span>
+                          <span className="font-bold text-slate-800">{prop.landPercentage}% (terreno)</span>
                         </div>
                         <div>
                           <span className="text-[10px] text-slate-400 block uppercase font-medium">Precio por m²</span>
@@ -546,8 +531,8 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
 
                       {/* Deferred Payment Banner */}
                       {!isRent && prop.deferredPaymentConfig?.allowed && (
-                        <div className="mb-4 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] font-semibold text-amber-800 flex items-center justify-between">
-                          <span>Admite {prop.deferredPaymentConfig.instrument === 'pagare' ? 'Pagaré' : 'Letra de Cambio'}</span>
+                        <div className="mb-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] font-semibold text-amber-800 flex items-center justify-between">
+                          <span>Admite {prop.deferredPaymentConfig.instrument === 'pagare' ? 'pagaré' : 'letra de cambio'}</span>
                           <span className="text-[10px] bg-amber-200/80 px-2 py-0.5 rounded-md">Entrada {prop.deferredPaymentConfig.minDownPaymentPercent}%</span>
                         </div>
                       )}
@@ -558,7 +543,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   <div className="p-5 pt-0 border-t border-slate-100 mt-2 flex items-center justify-between">
                     <div>
                       <div className="text-[10px] text-slate-400 font-medium">
-                        {isRent ? 'Renta Base (IVA 21% no incl.)' : 'Precio Base + 21% IVA'}
+                        {isRent ? 'Renta base (IVA 21% no incl.)' : 'Precio base + 21% IVA'}
                       </div>
                       <div className="flex items-baseline gap-1">
                         <span className="text-base font-black text-slate-900">
@@ -623,7 +608,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
               <div>
                 <span className="text-xs font-extrabold uppercase tracking-wider text-blue-600">
-                  {selectedPropertyForModal.operation === 'alquiler' ? 'Formalizar Alquiler' : 'Formalizar Compra'}
+                  {selectedPropertyForModal.operation === 'alquiler' ? 'Formalizar alquiler' : 'Formalizar compra'}
                 </span>
                 <h3 className="text-lg font-extrabold text-slate-900 line-clamp-1">
                   {selectedPropertyForModal.title}
@@ -641,7 +626,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             <div className="space-y-4 mb-6">
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2 text-xs">
                 <div className="flex justify-between text-slate-600">
-                  <span>Precio / Renta Base:</span>
+                  <span>Precio / renta base:</span>
                   <span className="font-bold text-slate-900">{formatNumber(selectedPropertyForModal.price)} €</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
@@ -650,7 +635,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 </div>
 
                 <div className="pt-2 border-t border-slate-200 flex justify-between text-sm font-black text-slate-900">
-                  <span>Total Inmueble con IVA:</span>
+                  <span>Total inmueble con IVA:</span>
                   <span className="text-blue-700">{formatNumber(selectedPropertyForModal.price * 1.21)} €</span>
                 </div>
               </div>
@@ -659,18 +644,18 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               <div className="p-4 bg-blue-50/60 rounded-2xl border border-blue-100 space-y-2 text-xs">
                 <h4 className="font-bold text-blue-900 flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-blue-600" />
-                  <span>Desglose Patrimonial Contable</span>
+                  <span>Desglose patrimonial contable</span>
                 </h4>
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div className="bg-white p-2.5 rounded-xl border border-blue-100">
-                    <span className="text-[10px] text-slate-400 font-medium block">Terreno / Suelo ({selectedPropertyForModal.landPercentage}%)</span>
+                    <span className="text-[10px] text-slate-400 font-medium block">Terreno / suelo ({selectedPropertyForModal.landPercentage}%)</span>
                     <span className="font-extrabold text-slate-900">
                       {formatNumber((selectedPropertyForModal.price * selectedPropertyForModal.landPercentage) / 100)} €
                     </span>
-                    <span className="text-[9px] text-slate-500 block mt-0.5">No Amortizable</span>
+                    <span className="text-[9px] text-slate-500 block mt-0.5">No amortizable</span>
                   </div>
                   <div className="bg-white p-2.5 rounded-xl border border-blue-100">
-                    <span className="text-[10px] text-slate-400 font-medium block">Edificación / Construcción ({100 - selectedPropertyForModal.landPercentage}%)</span>
+                    <span className="text-[10px] text-slate-400 font-medium block">Edificación / construcción ({100 - selectedPropertyForModal.landPercentage}%)</span>
                     <span className="font-extrabold text-slate-900">
                       {formatNumber((selectedPropertyForModal.price * (100 - selectedPropertyForModal.landPercentage)) / 100)} €
                     </span>
@@ -682,7 +667,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               {/* Payment Mode Choice for Purchase */}
               {selectedPropertyForModal.operation === 'compra' && selectedPropertyForModal.deferredPaymentConfig?.allowed && (
                 <div className="p-4 bg-amber-50/70 rounded-2xl border border-amber-200/80 space-y-3">
-                  <span className="text-xs font-bold text-amber-900 block">Selecciona la Modalidad de Pago:</span>
+                  <span className="text-xs font-bold text-amber-900 block">Selecciona la modalidad de pago:</span>
                   
                   <div className="space-y-2">
                     <label className="flex items-start gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:border-amber-400 transition">
@@ -694,7 +679,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                         className="mt-0.5 text-blue-600"
                       />
                       <div>
-                        <span className="text-xs font-bold text-slate-900 block">Pago al Contado (100%)</span>
+                        <span className="text-xs font-bold text-slate-900 block">Pago al contado (100%)</span>
                         <span className="text-[11px] text-slate-500">
                           Se deducirá el total de {formatNumber(selectedPropertyForModal.price * 1.21)} € en este momento.
                         </span>
@@ -711,7 +696,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       />
                       <div>
                         <span className="text-xs font-bold text-slate-900 block">
-                          Pago Aplazado con {selectedPropertyForModal.deferredPaymentConfig.instrument === 'pagare' ? 'Pagaré' : 'Letra de Cambio'}
+                          Pago aplazado con {selectedPropertyForModal.deferredPaymentConfig.instrument === 'pagare' ? 'pagaré' : 'letra de cambio'}
                         </span>
                         <span className="text-[11px] text-slate-600 block mt-0.5">
                           • Entrada inicial ({selectedPropertyForModal.deferredPaymentConfig.minDownPaymentPercent}%) + Total IVA: {' '}
@@ -740,7 +725,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               {/* Rental Conditions Note */}
               {selectedPropertyForModal.operation === 'alquiler' && (
                 <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
-                  <span className="font-bold block">Condiciones del Contrato de Arrendamiento:</span>
+                  <span className="font-bold block">Condiciones del contrato de arrendamiento:</span>
                   <p>
                     • Se abonará una fianza equivalente a 2 mensualidades ({ formatNumber(selectedPropertyForModal.price * 2) } €) + 1er mes con IVA ({ formatNumber(selectedPropertyForModal.price * 1.21) } €).
                   </p>
@@ -748,7 +733,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     • Total a desembolsar hoy: { formatNumber((selectedPropertyForModal.price * 2) + (selectedPropertyForModal.price * 1.21)) } €
                   </p>
                   <p className="text-[11px] text-indigo-800 font-bold mt-1 bg-indigo-100/80 p-2 rounded-xl border border-indigo-200">
-                    🔔 Aviso de Pagos Automáticos: Los 11 meses restantes ({ formatNumber(selectedPropertyForModal.price * 1.21) } €/mes) se programarán automáticamente como cargos domiciliados en tu cuenta bancaria a 30 días vista.
+                    🔔 Aviso de pagos automáticos: Los 11 meses restantes ({ formatNumber(selectedPropertyForModal.price * 1.21) } €/mes) se programarán automáticamente como cargos domiciliados en tu cuenta bancaria a 30 días vista.
                   </p>
                 </div>
               )}
@@ -756,7 +741,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               {/* Deferred Payment Warning */}
               {selectedPropertyForModal.operation === 'compra' && useDeferredPayment && (
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-medium">
-                  🔔 <strong>Aviso de Pagos Automáticos Programados:</strong> Al aplazar el pago, los vencimientos mensuales ({ formatNumber(((selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig?.minDownPaymentPercent || 20)) / 100) / (selectedPropertyForModal.deferredPaymentConfig?.installmentsCount || 12))) } €/mes) se domiciliarán automáticamente en tu cuenta. Recibirás avisos en tu panel para mantener fondos suficientes antes del vencimiento.
+                  🔔 <strong>Aviso de pagos automáticos programados:</strong> Al aplazar el pago, los vencimientos mensuales ({ formatNumber(((selectedPropertyForModal.price * (100 - (selectedPropertyForModal.deferredPaymentConfig?.minDownPaymentPercent || 20)) / 100) / (selectedPropertyForModal.deferredPaymentConfig?.installmentsCount || 12))) } €/mes) se domiciliarán automáticamente en tu cuenta. Recibirás avisos en tu panel para mantener fondos suficientes antes del vencimiento.
                 </div>
               )}
             </div>
@@ -777,7 +762,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold shadow-md transition cursor-pointer disabled:opacity-50 flex items-center gap-2"
               >
                 {actionLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                <span>Confirmar Operación</span>
+                <span>Confirmar operación</span>
               </button>
             </div>
           </div>
@@ -794,7 +779,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   <Plus className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-900">Publicar Anuncio Inmobiliario</h3>
+                  <h3 className="text-base font-extrabold text-slate-900">Publicar anuncio inmobiliario</h3>
                   <p className="text-xs text-slate-500">Genera oferta individual o en grupo para los estudiantes</p>
                 </div>
               </div>
@@ -815,7 +800,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   publishMode === 'single' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Anuncio Individual
+                Anuncio individual
               </button>
               <button
                 type="button"
@@ -824,7 +809,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   publishMode === 'batch' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Publicación en Grupo (Batch)
+                Publicación en grupo (batch)
               </button>
             </div>
 
@@ -832,10 +817,10 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             {publishMode === 'single' && (
               <form onSubmit={handleCreateSingleProperty} className="space-y-4 text-xs">
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Título del Anuncio</label>
+                  <label className="block font-bold text-slate-700 mb-1">Título del anuncio</label>
                   <input
                     type="text"
-                    placeholder="Ej. Nave Industrial con Puente Grúa en Polígono"
+                    placeholder="Ej. Nave industrial con puente grúa en polígono"
                     value={singleForm.title}
                     onChange={(e) => setSingleForm({ ...singleForm, title: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
@@ -844,27 +829,27 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Tipo de Inmueble</label>
+                    <label className="block font-bold text-slate-700 mb-1">Tipo de inmueble</label>
                     <select
                       value={singleForm.type}
                       onChange={(e) => setSingleForm({ ...singleForm, type: e.target.value as PropertyType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="oficina">Oficina</option>
-                      <option value="nave_industrial">Nave Industrial</option>
-                      <option value="almacen">Almacén Logístico</option>
+                      <option value="nave_industrial">Nave industrial</option>
+                      <option value="almacen">Almacén logístico</option>
                     </select>
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Tipo de Operación</label>
+                    <label className="block font-bold text-slate-700 mb-1">Tipo de operación</label>
                     <select
                       value={singleForm.operation}
                       onChange={(e) => setSingleForm({ ...singleForm, operation: e.target.value as OperationType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="compra">En Venta (Compra)</option>
-                      <option value="alquiler">En Alquiler Mensual</option>
+                      <option value="compra">En venta (compra)</option>
+                      <option value="alquiler">En alquiler mensual</option>
                     </select>
                   </div>
                 </div>
@@ -882,7 +867,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Precio Base (€)</label>
+                    <label className="block font-bold text-slate-700 mb-1">Precio base (€)</label>
                     <input
                       type="number"
                       min="100"
@@ -893,7 +878,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">% Suelo (55-75%)</label>
+                    <label className="block font-bold text-slate-700 mb-1">% suelo (55-75%)</label>
                     <input
                       type="number"
                       min="50"
@@ -908,7 +893,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 {/* Location */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Comunidad Autónoma</label>
+                    <label className="block font-bold text-slate-700 mb-1">Comunidad autónoma</label>
                     <select
                       value={singleForm.community}
                       onChange={(e) => setSingleForm({ ...singleForm, community: e.target.value })}
@@ -921,7 +906,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Municipio / Ciudad</label>
+                    <label className="block font-bold text-slate-700 mb-1">Municipio / ciudad</label>
                     <input
                       type="text"
                       value={singleForm.municipality}
@@ -932,7 +917,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Dirección Completa</label>
+                  <label className="block font-bold text-slate-700 mb-1">Dirección completa</label>
                   <input
                     type="text"
                     value={singleForm.address}
@@ -950,13 +935,13 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                         checked={singleForm.allowDeferred}
                         onChange={(e) => setSingleForm({ ...singleForm, allowDeferred: e.target.checked })}
                       />
-                      <span>Permitir Pago Aplazado (Pagarés / Letras de Cambio)</span>
+                      <span>Permitir pago aplazado (pagarés / letras de cambio)</span>
                     </label>
 
                     {singleForm.allowDeferred && (
                       <div className="grid grid-cols-3 gap-2 pt-2">
                         <div>
-                          <label className="text-[10px] text-amber-800 font-bold block">Entrada Mínima (%)</label>
+                          <label className="text-[10px] text-amber-800 font-bold block">Entrada mínima (%)</label>
                           <input
                             type="number"
                             value={singleForm.minDownPaymentPercent}
@@ -965,7 +950,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] text-amber-800 font-bold block">Plazo (Meses)</label>
+                          <label className="text-[10px] text-amber-800 font-bold block">Plazo (meses)</label>
                           <input
                             type="number"
                             value={singleForm.installmentsCount}
@@ -981,7 +966,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                             className="w-full px-2 py-1 bg-white border border-amber-200 rounded-lg text-xs"
                           >
                             <option value="pagare">Pagaré</option>
-                            <option value="letra_cambio">Letra de Cambio</option>
+                            <option value="letra_cambio">Letra de cambio</option>
                           </select>
                         </div>
                       </div>
@@ -1002,7 +987,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     disabled={actionLoading}
                     className="px-6 py-2 rounded-xl bg-blue-600 text-white font-extrabold hover:bg-blue-500 cursor-pointer shadow-xs"
                   >
-                    Publicar Anuncio
+                    Publicar anuncio
                   </button>
                 </div>
               </form>
@@ -1019,7 +1004,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
 
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Cantidad de Inmuebles</label>
+                    <label className="block font-bold text-slate-700 mb-1">Cantidad de inmuebles</label>
                     <input
                       type="number"
                       min="1"
@@ -1031,15 +1016,15 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Tipo de Inmueble</label>
+                    <label className="block font-bold text-slate-700 mb-1">Tipo de inmueble</label>
                     <select
                       value={batchForm.type}
                       onChange={(e) => setBatchForm({ ...batchForm, type: e.target.value as PropertyType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="oficina">Oficina</option>
-                      <option value="nave_industrial">Nave Industrial</option>
-                      <option value="almacen">Almacén Logístico</option>
+                      <option value="nave_industrial">Nave industrial</option>
+                      <option value="almacen">Almacén logístico</option>
                     </select>
                   </div>
 
@@ -1050,8 +1035,8 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                       onChange={(e) => setBatchForm({ ...batchForm, operation: e.target.value as OperationType })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="compra">En Venta (Compra)</option>
-                      <option value="alquiler">En Alquiler Mensual</option>
+                      <option value="compra">En venta (compra)</option>
+                      <option value="alquiler">En alquiler mensual</option>
                     </select>
                   </div>
                 </div>
@@ -1059,7 +1044,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                 {/* Surface Range */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Superficie Mínima (m²)</label>
+                    <label className="block font-bold text-slate-700 mb-1">Superficie mínima (m²)</label>
                     <input
                       type="number"
                       value={batchForm.surfaceMin}
@@ -1069,7 +1054,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Superficie Máxima (m²)</label>
+                    <label className="block font-bold text-slate-700 mb-1">Superficie máxima (m²)</label>
                     <input
                       type="number"
                       value={batchForm.surfaceMax}
@@ -1081,22 +1066,22 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
 
                 {/* Location Scope */}
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Ámbito Geográfico de Localizaciones</label>
+                  <label className="block font-bold text-slate-700 mb-1">Ámbito geográfico de localizaciones</label>
                   <select
                     value={batchForm.locationScope}
                     onChange={(e) => setBatchForm({ ...batchForm, locationScope: e.target.value as LocationScope })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="espana">Aleatorio por toda España</option>
-                    <option value="comunidad">En una Comunidad Autónoma Específica</option>
-                    <option value="municipio">En un Municipio Concreto</option>
+                    <option value="comunidad">En una comunidad autónoma específica</option>
+                    <option value="municipio">En un municipio concreto</option>
                   </select>
                 </div>
 
                 {batchForm.locationScope !== 'espana' && (
                   <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <div>
-                      <label className="block font-bold text-slate-700 mb-1">Comunidad Autónoma</label>
+                      <label className="block font-bold text-slate-700 mb-1">Comunidad autónoma</label>
                       <select
                         value={batchForm.community}
                         onChange={(e) => setBatchForm({ ...batchForm, community: e.target.value })}
@@ -1136,7 +1121,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
                     className="px-6 py-2 rounded-xl bg-blue-600 text-white font-extrabold hover:bg-blue-500 cursor-pointer shadow-xs flex items-center gap-2"
                   >
                     {actionLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                    <span>Generar Grupo de {batchForm.count} Anuncios</span>
+                    <span>Generar grupo de {batchForm.count} anuncios</span>
                   </button>
                 </div>
               </form>

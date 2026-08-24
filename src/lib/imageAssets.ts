@@ -52,8 +52,8 @@ export const SVG_FALLBACK = `data:image/svg+xml;utf8,${encodeURIComponent(`
   <circle cx="300" cy="170" r="48" fill="#3b82f6" opacity="0.2"/>
   <path d="M280 150 L320 150 L320 190 L280 190 Z" fill="none" stroke="#60a5fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M270 200 L330 200" stroke="#60a5fa" stroke-width="3" stroke-linecap="round"/>
-  <text x="300" y="250" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#f8fafc">Equipamiento Industrial</text>
-  <text x="300" y="275" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="#94a3b8">Portal de Gestión Corporativa</text>
+  <text x="300" y="250" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#f8fafc">Equipamiento industrial</text>
+  <text x="300" y="275" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="#94a3b8">Portal de gestión corporativa</text>
 </svg>
 `)}`;
 

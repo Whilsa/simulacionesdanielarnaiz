@@ -28,7 +28,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   // Teacher generator state
   const [batchCount, setBatchCount] = useState<number>(10);
   const [batchGender, setBatchGender] = useState<'indiferente' | 'hombre' | 'mujer'>('indiferente');
-  const [batchRole, setBatchRole] = useState<'mixto' | 'operario' | 'camionero' | 'carretillero'>('mixto');
+  const [batchRole, setBatchRole] = useState<'mixto' | 'operario' | 'camionero' | 'mozo_almacen' | 'carretillero'>('mixto');
   const [batchMinSalary, setBatchMinSalary] = useState<number>(1200);
   const [batchMaxSalary, setBatchMaxSalary] = useState<number>(2200);
   const [batchMinAge, setBatchMinAge] = useState<number>(20);
@@ -37,7 +37,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
 
   // Filter state for students
   const [genderFilter, setGenderFilter] = useState<'todos' | 'hombre' | 'mujer'>('todos');
-  const [roleFilter, setRoleFilter] = useState<'todos' | 'operario' | 'camionero' | 'carretillero'>('todos');
+  const [roleFilter, setRoleFilter] = useState<'todos' | 'operario' | 'camionero' | 'mozo_almacen' | 'carretillero'>('todos');
   const [maxSalaryFilter, setMaxSalaryFilter] = useState<number>(3000);
 
   const fetchJobs = async () => {
@@ -203,15 +203,15 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
             <button
               onClick={onBackToHub}
               className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition cursor-pointer"
-              title="Volver al Menú Principal"
+              title="Volver al menú principal"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold tracking-tight text-white">Foro de Empleo</h1>
+                <h1 className="text-lg font-bold tracking-tight text-white">Foro de empleo</h1>
                 <span className="text-[10px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">
-                  Mercado Laboral
+                  Mercado laboral
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-medium">Contratación de operarios y asignación a maquinaria industrial</p>
@@ -256,27 +256,28 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 <Users className="w-6 h-6" />
               </div>
               <div>
-                <h2 className="text-xl font-bold">Gestión Docente del Foro de Empleo</h2>
+                <h2 className="text-xl font-bold">Gestión docente del foro de empleo</h2>
                 <p className="text-xs text-slate-400">Configura y publica bolsas de empleo para que los alumnos contraten operarios.</p>
               </div>
             </div>
 
             <form onSubmit={handleCreateBatch} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 bg-slate-800/80 p-5 rounded-2xl border border-slate-700/80">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Puesto / Rol</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Puesto / rol</label>
                 <select
                   value={batchRole}
                   onChange={e => setBatchRole(e.target.value as any)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
                 >
-                  <option value="mixto">Mezcla de Roles</option>
-                  <option value="operario">Operario Industrial</option>
-                  <option value="camionero">Camionero / Conductor</option>
+                  <option value="mixto">Mezcla de roles</option>
+                  <option value="operario">Operario industrial</option>
+                  <option value="mozo_almacen">Mozo de almacén</option>
+                  <option value="camionero">Camionero / conductor</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Nº Candidatos</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Nº de candidatos</label>
                 <input
                   type="number"
                   min="1"
@@ -294,14 +295,14 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                   onChange={e => setBatchGender(e.target.value as any)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
                 >
-                  <option value="indiferente">Indiferente / Mixto</option>
-                  <option value="hombre">Solo Hombres</option>
-                  <option value="mujer">Solo Mujeres</option>
+                  <option value="indiferente">Indiferente / mixto</option>
+                  <option value="hombre">Solo hombres</option>
+                  <option value="mujer">Solo mujeres</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Sueldo Mín. (€)</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Sueldo mín. (€)</label>
                 <input
                   type="number"
                   step="50"
@@ -312,7 +313,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Sueldo Máx. (€)</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Sueldo máx. (€)</label>
                 <input
                   type="number"
                   step="50"
@@ -323,7 +324,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Edad (Rango)</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Edad (rango)</label>
                 <div className="flex items-center gap-1">
                   <input
                     type="number"
@@ -362,7 +363,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 className="text-red-400 hover:text-red-300 flex items-center gap-1 cursor-pointer font-semibold"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Borrar Ofertas Disponibles</span>
+                <span>Borrar ofertas disponibles</span>
               </button>
             </div>
           </div>
@@ -373,12 +374,12 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-slate-900 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">
               <Briefcase className="w-4 h-4 text-violet-600" />
-              <span>Ofertas de Empleo Candidatos ({availableJobs.length})</span>
+              <span>Ofertas de empleo de candidatos ({availableJobs.length})</span>
             </h2>
             {!isTeacher && (
               <span className="text-xs bg-blue-50 text-blue-900 px-3 py-2 rounded-2xl font-semibold border border-blue-200 flex items-center gap-1.5">
                 <Users className="w-4 h-4 text-blue-600" />
-                <span>La gestión de tus empleados contratados se realiza desde <strong>Patrimonio de la Empresa (Mi Empresa)</strong></span>
+                <span>La gestión de tus empleados contratados se realiza desde <strong>Patrimonio de la empresa (Mi empresa)</strong></span>
               </span>
             )}
           </div>
@@ -395,8 +396,9 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none"
               >
                 <option value="todos">Todos los puestos</option>
-                <option value="operario">Operarios Industriales</option>
-                <option value="camionero">Camioneros / Conductores</option>
+                <option value="operario">Operarios industriales</option>
+                <option value="mozo_almacen">Mozos de almacén</option>
+                <option value="camionero">Camioneros / conductores</option>
               </select>
 
               <select
@@ -405,8 +407,8 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                 className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
               >
                 <option value="todos">Todos los géneros</option>
-                <option value="hombre">Solo Hombres</option>
-                <option value="mujer">Solo Mujeres</option>
+                <option value="hombre">Solo hombres</option>
+                <option value="mujer">Solo mujeres</option>
               </select>
 
               <div className="flex items-center gap-2">
@@ -462,9 +464,9 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                       </div>
 
                       <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4">
-                        <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Puesto Pretendido</div>
+                        <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Puesto pretendido</div>
                         <div className="text-xs font-bold text-slate-800">{job.title}</div>
-                        <div className="mt-2 text-[11px] font-medium text-slate-500 uppercase tracking-wider">Salario Bruto Mensual</div>
+                        <div className="mt-2 text-[11px] font-medium text-slate-500 uppercase tracking-wider">Salario bruto mensual</div>
                         <div className="text-lg font-black text-violet-700">
                           {formatNumber(job.grossSalaryMonthly)} € / mes
                         </div>
@@ -478,7 +480,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                           className="w-full bg-violet-600 hover:bg-violet-700 text-white font-extrabold py-2.5 px-4 rounded-xl transition text-xs flex items-center justify-center gap-2 shadow-xs cursor-pointer"
                         >
                           <UserPlus className="w-4 h-4" />
-                          <span>Contratar Empleado</span>
+                          <span>Contratar empleado</span>
                         </button>
                       ) : (
                         <button
@@ -486,7 +488,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                           className="w-full bg-red-50 hover:bg-red-100 text-red-600 font-semibold py-2 px-3 rounded-xl transition text-xs flex items-center justify-center gap-1 cursor-pointer border border-red-200"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Eliminar Oferta</span>
+                          <span>Eliminar oferta</span>
                         </button>
                       )}
                     </div>

@@ -58,7 +58,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
               <PhoneCall className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-sm sm:text-base text-white truncate">Factura de Servicios Telecom</h3>
+              <h3 className="font-bold text-sm sm:text-base text-white truncate">Factura de servicios telecom</h3>
               <p className="text-xs text-slate-400 truncate">Nº {invoice.invoiceNumber} | {invoice.periodMonth}/{invoice.periodYear}</p>
             </div>
           </div>
@@ -105,9 +105,9 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
                 FACTURA OFICIAL
               </span>
               <p className="text-sm font-bold text-slate-900">Nº {invoice.invoiceNumber}</p>
-              <p className="text-xs text-slate-600">Fecha Emisión: {new Date(invoice.issueDate).toLocaleDateString('es-ES')}</p>
+              <p className="text-xs text-slate-600">Fecha emisión: {new Date(invoice.issueDate).toLocaleDateString('es-ES')}</p>
               <p className="text-xs text-slate-600">Periodo: {invoice.periodMonth}/{invoice.periodYear}</p>
-              <p className="text-xs font-semibold text-emerald-700 mt-1">Estado: PAGADO (Domiciliación)</p>
+              <p className="text-xs font-semibold text-emerald-700 mt-1">Estado: PAGADO (domiciliación)</p>
             </div>
           </div>
 
@@ -123,8 +123,8 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
             <div>
               <h4 className="font-extrabold text-slate-500 uppercase tracking-wider mb-2">DATOS DEL CONTRATO Y PAGO</h4>
               <p className="text-slate-700">Contrato: <span className="font-bold text-slate-900">{invoice.planName}</span></p>
-              <p className="text-slate-700">Forma de Pago: <span className="font-bold text-slate-900">{invoice.paymentMethod || 'Cargo automático en cuenta (1 de mes)'}</span></p>
-              <p className="text-slate-700">Fecha de Cobro: <span className="font-bold text-emerald-700">{new Date(invoice.paidDate || invoice.dueDate).toLocaleDateString('es-ES')}</span></p>
+              <p className="text-slate-700">Forma de pago: <span className="font-bold text-slate-900">{invoice.paymentMethod || 'Cargo automático en cuenta (1 de mes)'}</span></p>
+              <p className="text-slate-700">Fecha de cobro: <span className="font-bold text-emerald-700">{new Date(invoice.paidDate || invoice.dueDate).toLocaleDateString('es-ES')}</span></p>
             </div>
           </div>
 
@@ -135,7 +135,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                    <th className="p-3">Concepto / Servicio</th>
+                    <th className="p-3">Concepto / servicio</th>
                     <th className="p-3 text-right">Importe (€)</th>
                   </tr>
                 </thead>
@@ -149,7 +149,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
                     ))
                   ) : (
                     <tr>
-                      <td className="p-3 font-medium">Cuota Mensual {invoice.planName} (Fibra, Móviles y Centralita)</td>
+                      <td className="p-3 font-medium">Cuota mensual {invoice.planName} (Fibra, móviles y centralita)</td>
                       <td className="p-3 text-right font-semibold">{formatNumber(invoice.subtotal)} €</td>
                     </tr>
                   )}
@@ -167,7 +167,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
 
             <div className="w-full sm:w-64 bg-slate-900 text-white p-5 rounded-xl space-y-2 text-xs">
               <div className="flex justify-between text-slate-300">
-                <span>Base Imponible:</span>
+                <span>Base imponible:</span>
                 <span className="font-semibold">{formatNumber(invoice.subtotal)} €</span>
               </div>
               <div className="flex justify-between text-slate-300">
@@ -183,7 +183,7 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
 
           {/* Footer note */}
           <div className="border-t border-slate-200 pt-4 text-center text-[10px] text-slate-400 print:mt-10">
-            Documento expedido electrónicamente en el Simulador de Negocios de Daniel Arnaiz Boluda. Validez legal como justificante de gasto deducible.
+            Documento expedido electrónicamente en ContaLab. Validez legal como justificante de gasto deducible.
           </div>
 
           {/* Bottom Action Footer (Hidden when printing) */}
@@ -192,14 +192,14 @@ export function TelecomInvoiceModal({ invoice, onClose }: TelecomInvoiceModalPro
               onClick={onClose}
               className="w-full sm:w-auto px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
             >
-              Cerrar Ventana
+              Cerrar ventana
             </button>
             <button
               onClick={handlePrint}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
             >
               <Printer className="w-4 h-4" />
-              <span>Descargar / Imprimir Factura en PDF</span>
+              <span>Descargar / imprimir factura en PDF</span>
             </button>
           </div>
 

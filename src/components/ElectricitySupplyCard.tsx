@@ -226,7 +226,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
             <div className="flex items-center space-x-2">
               <h3 className="text-xl font-black text-white tracking-tight">IberLuz Comercializadora</h3>
               <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
-                Simulador & Contratación Eléctrica
+                Simulador y contratación eléctrica
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -237,7 +237,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
         <div className="flex items-center space-x-2">
           <span className="text-xs font-semibold px-3 py-1 bg-slate-800 text-amber-300 border border-slate-700 rounded-lg">
-            {activeContracts.length} / {acquisitions.length} Inmuebles Contratados
+            {activeContracts.length} / {acquisitions.length} Inmuebles contratados
           </span>
         </div>
       </div>
@@ -248,7 +248,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
           <Building2 className="w-12 h-12 text-amber-400/60 mx-auto" />
           <h4 className="text-base font-bold text-white">No dispones de inmuebles en propiedad o alquiler</h4>
           <p className="text-xs text-slate-400 max-w-md mx-auto">
-            La contratación de energía eléctrica se realiza de manera individual para cada inmueble. Accede al Portal Inmobiliario para alquilar o adquirir una Nave Industrial, Local Comercial o Almacén.
+            La contratación de energía eléctrica se realiza de manera individual para cada inmueble. Accede al portal inmobiliario para alquilar o adquirir una nave industrial, local comercial o almacén.
           </p>
         </div>
       ) : (
@@ -257,7 +257,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
               <Calculator className="w-4 h-4 text-amber-400" />
-              <span>Configuración de Potencia y Estimador de Consumo</span>
+              <span>Configuración de potencia y estimador de consumo</span>
             </h4>
             {successMsg && (
               <span className="text-xs text-emerald-400 bg-emerald-950/90 border border-emerald-800 px-3 py-1 rounded-lg font-medium animate-fadeIn">
@@ -304,7 +304,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                         <div className="flex items-center gap-2">
                           <h5 className="text-lg font-black text-white">{calc.propTitle}</h5>
                           <span className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                            {calc.isNave ? 'Nave Industrial' : calc.isLocal ? 'Local Comercial' : 'Almacén'} • {calc.surface} m²
+                            {calc.isNave ? 'Nave industrial' : calc.isLocal ? 'Local comercial' : 'Almacén'} • {calc.surface} m²
                           </span>
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5">
@@ -317,7 +317,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                       <div className="flex items-center gap-2 bg-emerald-950/90 border border-emerald-800/90 px-3 py-1.5 rounded-xl">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                         <span className="text-xs font-bold text-emerald-300">
-                          Contrato Activo ({calc.contract?.contractedPowerKw} kW)
+                          Contrato activo ({calc.contract?.contractedPowerKw} kW)
                         </span>
                         <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-900/60 px-2 py-0.5 rounded ml-1">
                           CUPS: {calc.contract?.cupsCode}
@@ -327,7 +327,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                       <div className="flex items-center gap-2 bg-amber-950/80 border border-amber-800/80 px-3 py-1.5 rounded-xl">
                         <AlertCircle className="w-4 h-4 text-amber-400" />
                         <span className="text-xs font-bold text-amber-300">
-                          Pendiente de Contratar
+                          Pendiente de contratar
                         </span>
                       </div>
                     )}
@@ -338,7 +338,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                       <span className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
                         <Sliders className="w-4 h-4 text-amber-400" />
-                        <span>Parámetros de Simulación de Equipamiento (Previsión de Compra)</span>
+                        <span>Parámetros de simulación de equipamiento (previsión de compra)</span>
                       </span>
                       <span className="text-[11px] text-slate-400">Ajusta los valores para simular la potencia requerida</span>
                     </div>
@@ -405,7 +405,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                         <div className="flex items-center justify-between">
                           <label className="text-xs font-bold text-slate-200 flex items-center gap-2">
                             <Factory className="w-4 h-4 text-blue-400" />
-                            <span>Potencia de Maquinaria Adicional prevista (kW):</span>
+                            <span>Potencia de maquinaria adicional prevista (kW):</span>
                           </label>
                           <span className="text-xs font-mono font-bold text-blue-300 bg-blue-950/80 border border-blue-800/60 px-2.5 py-0.5 rounded-lg">
                             Total: {calc.totalMachineryKw} kW
@@ -459,7 +459,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                         </div>
 
                         <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Añade potencia extra si tienes pensado adquirir nueva maquinaria en la sección de Maquinaria e Instalaciones.
+                          Añade potencia extra si tienes pensado adquirir nueva maquinaria en la sección de maquinaria e instalaciones.
                         </p>
                       </div>
                     </div>
@@ -468,7 +468,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-purple-400" />
-                        <span className="text-xs font-semibold text-slate-300">Turnos de Trabajo Previstos:</span>
+                        <span className="text-xs font-semibold text-slate-300">Turnos de trabajo previstos:</span>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -485,7 +485,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                                   : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
                               }`}
                             >
-                              {s} {s === 1 ? 'Turno (8h/día)' : s === 2 ? 'Turnos (16h/día)' : 'Turnos (24h/día)'}
+                              {s} {s === 1 ? 'turno (8h/día)' : s === 2 ? 'turnos (16h/día)' : 'turnos (24h/día)'}
                             </button>
                           );
                         })}
@@ -500,7 +500,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                         <div className="flex items-center gap-2">
                           <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
                           <h6 className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                            Potencia Recomendada a Contratar
+                            Potencia recomendada a contratar
                           </h6>
                         </div>
                         <p className="text-xs text-slate-300">
@@ -520,7 +520,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                           className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Aplicar Recomendada</span>
+                          <span>Aplicar recomendada</span>
                         </button>
                       </div>
                     </div>
@@ -551,18 +551,18 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                     <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                       <span className="font-bold text-amber-300 flex items-center gap-1.5">
                         <Calculator className="w-4 h-4 text-amber-400" />
-                        Desglose Estimado de Facturación Mensual ({(shiftsMap[calc.propId] || 1)} {(shiftsMap[calc.propId] || 1) === 1 ? 'Turno (8h/día)' : (shiftsMap[calc.propId] || 1) === 2 ? 'Turnos (16h/día)' : 'Turnos (24h/día)'})
+                        Desglose estimado de facturación mensual ({(shiftsMap[calc.propId] || 1)} {(shiftsMap[calc.propId] || 1) === 1 ? 'Turno (8h/día)' : (shiftsMap[calc.propId] || 1) === 2 ? 'Turnos (16h/día)' : 'Turnos (24h/día)'})
                       </span>
                       <span className="font-mono text-slate-400">Consumo: {formatNumber(calc.estimatedMonthlyKwh)} kWh/mes</span>
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1 font-mono text-[11px]">
                       <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                        <span className="text-slate-400 block text-[10px]">Término Potencia ({currentPower} kW)</span>
+                        <span className="text-slate-400 block text-[10px]">Término potencia ({currentPower} kW)</span>
                         <span className="text-slate-200 font-bold">{formatNumber(powerCostEst)} €</span>
                       </div>
                       <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                        <span className="text-slate-400 block text-[10px]">Término Energía ({formatNumber(calc.estimatedMonthlyKwh)} kWh)</span>
+                        <span className="text-slate-400 block text-[10px]">Término energía ({formatNumber(calc.estimatedMonthlyKwh)} kWh)</span>
                         <span className="text-amber-300 font-bold">{formatNumber(energyCostEst)} €</span>
                       </div>
                       <div className="bg-slate-950 p-2 rounded border border-slate-800">
@@ -630,7 +630,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
                     <div className="text-right flex items-center justify-between sm:justify-end gap-5 w-full sm:w-auto">
                       <div>
-                        <span className="text-[10px] text-slate-400 block">Factura Est. Mensual:</span>
+                        <span className="text-[10px] text-slate-400 block">Factura est. mensual:</span>
                         <span className="text-2xl font-black text-amber-400 font-mono">{formatNumber(totalCostEst)} €/mes</span>
                       </div>
 
@@ -649,8 +649,8 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
                           {contractingPropId === calc.propId
                             ? 'Procesando...'
                             : isContracted
-                            ? 'Modificar Contrato'
-                            : 'Contratar Suministro'}
+                            ? 'Modificar contrato'
+                            : 'Contratar suministro'}
                         </span>
                       </button>
                     </div>
@@ -669,7 +669,7 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
             <Info className="w-6 h-6" />
           </div>
           <div>
-            <h4 className="text-base font-black text-white">Explicación del Cálculo de la Factura de Electricidad y Variaciones del Gasto Previsto</h4>
+            <h4 className="text-base font-black text-white">Explicación del cálculo de la factura de electricidad y variaciones del gasto previsto</h4>
             <p className="text-xs text-slate-400">
               ¿Por qué un contrato de 95 kW puede pasar de un estimado base de ~2.732,38 € a un gasto previsto de ~5.748,99 € al mes?
             </p>
@@ -680,17 +680,17 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
           {/* Factor 1: Fixed Term vs Variable Energy Term */}
           <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
             <h5 className="font-bold text-amber-300 text-sm flex items-center gap-1.5">
-              <span>1. Término Fijo vs. Término Variable (Energía Consumida)</span>
+              <span>1. Término fijo vs. término variable (energía consumida)</span>
             </h5>
             <p className="leading-relaxed text-slate-400">
               La factura eléctrica consta de dos componentes principales:
             </p>
             <ul className="list-disc pl-4 space-y-1 text-slate-300">
               <li>
-                <strong className="text-slate-200">Término de Potencia (Fijo):</strong> Se cobra por la capacidad contratada ({formatNumber(95)} kW × 30,4 días × 0,11 €/kW/día = <span className="font-mono text-amber-300">317,68 €/mes</span>). Este coste es fijo independientemente del uso.
+                <strong className="text-slate-200">Término de potencia (fijo):</strong> Se cobra por la capacidad contratada ({formatNumber(95)} kW × 30,4 días × 0,11 €/kW/día = <span className="font-mono text-amber-300">317,68 €/mes</span>). Este coste es fijo independientemente del uso.
               </li>
               <li>
-                <strong className="text-slate-200">Término de Energía (Variable):</strong> Es el consumo real acumulado en kWh a precio de <span className="font-mono text-amber-300">0,14 €/kWh</span>.
+                <strong className="text-slate-200">Término de energía (variable):</strong> Es el consumo real acumulado en kWh a precio de <span className="font-mono text-amber-300">0,14 €/kWh</span>.
               </li>
             </ul>
           </div>
@@ -698,20 +698,20 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
           {/* Factor 2: Impact of Operarios and Shifts */}
           <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
             <h5 className="font-bold text-purple-300 text-sm flex items-center gap-1.5">
-              <span>2. Impacto de la Maquinaria Activa y los Operarios (Turnos Lunes a Viernes)</span>
+              <span>2. Impacto de la maquinaria activa y los operarios (turnos de lunes a viernes)</span>
             </h5>
             <p className="leading-relaxed text-slate-400">
               Cuando la empresa contrata y asigna operarios a la maquinaria, el número de turnos laborales aumenta (aplicables exclusivamente de <strong>lunes a viernes ambos inclusive</strong>; las máquinas no producen fines de semana):
             </p>
             <ul className="list-disc pl-4 space-y-1 text-slate-300">
               <li>
-                <strong className="text-slate-200">1 Turno (8 h/día × 20 días hábiles = 160h/mes):</strong> Consumo estimado ~15.200 kWh/mes → <span className="font-mono text-slate-200">2.128,00 €</span> de energía.
+                <strong className="text-slate-200">1 turno (8 h/día × 20 días hábiles = 160h/mes):</strong> Consumo estimado ~15.200 kWh/mes → <span className="font-mono text-slate-200">2.128,00 €</span> de energía.
               </li>
               <li>
-                <strong className="text-slate-200">2 Turnos (16 h/día × 20 días hábiles = 320h/mes):</strong> Al asignar operarios en 2 turnos de lunes a viernes → Consumo ~30.400 kWh/mes → <span className="font-mono text-purple-300 font-bold">4.256,00 €</span> de energía.
+                <strong className="text-slate-200">2 turnos (16 h/día × 20 días hábiles = 320h/mes):</strong> Al asignar operarios en 2 turnos de lunes a viernes → Consumo ~30.400 kWh/mes → <span className="font-mono text-purple-300 font-bold">4.256,00 €</span> de energía.
               </li>
               <li>
-                <strong className="text-slate-200">3 Turnos (24 h/día × 20 días hábiles = 480h/mes):</strong> Cobertura completa 24h de lunes a viernes → Consumo ~45.600 kWh/mes → <span className="font-mono text-purple-300 font-bold">6.384,00 €</span> de energía.
+                <strong className="text-slate-200">3 turnos (24 h/día × 20 días hábiles = 480h/mes):</strong> Cobertura completa 24h de lunes a viernes → Consumo ~45.600 kWh/mes → <span className="font-mono text-purple-300 font-bold">6.384,00 €</span> de energía.
               </li>
             </ul>
           </div>
@@ -719,14 +719,14 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
           {/* Factor 3: Taxes (IEE and VAT) */}
           <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
             <h5 className="font-bold text-emerald-300 text-sm flex items-center gap-1.5">
-              <span>3. Impuestos Regulados: Impuesto Eléctrico (5,11%) e IVA (21%)</span>
+              <span>3. Impuestos regulados: impuesto eléctrico (5,11%) e IVA (21%)</span>
             </h5>
             <p className="leading-relaxed text-slate-400">
               Sobre la base imponible (Potencia + Energía + Alquiler de equipos de 0,85 €) se aplican los tributos estatales obligatorios:
             </p>
             <ul className="list-disc pl-4 space-y-1 text-slate-300">
-              <li><strong className="text-slate-200">Impuesto sobre la Electricidad (IEE):</strong> 5,11269632% sobre la base.</li>
-              <li><strong className="text-slate-200">IVA General:</strong> 21% sobre (Base + Impuesto Eléctrico).</li>
+              <li><strong className="text-slate-200">Impuesto sobre la electricidad (IEE):</strong> 5,11269632% sobre la base.</li>
+              <li><strong className="text-slate-200">IVA general:</strong> 21% sobre (base + impuesto eléctrico).</li>
             </ul>
             <p className="text-[11px] text-slate-400 italic">
               Los impuestos representan aproximadamente un <strong className="text-emerald-300">27,28% adicional</strong> sobre la base imponible de la factura.
@@ -735,14 +735,14 @@ export const ElectricitySupplyCard: React.FC<Props> = ({
 
           {/* Comparative Summary Example Table */}
           <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
-            <h5 className="font-bold text-amber-400 text-sm">Ejemplo Comparativo para 95 kW Contratados</h5>
+            <h5 className="font-bold text-amber-400 text-sm">Ejemplo comparativo para 95 kW contratados</h5>
             <div className="space-y-1.5 text-[11px] font-mono">
               <div className="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
-                <span>• Turno Estándar (160h - ~15.200 kWh):</span>
+                <span>• Turno estándar (160h - ~15.200 kWh):</span>
                 <span className="text-slate-300 font-bold">2.446,53 € base + 285,85 € impuestos = 2.732,38 €</span>
               </div>
               <div className="bg-amber-950/80 p-2 rounded border border-amber-800/80 flex justify-between text-amber-300">
-                <span>• Doble Turno Operarios (320h - ~30.400 kWh):</span>
+                <span>• Doble turno operarios (320h - ~30.400 kWh):</span>
                 <span className="font-black text-amber-400">4.574,53 € base + 1.174,46 € impuestos = 5.748,99 €</span>
               </div>
             </div>

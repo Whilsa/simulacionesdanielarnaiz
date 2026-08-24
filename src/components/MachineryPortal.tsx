@@ -8,7 +8,7 @@ import {
   Wrench, Building2, ShieldAlert, CheckCircle2, AlertCircle, ArrowLeft, 
   Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight, Info
 } from 'lucide-react';
-import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, MachineryAcquisition } from '../types.js';
+import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, MachineryAcquisition, NaveFloorPlan } from '../types.js';
 import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -23,6 +23,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   const [catalog, setCatalog] = useState<MachineryItem[]>([]);
   const [studentAcquisitions, setStudentAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [myMachinery, setMyMachinery] = useState<MachineryAcquisition[]>([]);
+  const [floorPlans, setFloorPlans] = useState<NaveFloorPlan[]>([]);
   const [balance, setBalance] = useState<number>(currentUser.balance);
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +53,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
         if (catData.catalog) setCatalog(catData.catalog);
       }
 
-      // 2. Fetch Student Company info (properties + current machinery)
+      // 2. Fetch Student Company info (properties + current machinery + floor plans)
       const compRes = await fetch(`/api/company/${currentUser.id}`);
       if (compRes.ok) {
         const compData = await compRes.json();
@@ -62,6 +63,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
         }
         if (compData.acquisitions) setStudentAcquisitions(compData.acquisitions);
         if (compData.machineryAcquisitions) setMyMachinery(compData.machineryAcquisitions);
+        if (compData.naveFloorPlans) setFloorPlans(compData.naveFloorPlans);
       }
     } catch (err) {
       console.error('Error fetching machinery portal data:', err);
@@ -71,22 +73,84 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   };
 
   // Filter industrial naves owned or rented by student
-  const industrialNaves = studentAcquisitions.filter(a => a.propertyType === 'nave_industrial');
+  const industrialNaves = studentAcquisitions.filter(a => {
+    const pType = (a.propertyType || a.type || '').toLowerCase();
+    const pTitle = (a.propertyTitle || a.title || '').toLowerCase();
+    return pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
+  });
 
-  // Helper to calculate available surface m² in a nave subtracting already installed machinery
-  const getNaveAvailableSurface = (nave: PropertyAcquisition) => {
-    const installed = myMachinery.filter(m => 
-      m.installationNaveId === nave.id || 
-      m.installationNaveId === nave.propertyId ||
-      m.installedAtNaveId === nave.id ||
-      m.installedNaveId === nave.id
-    );
-    const occupied = installed.reduce((sum, m) => {
+  // Calculate detailed surface breakdown coherently with the nave floor plan
+  const getNaveSurfaceBreakdown = (nave: PropertyAcquisition) => {
+    const naveId = String(nave.id);
+    const propId = String(nave.propertyId || '');
+    const naveTitleLower = (nave.propertyTitle || nave.title || '').toLowerCase().trim();
+
+    const installed = myMachinery.filter(m => {
+      const instId = String(m.installedAtNaveId || m.installationNaveId || m.installedNaveId || m.propertyId || m.acquisitionId || '');
+      if (instId && (instId === naveId || (propId && instId === propId))) return true;
+      const mNaveTitle = (m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || m.naveInstaladaTitulo || '').toLowerCase().trim();
+      if (mNaveTitle && naveTitleLower && (mNaveTitle === naveTitleLower || mNaveTitle.includes(naveTitleLower) || naveTitleLower.includes(mNaveTitle))) return true;
+      return false;
+    });
+
+    const occupiedMachineryM2 = installed.reduce((sum, m) => {
+      if (m.requiredSurfaceM2 && m.requiredSurfaceM2 > 0) return sum + Number(m.requiredSurfaceM2);
       const cat = catalog.find(c => c.id === m.machineryId);
-      const reqM2 = m.totalRequiredM2 || m.requiredSurfaceM2 || (cat ? cat.totalRequiredM2 : 270);
-      return sum + reqM2;
+      if (cat && cat.requiredSurfaceM2) return sum + Number(cat.requiredSurfaceM2);
+      const title = (m.title || m.lineTitle || '').toLowerCase();
+      const isMetal = m.category === 'metal_hierro' || title.includes('metal') || title.includes('hierro');
+      return sum + (isMetal ? 240 : 180);
     }, 0);
-    return Math.max(0, nave.surfaceM2 - occupied);
+
+    const totalNaveM2 = Number(nave.surfaceM2 || (nave as any).superficie_m2 || (nave as any).m2) || 1000;
+
+    const floorPlan = floorPlans.find(p => 
+      (p.acquisitionId && String(p.acquisitionId) === naveId) ||
+      (p.propertyId && propId && String(p.propertyId) === propId) ||
+      (p.propertyId && String(p.propertyId) === naveId) ||
+      (p.propertyTitle && naveTitleLower && p.propertyTitle.toLowerCase().trim() === naveTitleLower)
+    );
+
+    let machineryZoneM2 = 0;
+    let storageZoneM2 = 30;
+    let adminZoneM2 = 0;
+    let freeZoneM2 = 0;
+
+    if (floorPlan) {
+      machineryZoneM2 = Number(floorPlan.machineryZoneM2) || 0;
+      storageZoneM2 = Number(floorPlan.storageZoneM2 ?? floorPlan.rawMaterialsStorageM2) || 30;
+      adminZoneM2 = Number(floorPlan.adminZoneM2) || 0;
+      freeZoneM2 = floorPlan.freeZoneM2 !== undefined 
+        ? Number(floorPlan.freeZoneM2) 
+        : Math.max(0, totalNaveM2 - (machineryZoneM2 + storageZoneM2 + adminZoneM2));
+    } else {
+      storageZoneM2 = 30;
+      adminZoneM2 = 0;
+      machineryZoneM2 = Math.max(occupiedMachineryM2, 0);
+      freeZoneM2 = Math.max(0, totalNaveM2 - occupiedMachineryM2 - storageZoneM2 - adminZoneM2);
+    }
+
+    const freeInMachineryZone = Math.max(0, machineryZoneM2 - occupiedMachineryM2);
+    const availableForMachineryM2 = freeInMachineryZone + freeZoneM2;
+
+    return {
+      totalNaveM2,
+      installedCount: installed.length,
+      installedMachinery: installed,
+      occupiedMachineryM2,
+      machineryZoneM2,
+      freeInMachineryZone,
+      storageZoneM2,
+      adminZoneM2,
+      freeZoneM2,
+      availableForMachineryM2,
+      hasFloorPlan: !!floorPlan,
+      floorPlan
+    };
+  };
+
+  const getNaveAvailableSurface = (nave: PropertyAcquisition) => {
+    return getNaveSurfaceBreakdown(nave).availableForMachineryM2;
   };
 
   const handleOpenBuyModal = (machinery: MachineryItem, option: MachineryLineOption) => {
@@ -95,8 +159,10 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
     setSelectedMachinery(machinery);
     setSelectedOption(option);
 
+    const requiredM2 = machinery.requiredSurfaceM2 || (machinery.category === 'metal_hierro' ? 240 : 180);
+
     // Auto-select first valid nave with enough available surface
-    const validNave = industrialNaves.find(n => getNaveAvailableSurface(n) >= machinery.totalRequiredM2);
+    const validNave = industrialNaves.find(n => getNaveAvailableSurface(n) >= requiredM2);
     if (validNave) {
       setSelectedNaveId(validNave.id);
     } else if (industrialNaves.length > 0) {
@@ -114,20 +180,30 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
     setSuccessMsg('');
 
     if (!selectedNaveId) {
-      setErrorMsg('Debes seleccionar una Nave Industrial para poder realizar la instalación.');
+      setErrorMsg('Debes seleccionar una nave industrial para poder realizar la instalación.');
       return;
     }
 
     const targetNave = studentAcquisitions.find(a => a.id === selectedNaveId);
-    if (!targetNave || targetNave.propertyType !== 'nave_industrial') {
-      setErrorMsg('El inmueble seleccionado no es una Nave Industrial. La maquinaria solo puede instalarse en Naves Industriales.');
+    if (!targetNave) {
+      setErrorMsg('El inmueble seleccionado no se ha encontrado en tus propiedades.');
       return;
     }
 
-    const availableM2 = getNaveAvailableSurface(targetNave);
-    if (availableM2 < selectedMachinery.totalRequiredM2) {
-      const occupiedM2 = targetNave.surfaceM2 - availableM2;
-      setErrorMsg(`Superficie Insuficiente: La nave industrial "${targetNave.propertyTitle}" dispone de ${targetNave.surfaceM2} m² en total. Actualmente tiene ocupados ${occupiedM2} m² por otra(s) máquina(s), por lo que solo quedan libres ${availableM2} m². Esta nueva línea requiere ${selectedMachinery.totalRequiredM2} m².`);
+    const pType = (targetNave.propertyType || targetNave.type || '').toLowerCase();
+    const pTitle = (targetNave.propertyTitle || targetNave.title || '').toLowerCase();
+    const isIndustrialNave = pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
+
+    if (!isIndustrialNave) {
+      setErrorMsg('El inmueble seleccionado no es una nave industrial. La maquinaria solo puede instalarse en naves industriales.');
+      return;
+    }
+
+    const breakdown = getNaveSurfaceBreakdown(targetNave);
+    const requiredM2 = selectedMachinery.requiredSurfaceM2 || (selectedMachinery.category === 'metal_hierro' ? 240 : 180);
+
+    if (breakdown.availableForMachineryM2 < requiredM2) {
+      setErrorMsg(`Superficie insuficiente en "${targetNave.propertyTitle}": Dispone de ${breakdown.totalNaveM2} m² en total. La maquinaria ya instalada ocupa ${breakdown.occupiedMachineryM2} m² (${breakdown.installedCount} máquina(s)), el almacén ${breakdown.storageZoneM2} m² y administración ${breakdown.adminZoneM2} m². En el plano solo quedan ${breakdown.availableForMachineryM2} m² disponibles para maquinaria (${breakdown.freeInMachineryZone} m² libres en zona de maquinaria + ${breakdown.freeZoneM2} m² diáfanos). Esta nueva línea requiere ${requiredM2} m².`);
       return;
     }
 
@@ -173,7 +249,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <button
               onClick={onBackToHub}
               className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition cursor-pointer border border-slate-700"
-              title="Volver al Menú Principal"
+              title="Volver al menú principal"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -182,7 +258,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                 <Wrench className="w-5 h-5 text-slate-950" />
               </div>
               <div>
-                <h1 className="text-base font-bold text-white tracking-tight">Portal de Maquinaria Industrial</h1>
+                <h1 className="text-base font-bold text-white tracking-tight">Portal de maquinaria industrial</h1>
                 <p className="text-xs text-slate-400">Equipamiento técnico para la línea de fabricación de destornilladores</p>
               </div>
             </div>
@@ -192,7 +268,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <div className="bg-slate-800/90 border border-slate-700 px-3.5 py-1.5 rounded-xl flex items-center space-x-2">
               <Coins className="w-4 h-4 text-amber-400" />
               <div className="text-right">
-                <span className="text-[10px] text-slate-400 block font-medium leading-none">Saldo Banco</span>
+                <span className="text-[10px] text-slate-400 block font-medium leading-none">Saldo banco</span>
                 <span className="text-sm font-extrabold text-amber-300 font-mono">
                   {formatNumber(balance)} €
                 </span>
@@ -214,31 +290,31 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-amber-200">
-                  REQUISITO IMPRESCINDIBLE DE UBICACIÓN Y ESPACIO
+                  Requisito imprescindible de ubicación y espacio
                 </h2>
                 <span className="bg-amber-400 text-slate-950 text-[10px] font-black uppercase px-2 py-0.5 rounded-full">
-                  Normativa Técnica
+                  Normativa técnica
                 </span>
               </div>
               <p className="text-xs text-slate-200 leading-relaxed max-w-4xl">
-                Para poder adquirir y montar cualquier línea de maquinaria es <strong>obligatorio disponer de una NAVE INDUSTRIAL</strong> (en propiedad o en alquiler) con la superficie mínima en m² requerida.
+                Para poder adquirir y montar cualquier línea de maquinaria es <strong>obligatorio disponer de una nave industrial</strong> (en propiedad o en alquiler) con la superficie mínima en m² requerida.
                 Los locales comerciales y almacenes estándar <strong>no son válidos</strong> para la instalación de maquinaria de producción. Si no dispones de una nave apta, la orden de compra quedará bloqueada.
               </p>
               <div className="pt-2 flex flex-wrap items-center gap-3 text-xs">
                 {myMachinery.length > 0 ? (
                   <span className="bg-amber-950/80 px-3 py-1.5 rounded-lg text-amber-200 border border-amber-500/50 font-semibold flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Aviso de Capacidad: Tu empresa ya dispone de <strong>{myMachinery.length} línea(s) de producción</strong> de maquinaria. Tenlo en cuenta antes de seguir comprando.</span>
+                    <span>Aviso de capacidad: Tu empresa ya dispone de <strong>{myMachinery.length} línea(s) de producción</strong> de maquinaria. Tenlo en cuenta antes de seguir comprando.</span>
                   </span>
                 ) : (
                   <span className="bg-slate-800/80 px-3 py-1.5 rounded-lg text-amber-300 border border-slate-700/60 font-semibold flex items-center gap-2">
                     <Info className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Planificación Industrial: Si compras una nueva línea de producción, ten en cuenta su capacidad instalada antes de seguir comprando.</span>
+                    <span>Planificación industrial: Si compras una nueva línea de producción, ten en cuenta su capacidad instalada antes de seguir comprando.</span>
                   </span>
                 )}
                 {industrialNaves.length === 0 && (
                   <span className="text-rose-300 font-bold bg-rose-900/60 px-2.5 py-1.5 rounded-lg border border-rose-500/40">
-                    ⚠️ No posees naves industriales. Acude primero al Portal Inmobiliario.
+                    ⚠️ No posees naves industriales. Acude primero al portal inmobiliario.
                   </span>
                 )}
               </div>
@@ -250,27 +326,27 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
         <div className="mb-8 bg-amber-50/90 border border-amber-200/90 rounded-2xl p-5 text-xs text-slate-800 shadow-xs">
           <div className="flex items-center gap-2 text-amber-900 font-extrabold text-sm mb-3">
             <Wrench className="w-4 h-4 text-amber-600" />
-            <span>Condiciones Oficiales de Suministro y Montaje de Maquinaria</span>
+            <span>Condiciones oficiales de suministro y montaje de maquinaria</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-slate-700">
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Precios Llave en Mano:</strong>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Precios llave en mano:</strong>
                 Todos los precios indicados son <strong>llave en mano</strong>, e incluyen transportes, seguros y montaje completo.
               </div>
             </div>
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de Montaje (8 Horas Reales):</strong>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Plazo de montaje (8 horas reales):</strong>
                 Se tardan exactamente <strong>8 horas reales</strong> en montar la maquinaria antes de estar operativa.
               </div>
             </div>
             <div className="bg-white p-3.5 rounded-xl border border-amber-200/70 flex items-start gap-2.5">
               <Zap className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <div>
-                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Suministro Eléctrico Requerido:</strong>
+                <strong className="text-slate-900 block font-bold text-xs mb-0.5">Suministro eléctrico requerido:</strong>
                 Puedes comprar la máquina, pero el montaje <strong>no empezará</strong> hasta haber contratado la luz y potencia necesaria.
               </div>
             </div>
@@ -304,10 +380,10 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
               <div className="flex items-center space-x-2">
                 <Factory className="w-5 h-5 text-amber-600" />
-                <h3 className="font-bold text-slate-900 text-base">Maquinaria Adquirida por tu Empresa</h3>
+                <h3 className="font-bold text-slate-900 text-base">Maquinaria adquirida por tu empresa</h3>
               </div>
               <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                {myMachinery.length} Línea(s) instalada(s)
+                {myMachinery.length} línea(s) instalada(s)
               </span>
             </div>
 
@@ -327,14 +403,14 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                             ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' 
                             : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                         }`}>
-                          {isAssembly ? 'En Montaje (8 horas)' : 'Operativa'}
+                          {isAssembly ? 'En montaje (8 horas)' : 'Operativa'}
                         </span>
                       </div>
 
                       <div className="text-xs text-slate-600 space-y-1 my-3 bg-white p-2.5 rounded-lg border border-slate-200/80">
                         <p>📍 <strong>Ubicación:</strong> {item.installationNaveTitle} ({item.installationSurfaceM2} m²)</p>
-                        <p>⚡ <strong>Capacidad Producción:</strong> {item.productionCapacityUnitsPerHour} unidades / hora</p>
-                        <p>💶 <strong>Inversión Total:</strong> {formatNumber(item.totalPrice)} € (Forma de Pago: {item.paymentMethod === 'contado' ? 'Contado' : 'Aplazada en 24 Pagarés'})</p>
+                        <p>⚡ <strong>Capacidad de producción:</strong> {item.productionCapacityUnitsPerHour} unidades / hora</p>
+                        <p>💶 <strong>Inversión total:</strong> {formatNumber(item.totalPrice)} € (Forma de pago: {item.paymentMethod === 'contado' ? 'Contado' : 'Aplazada en 24 pagarés'})</p>
                       </div>
                     </div>
 
@@ -355,8 +431,8 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
 
         {/* Machinery Catalog Cards */}
         <h3 className="font-extrabold text-slate-900 text-xl mb-4 tracking-tight flex items-center gap-2">
-          <span>Catálogo de Líneas de Producción</span>
-          <span className="text-xs font-normal text-slate-500 bg-slate-200 px-2.5 py-0.5 rounded-full">2 Lotes Oficiales</span>
+          <span>Catálogo de líneas de producción</span>
+          <span className="text-xs font-normal text-slate-500 bg-slate-200 px-2.5 py-0.5 rounded-full">2 lotes oficiales</span>
         </h3>
 
         {loading ? (
@@ -384,7 +460,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
                     
                     <div className="absolute top-3 left-3 bg-slate-900/80 backdrop-blur-md text-amber-400 text-xs font-bold px-3 py-1 rounded-full border border-slate-700">
-                      Lote de Fabricación
+                      Lote de fabricación
                     </div>
 
                     <div className="absolute bottom-3 left-4 right-4">
@@ -399,7 +475,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     {/* Equipment Included Badges */}
                     <div>
                       <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider block mb-2">
-                        Equipamiento Técnico Incluido en el Lote:
+                        Equipamiento técnico incluido en el lote:
                       </span>
                       <div className="flex flex-wrap gap-1.5">
                         {machinery.equipment.map((eq, idx) => (
@@ -414,7 +490,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     {/* Requirements Grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Superficie Total</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Superficie total</span>
                         <span className="font-extrabold text-slate-900 flex items-center gap-1 mt-0.5">
                           <Maximize2 className="w-3.5 h-3.5 text-amber-600" />
                           {machinery.totalRequiredM2} m²
@@ -423,7 +499,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                       </div>
 
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Personal Necesario</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Personal necesario</span>
                         <span className="font-extrabold text-slate-900 flex items-center gap-1 mt-0.5">
                           <Users className="w-3.5 h-3.5 text-blue-600" />
                           {machinery.requiredStaff} operarios
@@ -431,7 +507,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                       </div>
 
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Potencia Eléctrica</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Potencia eléctrica</span>
                         <span className="font-extrabold text-slate-900 flex items-center gap-1 mt-0.5">
                           <Zap className="w-3.5 h-3.5 text-amber-500" />
                           {machinery.powerKw} kW
@@ -439,7 +515,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                       </div>
 
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Plazo de Montaje</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Plazo de montaje</span>
                         <span className="font-extrabold text-slate-900 flex items-center gap-1 mt-0.5">
                           <Clock className="w-3.5 h-3.5 text-emerald-600" />
                           {machinery.assemblyDays} días reales
@@ -450,7 +526,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                     {/* Options / Pricing Cards */}
                     <div className="space-y-3 pt-2">
                       <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                        Opciones de Configuración y Capacidad de Producción:
+                        Opciones de configuración y capacidad de producción:
                       </span>
 
                       {machinery.options.map(option => {
@@ -477,10 +553,10 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                               
                               <div className="text-[11px] text-slate-600 space-y-0.5 pt-1">
                                 <div>
-                                  💳 <strong>Al Contado:</strong> <span className="font-mono font-bold text-slate-900">{formatNumber(basePrice)} €</span> + IVA 21% = <strong className="font-mono text-emerald-700">{formatNumber(totalCash)} € Total</strong>
+                                  💳 <strong>Al contado:</strong> <span className="font-mono font-bold text-slate-900">{formatNumber(basePrice)} €</span> + IVA 21% = <strong className="font-mono text-emerald-700">{formatNumber(totalCash)} € total</strong>
                                 </div>
                                 <div>
-                                  📅 <strong>Pago Aplazado (+10%):</strong> Entrada de <strong className="font-mono text-slate-900">{formatNumber(downPayment)} €</strong> + 24 pagarés de <strong className="font-mono text-amber-800">{formatNumber(installment24)} €/mes</strong>
+                                  📅 <strong>Pago aplazado (+10%):</strong> Entrada de <strong className="font-mono text-slate-900">{formatNumber(downPayment)} €</strong> + 24 pagarés de <strong className="font-mono text-amber-800">{formatNumber(installment24)} €/mes</strong>
                                 </div>
                               </div>
                             </div>
@@ -489,7 +565,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                               onClick={() => handleOpenBuyModal(machinery, option)}
                               className="w-full sm:w-auto px-4 py-2.5 bg-slate-900 hover:bg-amber-600 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-xs shrink-0 flex items-center justify-center gap-1.5"
                             >
-                              <span>Seleccionar y Comprar</span>
+                              <span>Seleccionar y comprar</span>
                               <ChevronRight className="w-4 h-4" />
                             </button>
                           </div>
@@ -514,7 +590,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
             {/* Header */}
             <div className="bg-gradient-to-r from-slate-900 to-amber-950 text-white p-6 flex justify-between items-start">
               <div>
-                <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">Formalizar Adquisición</span>
+                <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">Formalizar adquisición</span>
                 <h3 className="text-lg font-extrabold text-white">{selectedMachinery.title}</h3>
                 <p className="text-xs text-slate-300 font-medium">{selectedOption.title}</p>
               </div>
@@ -538,34 +614,100 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
               {/* Step 1: Select Industrial Nave Location */}
               <div className="space-y-2">
                 <label className="block text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                  1. Selecciona la Nave Industrial donde se instalará:
+                  1. Selecciona la nave industrial donde se instalará:
                 </label>
                 
                 {industrialNaves.length > 0 ? (
-                  <select
-                    value={selectedNaveId}
-                    onChange={(e) => setSelectedNaveId(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-amber-500 font-semibold text-slate-800 bg-white text-xs"
-                  >
-                    <option value="">-- Selecciona una Nave Industrial --</option>
-                    {industrialNaves.map(nave => {
-                      const availM2 = getNaveAvailableSurface(nave);
-                      const isEnough = availM2 >= selectedMachinery.totalRequiredM2;
+                  <div className="space-y-3">
+                    <select
+                      value={selectedNaveId}
+                      onChange={(e) => setSelectedNaveId(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-amber-500 font-semibold text-slate-800 bg-white text-xs"
+                    >
+                      <option value="">-- Selecciona una nave industrial --</option>
+                      {industrialNaves.map(nave => {
+                        const b = getNaveSurfaceBreakdown(nave);
+                        const requiredM2 = selectedMachinery.requiredSurfaceM2 || (selectedMachinery.category === 'metal_hierro' ? 240 : 180);
+                        const isEnough = b.availableForMachineryM2 >= requiredM2;
+                        return (
+                          <option key={nave.id} value={nave.id}>
+                            {nave.propertyTitle} (Disp. Maquinaria: {b.availableForMachineryM2} m² / Total: {b.totalNaveM2} m²) - {isEnough ? '✓ Superficie suficiente' : '⚠️ Superficie insuficiente'}
+                          </option>
+                        );
+                      })}
+                    </select>
+
+                    {selectedNaveId && (() => {
+                      const nave = industrialNaves.find(n => n.id === selectedNaveId);
+                      if (!nave) return null;
+                      const b = getNaveSurfaceBreakdown(nave);
+                      const requiredM2 = selectedMachinery.requiredSurfaceM2 || (selectedMachinery.category === 'metal_hierro' ? 240 : 180);
+                      const isEnough = b.availableForMachineryM2 >= requiredM2;
+
                       return (
-                        <option key={nave.id} value={nave.id}>
-                          {nave.propertyTitle} (Libres: {availM2} m² / Total: {nave.surfaceM2} m²) - {isEnough ? 'Apta para montaje' : '⚠️ m² libres insuficientes'}
-                        </option>
+                        <div className={`p-3.5 rounded-xl border ${isEnough ? 'bg-slate-50 border-slate-200' : 'bg-rose-50/70 border-rose-200'} space-y-2.5 text-xs`}>
+                          <div className="flex items-center justify-between font-bold">
+                            <span className="text-slate-800 flex items-center gap-1.5">
+                              <Maximize2 className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Distribución de superficie ({b.totalNaveM2} m² totales de nave):</span>
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${isEnough ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                              {isEnough ? '✓ Espacio suficiente' : '⚠️ Superficie insuficiente'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                            <div className="bg-white p-2 rounded-lg border border-slate-200/80">
+                              <span className="text-slate-500 block text-[10px]">Maquinaria ocupada</span>
+                              <span className="font-bold text-slate-800">{b.occupiedMachineryM2} m²</span>
+                              <span className="text-[9px] text-slate-400 block">({b.installedCount} línea(s) instalada(s))</span>
+                            </div>
+                            <div className="bg-white p-2 rounded-lg border border-slate-200/80">
+                              <span className="text-slate-500 block text-[10px]">Zona maq. libre</span>
+                              <span className="font-bold text-blue-700">{b.freeInMachineryZone} m²</span>
+                              <span className="text-[9px] text-slate-400 block">(de {b.machineryZoneM2} m² asignados)</span>
+                            </div>
+                            <div className="bg-white p-2 rounded-lg border border-slate-200/80">
+                              <span className="text-slate-500 block text-[10px]">Superficie diáfana</span>
+                              <span className="font-bold text-slate-700">{b.freeZoneM2} m²</span>
+                              <span className="text-[9px] text-slate-400 block">(libre en plano)</span>
+                            </div>
+                            <div className="bg-white p-2 rounded-lg border border-slate-200/80">
+                              <span className="text-slate-500 block text-[10px]">Total disp. maq.</span>
+                              <span className={`font-bold ${isEnough ? 'text-emerald-700' : 'text-rose-700'}`}>{b.availableForMachineryM2} m²</span>
+                              <span className="text-[9px] text-slate-400 block">(Requiere {requiredM2} m²)</span>
+                            </div>
+                          </div>
+
+                          {isEnough ? (
+                            <div className="text-[11px] text-emerald-800 bg-emerald-50/90 p-2 rounded-lg border border-emerald-200 flex items-start gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                              <div>
+                                {b.freeInMachineryZone >= requiredM2 ? (
+                                  <span>La zona de maquinaria actual cuenta con {b.freeInMachineryZone} m² libres, suficientes para albergar esta nueva línea sin reasignar espacio adicional.</span>
+                                ) : (
+                                  <span>La zona de maquinaria dispone de {b.freeInMachineryZone} m² libres y se integrarán automáticamente los {requiredM2 - b.freeInMachineryZone} m² restantes desde la superficie diáfana/libre del plano ({b.freeZoneM2} m² disponibles).</span>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-rose-800 bg-rose-50 p-2 rounded-lg border border-rose-200 flex items-start gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                              <span>Faltan {requiredM2 - b.availableForMachineryM2} m² en esta nave para poder instalar la maquinaria. Puedes liberar superficie en el plano de distribución de la nave o adquirir una nueva nave industrial.</span>
+                            </div>
+                          )}
+                        </div>
                       );
-                    })}
-                  </select>
+                    })()}
+                  </div>
                 ) : (
                   <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-rose-900 space-y-2">
                     <p className="font-bold flex items-center gap-1">
                       <ShieldAlert className="w-4 h-4 text-rose-600" />
-                      <span>NO TIENES NINGUNA NAVE INDUSTRIAL DISPONIBLE</span>
+                      <span>No tienes ninguna nave industrial disponible</span>
                     </p>
                     <p className="text-[11px] text-rose-700">
-                      Esta línea de maquinaria requiere de una Nave Industrial de al menos {selectedMachinery.totalRequiredM2} m². Actualmente no dispones de naves en propiedad ni en alquiler. Debes acudir primero al Portal Inmobiliario.
+                      Esta línea de maquinaria requiere de una nave industrial de al menos {selectedMachinery.requiredSurfaceM2} m². Actualmente no dispones de naves en propiedad ni en alquiler. Debes acudir primero al portal inmobiliario.
                     </p>
                   </div>
                 )}
@@ -574,7 +716,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
               {/* Step 2: Select Payment Method */}
               <div className="space-y-3 pt-2 border-t border-slate-100">
                 <label className="block text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                  2. Selecciona la Forma de Pago:
+                  2. Selecciona la forma de pago:
                 </label>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -590,14 +732,14 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-xs">Pago al Contado</span>
+                        <span className="font-bold text-xs">Pago al contado</span>
                         <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-2 py-0.5 rounded-full">Sin recargo</span>
                       </div>
-                      <p className="text-[11px] text-slate-600 font-normal">Cargo inmediato del 100% de la factura (Precio base + IVA 21%).</p>
+                      <p className="text-[11px] text-slate-600 font-normal">Cargo inmediato del 100% de la factura (precio base + IVA 21%).</p>
                     </div>
 
                     <div className="mt-3 pt-2 border-t border-emerald-200/60 font-mono text-sm font-extrabold text-emerald-800">
-                      {formatNumber(selectedOption.basePrice * 1.21)} € Total
+                      {formatNumber(selectedOption.basePrice * 1.21)} € total
                     </div>
                   </button>
 
@@ -613,8 +755,8 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-xs">Pago Aplazado (Pagarés)</span>
-                        <span className="text-[10px] bg-amber-200 text-amber-900 font-extrabold px-2 py-0.5 rounded-full">+10% Recargo</span>
+                        <span className="font-bold text-xs">Pago aplazado (pagarés)</span>
+                        <span className="text-[10px] bg-amber-200 text-amber-900 font-extrabold px-2 py-0.5 rounded-full">+10% recargo</span>
                       </div>
                       <p className="text-[11px] text-slate-600 font-normal">
                         Entrada inicial del 40% + Total IVA 21%. El 60% restante se aplaza en 24 pagarés mensuales.
@@ -631,7 +773,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
               {/* Cost Summary Box */}
               <div className="bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono">
                 <div className="flex justify-between border-b border-slate-800 pb-1 text-[11px]">
-                  <span className="text-slate-400 font-sans">Precio Base:</span>
+                  <span className="text-slate-400 font-sans">Precio base:</span>
                   <span>{formatNumber(paymentMethod === 'contado' ? selectedOption.basePrice : selectedOption.basePrice * 1.10)} €</span>
                 </div>
                 <div className="flex justify-between border-b border-slate-800 pb-1 text-[11px]">
@@ -645,13 +787,13 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                       <span className="font-bold">{formatNumber(((selectedOption.basePrice * 1.10) * 0.40) + ((selectedOption.basePrice * 1.10) * 0.21))} €</span>
                     </div>
                     <div className="flex justify-between text-[11px] text-slate-300">
-                      <span className="font-sans">24 Pagarés Mensuales Domiciliados:</span>
+                      <span className="font-sans">24 pagarés mensuales domiciliados:</span>
                       <span className="font-bold text-amber-400">{formatNumber((selectedOption.basePrice * 1.10 * 0.60) / 24)} € / mes</span>
                     </div>
                   </>
                 ) : (
                   <div className="flex justify-between text-xs text-emerald-400 pt-1 font-bold">
-                    <span className="font-sans">Total a Deducir de Cuenta hoy:</span>
+                    <span className="font-sans">Total a deducir de cuenta hoy:</span>
                     <span>{formatNumber(selectedOption.basePrice * 1.21)} €</span>
                   </div>
                 )}
@@ -672,7 +814,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
                   onClick={handleConfirmPurchase}
                   className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold rounded-xl transition cursor-pointer flex items-center space-x-2"
                 >
-                  {isSubmitting ? 'Procesando Orden...' : 'Confirmar y Formalizar Compra'}
+                  {isSubmitting ? 'Procesando orden...' : 'Confirmar y formalizar compra'}
                 </button>
               </div>
 

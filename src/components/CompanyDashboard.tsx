@@ -71,7 +71,8 @@ import { ElectricitySupplyCard } from "./ElectricitySupplyCard.js";
 import { ElectricityAssetTab } from "./ElectricityAssetTab.js";
 import { TelecomInvoiceModal } from "./TelecomInvoiceModal.js";
 import { OfficeInvoiceModal } from "./OfficeInvoiceModal.js";
-import { formatNumber } from "../lib/formatters.js";
+import { formatNumber, cleanSpanishTitle } from "../lib/formatters.js";
+import { calculateSpanishDistanceKm } from "../lib/spanishDistances.js";
 import { OFFICE_STORE_CATALOG } from "../lib/officeStoreData.js";
 import { resolveImageUrl, SVG_FALLBACK } from "../lib/imageAssets.js";
 
@@ -1255,21 +1256,21 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
     const headers = [
       "Empleado",
       "Edad",
-      "Fecha Contratación",
-      "Maquinaria Asignada",
+      "Fecha contratación",
+      "Maquinaria asignada",
       "Turno",
-      "Sueldo Bruto (€)",
-      "IRPF Retenido 17% (€)",
-      "SS Empleado 6,48% (€)",
-      "Sueldo Neto (€)",
-      "SS Empresa 75% (€)",
-      "Coste Total Empresa (€)",
+      "Sueldo bruto (€)",
+      "IRPF retenido 17% (€)",
+      "SS empleado 6,48% (€)",
+      "Sueldo neto (€)",
+      "SS empresa 75% (€)",
+      "Coste total empresa (€)",
     ];
 
     let csvContent = `DETALLE DE NÓMINAS DEL MES ACTUAL (${currentMonthStr.toUpperCase()})\n`;
     csvContent += `Empresa: ${currentUser.name}\n`;
     csvContent += `CIF / NIF: ${currentUser.nifCif || "B-99887766"}\n`;
-    csvContent += `Fecha Generación: ${new Date().toLocaleDateString("es-ES")}\n\n`;
+    csvContent += `Fecha generación: ${new Date().toLocaleDateString("es-ES")}\n\n`;
 
     csvContent += headers.join(";") + "\n";
 
@@ -1303,11 +1304,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         : "Sin asignar";
       const shiftText =
         e.shift === 1
-          ? "Turno Mañana"
+          ? "Turno mañana"
           : e.shift === 2
-            ? "Turno Tarde"
+            ? "Turno tarde"
             : e.shift === 3
-              ? "Turno Noche"
+              ? "Turno noche"
               : "Por defecto";
 
       const row = [
@@ -1381,7 +1382,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   {currentUser.name}
                 </h1>
                 <p className="text-[11px] text-slate-400">
-                  Estado Patrimonial y Contable de la Empresa
+                  Estado patrimonial y contable de la empresa
                 </p>
               </div>
             </div>
@@ -1390,7 +1391,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           <div className="flex items-center gap-3">
             <div className="bg-slate-800/90 px-3 py-1.5 rounded-xl border border-slate-700 text-right">
               <span className="text-[10px] text-slate-400 block uppercase tracking-wider">
-                Cuenta Bancaria IBAN
+                Cuenta bancaria IBAN
               </span>
               <span className="text-xs font-mono font-bold text-slate-200">
                 {currentUser.accountNumber}
@@ -1447,13 +1448,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         ) : (
           <>
             {/* Balance Overview Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
               {/* Bank Balance */}
               <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-slate-500">
-                      Saldo en Cuenta Bancaria
+                      Saldo en cuenta bancaria
                     </span>
                     <div className="p-2 bg-amber-50 rounded-xl text-amber-600">
                       <Landmark className="w-4 h-4" />
@@ -1463,7 +1464,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     {formatNumber(data.summary.bankBalance)} €
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    Tesorería disponible en el Banco Simulado
+                    Tesorería disponible en el banco simulado
                   </span>
                 </div>
                 {onGoToBank && (
@@ -1473,7 +1474,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       className="w-full py-2 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
                     >
                       <Landmark className="w-3.5 h-3.5" />
-                      <span>Acceder al Banco</span>
+                      <span>Acceder al banco</span>
                     </button>
                   </div>
                 )}
@@ -1483,7 +1484,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold text-slate-500">
-                    Activo Inmobiliario
+                    Activo inmobiliario
                   </span>
                   <div className="p-2 bg-blue-50 rounded-xl text-blue-600">
                     <Building2 className="w-4 h-4" />
@@ -1493,36 +1494,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   {formatNumber(data.summary.totalRealEstateAssetsValue)} €
                 </div>
                 <span className="text-[10px] text-blue-700 font-medium mt-1 block">
-                  {data.summary.ownedPropertiesCount} Inmueble(s) en Propiedad
+                  {data.summary.ownedPropertiesCount} inmueble(s) en propiedad
                 </span>
-              </div>
-
-              {/* Land vs Building Breakdown */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-slate-500">
-                    Suelo vs Construcción
-                  </span>
-                  <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
-                    <Layers className="w-4 h-4" />
-                  </div>
-                </div>
-                <div className="text-xs space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Terreno (No Amort.):</span>
-                    <span className="font-bold text-slate-900">
-                      {formatNumber(data.summary.totalLandValue)} €
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">
-                      Construcción (2%/año):
-                    </span>
-                    <span className="font-bold text-slate-900">
-                      {formatNumber(data.summary.totalBuildingValue)} €
-                    </span>
-                  </div>
-                </div>
               </div>
 
               {/* Obligations & Commitments */}
@@ -1535,10 +1508,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold text-slate-600 group-hover:text-red-700 transition-colors">
-                        Deudas / Pagarés Pendientes
+                        Deudas pendientes
                       </span>
                       <span className="text-[10px] bg-red-100 text-red-800 font-bold px-2 py-0.5 rounded-full">
-                        Ver Detalle
+                        Ver detalle
                       </span>
                     </div>
                     <div className="p-2 bg-red-50 group-hover:bg-red-100 rounded-xl text-red-600 transition-colors">
@@ -1552,16 +1525,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                 <div className="mt-3 pt-2 border-t border-slate-100 space-y-1 text-[11px] text-slate-500">
                   <div className="flex justify-between items-center">
-                    <span>Pagarés / Letras:</span>
-                    <span className="font-bold text-slate-800">
-                      {formatNumber(
-                        data.summary.totalObligationsPendingAmount || 0,
-                      )}{" "}
-                      €
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span>Préstamos Hipotecarios:</span>
+                    <span>Préstamos hipotecarios:</span>
                     <span className="font-bold text-slate-800">
                       {formatNumber(data.summary.totalLoansPendingAmount || 0)}{" "}
                       €
@@ -1581,14 +1545,14 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 {[
                   {
                     id: "owned" as const,
-                    label: "Inmuebles Propiedad",
+                    label: "Inmuebles en propiedad",
                     count: data.acquisitions.filter((a) => a.operation === "compra").length,
                     icon: Building2,
                     badgeColor: "bg-emerald-100 text-emerald-800",
                   },
                   {
                     id: "rented" as const,
-                    label: "Inmuebles Alquiler",
+                    label: "Inmuebles alquiler",
                     count: data.acquisitions.filter((a) => a.operation === "alquiler").length,
                     icon: FileText,
                     badgeColor: "bg-indigo-100 text-indigo-800",
@@ -1632,7 +1596,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     ? [
                         {
                           id: "energia" as const,
-                          label: "Energía / Luz",
+                          label: "Energía / luz",
                           count: `${electricityContract.contractedPowerKw} kW`,
                           icon: Zap,
                           badgeColor: "bg-amber-100 text-amber-800",
@@ -1641,14 +1605,14 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     : []),
                   {
                     id: "telecom" as const,
-                    label: "Teléfono / Internet",
+                    label: "Teléfono / internet",
                     count: telecomContracts.length,
                     icon: PhoneCall,
                     badgeColor: "bg-blue-100 text-blue-800",
                   },
                   {
                     id: "muebles_informatica" as const,
-                    label: "Muebles / Informática",
+                    label: "Muebles / informática",
                     count: officeOrders.length,
                     icon: ShoppingBag,
                     badgeColor: "bg-amber-100 text-amber-800",
@@ -1702,7 +1666,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-xs text-slate-500">
                     Tu empresa aún no posee ningún inmueble comercial o
                     industrial en propiedad. Puedes adquirir naves, almacenes o
-                    locales desde el Portal Inmobiliario.
+                    locales desde el portal inmobiliario.
                   </div>
                 ) : (
                   <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
@@ -1713,14 +1677,14 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <th className="p-3.5">Inmueble</th>
                             <th className="p-3.5">Ubicación</th>
                             <th className="p-3.5">Superficie</th>
-                            <th className="p-3.5">Precio Base</th>
+                            <th className="p-3.5">Precio base</th>
                             <th className="p-3.5">IVA (21%)</th>
                             <th className="p-3.5">
-                              Desglose Suelo / Edificación
+                              Desglose suelo / edificación
                             </th>
-                            <th className="p-3.5">Modalidad Pago</th>
+                            <th className="p-3.5">Modalidad pago</th>
                             <th className="p-3.5 text-right">
-                              Acciones y Documentos
+                              Acciones y documentos
                             </th>
                           </tr>
                         </thead>
@@ -1809,8 +1773,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       }`}
                                     >
                                       {acq.paymentMethod === "contado"
-                                        ? "Al Contado"
-                                        : "Pago Aplazado"}
+                                        ? "Al contado"
+                                        : "Pago aplazado"}
                                     </span>
                                   </td>
                                   <td className="p-3.5 text-right space-x-2">
@@ -1823,7 +1787,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         title="Ver y distribuir la superficie entre almacén y oficinas"
                                       >
                                         <LayoutGrid className="w-3.5 h-3.5 text-blue-200" />
-                                        <span>Plano de Distribución</span>
+                                        <span>Plano de distribución</span>
                                       </button>
                                     )}
                                     <button
@@ -1834,7 +1798,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       title="Ver historial y desglose de pagos realizados y pendientes"
                                     >
                                       <CreditCard className="w-3.5 h-3.5 text-emerald-300" />
-                                      <span>Detalle de Pagos</span>
+                                      <span>Detalle de pagos</span>
                                     </button>
                                     <button
                                       onClick={() =>
@@ -1846,7 +1810,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
                                     >
                                       <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                                      <span>Ver Factura</span>
+                                      <span>Ver factura</span>
                                     </button>
                                   </td>
                                 </tr>
@@ -1965,7 +1929,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         title="Ver y distribuir la superficie entre almacén y oficinas"
                                       >
                                         <LayoutGrid className="w-3.5 h-3.5 text-blue-200" />
-                                        <span>Plano de Distribución</span>
+                                        <span>Plano de distribución</span>
                                       </button>
                                     )}
                                     <button
@@ -1988,7 +1952,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
                                     >
                                       <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                                      <span>Ver Factura</span>
+                                      <span>Ver factura</span>
                                     </button>
                                   </td>
                                 </tr>
@@ -2335,7 +2299,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     title="Cambiar o trasladar esta máquina a otra nave industrial"
                                   >
                                     <Truck className="w-3.5 h-3.5 text-indigo-300" />
-                                    <span>Cambiar / Trasladar de Nave</span>
+                                    <span>Cambiar / trasladar de nave</span>
                                   </button>
                                   <button
                                     onClick={() =>
@@ -2358,7 +2322,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     title="Ver factura oficial de la compra anterior de la maquinaria"
                                   >
                                     <Receipt className="w-3.5 h-3.5 text-amber-400" />
-                                    <span>Factura Compra</span>
+                                    <span>Factura compra</span>
                                   </button>
                                   {(mac.relocationInvoices?.length > 0 ||
                                     mac.relocationInvoice) && (
@@ -2376,7 +2340,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       title="Ver y descargar factura oficial del servicio de traslado, transporte y montaje"
                                     >
                                       <Truck className="w-3.5 h-3.5 text-indigo-300" />
-                                      <span>Factura Traslado</span>
+                                      <span>Factura traslado</span>
                                     </button>
                                   )}
                                 </td>
@@ -2482,8 +2446,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           <Boxes className="w-5 h-5 text-emerald-400" />
                           <span>
                             {isLevel1
-                              ? "Almacenes de Materia Prima y Productos Terminados"
-                              : "Almacén de Mercaderías y Gestión de Stock"}
+                              ? "Almacenes de materia prima y productos terminados"
+                              : "Almacén de mercaderías y gestión de stock"}
                           </span>
                         </h3>
                         <p className="text-xs text-slate-300 mt-1">
@@ -2497,24 +2461,24 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
                       >
                         <RefreshCw className="w-4 h-4" />
-                        <span>Actualizar Stock</span>
+                        <span>Actualizar stock</span>
                       </button>
                     </div>
 
-                    {/* Section 1: Materia Prima Almacenada (SOLO NIVEL 1) */}
+                    {/* Section 1: Materia prima almacenada (SOLO NIVEL 1) */}
                     {isLevel1 && (
                       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                         <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
                           <Package className="w-4 h-4 text-amber-600" />
                           <span>
-                            Materia Prima en Almacén (Inputs de Fabricación)
+                            Materia prima en almacén (inputs de fabricación)
                           </span>
                         </h4>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                             <p className="text-xs font-semibold text-slate-500">
-                              Fragmentos de Hierro
+                              Fragmentos de hierro
                             </p>
                             <p className="text-xl font-bold font-mono text-slate-900 mt-1">
                               {formatNumber(
@@ -2533,7 +2497,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                             <p className="text-xs font-semibold text-slate-500">
-                              Pellets de Plástico
+                              Pellets de plástico
                             </p>
                             <p className="text-xl font-bold font-mono text-slate-900 mt-1">
                               {formatNumber(
@@ -2552,7 +2516,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                             <p className="text-xs font-semibold text-slate-500">
-                              Pegamento Epoxi
+                              Pegamento epoxi
                             </p>
                             <p className="text-xl font-bold font-mono text-slate-900 mt-1">
                               {formatNumber(
@@ -2587,7 +2551,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow transition-all self-start sm:self-auto"
                         >
                           <Truck className="w-4 h-4" />
-                          <span>Enviar Existencias a otro Alumno</span>
+                          <span>Enviar existencias a otro alumno</span>
                         </button>
                       </div>
 
@@ -2633,7 +2597,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <div>
                                   <div className="flex items-center justify-between">
                                     <p className="text-xs font-bold text-amber-950 uppercase">
-                                      Varillas con Punta Estrella
+                                      Varillas con punta estrella
                                     </p>
                                     {isProducingEstrella && (
                                       <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 border border-amber-300 uppercase animate-pulse">
@@ -2682,7 +2646,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <div>
                                   <div className="flex items-center justify-between">
                                     <p className="text-xs font-bold text-emerald-950 uppercase">
-                                      Varillas con Punta Plana
+                                      Varillas con punta plana
                                     </p>
                                     {isProducingPlana && (
                                       <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-200 text-emerald-900 border border-emerald-300 uppercase animate-pulse">
@@ -2726,7 +2690,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <div className="bg-indigo-50/50 border border-indigo-200 rounded-xl p-4 flex flex-col justify-between">
                                 <div>
                                   <p className="text-xs font-bold text-indigo-900 uppercase">
-                                    Destornilladores con Punta Estrella
+                                    Destornilladores con punta estrella
                                   </p>
                                   <p className="text-2xl font-black font-mono text-indigo-700 mt-1">
                                     {formatNumber(destornilladoresEstrella, 0)}{" "}
@@ -2746,7 +2710,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-4 flex flex-col justify-between">
                                 <div>
                                   <p className="text-xs font-bold text-blue-900 uppercase">
-                                    Destornilladores con Punta Plana
+                                    Destornilladores con punta plana
                                   </p>
                                   <p className="text-2xl font-black font-mono text-blue-700 mt-1">
                                     {formatNumber(destornilladoresPlana, 0)}{" "}
@@ -2771,7 +2735,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-xs font-bold text-emerald-900 uppercase tracking-wide">
-                                  Destornilladores con Punta Estrella
+                                  Destornilladores con punta estrella
                                 </p>
                                 <p className="text-3xl font-black font-mono text-emerald-700 mt-2">
                                   {formatNumber(destornilladoresEstrella, 0)}{" "}
@@ -2781,7 +2745,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </p>
                               </div>
                               <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase">
-                                Mercadería Comercial
+                                Mercadería comercial
                               </span>
                             </div>
                             <p className="text-xs text-slate-600 mt-3 border-t border-emerald-200/60 pt-2">
@@ -2794,7 +2758,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-xs font-bold text-blue-900 uppercase tracking-wide">
-                                  Destornilladores con Punta Plana
+                                  Destornilladores con punta plana
                                 </p>
                                 <p className="text-3xl font-black font-mono text-blue-700 mt-2">
                                   {formatNumber(destornilladoresPlana, 0)}{" "}
@@ -2804,7 +2768,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </p>
                               </div>
                               <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-md bg-blue-100 text-blue-800 border border-blue-300 uppercase">
-                                Mercadería Comercial
+                                Mercadería comercial
                               </span>
                             </div>
                             <p className="text-xs text-slate-600 mt-3 border-t border-blue-200/60 pt-2">
@@ -2822,7 +2786,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <div>
                           <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
                             <Building2 className="w-4 h-4 text-indigo-600" />
-                            <span>Desglose de Existencias por Inmueble con Almacén</span>
+                            <span>Desglose de existencias por inmueble con almacén</span>
                           </h4>
                           <p className="text-xs text-slate-500 mt-1">
                             Detalle del inventario almacenado de forma independiente en cada una de tus naves industriales y almacenes con control de ocupación volumétrica y paletización.
@@ -2835,7 +2799,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             className="inline-flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold px-3.5 py-2 rounded-xl transition-all self-start sm:self-auto cursor-pointer"
                           >
                             <Truck className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>Trasladar Entre Almacenes</span>
+                            <span>Trasladar entre almacenes</span>
                           </button>
                         )}
                       </div>
@@ -2863,12 +2827,12 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <span className="text-[10px] text-slate-300 block mt-0.5">0,833 palets por cada m² de zona de almacén.</span>
                           </div>
                           <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/80">
-                            <span className="text-[10px] text-slate-400 block font-bold uppercase">⚖️ Fragmentos de Hierro / Metal</span>
+                            <span className="text-[10px] text-slate-400 block font-bold uppercase">⚖️ Fragmentos de hierro</span>
                             <span className="font-bold text-amber-400 text-[13px]">1.000 kg / palet</span>
                             <span className="text-[10px] text-slate-300 block mt-0.5">1 palet europeo de fragmentos = 1.000 kg.</span>
                           </div>
                           <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/80">
-                            <span className="text-[10px] text-slate-400 block font-bold uppercase">📦 Pellets de Plástico</span>
+                            <span className="text-[10px] text-slate-400 block font-bold uppercase">📦 Pellets de plástico</span>
                             <span className="font-bold text-blue-400 text-[13px]">1.000 kg / palet</span>
                             <span className="text-[10px] text-slate-300 block mt-0.5">40 sacos de 25 kg = 1.000 kg por palet.</span>
                           </div>
@@ -2944,7 +2908,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
                                         <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                                        <span>Capacidad y Ocupación del Almacén</span>
+                                        <span>Capacidad y ocupación del almacén</span>
                                       </span>
                                       <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold border border-slate-200">
                                         Superficie: {storageM2} m²
@@ -3015,9 +2979,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
                                     <span>0 palets (0%)</span>
                                     <span className="font-bold text-slate-700">
-                                      Total Ocupado: {totalOccupiedPallets.toFixed(2)} / {maxPallets} palets
+                                      Total ocupado: {totalOccupiedPallets.toFixed(2)} / {maxPallets} palets
                                     </span>
-                                    <span>Capacidad Máx: {maxPallets} palets (100%)</span>
+                                    <span>Capacidad máx: {maxPallets} palets (100%)</span>
                                   </div>
                                 </div>
 
@@ -3033,25 +2997,25 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 {/* Pallet Conversion Breakdown */}
                                 <div className="pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
                                   <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                    <span className="text-slate-500 block text-[10px]">⚖️ Fragmentos Hierro (1.000 kg/palet)</span>
+                                    <span className="text-slate-500 block text-[10px]">⚖️ Fragmentos hierro (1.000 kg/palet)</span>
                                     <span className="font-bold font-mono text-slate-800">
                                       {formatNumber(dIron, 1)} kg → {ironPallets.toFixed(2)} palets
                                     </span>
                                   </div>
                                   <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                    <span className="text-slate-500 block text-[10px]">📦 Pellets Plástico (1.000 kg / 40 sacos)</span>
+                                    <span className="text-slate-500 block text-[10px]">📦 Pellets plástico (1.000 kg / 40 sacos)</span>
                                     <span className="font-bold font-mono text-slate-800">
                                       {formatNumber(dPlastic, 1)} kg → {plasticPallets.toFixed(2)} palets
                                     </span>
                                   </div>
                                   <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                    <span className="text-slate-500 block text-[10px]">🧪 Pegamento Epoxi (1.000 kg/palet)</span>
+                                    <span className="text-slate-500 block text-[10px]">🧪 Pegamento epoxi (1.000 kg/palet)</span>
                                     <span className="font-bold font-mono text-slate-800">
                                       {formatNumber(dEpoxi, 1)} kg → {epoxiPallets.toFixed(2)} palets
                                     </span>
                                   </div>
                                   <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                    <span className="text-slate-500 block text-[10px]">🔩 Destornilladores / Varillas (10.000 u./palet)</span>
+                                    <span className="text-slate-500 block text-[10px]">🔩 Destornilladores y varillas (10.000 u./palet)</span>
                                     <span className="font-bold font-mono text-slate-800">
                                       {formatNumber(dTotalUnits, 0)} u. → {finishedGoodsPallets.toFixed(2)} palets
                                     </span>
@@ -3065,7 +3029,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   <div className="bg-white border border-slate-200/80 rounded-xl p-3.5 space-y-2">
                                     <p className="font-bold text-slate-700 uppercase tracking-wide text-[10px] flex items-center gap-1">
                                       <Package className="w-3.5 h-3.5 text-amber-600" />
-                                      <span>Materias Primas Almacenadas</span>
+                                      <span>Materias primas almacenadas</span>
                                     </p>
                                     <div className="grid grid-cols-3 gap-2 pt-1 text-slate-800 font-mono text-xs">
                                       <div>
@@ -3088,27 +3052,27 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <div className="bg-white border border-slate-200/80 rounded-xl p-3.5 space-y-2">
                                   <p className="font-bold text-slate-700 uppercase tracking-wide text-[10px] flex items-center gap-1">
                                     <Factory className="w-3.5 h-3.5 text-emerald-600" />
-                                    <span>{isLevel1 ? "Productos Fabricados" : "Mercaderías"}</span>
+                                    <span>{isLevel1 ? "Productos fabricados" : "Mercaderías"}</span>
                                   </p>
                                   <div className="grid grid-cols-2 gap-2 pt-1 text-slate-800 font-mono text-xs">
                                     {isLevel1 && (
                                       <>
                                         <div>
-                                          <span className="text-[10px] font-sans text-slate-400 block">Varillas Estrella</span>
+                                          <span className="text-[10px] font-sans text-slate-400 block">Varillas estrella</span>
                                           <span className="font-bold text-amber-700">{formatNumber(dStarRods, 0)} u.</span>
                                         </div>
                                         <div>
-                                          <span className="text-[10px] font-sans text-slate-400 block">Varillas Plana</span>
+                                          <span className="text-[10px] font-sans text-slate-400 block">Varillas plana</span>
                                           <span className="font-bold text-emerald-700">{formatNumber(dFlatRods, 0)} u.</span>
                                         </div>
                                       </>
                                     )}
                                     <div>
-                                      <span className="text-[10px] font-sans text-slate-400 block">Destornilladores Estrella</span>
+                                      <span className="text-[10px] font-sans text-slate-400 block">Destornilladores estrella</span>
                                       <span className="font-bold text-indigo-700">{formatNumber(dStarScrewdrivers, 0)} u.</span>
                                     </div>
                                     <div>
-                                      <span className="text-[10px] font-sans text-slate-400 block">Destornilladores Plana</span>
+                                      <span className="text-[10px] font-sans text-slate-400 block">Destornilladores plana</span>
                                       <span className="font-bold text-blue-700">{formatNumber(dFlatScrewdrivers, 0)} u.</span>
                                     </div>
                                   </div>
@@ -3118,7 +3082,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <div className="p-3 bg-amber-50/80 border border-amber-200/70 rounded-xl text-[11px] text-amber-800 flex items-start gap-2">
                                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                                 <span>
-                                  <strong>Aviso Inmobiliario:</strong> Para disponer de existencias separadas e independientes por edificio, adquiere o alquila naves industriales o almacenes logísticos desde el Portal Inmobiliario.
+                                  <strong>Aviso inmobiliario:</strong> Para disponer de existencias separadas e independientes por edificio, adquiere o alquila naves industriales o almacenes logísticos desde el portal inmobiliario.
                                 </span>
                               </div>
                             </div>
@@ -3144,7 +3108,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             const isOwned = acq.operation === "compra";
                             const pType = (acq.propertyType || acq.type || "").toLowerCase();
                             const isLogisticsWarehouse = pType.includes("almacen") || pType.includes("almacén");
-                            const typeLabel = isLogisticsWarehouse ? "Almacén Logístico" : "Nave Industrial";
+                            const typeLabel = isLogisticsWarehouse ? "Almacén logístico" : "Nave industrial";
                             const locationStr = acq.location || acq.municipality || "Polígono Industrial";
 
                             // Determine storage surface M2
@@ -3250,7 +3214,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       <div className="flex items-center gap-2">
                                         <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
                                           <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                                          <span>Capacidad y Ocupación del Almacén</span>
+                                          <span>Capacidad y ocupación del almacén</span>
                                         </span>
                                         <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-bold border border-indigo-200">
                                           Zona Almacén: {storageM2} m²
@@ -3304,7 +3268,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         title={`Ocupado: ${occupiedPercentage.toFixed(1)}% (${totalOccupiedPallets.toFixed(2)} palets)`}
                                       >
                                         {clampedOccupiedPercentage >= 15 && (
-                                          <span className="px-1 truncate">{occupiedPercentage.toFixed(1)}% Ocupado</span>
+                                          <span className="px-1 truncate">{occupiedPercentage.toFixed(1)}% ocupado</span>
                                         )}
                                       </div>
 
@@ -3315,7 +3279,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         title={`Libre: ${freePercentage.toFixed(1)}% (${freePallets.toFixed(2)} palets)`}
                                       >
                                         {clampedFreePercentage >= 15 && (
-                                          <span className="px-1 truncate">{freePercentage.toFixed(1)}% Libre</span>
+                                          <span className="px-1 truncate">{freePercentage.toFixed(1)}% libre</span>
                                         )}
                                       </div>
                                     </div>
@@ -3324,9 +3288,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
                                       <span>0 palets (0%)</span>
                                       <span className="font-bold text-slate-700">
-                                        Total Ocupado: {totalOccupiedPallets.toFixed(2)} / {maxPallets} palets
+                                        Total ocupado: {totalOccupiedPallets.toFixed(2)} / {maxPallets} palets
                                       </span>
-                                      <span>Capacidad Máx: {maxPallets} palets (100%)</span>
+                                      <span>Capacidad máx: {maxPallets} palets (100%)</span>
                                     </div>
                                   </div>
 
@@ -3335,7 +3299,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-medium flex items-center gap-1.5">
                                       <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                                       <span>
-                                        ⚠️ <strong>Exceso de Capacidad:</strong> Superas la capacidad máxima de este almacén por +{(totalOccupiedPallets - maxPallets).toFixed(2)} palets (+{((occupiedPercentage - 100)).toFixed(1)}%).
+                                        ⚠️ <strong>Exceso de capacidad:</strong> Superas la capacidad máxima de este almacén por +{(totalOccupiedPallets - maxPallets).toFixed(2)} palets (+{((occupiedPercentage - 100)).toFixed(1)}%).
                                       </span>
                                     </div>
                                   )}
@@ -3343,25 +3307,25 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   {/* Detailed Pallet Breakdown & Rules Reminder */}
                                   <div className="pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
                                     <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                      <span className="text-slate-500 block text-[10px]">⚖️ Fragmentos Hierro (1.000 kg/palet)</span>
+                                      <span className="text-slate-500 block text-[10px]">⚖️ Fragmentos hierro (1.000 kg/palet)</span>
                                       <span className="font-bold font-mono text-slate-800">
                                         {formatNumber(iron, 1)} kg → {ironPallets.toFixed(2)} palets
                                       </span>
                                     </div>
                                     <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                      <span className="text-slate-500 block text-[10px]">📦 Pellets Plástico (1.000 kg / 40 sacos)</span>
+                                      <span className="text-slate-500 block text-[10px]">📦 Pellets plástico (1.000 kg / 40 sacos)</span>
                                       <span className="font-bold font-mono text-slate-800">
                                         {formatNumber(plastic, 1)} kg → {plasticPallets.toFixed(2)} palets
                                       </span>
                                     </div>
                                     <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                      <span className="text-slate-500 block text-[10px]">🧪 Pegamento Epoxi (1.000 kg/palet)</span>
+                                      <span className="text-slate-500 block text-[10px]">🧪 Pegamento epoxi (1.000 kg/palet)</span>
                                       <span className="font-bold font-mono text-slate-800">
                                         {formatNumber(epoxi, 1)} kg → {epoxiPallets.toFixed(2)} palets
                                       </span>
                                     </div>
                                     <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/70">
-                                      <span className="text-slate-500 block text-[10px]">🔩 Destornilladores / Varillas (10.000 u./palet)</span>
+                                      <span className="text-slate-500 block text-[10px]">🔩 Destornilladores y varillas (10.000 u./palet)</span>
                                       <span className="font-bold font-mono text-slate-800">
                                         {formatNumber(totalUnits, 0)} u. → {finishedGoodsPallets.toFixed(2)} palets
                                       </span>
@@ -3377,7 +3341,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
                                         <p className="font-bold text-amber-900 uppercase tracking-wide text-[10px] flex items-center gap-1">
                                           <Package className="w-3.5 h-3.5 text-amber-600" />
-                                          <span>Materias Primas (Inputs)</span>
+                                          <span>Materias primas (inputs)</span>
                                         </p>
                                         <span className="text-[10px] font-mono text-slate-400">
                                           Total: {formatNumber(totalWeight, 1)} kg
@@ -3406,7 +3370,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
                                       <p className="font-bold text-emerald-900 uppercase tracking-wide text-[10px] flex items-center gap-1">
                                         <Factory className="w-3.5 h-3.5 text-emerald-600" />
-                                        <span>{isLevel1 ? "Productos Fabricados" : "Mercaderías"}</span>
+                                        <span>{isLevel1 ? "Productos fabricados" : "Mercaderías"}</span>
                                       </p>
                                       <span className="text-[10px] font-mono text-slate-400">
                                         Total: {formatNumber(totalUnits, 0)} u.
@@ -3417,21 +3381,21 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       {isLevel1 && (
                                         <>
                                           <div className="bg-amber-50/60 p-2 rounded-lg border border-amber-100">
-                                            <span className="text-[10px] font-sans text-amber-900 block truncate">Varillas Estrella</span>
+                                            <span className="text-[10px] font-sans text-amber-900 block truncate">Varillas estrella</span>
                                             <span className="font-bold text-amber-700">{formatNumber(starRods, 0)} u.</span>
                                           </div>
                                           <div className="bg-emerald-50/60 p-2 rounded-lg border border-emerald-100">
-                                            <span className="text-[10px] font-sans text-emerald-900 block truncate">Varillas Plana</span>
+                                            <span className="text-[10px] font-sans text-emerald-900 block truncate">Varillas plana</span>
                                             <span className="font-bold text-emerald-700">{formatNumber(flatRods, 0)} u.</span>
                                           </div>
                                         </>
                                       )}
                                       <div className="bg-indigo-50/60 p-2 rounded-lg border border-indigo-100">
-                                        <span className="text-[10px] font-sans text-indigo-900 block truncate">Dest. Estrella</span>
+                                        <span className="text-[10px] font-sans text-indigo-900 block truncate">Dest. estrella</span>
                                         <span className="font-bold text-indigo-700">{formatNumber(starScrewdrivers, 0)} u.</span>
                                       </div>
                                       <div className="bg-blue-50/60 p-2 rounded-lg border border-blue-100">
-                                        <span className="text-[10px] font-sans text-blue-900 block truncate">Dest. Plana</span>
+                                        <span className="text-[10px] font-sans text-blue-900 block truncate">Dest. plana</span>
                                         <span className="font-bold text-blue-700">{formatNumber(flatScrewdrivers, 0)} u.</span>
                                       </div>
                                     </div>
@@ -3460,7 +3424,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 mac.installationNaveTitle ||
                                 mac.installedAtNaveTitle ||
                                 mac.installedNaveTitle ||
-                                "Nave Industrial";
+                                "Nave industrial";
                               const isRelocating =
                                 mac.relocationStatus &&
                                 mac.relocationStatus !== "completed";
@@ -3702,7 +3666,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                               <Users className="w-5 h-5 text-blue-600" />
                               <span>
-                                Resumen de Masa Salarial y Cotizaciones Sociales
+                                Resumen de masa salarial y cotizaciones sociales
                                 (
                                 {curNow.toLocaleDateString("es-ES", {
                                   month: "long",
@@ -3739,7 +3703,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {/* Card 1: Sueldo Bruto Total */}
                           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block mb-1">
-                              Sueldo Bruto Total Mes
+                              Sueldo bruto total mes
                             </span>
                             <div className="text-lg font-black text-slate-900">
                               {formatNumber(totalGrossMonthly)} €
@@ -3752,7 +3716,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {/* Card 2: Total IRPF a Retener */}
                           <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-4">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-800 block mb-1">
-                              IRPF a Retener (17%)
+                              IRPF a retener (17%)
                             </span>
                             <div className="text-lg font-black text-amber-900">
                               {formatNumber(totalIRPFWithholding)} €
@@ -3765,7 +3729,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {/* Card 3: Seguridad Social Empleado */}
                           <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-2xl p-4">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-800 block mb-1">
-                              SS Empleado (6,48%)
+                              SS empleado (6,48%)
                             </span>
                             <div className="text-lg font-black text-indigo-900">
                               {formatNumber(totalEmployeeSS)} €
@@ -3778,7 +3742,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {/* Card 4: Seguridad Social Empresa */}
                           <div className="bg-violet-50/80 border border-violet-200/80 rounded-2xl p-4">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-violet-800 block mb-1">
-                              SS Empresa (75%)
+                              SS empresa (75%)
                             </span>
                             <div className="text-lg font-black text-violet-900">
                               {formatNumber(totalCompanySS)} €
@@ -3788,16 +3752,16 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             </span>
                           </div>
 
-                          {/* Card 5: Gasto Total Empresa */}
+                          {/* Card 5: Gasto total empresa */}
                           <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 block mb-1">
-                              Gasto Total Empresa
+                              Gasto total empresa
                             </span>
                             <div className="text-lg font-black text-emerald-950">
                               {formatNumber(totalCompanyStaffExpense)} €
                             </div>
                             <span className="text-[10px] text-emerald-800/80 mt-1 block font-medium">
-                              Sueldo Neto: {formatNumber(totalNetSalaries)} €
+                              Sueldo neto: {formatNumber(totalNetSalaries)} €
                             </span>
                           </div>
                         </div>
@@ -3808,18 +3772,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <div className="flex items-center gap-2.5 font-bold">
                           <Clock className="w-4 h-4 text-amber-600 shrink-0" />
                           <span>
-                            Horarios Oficiales de Turnos de Trabajo (Lunes a Viernes, ambos inclusive):
+                            Horarios oficiales de turnos de trabajo (Lunes a Viernes, ambos inclusive):
                           </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium">
                           <span className="bg-white/80 border border-amber-300 px-2.5 py-1 rounded-xl shadow-2xs">
-                            ☀️ <strong>Turno Mañana:</strong> 06:00 a 14:00 h
+                            ☀️ <strong>Turno mañana:</strong> 06:00 a 14:00 h
                           </span>
                           <span className="bg-white/80 border border-amber-300 px-2.5 py-1 rounded-xl shadow-2xs">
-                            ⛅ <strong>Turno Tarde:</strong> 14:00 a 22:00 h
+                            ⛅ <strong>Turno tarde:</strong> 14:00 a 22:00 h
                           </span>
                           <span className="bg-white/80 border border-amber-300 px-2.5 py-1 rounded-xl shadow-2xs">
-                            🌙 <strong>Turno Noche:</strong> 22:00 a 06:00 h
+                            🌙 <strong>Turno noche:</strong> 22:00 a 06:00 h
                           </span>
                           <span className="bg-amber-100 border border-amber-400/70 text-amber-900 px-2.5 py-1 rounded-xl shadow-2xs font-bold">
                             🛑 <strong>Fines de semana:</strong> Parada sin producción
@@ -3836,7 +3800,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                                   <Wrench className="w-4 h-4 text-amber-600" />
                                   <span>
-                                    Cobertura de Operarios por Máquina y Turno
+                                    Cobertura de operarios por máquina y turno
                                   </span>
                                 </h3>
                                 <span className="text-xs text-slate-500 font-medium">
@@ -3889,7 +3853,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           }`}
                                         >
                                           <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno Mañana
+                                            Turno mañana
                                           </span>
                                           <span className="text-[9px] opacity-75 font-semibold block my-0.5">
                                             06:00 - 14:00 h
@@ -3918,7 +3882,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           }`}
                                         >
                                           <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno Tarde
+                                            Turno tarde
                                           </span>
                                           <span className="text-[9px] opacity-75 font-semibold block my-0.5">
                                             14:00 - 22:00 h
@@ -3947,7 +3911,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           }`}
                                         >
                                           <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno Noche
+                                            Turno noche
                                           </span>
                                           <span className="text-[9px] opacity-75 font-semibold block my-0.5">
                                             22:00 - 06:00 h
@@ -3993,7 +3957,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                                         <Truck className="w-4 h-4 text-amber-600" />
                                         <span>
-                                          Requisito de Carretilla Elevadora en Nave Industrial
+                                          Requisito de carretilla elevadora en nave industrial
                                         </span>
                                       </h3>
                                       <p className="text-xs text-slate-500 mt-0.5">
@@ -4007,22 +3971,22 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           : "bg-amber-50 border-amber-200 text-amber-900"
                                       }`}
                                     >
-                                      Carretilla Elevadora: {ownedForklifts} / 1{" "}
+                                      Carretilla elevadora: {ownedForklifts} / 1{" "}
                                       {ownedForklifts >= 1
                                         ? "✅ Adquirida"
-                                        : "⚠️ Pendiente de Compra"}
+                                        : "⚠️ Pendiente de compra"}
                                     </div>
                                   </div>
 
                                   <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs flex items-center justify-between gap-3">
                                     <div className="space-y-1">
                                       <div className="font-bold text-slate-900">
-                                        Estado de Maquinaria de Logística e Inmueble
+                                        Estado de maquinaria de logística e inmueble
                                       </div>
                                       <p className="text-[11px] text-slate-500">
                                         {ownedForklifts >= 1 
                                           ? "✓ Dispones de carretilla elevadora asignada a la nave industrial para operativa de almacén y recepción de mercancía."
-                                          : "✕ No dispones de carretilla elevadora. Adquiérela en el Concesionario de Vehículos e Industriales para habilitar la nave y las compras."}
+                                          : "✕ No dispones de carretilla elevadora. Adquiérela en el concesionario de vehículos e industriales para habilitar la nave y las compras."}
                                       </p>
                                     </div>
                                     {ownedForklifts < 1 && (
@@ -4031,7 +3995,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         onClick={onBackToHub}
                                         className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs shrink-0 cursor-pointer transition"
                                       >
-                                        Ir al Concesionario
+                                        Ir al concesionario
                                       </button>
                                     )}
                                   </div>
@@ -4127,14 +4091,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                               ? "bg-indigo-50 text-indigo-800 border-indigo-200"
                                               : emp.role === "carretillero"
                                                 ? "bg-amber-50 text-amber-800 border-amber-200"
-                                                : "bg-blue-50 text-blue-800 border-blue-200"
+                                                : emp.role === "mozo_almacen"
+                                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                                  : "bg-blue-50 text-blue-800 border-blue-200"
                                           }`}
                                         >
                                           {emp.role === "camionero"
                                             ? "Camionero"
                                             : emp.role === "carretillero"
                                               ? "Carretillero"
-                                              : "Operario"}
+                                              : emp.role === "mozo_almacen"
+                                                ? "Mozo de almacén"
+                                                : "Operario"}
                                         </span>
                                       </div>
                                       <span className="text-[11px] text-slate-500 block">
@@ -4150,7 +4118,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                                   {isFirstMonth ? (
                                     <div className="mb-3 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-xl text-[11px] text-blue-900 flex items-center justify-between font-medium">
-                                      <span>Mes de alta (Incompleto):</span>
+                                      <span>Mes de alta (incompleto):</span>
                                       <span className="font-bold font-mono">
                                         {workedDays}/{daysInMonth} días
                                       </span>
@@ -4167,7 +4135,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4 text-xs space-y-2">
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">
-                                        Sueldo Bruto (Mes):
+                                        Sueldo bruto (mes):
                                       </span>
                                       <strong className="text-slate-900 font-mono">
                                         {formatNumber(grossForMonth)} €
@@ -4175,7 +4143,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">
-                                        IRPF Retenido (17%):
+                                        IRPF retenido (17%):
                                       </span>
                                       <span className="text-amber-800 font-semibold font-mono">
                                         {formatNumber(irpfForMonth)} €
@@ -4183,7 +4151,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">
-                                        SS Empleado (6,48%):
+                                        SS empleado (6,48%):
                                       </span>
                                       <span className="text-indigo-800 font-semibold font-mono">
                                         {formatNumber(ssEmpForMonth)} €
@@ -4191,7 +4159,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     </div>
                                     <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
                                       <span className="text-slate-700">
-                                        Sueldo Neto a Percibir:
+                                        Sueldo neto a percibir:
                                       </span>
                                       <span className="text-emerald-700 font-mono">
                                         {formatNumber(netForMonth)} €
@@ -4205,7 +4173,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     {(!emp.role || emp.role === "operario") && (
                                       <>
                                         <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                                          Asignación de Maquinaria
+                                          Asignación de maquinaria
                                         </label>
                                         <select
                                           value={emp.assignedMachineryId || ""}
@@ -4235,7 +4203,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         {emp.assignedMachineryId && (
                                           <div className="flex items-center justify-between pt-1">
                                             <span className="text-xs text-slate-500 font-medium">
-                                              Turno Asignado:
+                                              Turno asignado:
                                             </span>
                                             <div className="flex gap-1">
                                               {[
@@ -4281,7 +4249,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     {(emp.role === "camionero" || emp.role === "carretillero" || (emp.role as string) === "conductor") && (
                                       <>
                                         <label className="block text-[11px] font-bold uppercase tracking-wider text-indigo-700">
-                                          Asignación de Vehículo / Carretilla Elevadora
+                                          Asignación de vehículo / carretilla elevadora
                                         </label>
                                         <select
                                           value={emp.assignedVehicleId || ""}
@@ -4308,11 +4276,23 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                             .map((v) => (
                                               <option key={v.id} value={v.id}>
                                                 {v.vehicleType === "carretilla_elevadora" ? "🚜 " : "🚛 "}
-                                                {v.title || v.vehicleTitle} ({v.vehicleType === "carretilla_elevadora" ? "Carretilla Elevadora" : "Camión Tráiler"}) - {v.paymentMethod === "contado" ? "Propiedad" : "Renting"}
+                                                {cleanSpanishTitle(v.title || v.vehicleTitle)} ({v.vehicleType === "carretilla_elevadora" ? "Carretilla elevadora" : "Camión tráiler"}) - {v.paymentMethod === "contado" ? "Propiedad" : "Renting"}
                                               </option>
                                             ))}
                                         </select>
                                       </>
+                                    )}
+
+                                    {/* MOZO DE ALMACEN */}
+                                    {emp.role === "mozo_almacen" && (
+                                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl text-xs text-emerald-900">
+                                        <div className="font-bold flex items-center gap-1.5 text-emerald-800">
+                                          <span>📦 Mozo de almacén</span>
+                                        </div>
+                                        <p className="text-[11px] text-emerald-700 mt-0.5">
+                                          Encargado de tareas de carga, descarga, clasificación y gestión interna del almacén. Requisito de acceso a mercado y mensajería directa en nivel 2 y 3.
+                                        </p>
+                                      </div>
                                     )}
 
 
@@ -4349,7 +4329,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     className="w-full py-2 px-3 bg-slate-900 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center justify-center gap-2"
                                   >
                                     <Receipt className="w-3.5 h-3.5 text-blue-300" />
-                                    <span>Ver / Imprimir Nómina (PDF)</span>
+                                    <span>Ver / imprimir nómina (PDF)</span>
                                   </button>
                                 </div>
                               </div>
@@ -4617,7 +4597,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                         <PhoneCall className="w-5 h-5 text-blue-600" />
                         <span>
-                          Servicios de Teléfono e Internet Contratados
+                          Servicios de teléfono e internet contratados
                         </span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
@@ -4635,7 +4615,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     <div className="p-8 text-center text-xs text-slate-500">
                       Tu empresa no tiene contratado ningún servicio de teléfono
                       o internet. Puedes contratar planes empresariales desde la
-                      tarjeta de Servicios de Teléfono e Internet.
+                      tarjeta de servicios de teléfono e internet.
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4688,7 +4668,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   {/* Telecom Invoices Table */}
                   <div className="pt-4 border-t border-slate-100 space-y-3">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Facturas de Telecomunicaciones Emitidas
+                      Facturas de telecomunicaciones emitidas
                     </h4>
                     {telecomInvoices.length === 0 ? (
                       <p className="text-xs text-slate-400 italic">
@@ -4699,10 +4679,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <table className="w-full text-left text-xs border-collapse">
                           <thead>
                             <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                              <th className="p-3">Nº Factura</th>
+                              <th className="p-3">Nº factura</th>
                               <th className="p-3">Periodo</th>
                               <th className="p-3">Servicio</th>
-                              <th className="p-3 text-right">Total Factura</th>
+                              <th className="p-3 text-right">Total factura</th>
                               <th className="p-3 text-center">Estado</th>
                               <th className="p-3 text-right">Factura PDF</th>
                             </tr>
@@ -4735,7 +4715,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-[11px] rounded-xl transition cursor-pointer shadow-xs inline-flex items-center gap-1.5"
                                   >
                                     <Download className="w-3.5 h-3.5" />
-                                    <span>Descargar / Imprimir PDF</span>
+                                    <span>Descargar / imprimir PDF</span>
                                   </button>
                                 </td>
                               </tr>
@@ -4757,7 +4737,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     <div>
                       <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                         <Truck className="w-5 h-5 text-blue-600" />
-                        <span>Flota de Vehículos y Carretillas Compradas</span>
+                        <span>Flota de vehículos y carretillas compradas</span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
                         Gestión de vehículos industriales y carretillas
@@ -4775,8 +4755,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   data.purchasedVehicles.length === 0 ? (
                     <div className="p-8 text-center text-xs text-slate-500">
                       Tu empresa no ha adquirido vehículos ni carretillas
-                      elevadoras todavía. Puedes adquirirlos en el Concesionario
-                      de Vehículos.
+                      elevadoras todavía. Puedes adquirirlos en el concesionario
+                      de vehículos.
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4824,9 +4804,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 }`}
                               >
                                 {isForklift
-                                  ? "Carretilla Elevadora"
+                                  ? "Carretilla elevadora"
                                   : isTruck
-                                    ? "Camión Tráiler"
+                                    ? "Camión tráiler"
                                     : isVan
                                       ? "Furgoneta"
                                       : "Vehículo"}
@@ -4836,7 +4816,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             <div className="grid grid-cols-2 gap-2 text-xs font-medium border-t border-b border-slate-200/80 py-3">
                               <div>
                                 <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                                  Precio Adquisición
+                                  Precio adquisición
                                 </span>
                                 <span className="text-slate-900 font-bold font-mono">
                                   {formatNumber(
@@ -4863,8 +4843,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <span className="flex items-center gap-1.5">
                                   <Building2 className="w-3.5 h-3.5 text-blue-600" />
                                   {isForklift
-                                    ? "Inmueble Asignado (Nave Industrial o Almacén Logístico):"
-                                    : "Almacén Asignado por Nave / Inmueble:"}
+                                    ? "Inmueble asignado (nave industrial o almacén logístico):"
+                                    : "Almacén asignado por nave / inmueble:"}
                                 </span>
                                 {veh.assignedWarehouseName ||
                                 veh.assignedWarehouseIndex ? (
@@ -4876,7 +4856,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   </span>
                                 ) : (
                                   <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
-                                    Sin Inmueble Asignado
+                                    Sin inmueble asignado
                                   </span>
                                 )}
                               </label>
@@ -4907,9 +4887,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     );
                                     const names = [
                                       "",
-                                      "Almacén 1 (Materias Primas)",
+                                      "Almacén 1 (Materias primas)",
                                       "Almacén 2 (Semiterminados)",
-                                      "Almacén 3 (Productos Terminados)",
+                                      "Almacén 3 (Productos terminados)",
                                     ];
                                     handleAssignVehicleWarehouse(
                                       veh.id,
@@ -4953,9 +4933,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       .includes("almacen");
 
                                   const whName = isNave
-                                    ? `${propTitle} (Inmueble Nave Industrial)`
+                                    ? `${propTitle} (inmueble nave industrial)`
                                     : isAlmacen
-                                      ? `${propTitle} (Inmueble Almacén Logístico)`
+                                      ? `${propTitle} (inmueble almacén logístico)`
                                       : `${propTitle} - Almacén ${whIdx}`;
 
                                   handleAssignVehicleWarehouse(
@@ -4969,7 +4949,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-blue-500 shadow-2xs cursor-pointer"
                               >
                                 <option value="">
-                                  -- Sin Inmueble Asignado --
+                                  -- Sin inmueble asignado --
                                 </option>
 
                                 {/* Group by Naves Industriales */}
@@ -4983,7 +4963,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         ?.toLowerCase()
                                         .includes("nave"),
                                   ).length > 0 && (
-                                    <optgroup label="🏭 Naves Industriales">
+                                    <optgroup label="🏭 Naves industriales">
                                       {data.acquisitions
                                         .filter(
                                           (a) =>
@@ -4998,13 +4978,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           const pId = acq.id || acq.propertyId;
                                           const title =
                                             acq.propertyTitle ||
-                                            "Nave Industrial";
+                                            "Nave industrial";
                                           return (
                                             <option
                                               key={pId}
                                               value={`${pId}_wh_1`}
                                             >
-                                              {title} (Inmueble Completo)
+                                              {title} (inmueble completo)
                                             </option>
                                           );
                                         })}
@@ -5025,7 +5005,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         ?.toLowerCase()
                                         .includes("almacen"),
                                   ).length > 0 && (
-                                    <optgroup label="📦 Almacenes Logísticos">
+                                    <optgroup label="📦 Almacenes logísticos">
                                       {data.acquisitions
                                         .filter(
                                           (a) =>
@@ -5043,13 +5023,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           const pId = acq.id || acq.propertyId;
                                           const title =
                                             acq.propertyTitle ||
-                                            "Almacén Logístico";
+                                            "Almacén logístico";
                                           return (
                                             <option
                                               key={pId}
                                               value={`${pId}_wh_1`}
                                             >
-                                              {title} (Inmueble Completo)
+                                              {title} (inmueble completo)
                                             </option>
                                           );
                                         })}
@@ -5058,15 +5038,15 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                                 {/* Standalone General Options (Only for non-forklifts) */}
                                 {!isForklift && (
-                                  <optgroup label="🏢 Almacenes Generales por Defecto">
+                                  <optgroup label="🏢 Almacenes generales por defecto">
                                     <option value="generic_wh_1">
-                                      Almacén 1 (Materias Primas - General)
+                                      Almacén 1 (materias primas - general)
                                     </option>
                                     <option value="generic_wh_2">
-                                      Almacén 2 (Semiterminados - General)
+                                      Almacén 2 (semiterminados - general)
                                     </option>
                                     <option value="generic_wh_3">
-                                      Almacén 3 (Productos Terminados - General)
+                                      Almacén 3 (productos terminados - general)
                                     </option>
                                   </optgroup>
                                 )}
@@ -5093,7 +5073,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                         .includes("almacen"),
                                   ).length === 0) && (
                                   <p className="text-[11px] font-medium text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 mt-1">
-                                    ⚠️ Para asignar esta carretilla elevadora contrapesada, debes disponer de una Nave Industrial o Almacén Logístico en propiedad o alquiler.
+                                    ⚠️ Para asignar esta carretilla elevadora contrapesada, debes disponer de una nave industrial o almacén logístico en propiedad o alquiler.
                                   </p>
                                 )}
                             </div>
@@ -5131,7 +5111,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               className="w-full py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                             >
                               <Receipt className="w-3.5 h-3.5 text-blue-600" />
-                              <span>Ver / Imprimir Factura Adquisición (PDF)</span>
+                              <span>Ver / imprimir factura adquisición (PDF)</span>
                             </button>
                           </div>
                         );
@@ -5151,7 +5131,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                         <ShoppingBag className="w-5 h-5 text-amber-600" />
                         <span>
-                          Inventario de Muebles e Equipos Informáticos
+                          Inventario de muebles y equipos informáticos
                         </span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
@@ -5209,7 +5189,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs rounded-xl transition cursor-pointer shadow-xs inline-flex items-center gap-1.5"
                               >
                                 <Download className="w-3.5 h-3.5" />
-                                <span>Factura / Descargar PDF</span>
+                                <span>Factura / descargar PDF</span>
                               </button>
                             </div>
                           </div>
@@ -5311,11 +5291,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 </div>
                 <div>
                   <h2 className="text-lg font-black text-white">
-                    Detalle de Deudas por Operación Origen
+                    Detalle de deudas por operación origen
                   </h2>
                   <p className="text-xs text-slate-400 font-medium">
-                    Simulador de Daniel Arnaiz Boluda • Contabilidad y Gestión
-                    Patrimonial
+                    ContaLab • Contabilidad y gestión patrimonial
                   </p>
                 </div>
               </div>
@@ -5333,32 +5312,32 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-red-900">
                   <span className="text-[10px] font-extrabold uppercase text-red-600 block mb-1">
-                    Deuda Total Pendiente
+                    Deuda total pendiente
                   </span>
                   <div className="text-xl font-black text-red-700">
                     {formatNumber(data.summary.totalPendingObligations)} €
                   </div>
                   <span className="text-[11px] text-red-600/80 mt-1 block">
-                    Pagarés + Préstamos Bancarios
+                    Pagarés + Préstamos bancarios
                   </span>
                 </div>
 
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-900">
                   <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">
-                    Préstamos Hipotecarios
+                    Préstamos hipotecarios
                   </span>
                   <div className="text-xl font-black text-emerald-800">
                     {formatNumber(data.summary.totalLoansPendingAmount || 0)} €
                   </div>
                   <span className="text-[11px] text-emerald-700/80 mt-1 block">
-                    {data.summary.activeLoansCount || 0} operación(es) con Banco
-                    Simulado
+                    {data.summary.activeLoansCount || 0} operación(es) con banco
+                    simulado
                   </span>
                 </div>
 
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900">
                   <span className="text-[10px] font-extrabold uppercase text-amber-800 block mb-1">
-                    Pagarés / Letras de Cambio
+                    Pagarés / letras de cambio
                   </span>
                   <div className="text-xl font-black text-amber-900">
                     {formatNumber(
@@ -5386,7 +5365,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
                   }`}
                 >
-                  Todas las Deudas
+                  Todas las deudas
                 </button>
                 <button
                   onClick={() => setDebtFilterOrigin("loans")}
@@ -5397,7 +5376,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   }`}
                 >
                   <Landmark className="w-3.5 h-3.5" />
-                  <span>Préstamos Bancarios ({(data.loans || []).length})</span>
+                  <span>Préstamos bancarios ({(data.loans || []).length})</span>
                 </button>
                 <button
                   onClick={() => setDebtFilterOrigin("obligations")}
@@ -5409,7 +5388,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 >
                   <Receipt className="w-3.5 h-3.5" />
                   <span>
-                    Pagarés y Letras (
+                    Pagarés y letras (
                     {
                       data.obligations.filter(
                         (o) =>
@@ -5432,11 +5411,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <h3 className="text-xs font-black uppercase text-slate-500 tracking-wider flex items-center gap-2">
                         <Landmark className="w-4 h-4 text-emerald-600" />
                         <span>
-                          Operación Origen: Financiación Hipotecaria Bancaria
+                          Operación origen: financiación hipotecaria bancaria
                         </span>
                       </h3>
                       <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                        Banco Simulado
+                        Banco simulado
                       </span>
                     </div>
 
@@ -5470,7 +5449,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 <div>
                                   <div className="flex items-center gap-2">
                                     <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-emerald-100 text-emerald-900 border border-emerald-300">
-                                      Préstamo Bancario
+                                      Préstamo bancario
                                     </span>
                                     <span className="text-xs text-slate-500 font-mono">
                                       Ref: #{loan.id}
@@ -5478,12 +5457,12 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   </div>
                                   <h4 className="text-base font-black text-slate-900 mt-1">
                                     {loan.collateral.propertyTitle ||
-                                      "Garantía Inmobiliaria"}
+                                      "Garantía inmobiliaria"}
                                   </h4>
                                   <p className="text-xs text-slate-500">
                                     Superficie:{" "}
                                     {loan.collateral.surfaceM2 || "—"} m² •
-                                    Valor de Tasación:{" "}
+                                    Valor de tasación:{" "}
                                     {formatNumber(
                                       loan.collateral.appraisalValue,
                                     )}{" "}
@@ -5493,7 +5472,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                                 <div className="text-right">
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">
-                                    Deuda Pendiente en Cuotas
+                                    Deuda pendiente en cuotas
                                   </span>
                                   <div className="text-lg font-black text-red-700">
                                     {formatNumber(unpaidSum)} €
@@ -5504,7 +5483,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl text-xs">
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">
-                                    Capital Otorgado
+                                    Capital otorgado
                                   </span>
                                   <span className="font-extrabold text-slate-900">
                                     {formatNumber(loan.offeredAmount)} €
@@ -5512,7 +5491,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">
-                                    Capital Vivo Pendiente
+                                    Capital vivo pendiente
                                   </span>
                                   <span className="font-extrabold text-slate-900">
                                     {formatNumber(unpaidPrincipal)} €
@@ -5520,7 +5499,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">
-                                    Cuota Mensual
+                                    Cuota mensual
                                   </span>
                                   <span className="font-extrabold text-slate-900">
                                     {formatNumber(loan.monthlyPayment)} €/mes
@@ -5528,7 +5507,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 </div>
                                 <div>
                                   <span className="text-[10px] text-slate-400 block uppercase font-bold">
-                                    Interés y Plazo
+                                    Interés y plazo
                                   </span>
                                   <span className="font-extrabold text-slate-900">
                                     {loan.annualInterestRate}% • {paidCount}/
@@ -5547,7 +5526,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 >
                                   <Calculator className="w-4 h-4 text-emerald-400" />
                                   <span>
-                                    Ver Cuadro de Amortización Completo
+                                    Ver cuadro de amortización completo
                                   </span>
                                 </button>
                               </div>
@@ -5585,8 +5564,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           <thead>
                             <tr className="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider border-b border-slate-200">
                               <th className="p-3">Instrumento</th>
-                              <th className="p-3">Inmueble Origen</th>
-                              <th className="p-3">Nº Cuota</th>
+                              <th className="p-3">Inmueble origen</th>
+                              <th className="p-3">Nº cuota</th>
                               <th className="p-3">Importe</th>
                               <th className="p-3">Vencimiento</th>
                               <th className="p-3">Estado</th>
@@ -5613,7 +5592,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                       <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 text-[10px] uppercase font-bold">
                                         {ob.type === "pagare"
                                           ? "Pagaré"
-                                          : "Letra de Cambio"}
+                                          : "Letra de cambio"}
                                       </span>
                                     </td>
                                     <td className="p-3 text-slate-900 font-bold">
@@ -5696,9 +5675,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider border-b border-slate-200">
-                              <th className="p-3">Inmueble Alquilado</th>
-                              <th className="p-3">Nº Cuota</th>
-                              <th className="p-3">Importe Mensual</th>
+                              <th className="p-3">Inmueble alquilado</th>
+                              <th className="p-3">Nº cuota</th>
+                              <th className="p-3">Importe mensual</th>
                               <th className="p-3">Vencimiento</th>
                               <th className="p-3">Estado</th>
                               <th className="p-3 text-right">Acciones</th>
@@ -5788,7 +5767,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 onClick={() => setShowDebtDetailsModal(false)}
                 className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer"
               >
-                Cerrar Detalle
+                Cerrar detalle
               </button>
             </div>
           </div>
@@ -5806,7 +5785,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               const itemTitle =
                 item.propertyTitle || item.title || "Detalle de elemento";
               const itemSubtitle = isMachinery
-                ? `${item.optionTitle || "Línea de producción"} • Instalado en ${item.installationNaveTitle || "Nave Industrial"}`
+                ? `${item.optionTitle || "Línea de producción"} • Instalado en ${item.installationNaveTitle || "Nave industrial"}`
                 : `${item.location || "Ubicación no especificada"} • ${item.operation === "compra" ? "Inmueble en propiedad" : "Contrato de arrendamiento"}`;
 
               return (
@@ -6121,7 +6100,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">
-                    Estados de la Maquinaria
+                    Estados de la maquinaria
                   </h3>
                   <p className="text-xs text-slate-500">
                     Requisitos para la producción industrial
@@ -6208,7 +6187,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">
-                    Trasladar Maquinaria
+                    Trasladar maquinaria
                   </h3>
                   <p className="text-xs text-slate-500">
                     {relocateModalMachinery.lineTitle ||
@@ -6227,12 +6206,12 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
             <div className="space-y-4 text-xs text-slate-700">
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-1">
                 <p>
-                  Ubicación Actual:{" "}
+                  Ubicación actual:{" "}
                   <strong>
                     {relocateModalMachinery.installationNaveTitle ||
                       relocateModalMachinery.installedAtNaveTitle ||
                       relocateModalMachinery.installedNaveTitle ||
-                      "Nave Industrial de Origen"}
+                      "Nave industrial de origen"}
                   </strong>
                 </p>
                 <p className="text-[11px] text-slate-500">
@@ -6258,7 +6237,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Selecciona la Nave Industrial de Destino:
+                  Selecciona la nave industrial de destino:
                 </label>
                 <select
                   value={targetRelocateNaveId}
@@ -6268,7 +6247,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   }}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs text-slate-900 font-medium focus:outline-none focus:border-indigo-500"
                 >
-                  <option value="">-- Selecciona una Nave Industrial --</option>
+                  <option value="">-- Selecciona una nave industrial --</option>
                   {(data.acquisitions || [])
                     .filter(
                       (a) =>
@@ -6309,8 +6288,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {isCurrent
                             ? "Ubicación actual"
                             : hasElectricity
-                              ? "⚡ Luz Contratada"
-                              : "⚠️ Sin Luz Contratada"}
+                              ? "⚡ Luz contratada"
+                              : "⚠️ Sin luz contratada"}
                         </option>
                       );
                     })}
@@ -6342,7 +6321,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-[11px] space-y-1">
                         <div className="font-bold flex items-center gap-1.5 text-amber-800">
                           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                          <span>Requisito Incumplido: Sin Luz Contratada</span>
+                          <span>Requisito incumplido: sin luz contratada</span>
                         </div>
                         <p>
                           Para poder trasladar maquinaria a{" "}
@@ -6405,7 +6384,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   return (
                     <div className="p-3.5 bg-slate-50 border border-slate-300 rounded-2xl space-y-2">
                       <span className="font-extrabold text-[11px] uppercase tracking-wider text-slate-800 block">
-                        Presupuesto Oficial del Traslado ({distanceKm} km)
+                        Presupuesto oficial del traslado ({distanceKm} km)
                       </span>
                       <div className="space-y-1 text-[11px] font-mono text-slate-700">
                         <div className="flex justify-between">
@@ -6429,7 +6408,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           <span>+{formatNumber(ivaAmount)} €</span>
                         </div>
                         <div className="flex justify-between font-bold text-xs text-indigo-900 pt-1 border-t border-slate-300">
-                          <span>TOTAL FACTURA A PAGAR:</span>
+                          <span>Total factura a pagar:</span>
                           <span>{formatNumber(totalCost)} €</span>
                         </div>
                       </div>
@@ -6449,7 +6428,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 })()}
 
               <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl text-[11px] text-blue-900 space-y-1">
-                <span className="font-bold block">Normativa de Traslado:</span>
+                <span className="font-bold block">Normativa de traslado:</span>
                 <p>
                   • <strong>Desmontaje:</strong> 4 horas reales en la nave de
                   origen.
@@ -6482,7 +6461,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 {isRelocatingSubmitting && (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 )}
-                <span>Iniciar Traslado</span>
+                <span>Iniciar traslado</span>
               </button>
             </div>
           </div>
@@ -6499,8 +6478,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 <Truck className="w-5 h-5 text-indigo-600" />
                 <h3 className="text-lg font-bold text-slate-900">
                   {transferMode === 'nave'
-                    ? 'Traslado de Existencias entre Mis Almacenes / Naves'
-                    : 'Envío de Existencias a otro Alumno'}
+                    ? 'Traslado de existencias entre mis almacenes / naves'
+                    : 'Envío de existencias a otro alumno'}
                 </h3>
               </div>
               <button
@@ -6524,7 +6503,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  A otro Alumno / Empresa
+                  A otro alumno / empresa
                 </button>
                 <button
                   type="button"
@@ -6535,7 +6514,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Entre Mis Propios Almacenes
+                  Entre mis propios almacenes
                 </button>
               </div>
 
@@ -6557,7 +6536,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 /* Select Recipient via Search Input & Autocomplete */
                 <div className="relative">
                   <label className="block font-bold text-slate-700 mb-1">
-                    Alumno / Empresa Destinatario
+                    Alumno / empresa destinatario
                   </label>
                   {selectedRecipient ? (
                     <div className="space-y-3">
@@ -6589,7 +6568,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       {selectedRecipient.warehouses && selectedRecipient.warehouses.length > 0 && (
                         <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
                           <label className="block text-xs font-bold text-slate-700 flex items-center justify-between">
-                            <span>Inmueble / Almacén de Destino:</span>
+                            <span>Inmueble / almacén de destino:</span>
                             {selectedRecipient.warehouses.length > 1 && (
                               <span className="text-[10px] text-amber-700 font-bold bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
                                 ⚠️ {selectedRecipient.warehouses.length} almacenes disponibles
@@ -6603,7 +6582,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           >
                             {selectedRecipient.warehouses.map((w: any) => (
                               <option key={w.id} value={w.id}>
-                                {w.title} ({w.address}) {w.hasForklift !== undefined ? (w.hasForklift ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta Carretilla]') : ''}
+                                {w.title} ({w.address}) {w.hasForklift !== undefined ? (w.hasForklift ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]') : ''}
                               </option>
                             ))}
                           </select>
@@ -6721,7 +6700,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <div className="space-y-1.5 pt-1">
                         <div className="flex items-center justify-between">
                           <label className="block font-bold text-slate-700 text-xs">
-                            Nave / Almacén de Origen (desde donde envías)
+                            Nave / almacén de origen (desde donde envías)
                           </label>
                           {userNaves.length > 1 && (
                             <span className="text-[10px] text-indigo-700 font-bold bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
@@ -6738,7 +6717,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             const hasF = checkNaveHasForklift(n);
                             return (
                               <option key={n.id} value={n.id}>
-                                {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta Carretilla]'}
+                                {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                               </option>
                             );
                           })}
@@ -6747,7 +6726,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-medium flex items-center gap-1.5">
                             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                             <span>
-                              ⚠️ Tu almacén de origen no tiene asignada ninguna carretilla elevadora contrapesada. Asigna una carretilla a esta nave desde la Gestión de Flotas / Concesionario para poder cargar y expedir mercancías.
+                              ⚠️ Tu almacén de origen no tiene asignada ninguna carretilla elevadora contrapesada. Asigna una carretilla a esta nave desde la gestión de flotas / concesionario para poder cargar y expedir mercancías.
                             </span>
                           </div>
                         )}
@@ -6797,7 +6776,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block font-bold text-slate-700 mb-1">
-                            Nave / Almacén de Origen
+                            Nave / almacén de origen
                           </label>
                           <select
                             value={fromNaveId}
@@ -6808,7 +6787,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               const hasF = checkNaveHasForklift(n);
                               return (
                                 <option key={n.id} value={n.id}>
-                                  {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta Carretilla]'}
+                                  {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                                 </option>
                               );
                             })}
@@ -6817,7 +6796,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                         <div>
                           <label className="block font-bold text-slate-700 mb-1">
-                            Nave / Almacén de Destino
+                            Nave / almacén de destino
                           </label>
                           <select
                             value={toNaveId}
@@ -6830,7 +6809,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                 const hasF = checkNaveHasForklift(n);
                                 return (
                                   <option key={n.id} value={n.id}>
-                                    {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta Carretilla]'}
+                                    {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                                   </option>
                                 );
                               })}
@@ -6842,7 +6821,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-medium flex items-center gap-1.5">
                           <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                           <span>
-                            ⚠️ Tu almacén de destino no tiene asignada ninguna carretilla elevadora contrapesada. Asigna una carretilla a esta nave desde la Gestión de Flotas / Concesionario para realizar el traslado.
+                            ⚠️ Tu almacén de destino no tiene asignada ninguna carretilla elevadora contrapesada. Asigna una carretilla a esta nave desde la gestión de flotas / concesionario para realizar el traslado.
                           </span>
                         </div>
                       )}
@@ -6854,7 +6833,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               {/* Select Item */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  Tipo de Existencia / Producto a Enviar
+                  Tipo de existencia / producto a enviar
                 </label>
                 <select
                   value={transferItemKey}
@@ -6987,31 +6966,31 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       return (
                         <>
                           <option value="ironKg">
-                            Fragmentos de Hierro (Stock:{" "}
+                            Fragmentos de hierro (Stock:{" "}
                             {formatNumber(ironKgStock)} kg)
                           </option>
                           <option value="plasticKg">
-                            Pellets de Plástico (Stock:{" "}
+                            Pellets de plástico (Stock:{" "}
                             {formatNumber(plasticKgStock)} kg)
                           </option>
                           <option value="epoxiKg">
-                            Pegamento Epoxi (Stock: {formatNumber(epoxiKgStock)}{" "}
+                            Pegamento epoxi (Stock: {formatNumber(epoxiKgStock)}{" "}
                             kg)
                           </option>
                           <option value="varillas_punta_estrella">
-                            Varillas con Punta Estrella (Stock:{" "}
+                            Varillas con punta estrella (Stock:{" "}
                             {formatNumber(varillasEstrellaStock, 0)} u.)
                           </option>
                           <option value="varillas_punta_plana">
-                            Varillas con Punta Plana (Stock:{" "}
+                            Varillas con punta plana (Stock:{" "}
                             {formatNumber(varillasPlanaStock, 0)} u.)
                           </option>
                           <option value="destornilladores_punta_estrella">
-                            Destornilladores con Punta Estrella (Stock:{" "}
+                            Destornilladores con punta estrella (Stock:{" "}
                             {formatNumber(destEstrellaStock, 0)} u.)
                           </option>
                           <option value="destornilladores_punta_plana">
-                            Destornilladores con Punta Plana (Stock:{" "}
+                            Destornilladores con punta plana (Stock:{" "}
                             {formatNumber(destPlanaStock, 0)} u.)
                           </option>
                         </>
@@ -7021,11 +7000,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     return (
                       <>
                         <option value="destornilladores_punta_estrella">
-                          Destornilladores con Punta Estrella (Stock:{" "}
+                          Destornilladores con punta estrella (Stock:{" "}
                           {formatNumber(destEstrellaStock, 0)} u.)
                         </option>
                         <option value="destornilladores_punta_plana">
-                          Destornilladores con Punta Plana (Stock:{" "}
+                          Destornilladores con punta plana (Stock:{" "}
                           {formatNumber(destPlanaStock, 0)} u.)
                         </option>
                       </>
@@ -7037,7 +7016,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               {/* Quantity */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  Cantidad a Enviar
+                  Cantidad a enviar
                 </label>
                 <input
                   type="number"
@@ -7051,7 +7030,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               {/* Transport Method */}
               <div>
                 <label className="block font-bold text-slate-700 mb-2">
-                  Método de Transporte Logístico
+                  Método de transporte logístico
                 </label>
                 <div className="space-y-2">
                   <label
@@ -7071,12 +7050,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     />
                     <div>
                       <span className="font-bold block text-slate-900">
-                        Servicio Exterior de Transporte
+                        Servicio exterior de transporte (Tarifa unificada: 0,38 € / palet / km)
                       </span>
                       <span className="text-[11px] text-slate-500 block">
-                        Contratación de logística externa con tarifa según
-                        volumen (mínimo 35 € cargos de gestión). Se abonará
-                        desde la cuenta bancaria.
+                        Logística profesional externa calculada por distancia y palets completos (si el palet no está completo, se factura como completo). Se abonará desde la cuenta bancaria.
                       </span>
                     </div>
                   </label>
@@ -7119,7 +7096,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         />
                         <div>
                           <span className="font-bold block text-slate-900">
-                            Usar Transporte Propio de Empresa
+                            Usar transporte propio de empresa
                           </span>
                           <span className="text-[11px] text-slate-500 block">
                             Envío utilizando camión y chofer propio en plantilla. Sin costes ni gastos de servicio de transporte. Únicamente se adeudará el gasto de suministro por la gasolina consumida según la distancia entre el almacén de origen y el de destino.
@@ -7150,6 +7127,52 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   })()}
                 </div>
               </div>
+
+              {/* Dynamic Transport Cost Breakdown Preview */}
+              {(() => {
+                const qty = Number(transferQuantity) || 0;
+                const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(transferItemKey);
+                const pReq = isKgItem ? (qty / 1000) : (qty / 10000);
+                const cPallets = pReq > 0 ? Math.max(1, Math.ceil(pReq)) : 0;
+                
+                let sourceLoc: any = null;
+                let targetLoc: any = null;
+                if (transferMode === 'between_naves') {
+                  sourceLoc = (data?.acquisitions || []).find(a => a.id === fromNaveId) || (data?.acquisitions || [])[0];
+                  targetLoc = (data?.acquisitions || []).find(a => a.id === toNaveId) || (data?.acquisitions || [])[1];
+                } else {
+                  sourceLoc = (data?.acquisitions || []).find(a => a.id === fromNaveId) || (data?.acquisitions || [])[0] || currentUser;
+                  const recWh = selectedRecipient?.warehouses?.find((w: any) => String(w.id) === String(transferDestinationNaveId)) || selectedRecipient?.warehouses?.[0];
+                  targetLoc = recWh || selectedRecipient || 'Destinatario';
+                }
+                const distKm = calculateSpanishDistanceKm(sourceLoc, targetLoc);
+                const estExtCost = Math.round(cPallets * distKm * 0.38 * 100) / 100;
+                const estPropioCost = Math.max(8.50, Math.round((distKm * 0.48 + 5.0) * 100) / 100);
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Distancia real por carretera:</span>
+                      <span className="font-bold text-slate-800">{distKm} km</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Palets facturables (fracción como completo):</span>
+                      <span className="font-bold text-slate-800">{cPallets} palet{cPallets !== 1 ? 's' : ''} ({pReq.toFixed(2)} reales)</span>
+                    </div>
+                    <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center font-bold text-slate-900">
+                      <span>Coste de transporte {transferTransportMethod === 'exterior' ? '(Servicio exterior)' : '(Gasto suministro gasolina)'}:</span>
+                      <span className="text-indigo-600 text-sm">
+                        {transferTransportMethod === 'exterior' ? `${formatNumber(estExtCost)} €` : `${formatNumber(estPropioCost)} €`}
+                      </span>
+                    </div>
+                    {transferTransportMethod === 'exterior' && (
+                      <p className="text-[10px] text-slate-400">
+                        Cálculo: {cPallets} palet{cPallets !== 1 ? 's' : ''} × {distKm} km × 0,38 €/pal-km = {formatNumber(estExtCost)} €
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Modal Action Buttons (Fixed Footer) */}
@@ -7170,7 +7193,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 {isTransferring && (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 )}
-                <span>Confirmar y Enviar Existencias</span>
+                <span>Confirmar y enviar existencias</span>
               </button>
             </div>
           </div>

@@ -61,7 +61,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
               <Zap className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white text-base">Factura de Suministro Eléctrico</h3>
+              <h3 className="font-bold text-white text-base">Factura de suministro eléctrico</h3>
               <p className="text-xs text-slate-400">Nº {bill.billNumber} • IberLuz Comercializadora</p>
             </div>
           </div>
@@ -108,10 +108,10 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
 
             <div className="text-right space-y-1">
               <span className="inline-block bg-slate-100 text-slate-800 text-xs font-bold px-3 py-1 rounded border border-slate-300 uppercase tracking-wider">
-                Factura Oficial de Electricidad
+                Factura oficial de electricidad
               </span>
-              <p className="text-sm font-mono font-bold text-slate-900 mt-2">Nº Factura: {bill.billNumber}</p>
-              <p className="text-xs text-slate-600">Fecha Emisión: {new Date(bill.createdAt).toLocaleDateString('es-ES')}</p>
+              <p className="text-sm font-mono font-bold text-slate-900 mt-2">Nº factura: {bill.billNumber}</p>
+              <p className="text-xs text-slate-600">Fecha emisión: {new Date(bill.createdAt).toLocaleDateString('es-ES')}</p>
               <p className="text-xs text-slate-600">Período: {periodStr}</p>
             </div>
           </div>
@@ -120,36 +120,36 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           <div className="grid grid-cols-2 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
             <div>
               <h4 className="font-bold text-slate-900 uppercase text-[11px] text-amber-700 tracking-wider mb-2">
-                Datos del Cliente y Titular
+                Datos del cliente y titular
               </h4>
               <p className="font-bold text-slate-900 text-sm">{studentName || bill.studentName}</p>
               <p className="text-slate-600">NIF / CIF: {bill.cifNif || 'B-98765432'}</p>
-              <p className="text-slate-600">Domicilio Fiscal: Polígono Industrial San José, Nave 4</p>
-              <p className="text-slate-600">Cuenta de Cargo: ES21 **** **** **** {bill.studentId.slice(-4)}</p>
+              <p className="text-slate-600">Domicilio fiscal: Polígono Industrial San José, Nave 4</p>
+              <p className="text-slate-600">Cuenta de cargo: ES21 **** **** **** {bill.studentId.slice(-4)}</p>
             </div>
 
             <div>
               <h4 className="font-bold text-slate-900 uppercase text-[11px] text-amber-700 tracking-wider mb-2">
-                Datos del Suministro y Contrato
+                Datos del suministro y contrato
               </h4>
               <p className="text-slate-700"><span className="font-semibold">CUPS:</span> <span className="font-mono">{bill.cupsCode}</span></p>
               <p className="text-slate-700"><span className="font-semibold">Tarifa:</span> IberLuz 3.0TD Industrial</p>
-              <p className="text-slate-700"><span className="font-semibold">Potencia Contratada:</span> {bill.contractedPowerKw} kW</p>
-              <p className="text-slate-700"><span className="font-semibold">Peaje de Acceso:</span> 3.0TD Alta/Baja Tensión</p>
-              <p className="text-slate-700"><span className="font-semibold">Forma de Pago:</span> Domiciliación Bancaria (Día 5 del mes)</p>
+              <p className="text-slate-700"><span className="font-semibold">Potencia contratada:</span> {bill.contractedPowerKw} kW</p>
+              <p className="text-slate-700"><span className="font-semibold">Peaje de acceso:</span> 3.0TD Alta/Baja Tensión</p>
+              <p className="text-slate-700"><span className="font-semibold">Forma de pago:</span> Domiciliación bancaria (día 5 del mes)</p>
             </div>
           </div>
 
           {/* Summary Callout */}
           <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4 flex items-center justify-between">
             <div>
-              <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Resumen de Consumo Eléctrico</span>
+              <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Resumen de consumo eléctrico</span>
               <p className="text-2xl font-black text-slate-900 mt-0.5">
                 {formatNumber(bill.totalKwh, 0)} <span className="text-sm font-normal text-slate-600">kWh consumidos</span>
               </p>
             </div>
             <div className="text-right">
-              <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Importe Total a Pagar</span>
+              <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Importe total a pagar</span>
               <p className="text-3xl font-black text-amber-600">{formatNumber(bill.totalAmount)} €</p>
             </div>
           </div>
@@ -157,22 +157,22 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           {/* Itemized Billing Table */}
           <div className="space-y-3">
             <h4 className="font-bold text-slate-900 uppercase text-xs tracking-wider border-b border-slate-200 pb-1">
-              Desglose de la Factura
+              Desglose de la factura
             </h4>
 
             <table className="w-full text-xs text-left border-collapse">
               <thead>
                 <tr className="bg-slate-100 text-slate-700 uppercase font-bold text-[10px] border-b border-slate-300">
                   <th className="p-2.5">Concepto</th>
-                  <th className="p-2.5 text-right">Cálculo / Base</th>
-                  <th className="p-2.5 text-right">Precio Unitario</th>
+                  <th className="p-2.5 text-right">Cálculo / base</th>
+                  <th className="p-2.5 text-right">Precio unitario</th>
                   <th className="p-2.5 text-right">Importe (€)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 text-slate-800">
                 <tr>
                   <td className="p-2.5 font-medium">
-                    1. Término de Potencia ({bill.contractedPowerKw} kW)
+                    1. Término de potencia ({bill.contractedPowerKw} kW)
                   </td>
                   <td className="p-2.5 text-right font-mono">{bill.contractedPowerKw} kW × {bill.daysCount} días</td>
                   <td className="p-2.5 text-right font-mono">{formatNumber(bill.pricePerKwDay, 4)} €/kW/día</td>
@@ -181,7 +181,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
 
                 <tr>
                   <td className="p-2.5 font-medium">
-                    2. Término de Energía Consumida
+                    2. Término de energía consumida
                   </td>
                   <td className="p-2.5 text-right font-mono">{formatNumber(bill.totalKwh, 0)} kWh</td>
                   <td className="p-2.5 text-right font-mono">{formatNumber(bill.pricePerKwh, 4)} €/kWh</td>
@@ -190,21 +190,21 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
 
                 <tr>
                   <td className="p-2.5 font-medium text-slate-600">
-                    3. Alquiler de Equipo de Medida / Contador
+                    3. Alquiler de equipo de medida / contador
                   </td>
-                  <td className="p-2.5 text-right font-mono text-slate-600">1 Mes</td>
+                  <td className="p-2.5 text-right font-mono text-slate-600">1 mes</td>
                   <td className="p-2.5 text-right font-mono text-slate-600">0,85 €/mes</td>
                   <td className="p-2.5 text-right font-mono font-semibold">{formatNumber(bill.equipmentRental)} €</td>
                 </tr>
 
                 <tr className="bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-300">
-                  <td className="p-2.5" colSpan={3}>Base Imponible de Suministro</td>
+                  <td className="p-2.5" colSpan={3}>Base imponible de suministro</td>
                   <td className="p-2.5 text-right font-mono">{formatNumber(bill.taxableBase)} €</td>
                 </tr>
 
                 <tr>
                   <td className="p-2.5 text-slate-700">
-                    4. Impuesto sobre la Electricidad (IEE 5,11269632%)
+                    4. Impuesto sobre la electricidad (IEE 5,11269632%)
                   </td>
                   <td className="p-2.5 text-right font-mono text-slate-600">s/ Base {formatNumber(bill.taxableBase)} €</td>
                   <td className="p-2.5 text-right font-mono text-slate-600">5,1127%</td>
@@ -218,7 +218,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
 
                 <tr>
                   <td className="p-2.5 text-slate-700">
-                    5. Impuesto sobre el Valor Añadido (IVA 21%)
+                    5. Impuesto sobre el valor añadido (IVA 21%)
                   </td>
                   <td className="p-2.5 text-right font-mono text-slate-600">s/ Subtotal {formatNumber(bill.subtotalWithTax)} €</td>
                   <td className="p-2.5 text-right font-mono text-slate-600">21,00%</td>
@@ -237,7 +237,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           {bill.propertyBreakdown && bill.propertyBreakdown.length > 0 && (
             <div className="space-y-2 border-t border-slate-200 pt-4">
               <h5 className="font-bold text-slate-800 text-xs uppercase tracking-wider">
-                Detalle de Consumo por Inmueble
+                Detalle de consumo por inmueble
               </h5>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {bill.propertyBreakdown.map((item, idx) => (
@@ -260,7 +260,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
                       <span className="font-mono">{item.kwhHvac} kWh</span>
                     </div>
                     <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1">
-                      <span>Subtotal Consumo:</span>
+                      <span>Subtotal consumo:</span>
                       <span className="font-mono text-amber-700">{formatNumber(item.totalKwh, 0)} kWh (~{formatNumber(item.costEstimate)} €)</span>
                     </div>
                   </div>
@@ -273,7 +273,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
           <div className="bg-slate-100 rounded-lg p-4 text-xs text-slate-700 flex items-start space-x-3 border border-slate-300">
             <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-bold text-slate-900">Forma y Término de Pago</p>
+              <p className="font-bold text-slate-900">Forma y término de pago</p>
               <p className="text-slate-600 mt-0.5">
                 El importe de esta factura se cargará automáticamente en su cuenta bancaria registrada el día <span className="font-bold text-slate-900">5 del mes siguiente</span> al período de consumo ({new Date(bill.dueDate).toLocaleDateString('es-ES')}).
                 {bill.status === 'pagado' ? (

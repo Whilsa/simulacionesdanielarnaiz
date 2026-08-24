@@ -81,7 +81,13 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
       .replace(/Préstamo Hipotecario/g, 'Préstamo hipotecario')
       .replace(/Fibra y Teléfono/g, 'Fibra y teléfono')
       .replace(/Seg\. Social Empleado/g, 'Seg. Social empleado')
-      .replace(/Seg\. Social Empresa/g, 'Seg. Social empresa');
+      .replace(/Seg\. Social Empresa/g, 'Seg. Social empresa')
+      .replace(/Línea de Fabricación de Metal \/ Hierro \(Varilla y Punta\)/g, 'Línea de fabricación de metal / hierro (varilla y punta)')
+      .replace(/Línea de Inyección de Plástico y Ensamblaje Final/g, 'Línea de inyección de plástico y ensamblaje final')
+      .replace(/Línea Estándar \(1 Torno CNC de 2 ejes\)/g, 'Línea estándar (1 torno CNC de 2 ejes)')
+      .replace(/Línea de Alta Capacidad \(2 Tornos CNC de 2 ejes\)/g, 'Línea de alta capacidad (2 tornos CNC de 2 ejes)')
+      .replace(/Línea Inyectora y Marcado Láser/g, 'Línea inyectora y marcado láser')
+      .replace(/Máquina Industrial/g, 'Máquina industrial');
   };
 
   const getTypeName = (type: string) => {
@@ -128,7 +134,7 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
             <h3 className="font-display font-bold text-slate-900 text-base flex items-center gap-2">
               <span>Vencimientos de los próximos 30 días</span>
               <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200/80 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                Pagos Automáticos Domiciliados
+                Pagos automáticos domiciliados
               </span>
             </h3>
             <p className="text-xs text-slate-500">
@@ -159,9 +165,9 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
             </div>
             <div className="flex-1">
               <h4 className="font-bold text-rose-900 text-sm flex items-center justify-between">
-                <span>⚠️ Salidas de Dinero Manuales Bloqueadas (Mora por Impago)</span>
+                <span>⚠️ Salidas de dinero manuales bloqueadas (mora por impago)</span>
                 <span className="text-xs font-mono font-bold bg-rose-200 text-rose-900 px-2.5 py-0.5 rounded-full">
-                  5% Int. Demora
+                  5% int. demora
                 </span>
               </h4>
               <p className="text-xs text-rose-800 mt-1 leading-relaxed">
@@ -175,11 +181,11 @@ export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger 
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-rose-100/50 text-rose-900 font-bold border-b border-rose-200/80">
-                  <th className="p-2.5">Concepto / Referencia</th>
+                  <th className="p-2.5">Concepto / referencia</th>
                   <th className="p-2.5">Vencimiento</th>
                   <th className="p-2.5 text-right">Principal</th>
-                  <th className="p-2.5 text-right">Int. Demora (5%)</th>
-                  <th className="p-2.5 text-right">Total Pendiente</th>
+                  <th className="p-2.5 text-right">Int. demora (5%)</th>
+                  <th className="p-2.5 text-right">Total pendiente</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-rose-100 text-slate-800 font-mono">
