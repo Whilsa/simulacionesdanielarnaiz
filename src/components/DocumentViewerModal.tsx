@@ -1440,7 +1440,7 @@ Estado Contable: EJECUTADO Y ABONADO
                 <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-4 flex justify-between items-center font-mono">
                   <div>
                     <span className="text-xs font-sans font-bold text-emerald-950 uppercase block">Líquido total a percibir (sueldo neto):</span>
-                    <span className="text-[11px] text-emerald-800 font-sans">Abonado por transferencia bancaria el día 26 de cada mes</span>
+                    <span className="text-[11px] text-emerald-800 font-sans">Abonado por transferencia bancaria individual el día 1 del mes siguiente</span>
                   </div>
                   <span className="text-2xl font-black px-4 py-1.5 rounded-lg border text-emerald-900 bg-white border-emerald-400 shadow-xs">
                     {formatNumber(net)} €
