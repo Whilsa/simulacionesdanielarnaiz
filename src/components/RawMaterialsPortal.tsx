@@ -10,6 +10,10 @@ import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
 import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import {
+  getStoredWarehouseRequirementsMet,
+  setStoredWarehouseRequirementsMet
+} from '../lib/marketRequirements.js';
+import {
   Package,
   Layers,
   Truck,
@@ -140,6 +144,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Cached Warehouse Requirements (stored in browser to avoid double checks)
+  const initialWarehouseCache = getStoredWarehouseRequirementsMet(currentUser.id);
+  const [isWarehouseConfiguredCached, setIsWarehouseConfiguredCached] = useState<boolean>(
+    isTeacher || initialWarehouseCache.warehouseMet
+  );
+  const [isForkliftConfiguredCached, setIsForkliftConfiguredCached] = useState<boolean>(
+    isTeacher || initialWarehouseCache.forkliftMet
+  );
 
   // Property & Floorplan State
   const [floorPlans, setFloorPlans] = useState<any[]>([]);
@@ -1707,6 +1720,33 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         if (compData.hiredEmployees) setEmployees(compData.hiredEmployees);
         if (compData.naveFloorPlans) setFloorPlans(compData.naveFloorPlans);
         if (compData.acquisitions) setAcquisitions(compData.acquisitions);
+
+        // Dynamically check and cache warehouse and forklift fulfillment if newly completed
+        const fetchedAcqs = compData.acquisitions || [];
+        const fetchedVehicles = compData.purchasedVehicles || [];
+        const hasRealWarehouse = fetchedAcqs.some((a: any) => {
+          const pType = (a.propertyType || a.type || "").toLowerCase();
+          const title = (a.propertyTitle || a.title || "").toLowerCase();
+          return (
+            ["nave_industrial", "almacen", "almacen_logistico", "industrial", "warehouse"].includes(pType) ||
+            title.includes("nave") ||
+            title.includes("almacen") ||
+            title.includes("almacén")
+          );
+        });
+        const hasRealForklift = fetchedVehicles.some((v: any) => v.vehicleType === 'carretilla_elevadora');
+
+        if (hasRealWarehouse) {
+          setIsWarehouseConfiguredCached(true);
+          setStoredWarehouseRequirementsMet(currentUser.id, { warehouseMet: true });
+        }
+        if (hasRealForklift) {
+          setIsForkliftConfiguredCached(true);
+          setStoredWarehouseRequirementsMet(currentUser.id, { forkliftMet: true });
+        }
+        if (hasRealWarehouse && hasRealForklift) {
+          setStoredWarehouseRequirementsMet(currentUser.id, { allMet: true, warehouseMet: true, forkliftMet: true });
+        }
       }
 
       if (invData) {
@@ -1771,12 +1811,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     });
   }
 
-  const rawMaterialWarehousesCount = Math.max(1, warehouseProperties.length);
+  const isWarehouseConfigured = isTeacher || isWarehouseConfiguredCached || warehouseProperties.length > 0;
+  const rawMaterialWarehousesCount = isWarehouseConfigured ? Math.max(1, warehouseProperties.length) : warehouseProperties.length;
 
   // Forklifts requirement check (1 forklift for the property)
   const ownedForklifts = vehicles.filter(v => v.vehicleType === 'carretilla_elevadora').length;
-  const hasEnoughForklifts = rawMaterialWarehousesCount > 0 && ownedForklifts >= 1;
-  const canPurchaseRawMaterials = (isLevel1 || isTeacher) && rawMaterialWarehousesCount > 0 && hasEnoughForklifts;
+  const hasEnoughForklifts = isTeacher || isForkliftConfiguredCached || (rawMaterialWarehousesCount > 0 && ownedForklifts >= 1);
+  const canPurchaseRawMaterials = (isLevel1 || isTeacher) && isWarehouseConfigured && hasEnoughForklifts;
 
   // Stored inventory quantities & pallet conversions (Identical to "Existencias" in CompanyDashboard)
   const ironKg = inventoryData?.ironKg ?? rawMaterialsState?.fragmentos_hierro_kg ?? 0;
@@ -2846,17 +2887,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           {/* Requirements Status Checklist */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
-              rawMaterialWarehousesCount > 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              isWarehouseConfigured ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
               <span>1. Almacén configurado:</span>
-              <strong className="font-bold">{rawMaterialWarehousesCount > 0 ? `${realWarehouseM2} m² (${maxPalletsAllowed} pal.) ✅` : '0 m² ❌'}</strong>
+              <strong className="font-bold">{isWarehouseConfigured ? `${realWarehouseM2} m² (${maxPalletsAllowed} pal.) ✅` : '0 m² ❌'}</strong>
             </div>
 
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
               hasEnoughForklifts ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
               <span>2. Carretilla elevadora (mín. 1 en propiedad):</span>
-              <strong className="font-bold">{ownedForklifts}/1 {hasEnoughForklifts ? '✅ OK' : '❌ Pendiente'}</strong>
+              <strong className="font-bold">{Math.max(ownedForklifts, hasEnoughForklifts ? 1 : 0)}/1 {hasEnoughForklifts ? '✅ OK' : '❌ Pendiente'}</strong>
             </div>
           </div>
         </div>

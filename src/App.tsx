@@ -20,6 +20,13 @@ import RawMaterialsPortal from './components/RawMaterialsPortal.js';
 import CourtPortal from './components/CourtPortal.js';
 import PriceAlertModal from './components/PriceAlertModal.js';
 import { ArrowLeft, Landmark } from 'lucide-react';
+import {
+  checkStudentMarketRequirements,
+  getStoredMarketRequirementsMet,
+  setStoredMarketRequirementsMet,
+  getStoredWarehouseRequirementsMet,
+  setStoredWarehouseRequirementsMet
+} from './lib/marketRequirements.js';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -50,7 +57,20 @@ export default function App() {
               const exists = data.users.some((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
               if (exists) {
                 const freshUser = data.users.find((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
-                setCurrentUser(freshUser || parsed);
+                const effectiveUser = freshUser || parsed;
+                setCurrentUser(effectiveUser);
+                if (effectiveUser.role !== 'teacher' && effectiveUser.username !== 'pupdaniel') {
+                  checkStudentMarketRequirements(effectiveUser)
+                    .then(res => {
+                      setStoredMarketRequirementsMet(effectiveUser.id, res.met);
+                      setStoredWarehouseRequirementsMet(effectiveUser.id, {
+                        warehouseMet: res.hasWarehouse,
+                        forkliftMet: res.hasForklift,
+                        allMet: res.hasWarehouse && res.hasForklift
+                      });
+                    })
+                    .catch(() => {});
+                }
               } else {
                 console.warn('Session user no longer exists on server, clearing session');
                 localStorage.removeItem('bes_sim_user');
@@ -58,6 +78,18 @@ export default function App() {
               }
             } else {
               setCurrentUser(parsed);
+              if (parsed.role !== 'teacher' && parsed.username !== 'pupdaniel') {
+                checkStudentMarketRequirements(parsed)
+                  .then(res => {
+                    setStoredMarketRequirementsMet(parsed.id, res.met);
+                    setStoredWarehouseRequirementsMet(parsed.id, {
+                      warehouseMet: res.hasWarehouse,
+                      forkliftMet: res.hasForklift,
+                      allMet: res.hasWarehouse && res.hasForklift
+                    });
+                  })
+                  .catch(() => {});
+              }
             }
           })
           .catch(() => {
@@ -149,6 +181,20 @@ export default function App() {
     setCurrentUser(user);
     setActiveModule('hub');
     localStorage.setItem('bes_sim_user', JSON.stringify(user));
+
+    // Check market requirements ONCE upon login
+    if (user.role !== 'teacher' && user.username !== 'pupdaniel') {
+      checkStudentMarketRequirements(user)
+        .then(res => {
+          setStoredMarketRequirementsMet(user.id, res.met);
+          setStoredWarehouseRequirementsMet(user.id, {
+            warehouseMet: res.hasWarehouse,
+            forkliftMet: res.hasForklift,
+            allMet: res.hasWarehouse && res.hasForklift
+          });
+        })
+        .catch(err => console.error('Error checking market requirements on login:', err));
+    }
   };
 
   const handleLogout = () => {

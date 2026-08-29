@@ -12,6 +12,11 @@ import {
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
 import { formatNumber } from '../lib/formatters.js';
+import {
+  checkStudentMarketRequirements,
+  getStoredMarketRequirementsMet,
+  setStoredMarketRequirementsMet
+} from '../lib/marketRequirements.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -28,6 +33,13 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [unreadCourtCount, setUnreadCourtCount] = useState<number>(0);
+
+  // Cached market requirements flag in browser
+  const [isMarketRequirementsMetInBrowser, setIsMarketRequirementsMetInBrowser] = useState<boolean>(() => {
+    if (isTeacher || currentUser.username === 'pupdaniel') return true;
+    return getStoredMarketRequirementsMet(currentUser.id);
+  });
+  const [isCheckingMarketAccess, setIsCheckingMarketAccess] = useState(false);
 
   useEffect(() => {
     const fetchUnread = () => {
@@ -76,16 +88,29 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
         fetch(`/api/telecom/contracts?studentId=${currentUser.id}`),
         fetch(`/api/office-store/orders?studentId=${currentUser.id}`)
       ]);
+      let acqs: PropertyAcquisition[] = [];
+      let machs: MachineryAcquisition[] = [];
+      let emps: HiredEmployee[] = [];
+      let vechs: PurchasedVehicle[] = [];
+      let elecs: ElectricityContract[] = [];
+      let tels: any[] = [];
+      let offs: any[] = [];
+
       if (compRes.ok && compRes.headers.get('content-type')?.includes('application/json')) {
         const cData = await compRes.json();
-        setAcquisitions(cData.acquisitions || []);
-        setMachinery(cData.machineryAcquisitions || []);
-        setEmployees(cData.hiredEmployees || []);
-        setPurchasedVehicles(cData.purchasedVehicles || []);
+        acqs = cData.acquisitions || [];
+        machs = cData.machineryAcquisitions || [];
+        emps = cData.hiredEmployees || [];
+        vechs = cData.purchasedVehicles || [];
+        setAcquisitions(acqs);
+        setMachinery(machs);
+        setEmployees(emps);
+        setPurchasedVehicles(vechs);
       }
       if (cRes.ok && cRes.headers.get('content-type')?.includes('application/json')) {
         const elecJson = await cRes.json();
-        setElectricityContracts(elecJson.contracts || []);
+        elecs = elecJson.contracts || [];
+        setElectricityContracts(elecs);
       }
       if (fpRes.ok && fpRes.headers.get('content-type')?.includes('application/json')) {
         const fpJson = await fpRes.json();
@@ -93,11 +118,52 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
       }
       if (telRes.ok && telRes.headers.get('content-type')?.includes('application/json')) {
         const telJson = await telRes.json();
-        setTelecomContracts(telJson.contracts || []);
+        tels = telJson.contracts || [];
+        setTelecomContracts(tels);
       }
       if (offRes.ok && offRes.headers.get('content-type')?.includes('application/json')) {
         const offJson = await offRes.json();
-        setOfficeOrders(offJson.orders || []);
+        offs = offJson.orders || [];
+        setOfficeOrders(offs);
+      }
+
+      // Check if newly met
+      const userLevel = currentUser.level || 1;
+      const telOk = tels.some((c: any) => c.status === 'active');
+      const offOk = offs.some((order: any) => {
+        const items = order.items || order.cartItems || [];
+        return items.some((item: any) => {
+          const cat = item.category || '';
+          const name = (item.itemName || item.name || '').toLowerCase();
+          return (
+            ['sobremesa', 'portatiles', 'telefonos_fijos', 'telefonos_moviles'].includes(cat) ||
+            name.includes('ordenador') || name.includes('portátil') || name.includes('portatil') ||
+            name.includes('teléfono') || name.includes('telefono') || name.includes('pc') ||
+            name.includes('laptop') || name.includes('smartphone')
+          );
+        });
+      });
+      const whAcqs = acqs.filter((a: any) => {
+        const t = (a.type || a.propertyType || '').toLowerCase();
+        const title = (a.propertyTitle || a.title || '').toLowerCase();
+        return a.status !== 'cancelado' && (
+          t === 'almacen' || t === 'almacén' || t === 'nave_industrial' ||
+          title.includes('almacen') || title.includes('almacén') || title.includes('nave')
+        );
+      });
+      const whOk = whAcqs.length > 0;
+      const elecOk = elecs.some((ec: any) => ec.status === 'active' && whAcqs.some((a: any) => a.propertyId === ec.propertyId || a.id === ec.propertyId));
+      const forkOk = vechs.some((v: any) => v.vehicleType === 'carretilla_elevadora');
+      const workerOk = emps.some((e: any) => {
+        const role = (e.role || '').toLowerCase();
+        const title = (e.title || e.jobTitle || '').toLowerCase();
+        return role === 'mozo_almacen' || role === 'mozo' || title.includes('mozo');
+      });
+
+      const met = userLevel === 1 ? (telOk && offOk) : (telOk && offOk && whOk && elecOk && forkOk && workerOk);
+      if (met) {
+        setStoredMarketRequirementsMet(currentUser.id, true);
+        setIsMarketRequirementsMetInBrowser(true);
       }
     } catch (e) {
       console.error(e);
@@ -149,8 +215,10 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
   });
 
   const userLevel = currentUser.level || 1;
+  const isMarketRequirementsMet = isTeacher || currentUser.username === 'pupdaniel' || isMarketRequirementsMetInBrowser;
+  
   let canAccessMarket = false;
-  if (isTeacher) {
+  if (isMarketRequirementsMet) {
     canAccessMarket = true;
   } else if (userLevel === 1) {
     canAccessMarket = hasTelecomContract && hasOfficeDevice;
@@ -159,10 +227,41 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
     canAccessMarket = hasTelecomContract && hasOfficeDevice && hasWarehouse && hasElectricityInWarehouse && hasForklift && hasWarehouseWorker;
   }
 
-  const handleCardClick = (moduleId: ModuleType) => {
-    if (moduleId === "raw_materials" && !canAccessMarket) {
-      setShowMarketLockModal(true);
-      return;
+  const handleCardClick = async (moduleId: ModuleType) => {
+    if (moduleId === "raw_materials") {
+      // If requirements were already verified at login and stored in browser, grant access immediately!
+      if (isMarketRequirementsMet) {
+        onSelectModule('raw_materials');
+        return;
+      }
+
+      // If not met upon login, dynamically check each time they attempt to access:
+      setIsCheckingMarketAccess(true);
+      try {
+        const res = await checkStudentMarketRequirements(currentUser);
+        if (res.met) {
+          setStoredMarketRequirementsMet(currentUser.id, true);
+          setIsMarketRequirementsMetInBrowser(true);
+          onSelectModule('raw_materials');
+          return;
+        } else {
+          // Update details so the lock modal shows exact missing items
+          setTelecomContracts(res.details.telecomContracts);
+          setOfficeOrders(res.details.officeOrders);
+          setAcquisitions(res.details.acquisitions);
+          setElectricityContracts(res.details.electricityContracts);
+          setPurchasedVehicles(res.details.purchasedVehicles);
+          setEmployees(res.details.employees);
+          setShowMarketLockModal(true);
+          return;
+        }
+      } catch (e) {
+        console.error('Error verifying market requirements:', e);
+        setShowMarketLockModal(true);
+        return;
+      } finally {
+        setIsCheckingMarketAccess(false);
+      }
     }
     if (moduleId === 'court') {
       setUnreadCourtCount(0);
@@ -455,15 +554,38 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
 
             <button
               type="button"
-              onClick={() => {
-                if (!canAccessMarket) {
-                  setShowMarketLockModal(true);
+              onClick={async () => {
+                if (isMarketRequirementsMet) {
+                  if (onOpenDirectMessaging) {
+                    onOpenDirectMessaging();
+                  } else {
+                    onSelectModule('raw_materials');
+                  }
                   return;
                 }
-                if (onOpenDirectMessaging) {
-                  onOpenDirectMessaging();
-                } else {
-                  onSelectModule('raw_materials');
+
+                // Dynamic check if not met at login
+                try {
+                  const res = await checkStudentMarketRequirements(currentUser);
+                  if (res.met) {
+                    setStoredMarketRequirementsMet(currentUser.id, true);
+                    setIsMarketRequirementsMetInBrowser(true);
+                    if (onOpenDirectMessaging) {
+                      onOpenDirectMessaging();
+                    } else {
+                      onSelectModule('raw_materials');
+                    }
+                  } else {
+                    setTelecomContracts(res.details.telecomContracts);
+                    setOfficeOrders(res.details.officeOrders);
+                    setAcquisitions(res.details.acquisitions);
+                    setElectricityContracts(res.details.electricityContracts);
+                    setPurchasedVehicles(res.details.purchasedVehicles);
+                    setEmployees(res.details.employees);
+                    setShowMarketLockModal(true);
+                  }
+                } catch (e) {
+                  setShowMarketLockModal(true);
                 }
               }}
               className="relative flex items-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-200 px-3 py-1.5 rounded-xl border border-indigo-500/40 transition cursor-pointer group shadow-sm"
