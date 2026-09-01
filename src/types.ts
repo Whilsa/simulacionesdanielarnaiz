@@ -329,8 +329,6 @@ export interface RawMaterialAnnouncement {
   sellerProvince?: string;
   isDesTornillo?: boolean;
   priceAlert?: PriceAlertFeedback;
-  acceptsPromissoryNotes?: boolean;
-  promissoryTerms?: number[]; // e.g. [30, 60, 90]
 }
 
 export interface RawMaterialOrderItem {
@@ -413,18 +411,11 @@ export interface RawMaterialOrder {
   note?: string;
   isDirectMessageInvoice?: boolean;
   isChatInvoice?: boolean;
-  isDirectTransfer?: boolean;
-  noInvoice?: boolean;
   source?: string;
   subtotalAmount?: number;
   vatRate?: number;
   vatAmount?: number;
   unitPrice?: number;
-  paymentMethod?: 'contado' | 'pagare';
-  promissoryDaysTerm?: number;
-  promissoryDueDate?: string;
-  promissoryNoteNumber?: string;
-  promissoryNoteData?: PromissoryNoteData;
 }
 
 export interface PromissoryNoteData {

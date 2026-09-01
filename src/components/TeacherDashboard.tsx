@@ -9,8 +9,7 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle,
-  ArrowUpDown, ArrowUp, ArrowDown
+  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle
 } from 'lucide-react';
 import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, RawMaterialAnnouncement, RawMaterialOrder } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
@@ -59,10 +58,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
-  const [studentInventories, setStudentInventories] = useState<{ [studentId: string]: any }>({});
   const [searchQuery, setSearchQuery] = useState('');
-  const [studentSortField, setStudentSortField] = useState<'name' | 'level' | null>(null);
-  const [studentSortOrder, setStudentSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Raw Materials Teacher Management State
   const [rmAnnouncements, setRmAnnouncements] = useState<RawMaterialAnnouncement[]>([]);
@@ -202,14 +198,13 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
   const fetchData = async () => {
     try {
-      const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes, invsRes] = await Promise.all([
+      const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes] = await Promise.all([
         fetch('/users?role=teacher'),
         fetch('/transfers?role=teacher'),
         fetch('/logs'),
         fetch('/api/supabase-status').catch(() => null),
         fetch('/api/raw-materials/announcements').catch(() => null),
-        fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null),
-        fetch('/api/teacher/students-inventory').catch(() => null)
+        fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null)
       ]);
 
       let usersList: User[] = [];
@@ -242,10 +237,6 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       if (ordRes && ordRes.ok) {
         const ordData = await ordRes.json();
         if (ordData.orders) setRmOrders(ordData.orders);
-      }
-      if (invsRes && invsRes.ok) {
-        const invsData = await invsRes.json();
-        if (invsData.inventories) setStudentInventories(invsData.inventories);
       }
 
       setUsers(usersList);
@@ -753,44 +744,13 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }));
   };
 
-  const handleToggleStudentSort = (field: 'name' | 'level') => {
-    if (studentSortField === field) {
-      if (studentSortOrder === 'asc') {
-        setStudentSortOrder('desc');
-      } else {
-        setStudentSortField(null);
-        setStudentSortOrder('asc');
-      }
-    } else {
-      setStudentSortField(field);
-      setStudentSortOrder('asc');
-    }
-  };
-
   const filteredStudents = users
     .filter(u => u.role === 'student')
     .filter(u => 
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) || 
       u.accountNumber.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-    .sort((a, b) => {
-      if (!studentSortField) return 0;
-      if (studentSortField === 'name') {
-        const cmp = a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
-        return studentSortOrder === 'asc' ? cmp : -cmp;
-      }
-      if (studentSortField === 'level') {
-        const levelA = a.level || 1;
-        const levelB = b.level || 1;
-        if (levelA !== levelB) {
-          return studentSortOrder === 'asc' ? levelA - levelB : levelB - levelA;
-        }
-        // Secondary alphabetical sort when levels are equal
-        return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
-      }
-      return 0;
-    });
+    );
 
   const totalMoneySupply = users
     .filter(u => u.role === 'student')
@@ -1040,240 +1000,97 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[1100px]">
+                    <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50/70">
-                          <th className="py-3.5 px-3">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStudentSort('name')}
-                              className="flex items-center gap-1.5 hover:text-slate-900 transition-colors uppercase font-bold text-xs group cursor-pointer focus:outline-none"
-                              title={`Ordenar por Alumno (${studentSortField === 'name' ? (studentSortOrder === 'asc' ? 'A-Z (clic para Z-A)' : 'Z-A (clic para quitar orden)') : 'A-Z'})`}
-                            >
-                              <span>Alumno</span>
-                              {studentSortField === 'name' ? (
-                                studentSortOrder === 'asc' ? (
-                                  <ArrowUp className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                ) : (
-                                  <ArrowDown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                )
-                              ) : (
-                                <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 opacity-60 group-hover:opacity-100 shrink-0" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="py-3.5 px-2">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStudentSort('level')}
-                              className="flex items-center gap-1.5 hover:text-slate-900 transition-colors uppercase font-bold text-xs group cursor-pointer focus:outline-none"
-                              title={`Ordenar por Nivel (${studentSortField === 'level' ? (studentSortOrder === 'asc' ? '1-3 ascendente (clic para 3-1 descendente)' : '3-1 descendente (clic para quitar orden)') : '1-3 ascendente'})`}
-                            >
-                              <span>Nivel</span>
-                              {studentSortField === 'level' ? (
-                                studentSortOrder === 'asc' ? (
-                                  <ArrowUp className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                ) : (
-                                  <ArrowDown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                )
-                              ) : (
-                                <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 opacity-60 group-hover:opacity-100 shrink-0" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="py-3.5 px-2">Acceso</th>
-                          <th className="py-3.5 px-2">IBAN</th>
-                          <th className="py-3.5 px-3 text-right">Saldo (€)</th>
-
-                          {/* Columnas de Existencias: Materias Primas */}
-                          <th className="py-3.5 px-2.5 text-right bg-amber-50/40 border-l border-amber-200/60" title="Fragmentos de hierro (Materia Prima)">
-                            <div className="flex flex-col items-end">
-                              <span className="text-amber-900 font-bold">Hierro</span>
-                              <span className="text-[10px] text-amber-700 font-normal lowercase">kg (mp)</span>
-                            </div>
-                          </th>
-                          <th className="py-3.5 px-2.5 text-right bg-amber-50/40" title="Pellets de plástico (Materia Prima)">
-                            <div className="flex flex-col items-end">
-                              <span className="text-amber-900 font-bold">Plástico</span>
-                              <span className="text-[10px] text-amber-700 font-normal lowercase">kg (mp)</span>
-                            </div>
-                          </th>
-                          <th className="py-3.5 px-2.5 text-right bg-amber-50/40 border-r border-amber-200/60" title="Pegamento epoxi (Materia Prima)">
-                            <div className="flex flex-col items-end">
-                              <span className="text-amber-900 font-bold">Epoxi</span>
-                              <span className="text-[10px] text-amber-700 font-normal lowercase">kg (mp)</span>
-                            </div>
-                          </th>
-
-                          {/* Columnas de Existencias: Mercaderías */}
-                          <th className="py-3.5 px-2.5 text-right bg-indigo-50/40 border-l border-indigo-200/60" title="Varillas fabricadas punta estrella y plana">
-                            <div className="flex flex-col items-end">
-                              <span className="text-indigo-900 font-bold">Varillas</span>
-                              <span className="text-[10px] text-indigo-700 font-normal lowercase">uds (merc.)</span>
-                            </div>
-                          </th>
-                          <th className="py-3.5 px-2.5 text-right bg-emerald-50/40 border-r border-emerald-200/60" title="Destornilladores terminados y ensamblados">
-                            <div className="flex flex-col items-end">
-                              <span className="text-emerald-900 font-bold">Destornilladores</span>
-                              <span className="text-[10px] text-emerald-700 font-normal lowercase">uds (merc.)</span>
-                            </div>
-                          </th>
-
-                          <th className="py-3.5 px-3 text-center">Acciones</th>
+                        <tr className="border-b border-slate-100 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          <th className="py-4 px-2">Alumno</th>
+                          <th className="py-4 px-2">Clasificación / nivel</th>
+                          <th className="py-4 px-2">Detalles de acceso</th>
+                          <th className="py-4 px-2">Número de cuenta (IBAN)</th>
+                          <th className="py-4 px-2 text-right">Saldo actual</th>
+                          <th className="py-4 px-2 text-center">Acciones</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredStudents.map((student) => {
-                          const sInv = studentInventories[student.id];
-                          const ironKg = sInv?.rawMaterials?.fragmentos_hierro_kg ?? sInv?.ironKg ?? 0;
-                          const plasticKg = sInv?.rawMaterials?.pellets_plastico_kg ?? sInv?.plasticKg ?? 0;
-                          const epoxiKg = sInv?.rawMaterials?.pegamento_epoxi_kg ?? sInv?.epoxiKg ?? 0;
-
-                          const totalRods = sInv?.producedGoods?.varillas_punta ?? sInv?.producedRodsUnits ?? 0;
-                          const starRods = sInv?.producedGoods?.varillas_punta_estrella ?? sInv?.starRodsUnits ?? 0;
-                          const flatRods = sInv?.producedGoods?.varillas_punta_plana ?? sInv?.flatRodsUnits ?? 0;
-
-                          const totalScrewdrivers = sInv?.producedGoods?.productos_ensamblados ?? sInv?.producedScrewdriversUnits ?? 0;
-                          const starScrewdrivers = sInv?.producedGoods?.destornilladores_punta_estrella ?? sInv?.starScrewdriversUnits ?? 0;
-                          const flatScrewdrivers = sInv?.producedGoods?.destornilladores_punta_plana ?? sInv?.flatScrewdriversUnits ?? 0;
-
-                          return (
-                            <tr key={student.id} className="hover:bg-slate-50/60 transition-all text-sm text-slate-700">
-                              <td className="py-3.5 px-3">
-                                <div>
-                                  <p className="font-bold text-slate-950 font-display">{student.name}</p>
-                                  <p className="text-xs text-slate-400">ID: {student.id}</p>
+                      <tbody className="divide-y divide-slate-50">
+                        {filteredStudents.map((student) => (
+                          <tr key={student.id} className="hover:bg-slate-50/50 transition-all text-sm text-slate-700">
+                            <td className="py-4 px-2">
+                              <div>
+                                <p className="font-bold text-slate-950 font-display">{student.name}</p>
+                                <p className="text-xs text-slate-400">ID: {student.id}</p>
+                              </div>
+                            </td>
+                            <td className="py-4 px-2">
+                              <select
+                                value={student.level || 1}
+                                onChange={(e) => handleUpdateStudentLevel(student.id, Number(e.target.value))}
+                                className="bg-slate-100 hover:bg-white text-slate-900 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                              >
+                                <option value={1}>Nivel 1 (Materias primas)</option>
+                                <option value={2}>Nivel 2</option>
+                                <option value={3}>Nivel 3</option>
+                              </select>
+                            </td>
+                            <td className="py-4 px-2">
+                              <div className="space-y-1">
+                                <p className="text-xs">
+                                  <span className="font-semibold text-slate-400">Usuario:</span>{' '}
+                                  <span className="font-mono bg-slate-100 px-1 rounded font-medium text-slate-800">{student.username}</span>
+                                </p>
+                                <div className="text-xs flex items-center space-x-1.5">
+                                  <span className="font-semibold text-slate-400">Clave:</span>{' '}
+                                  <span className="font-mono bg-slate-100 px-1 rounded font-medium text-slate-800">
+                                    {visiblePasswords[student.id] ? student.password : '••••••'}
+                                  </span>
+                                  <button
+                                    onClick={() => togglePasswordVisibility(student.id)}
+                                    className="p-0.5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                                    title="Mostrar/Ocultar contraseña"
+                                  >
+                                    {visiblePasswords[student.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                  </button>
                                 </div>
-                              </td>
-                              <td className="py-3.5 px-2">
-                                <select
-                                  value={student.level || 1}
-                                  onChange={(e) => handleUpdateStudentLevel(student.id, Number(e.target.value))}
-                                  className="bg-slate-100 hover:bg-white text-slate-900 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                              </div>
+                            </td>
+                            <td className="py-4 px-2">
+                              <span className="font-mono text-xs bg-amber-50/50 text-amber-800 px-2 py-1 rounded-md font-semibold tracking-tight border border-amber-50/50">
+                                {student.accountNumber}
+                              </span>
+                            </td>
+                            <td className="py-4 px-2 text-right">
+                              <span className="font-mono font-bold text-slate-900 text-base">
+                                {formatNumber(student.balance)} €
+                              </span>
+                            </td>
+                            <td className="py-4 px-2">
+                              <div className="flex justify-center items-center space-x-2">
+                                <button
+                                  onClick={() => handleOpenEditUser(student)}
+                                  className="flex items-center space-x-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                  title="Editar nombre, usuario y contraseña"
                                 >
-                                  <option value={1}>Nivel 1 (Materias primas)</option>
-                                  <option value={2}>Nivel 2</option>
-                                  <option value={3}>Nivel 3</option>
-                                </select>
-                              </td>
-                              <td className="py-3.5 px-2">
-                                <div className="space-y-1">
-                                  <p className="text-xs">
-                                    <span className="font-semibold text-slate-400">Usuario:</span>{' '}
-                                    <span className="font-mono bg-slate-100 px-1 rounded font-medium text-slate-800">{student.username}</span>
-                                  </p>
-                                  <div className="text-xs flex items-center space-x-1.5">
-                                    <span className="font-semibold text-slate-400">Clave:</span>{' '}
-                                    <span className="font-mono bg-slate-100 px-1 rounded font-medium text-slate-800">
-                                      {visiblePasswords[student.id] ? student.password : '••••••'}
-                                    </span>
-                                    <button
-                                      onClick={() => togglePasswordVisibility(student.id)}
-                                      className="p-0.5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                                      title="Mostrar/Ocultar contraseña"
-                                    >
-                                      {visiblePasswords[student.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                                    </button>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="py-3.5 px-2">
-                                <span className="font-mono text-xs bg-amber-50/60 text-amber-900 px-2 py-1 rounded-md font-semibold tracking-tight border border-amber-200/60">
-                                  {student.accountNumber}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-3 text-right">
-                                <span className="font-mono font-bold text-slate-900 text-sm">
-                                  {formatNumber(student.balance)} €
-                                </span>
-                              </td>
-
-                              {/* Existencias: Hierro (MP) */}
-                              <td className="py-3.5 px-2.5 text-right bg-amber-50/20 border-l border-amber-200/50 whitespace-nowrap">
-                                <div className="inline-flex items-center gap-1 font-mono text-xs font-semibold text-slate-900 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-2xs">
-                                  <span>{formatNumber(ironKg)}</span>
-                                  <span className="text-[10px] text-amber-700 font-medium">kg</span>
-                                </div>
-                              </td>
-
-                              {/* Existencias: Plástico (MP) */}
-                              <td className="py-3.5 px-2.5 text-right bg-amber-50/20 whitespace-nowrap">
-                                <div className="inline-flex items-center gap-1 font-mono text-xs font-semibold text-slate-900 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-2xs">
-                                  <span>{formatNumber(plasticKg)}</span>
-                                  <span className="text-[10px] text-amber-700 font-medium">kg</span>
-                                </div>
-                              </td>
-
-                              {/* Existencias: Epoxi (MP) */}
-                              <td className="py-3.5 px-2.5 text-right bg-amber-50/20 border-r border-amber-200/50 whitespace-nowrap">
-                                <div className="inline-flex items-center gap-1 font-mono text-xs font-semibold text-slate-900 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-2xs">
-                                  <span>{formatNumber(epoxiKg)}</span>
-                                  <span className="text-[10px] text-amber-700 font-medium">kg</span>
-                                </div>
-                              </td>
-
-                              {/* Existencias: Varillas (Mercadería) */}
-                              <td className="py-3.5 px-2.5 text-right bg-indigo-50/20 border-l border-indigo-200/50 whitespace-nowrap">
-                                <div className="flex flex-col items-end">
-                                  <div className="inline-flex items-center gap-1 font-mono text-xs font-bold text-indigo-950 bg-white px-2 py-1 rounded-md border border-indigo-200 shadow-2xs">
-                                    <span>{formatNumber(totalRods)}</span>
-                                    <span className="text-[10px] text-indigo-600 font-medium">u.</span>
-                                  </div>
-                                  {(starRods > 0 || flatRods > 0) && (
-                                    <div className="text-[9px] text-slate-500 mt-0.5 font-medium flex gap-1 justify-end">
-                                      {starRods > 0 && <span title="Varillas estrella" className="bg-indigo-50/80 px-1 rounded">★{formatNumber(starRods)}</span>}
-                                      {flatRods > 0 && <span title="Varillas plana" className="bg-indigo-50/80 px-1 rounded">▬{formatNumber(flatRods)}</span>}
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-
-                              {/* Existencias: Destornilladores (Mercadería) */}
-                              <td className="py-3.5 px-2.5 text-right bg-emerald-50/20 border-r border-emerald-200/50 whitespace-nowrap">
-                                <div className="flex flex-col items-end">
-                                  <div className="inline-flex items-center gap-1 font-mono text-xs font-bold text-emerald-950 bg-white px-2 py-1 rounded-md border border-emerald-200 shadow-2xs">
-                                    <span>{formatNumber(totalScrewdrivers)}</span>
-                                    <span className="text-[10px] text-emerald-600 font-medium">u.</span>
-                                  </div>
-                                  {(starScrewdrivers > 0 || flatScrewdrivers > 0) && (
-                                    <div className="text-[9px] text-slate-500 mt-0.5 font-medium flex gap-1 justify-end">
-                                      {starScrewdrivers > 0 && <span title="Destornilladores estrella" className="bg-emerald-50/80 px-1 rounded">★{formatNumber(starScrewdrivers)}</span>}
-                                      {flatScrewdrivers > 0 && <span title="Destornilladores plana" className="bg-emerald-50/80 px-1 rounded">▬{formatNumber(flatScrewdrivers)}</span>}
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-
-                              <td className="py-3.5 px-3">
-                                <div className="flex justify-center items-center space-x-2">
-                                  <button
-                                    onClick={() => handleOpenEditUser(student)}
-                                    className="flex items-center space-x-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                                    title="Editar nombre, usuario y contraseña"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                    <span>Editar</span>
-                                  </button>
-                                  <button
-                                    onClick={() => setSelectedUser(student)}
-                                    className="flex items-center space-x-1 bg-slate-100 hover:bg-amber-50 text-slate-700 hover:text-amber-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                                    title="Añadir o quitar saldo"
-                                  >
-                                    <Coins className="w-3.5 h-3.5" />
-                                    <span>Fondos</span>
-                                  </button>
-                                  <button
-                                    onClick={() => { setDeleteTarget(student); setDeleteError(''); }}
-                                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
-                                    title="Eliminar cuenta"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Editar</span>
+                                </button>
+                                <button
+                                  onClick={() => setSelectedUser(student)}
+                                  className="flex items-center space-x-1 bg-slate-100 hover:bg-amber-50 text-slate-700 hover:text-amber-700 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                  title="Añadir o quitar saldo"
+                                >
+                                  <Coins className="w-3.5 h-3.5" />
+                                  <span>Fondos</span>
+                                </button>
+                                <button
+                                  onClick={() => { setDeleteTarget(student); setDeleteError(''); }}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                  title="Eliminar cuenta"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>

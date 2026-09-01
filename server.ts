@@ -2740,7 +2740,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
           estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
           deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
-          invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined),
+          invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
           invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
           items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
           sellerId: row.seller_id ? String(row.seller_id) : undefined,
@@ -4237,67 +4237,12 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
   }
 }
 
-function cleanupErroneousAugustPayrolls(db: DatabaseSchema) {
-  if (!db) return;
-  if (!db.payrollRecords) db.payrollRecords = [];
-  if (!db.transfers) db.transfers = [];
-  if (!db.taxObligations) db.taxObligations = [];
-
-  // Find any payroll records for 8/2026 (created prematurely before September 1st)
-  const badPayrollIds = new Set<string>();
-  const refundsByStudent: { [studentId: string]: number } = {};
-
-  for (const pr of db.payrollRecords) {
-    if (pr.periodMonth === 8 && pr.periodYear === 2026) {
-      badPayrollIds.add(pr.id);
-      refundsByStudent[pr.studentId] = (refundsByStudent[pr.studentId] || 0) + (pr.totalNetSalaryPaid || 0);
-    }
-  }
-
-  // Also find bad transfers with concept of lumped payroll for 8/2026 or receiverId 'empleados-nomina'
-  const badTransferIds = new Set<string>();
-  for (const tx of db.transfers) {
-    if (
-      (tx.concept && (tx.concept.includes('nóminas del mes 8/2026') || tx.concept.includes('nominas del mes 8/2026') || tx.concept.includes('nóminas del mes 08/2026'))) ||
-      tx.receiverId === 'empleados-nomina'
-    ) {
-      badTransferIds.add(tx.id);
-    }
-  }
-
-  if (badPayrollIds.size > 0 || badTransferIds.size > 0) {
-    console.log(`[Payroll Cleanup] Found ${badPayrollIds.size} bad Aug 2026 payroll records and ${badTransferIds.size} lumped transfers. Restoring student balances...`);
-
-    for (const [studentId, refundAmt] of Object.entries(refundsByStudent)) {
-      const student = db.users.find(u => u.id === studentId);
-      if (student && refundAmt > 0) {
-        student.balance = Math.round((student.balance + refundAmt) * 100) / 100;
-        console.log(`[Payroll Cleanup] Restored ${refundAmt} € to student ${student.name} (${student.id}). Current balance: ${student.balance} €`);
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-      }
-    }
-
-    db.payrollRecords = db.payrollRecords.filter(pr => !badPayrollIds.has(pr.id));
-    db.transfers = db.transfers.filter(tx => !badTransferIds.has(tx.id));
-    db.taxObligations = db.taxObligations.filter(to => {
-      if (to.payrollRecordId && badPayrollIds.has(to.payrollRecordId)) return false;
-      if (to.concept && (to.concept.includes('Mes 8/2026') || to.concept.includes('Mes 8 / 2026') || to.concept.includes('Mes 08/2026'))) return false;
-      return true;
-    });
-
-    safeDbQuery('DELETE FROM registros_nomina WHERE mes = 8 AND anio = 2026').catch(e => console.error(e));
-    safeDbQuery("DELETE FROM movimientos WHERE concepto ILIKE '%nóminas del mes 8/2026%' OR concepto ILIKE '%nominas del mes 8/2026%'").catch(e => console.error(e));
-    safeDbQuery("DELETE FROM obligaciones_fiscales WHERE concepto ILIKE '%Mes 8/2026%' OR concepto ILIKE '%Mes 08/2026%'").catch(e => console.error(e));
-  }
-}
-
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
   if (!db.taxObligations) db.taxObligations = [];
   if (!db.jobListings) db.jobListings = [];
 
-  cleanupErroneousAugustPayrolls(db);
   normalizeAndFixTaxObligations(db);
 
   const now = new Date();
@@ -4305,17 +4250,8 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   const currentMonth = now.getMonth() + 1; // 1 - 12
   const currentYear = now.getFullYear();
 
-  // 1. Process Payroll on Day 1 of following month (for the preceding completed month)
-  // Las nóminas de cada mes se pagan el día 1 del mes siguiente mediante transferencia individual a cada empleado.
-  let prevMonth = currentMonth - 1;
-  let prevYear = currentYear;
-  if (prevMonth === 0) {
-    prevMonth = 12;
-    prevYear = currentYear - 1;
-  }
-
-  // On day 1 or later of current month, ensure previous completed month's payroll is processed
-  if (currentDay >= 1) {
+  // 1. Process Payroll on day 26 or later
+  if (currentDay >= 26) {
     const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
 
     for (const studentId of studentsWithEmployees) {
@@ -4323,7 +4259,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       if (!student) continue;
 
       const alreadyProcessed = db.payrollRecords.some(
-        pr => pr.studentId === studentId && pr.periodMonth === prevMonth && pr.periodYear === prevYear
+        pr => pr.studentId === studentId && pr.periodMonth === currentMonth && pr.periodYear === currentYear
       );
 
       if (!alreadyProcessed) {
@@ -4331,200 +4267,164 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         if (myEmployees.length === 0) continue;
 
         let totalGross = 0;
-        let totalEmployeeIRPF = 0;
-        let totalEmployeeSS = 0;
-        let totalNetPaid = 0;
-        let totalCompanySS = 0;
         let isProportionalPayroll = false;
-        let activeEmployeesCount = 0;
-
-        const daysInPeriod = new Date(prevYear, prevMonth, 0).getDate();
-        const payrollPayDate = new Date(currentYear, currentMonth - 1, 1, 9, 0, 0);
 
         for (const emp of myEmployees) {
-          let empGross = 0;
-          let empIsProportional = false;
-          let workedDays = daysInPeriod;
-
           if (emp.hireDate) {
             const parts = emp.hireDate.split('T')[0].split('-');
             const hireYear = parseInt(parts[0], 10);
             const hireMonth = parseInt(parts[1], 10);
             const hireDay = parseInt(parts[2], 10);
 
-            if (hireYear > prevYear || (hireYear === prevYear && hireMonth > prevMonth)) {
-              // Employee was hired after prevMonth (e.g. hired in August, checking July) -> did not work in prevMonth
-              continue;
-            } else if (hireYear === prevYear && hireMonth === prevMonth) {
-              empIsProportional = true;
-              workedDays = Math.max(1, daysInPeriod - hireDay + 1);
-              empGross = (emp.grossSalaryMonthly / daysInPeriod) * workedDays;
-            } else {
-              empGross = emp.grossSalaryMonthly;
+            if (hireMonth === currentMonth && hireYear === currentYear) {
+              isProportionalPayroll = true;
+              const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+              totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+            } else if (hireYear < currentYear || (hireYear === currentYear && hireMonth < currentMonth)) {
+              totalGross += emp.grossSalaryMonthly;
             }
           } else {
-            empGross = emp.grossSalaryMonthly;
+            totalGross += emp.grossSalaryMonthly;
           }
-
-          empGross = Math.round(empGross * 100) / 100;
-          if (empGross <= 0) continue;
-
-          if (empIsProportional) isProportionalPayroll = true;
-
-          const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
-          const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
-          const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
-          const eSSComp = Math.round(empGross * 0.75 * 100) / 100;
-
-          // Individual payment to this employee
-          student.balance = Math.round((student.balance - eNet) * 100) / 100;
-
-          const txId = generateId('tx');
-          const empName = emp.employeeName || (emp as any).name || 'Empleado/a';
-          const empId = emp.id || generateId('emp');
-
-          let hash = 0;
-          for (let i = 0; i < empId.length; i++) hash = (hash << 5) - hash + empId.charCodeAt(i);
-          const empAccountNum = (emp as any).accountNumber || `ES${Math.abs(hash) % 900000000000000000 + 100000000000000000}`;
-
-          const transfer: Transfer = {
-            id: txId,
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: empId,
-            receiverName: empName,
-            receiverAccount: empAccountNum,
-            amount: eNet,
-            concept: `Abono de nómina neta Mes ${prevMonth}/${prevYear} - ${empName}${emp.role ? ` (${emp.role})` : ''}`,
-            timestamp: payrollPayDate.toISOString()
-          };
-          db.transfers.unshift(transfer);
-          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', eNet, payrollPayDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-          totalGross += empGross;
-          totalEmployeeIRPF += eIRPF;
-          totalEmployeeSS += eSSEmp;
-          totalNetPaid += eNet;
-          totalCompanySS += eSSComp;
-          activeEmployeesCount++;
         }
 
-        if (activeEmployeesCount > 0) {
-          totalGross = Math.round(totalGross * 100) / 100;
-          totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
-          totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
-          totalNetPaid = Math.round(totalNetPaid * 100) / 100;
-          totalCompanySS = Math.round(totalCompanySS * 100) / 100;
+        totalGross = Math.round(totalGross * 100) / 100;
+        const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
+        const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
+        const totalNetPaid = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
+        const totalCompanySS = Math.round(totalGross * 0.75 * 100) / 100;
 
-          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+        student.balance = Math.round((student.balance - totalNetPaid) * 100) / 100;
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
-          const prId = generateId('payroll');
-          const newPR: PayrollRecord = {
-            id: prId,
-            studentId: student.id,
-            studentName: student.name,
-            payrollDate: payrollPayDate.toISOString(),
-            periodMonth: prevMonth,
-            periodYear: prevYear,
-            employeeCount: activeEmployeesCount,
-            totalGrossSalary: totalGross,
-            totalEmployeeSS: totalEmployeeSS,
-            totalEmployeeIRPF: totalEmployeeIRPF,
-            totalNetSalaryPaid: totalNetPaid,
-            totalCompanySS: totalCompanySS,
-            isProportional: isProportionalPayroll,
-            status: 'paid',
-            createdAt: now.toISOString()
-          };
-          db.payrollRecords.push(newPR);
-          syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+        const txId = generateId('tx');
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'empleados-nomina',
+          receiverName: 'Personal empleado / nóminas',
+          receiverAccount: 'ES000000000000000000',
+          amount: totalNetPaid,
+          concept: `Pago automático de nóminas del mes ${currentMonth}/${currentYear} (${myEmployees.length} empleados)`,
+          timestamp: now.toISOString()
+        };
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalNetPaid, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
-          // TGSS SS due date: 20th of current month (month following prevMonth)
-          const ssDueDateObj = new Date(currentYear, currentMonth - 1, 20, 9, 0, 0);
+        const prId = generateId('payroll');
+        const newPR: PayrollRecord = {
+          id: prId,
+          studentId: student.id,
+          studentName: student.name,
+          payrollDate: now.toISOString(),
+          periodMonth: currentMonth,
+          periodYear: currentYear,
+          employeeCount: myEmployees.length,
+          totalGrossSalary: totalGross,
+          totalEmployeeSS: totalEmployeeSS,
+          totalEmployeeIRPF: totalEmployeeIRPF,
+          totalNetSalaryPaid: totalNetPaid,
+          totalCompanySS: totalCompanySS,
+          isProportional: isProportionalPayroll,
+          status: 'paid',
+          createdAt: now.toISOString()
+        };
+        db.payrollRecords.push(newPR);
+        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
 
-          // AEAT IRPF due date: 15th of first month of following quarter of prevMonth/prevYear
-          let qNum = 1;
-          let irpfDueDateObj: Date;
-          if (prevMonth >= 10) {
-            qNum = 4;
-            irpfDueDateObj = new Date(prevYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
-          } else if (prevMonth >= 7) {
-            qNum = 3;
-            irpfDueDateObj = new Date(prevYear, 9, 15, 9, 0, 0); // Oct 15
-          } else if (prevMonth >= 4) {
-            qNum = 2;
-            irpfDueDateObj = new Date(prevYear, 6, 15, 9, 0, 0); // Jul 15
-          } else {
-            qNum = 1;
-            irpfDueDateObj = new Date(prevYear, 3, 15, 9, 0, 0); // Apr 15
-          }
+        // TGSS SS due date: 20th of following month
+        let nextMonth = currentMonth + 1;
+        let nextYear = currentYear;
+        if (nextMonth > 12) {
+          nextMonth = 1;
+          nextYear += 1;
+        }
+        const ssDueDateObj = new Date(nextYear, nextMonth - 1, 20, 9, 0, 0);
 
-          const ssEmpObl: TaxObligation = {
+        // AEAT IRPF due date: 15th of first month of following quarter
+        let qNum = 1;
+        let irpfDueDateObj: Date;
+        if (currentMonth >= 10) {
+          qNum = 4;
+          irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+        } else if (currentMonth >= 7) {
+          qNum = 3;
+          irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0); // Oct 15
+        } else if (currentMonth >= 4) {
+          qNum = 2;
+          irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0); // Jul 15
+        } else {
+          qNum = 1;
+          irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0); // Apr 15
+        }
+
+        const ssEmpObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_employee',
+          concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${currentMonth}/${currentYear}`,
+          amount: totalEmployeeSS,
+          dueDate: ssDueDateObj.toISOString(),
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        const ssCompObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_company',
+          concept: `Aportación patronal Seguridad Social (75%) Mes ${currentMonth}/${currentYear}`,
+          amount: totalCompanySS,
+          dueDate: ssDueDateObj.toISOString(),
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        db.taxObligations.push(ssEmpObl, ssCompObl);
+        syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
+        syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+        const existingIrpf = db.taxObligations.find(t => 
+          t.studentId === student.id && 
+          t.type === 'irpf' && 
+          t.status === 'pendiente' && 
+          new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
+          new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
+        );
+
+        if (existingIrpf) {
+          existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
+          existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
+          syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
+        } else {
+          const irpfObl: TaxObligation = {
             id: generateId('tax'),
             studentId: student.id,
             studentName: student.name,
-            type: 'ss_employee',
-            concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${prevMonth}/${prevYear}`,
-            amount: totalEmployeeSS,
-            dueDate: ssDueDateObj.toISOString(),
+            type: 'irpf',
+            concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`,
+            amount: totalEmployeeIRPF,
+            dueDate: irpfDueDateObj.toISOString(),
             status: 'pendiente',
             payrollRecordId: prId
           };
-
-          const ssCompObl: TaxObligation = {
-            id: generateId('tax'),
-            studentId: student.id,
-            studentName: student.name,
-            type: 'ss_company',
-            concept: `Aportación patronal Seguridad Social (75%) Mes ${prevMonth}/${prevYear}`,
-            amount: totalCompanySS,
-            dueDate: ssDueDateObj.toISOString(),
-            status: 'pendiente',
-            payrollRecordId: prId
-          };
-
-          db.taxObligations.push(ssEmpObl, ssCompObl);
-          syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
-          syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
-
-          const existingIrpf = db.taxObligations.find(t => 
-            t.studentId === student.id && 
-            t.type === 'irpf' && 
-            t.status === 'pendiente' && 
-            new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
-            new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
-          );
-
-          if (existingIrpf) {
-            existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
-            existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${prevYear}`;
-            syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
-          } else {
-            const irpfObl: TaxObligation = {
-              id: generateId('tax'),
-              studentId: student.id,
-              studentName: student.name,
-              type: 'irpf',
-              concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${prevYear}`,
-              amount: totalEmployeeIRPF,
-              dueDate: irpfDueDateObj.toISOString(),
-              status: 'pendiente',
-              payrollRecordId: prId
-            };
-            db.taxObligations.push(irpfObl);
-            syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
-          }
-
-          db.systemLogs.unshift({
-            id: generateId('log'),
-            action: 'PAYROLL_AUTOMATED',
-            details: `Nóminas del mes ${prevMonth}/${prevYear} pagadas automáticamente el día 1 para ${student.name}: ${activeEmployeesCount} transferencias individuales realizadas por un líquido total de ${totalNetPaid}€. Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}€) y Seguridad Social (Empleado: ${totalEmployeeSS}€, Empresa: ${totalCompanySS}€).`,
-            timestamp: now.toISOString(),
-            studentId: student.id,
-            studentName: student.name
-          });
+          db.taxObligations.push(irpfObl);
+          syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
         }
+
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'PAYROLL_AUTOMATED',
+          details: `Nóminas pagadas automáticamente para ${student.name}: Líquido ${totalNetPaid}€ (${myEmployees.length} empleados). Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}€) y Seguridad Social (Empleado: ${totalEmployeeSS}€, Empresa: ${totalCompanySS}€).`,
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
       }
     }
   }
@@ -5180,62 +5080,6 @@ function readDb(): DatabaseSchema {
     }
     if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
     if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
-
-    // Ensure all existing raw material orders have immutable invoicedAt and invoiceNumber ONLY for actual invoices
-    if (Array.isArray(db.rawMaterialOrders)) {
-      for (const ord of db.rawMaterialOrders) {
-        if (!ord) continue;
-
-        // Never generate or assign invoices for direct transfers between students or zero-amount inventory deliveries
-        if (
-          ord.isDirectTransfer === true ||
-          ord.noInvoice === true ||
-          (ord.announcementId && String(ord.announcementId).startsWith('tr-')) ||
-          (ord.totalAmount === 0 && ord.basePrice === 0) ||
-          (ord.note && String(ord.note).includes('Envío directo de existencias'))
-        ) {
-          delete ord.invoiceNumber;
-          delete ord.invoicedAt;
-          continue;
-        }
-
-        // For orders where a student seller ships/sells to a student buyer: do NOT generate invoice for buyer on delivery
-        const isStudentSeller = ord.sellerId && ord.sellerId !== 'proveedor-materia-prima' && ord.sellerId !== 'profesor-1' && ord.sellerId !== 'LOGISTICA_EXTERIOR' && ord.sellerId !== 'SUMINISTROS_ESTACION_SERVICIO';
-        const isStudentBuyer = ord.studentId && ord.studentId !== 'profesor-1';
-        if (isStudentSeller && isStudentBuyer && ord.status !== 'facturado') {
-          delete ord.invoiceNumber;
-          delete ord.invoicedAt;
-          continue;
-        }
-
-        // When teacher buys from a student (e.g. Level 3 student), an automatic invoice MUST be generated and marked as 'facturado'
-        if (ord.studentId === 'profesor-1' && isStudentSeller) {
-          ord.status = 'facturado';
-          if (!ord.invoicedAt) ord.invoicedAt = ord.deliveredAt || ord.approvedAt || ord.requestedAt || new Date().toISOString();
-          if (!ord.invoiceNumber) {
-            let hash = 0;
-            const str = String(ord.id || ord.requestedAt || '1234');
-            for (let i = 0; i < str.length; i++) hash = (hash << 5) - hash + str.charCodeAt(i);
-            const num = Math.abs(hash) % 9000 + 1000;
-            ord.invoiceNumber = `FACT-2026-${num}`;
-          }
-        }
-
-        if (!ord.requestedAt) {
-          ord.requestedAt = ord.approvedAt || ord.deliveredAt || ord.invoicedAt || new Date().toISOString();
-        }
-        if (!ord.invoicedAt && (ord.status === 'facturado' || Boolean(ord.invoiceNumber))) {
-          ord.invoicedAt = ord.requestedAt || ord.approvedAt || ord.deliveredAt || new Date().toISOString();
-        }
-        if (!ord.invoiceNumber && ord.status === 'facturado') {
-          let hash = 0;
-          const str = String(ord.id || ord.requestedAt || '1234');
-          for (let i = 0; i < str.length; i++) hash = (hash << 5) - hash + str.charCodeAt(i);
-          const num = Math.abs(hash) % 9000 + 1000;
-          ord.invoiceNumber = `FACT-2026-${num}`;
-        }
-      }
-    }
 
     sanitizeDbStrings(db);
 
@@ -10215,7 +10059,7 @@ app.get('/api/raw-materials/announcements', (req, res) => {
 });
 
 app.post('/api/raw-materials/announcements', async (req, res) => {
-  const { materialType, title, presentation, unitWeightKg, isPallet, pricePerUnit, description, durationDays, stock, sellerId, sellerName, sellerLocation, sellerMunicipality, sellerProvince, isDesTornillo: rawIsDesTornillo, acceptsPromissoryNotes, promissoryTerms } = req.body;
+  const { materialType, title, presentation, unitWeightKg, isPallet, pricePerUnit, description, durationDays, stock, sellerId, sellerName, sellerLocation, sellerMunicipality, sellerProvince, isDesTornillo: rawIsDesTornillo } = req.body;
   const db = readDb();
   if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
 
@@ -10278,11 +10122,6 @@ app.post('/api/raw-materials/announcements', async (req, res) => {
     annStockValue = requestedStock;
   }
 
-  const finalAcceptsPromissory = acceptsPromissoryNotes !== undefined ? !!acceptsPromissoryNotes : (isDesTornilloVal || (user && user.level === 3));
-  const finalPromissoryTerms = Array.isArray(promissoryTerms) && promissoryTerms.length > 0
-    ? promissoryTerms.map(Number).filter(n => [30, 60, 90].includes(n))
-    : [30, 60, 90];
-
   const id = generateId('rm-ann');
   const newAnn: RawMaterialAnnouncement = {
     id,
@@ -10303,9 +10142,7 @@ app.post('/api/raw-materials/announcements', async (req, res) => {
     sellerLocation: finalSellerLoc,
     sellerMunicipality: finalSellerMun,
     sellerProvince: finalSellerProv,
-    isDesTornillo: isDesTornilloVal,
-    acceptsPromissoryNotes: finalAcceptsPromissory,
-    promissoryTerms: finalPromissoryTerms
+    isDesTornillo: isDesTornilloVal
   };
 
   db.rawMaterialAnnouncements.unshift(newAnn);
@@ -10330,7 +10167,7 @@ app.post('/api/raw-materials/announcements', async (req, res) => {
 
 app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], async (req, res) => {
   const { id } = req.params;
-  const { pricePerUnit, title, description, presentation, durationDays, stock, active, isDesTornillo, unitWeightKg, isPallet, materialType, sellerId, sellerName, sellerLevel, sellerLocation, sellerMunicipality, sellerProvince, acceptsPromissoryNotes, promissoryTerms } = req.body;
+  const { pricePerUnit, title, description, presentation, durationDays, stock, active, isDesTornillo, unitWeightKg, isPallet, materialType, sellerId, sellerName, sellerLevel, sellerLocation, sellerMunicipality, sellerProvince } = req.body;
   const db = readDb();
 
   if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
@@ -10408,11 +10245,6 @@ app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/ann
   if (sellerLocation !== undefined) ann.sellerLocation = sellerLocation;
   if (sellerMunicipality !== undefined) ann.sellerMunicipality = sellerMunicipality;
   if (sellerProvince !== undefined) ann.sellerProvince = sellerProvince;
-  if (acceptsPromissoryNotes !== undefined) ann.acceptsPromissoryNotes = !!acceptsPromissoryNotes;
-  if (promissoryTerms !== undefined && Array.isArray(promissoryTerms)) {
-    ann.promissoryTerms = promissoryTerms.map(Number).filter(n => [30, 60, 90].includes(n));
-  }
-  ann.updatedAt = new Date().toISOString();
   ann.updatedAt = new Date().toISOString();
 
   await syncRawMaterialAnnouncementToSupabase(ann);
@@ -10737,9 +10569,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
     pickupVehicleId,
     destinationNaveId: rawDestinationNaveId,
     destinationWarehouseIndex,
-    note,
-    paymentMethod,
-    promissoryDaysTerm
+    note
   } = req.body;
   const db = readDb();
 
@@ -11095,9 +10925,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
     deliveryAddress: deliveryAddressStr,
     destinationNaveId: finalDestinationNaveId,
     pickupVehicleId: pickupVehicleId || undefined,
-    status: (isTeacherBuyer && isStudentSeller) ? 'facturado' : (isAutoApproved ? 'entregado' : 'pendiente'),
-    invoiceNumber: (isAutoApproved || (isTeacherBuyer && isStudentSeller)) ? `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
-    invoicedAt: (isAutoApproved || (isTeacherBuyer && isStudentSeller)) ? now.toISOString() : undefined,
+    status: isAutoApproved ? 'entregado' : 'pendiente',
     requestedAt: now.toISOString(),
     approvedAt: isAutoApproved ? now.toISOString() : undefined,
     deliveredAt: isAutoApproved ? now.toISOString() : undefined,
@@ -11132,87 +10960,23 @@ app.post('/api/raw-materials/orders', (req, res) => {
     if (isTeacherBuyer && isStudentSeller) {
       const sellerUser = db.users.find(u => u.id === sellerId);
       if (sellerUser) {
-        const isPayingByPromissory = paymentMethod === 'pagare' || (promissoryDaysTerm !== undefined && [30, 60, 90].includes(Number(promissoryDaysTerm)));
-        const promissoryDays = Number(promissoryDaysTerm) === 60 ? 60 : Number(promissoryDaysTerm) === 90 ? 90 : 30;
+        // 1. Credit sale amount (totalAmount = subtotal + IVA) to seller
+        sellerUser.balance = Math.round((sellerUser.balance + totalAmount) * 100) / 100;
 
-        if (isPayingByPromissory) {
-          // 1. Payment via Promissory Note (Pagaré a 30/60/90 días)
-          const dueDate = new Date(now.getTime() + promissoryDays * 24 * 60 * 60 * 1000);
-          const dueDateStr = dueDate.toISOString();
-          const promissoryNum = `PAG-${now.getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
-          const signatureHash = `FIRM-DIGITAL-PROFESOR-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
-
-          const promissoryId = generateId('pn');
-          const promissoryData: PromissoryNoteData = {
-            id: promissoryId,
-            promissoryNoteNumber: promissoryNum,
-            concept: `Factura ${order.invoiceNumber || 'FACT-2026'} - Compra El Des-Tornillo (${totalUnits} u. ${summaryTitle})`,
-            amount: totalAmount,
-            amountInWords: numberToSpanishWords(totalAmount),
-            issueDate: now.toISOString(),
-            issuePlace: 'Madrid',
-            dueDate: dueDateStr,
-            daysTerm: promissoryDays,
-            orderType: 'no_a_la_orden',
-            beneficiaryId: sellerUser.id,
-            beneficiaryName: sellerUser.name,
-            beneficiaryNifCif: sellerUser.username ? `${sellerUser.username.toUpperCase()}-ES` : `ES-${sellerUser.id}`,
-            beneficiaryLevel: sellerUser.level || 3,
-            issuerId: buyer.id,
-            issuerName: 'BricoMaster Distribuciones, S.A.',
-            issuerNifCif: 'A-28900455',
-            issuerAddress: 'Polígono Industrial de San Fernando de Henares, Madrid',
-            issuerLevel: 1,
-            bankName: 'Banco Central Mercantil S.A.',
-            bankIban: buyer.accountNumber || 'ES990001000988776655',
-            signatureTimestamp: now.toISOString(),
-            signatureHash,
-            status: 'pendiente'
-          };
-
-          order.paymentMethod = 'pagare';
-          order.promissoryDaysTerm = promissoryDays;
-          order.promissoryDueDate = dueDateStr;
-          order.promissoryNoteNumber = promissoryNum;
-          order.promissoryNoteData = promissoryData;
-
-          const promissoryMsg: MarketMessage = {
-            id: generateId('msg'),
-            chatId: [buyer.id, sellerUser.id].sort().join('_'),
-            senderId: buyer.id,
-            senderName: 'BricoMaster Distribuciones, S.A. (Profesor)',
-            recipientId: sellerUser.id,
-            recipientName: sellerUser.name,
-            content: `📑 PAGARÉ EMITIDO POR COMPRA EN MERCADO: El Profesor ha emitido a tu favor el pagaré cambiario oficial ${promissoryNum} por importe de ${formatNumber(totalAmount)} € con vencimiento a ${promissoryDays} días (${dueDate.toLocaleDateString('es-ES')}) vinculado a la Factura ${order.invoiceNumber}. Puedes gestionarlo en tu cartera de efectos o descontarlo en el banco para anticipar liquidez.`,
-            timestamp: now.toISOString(),
-            read: false,
-            type: 'promissory_note',
-            promissoryNoteData: promissoryData
-          };
-          if (!db.marketMessages) db.marketMessages = [];
-          db.marketMessages.push(promissoryMsg);
-          syncMarketMessageToSupabase(promissoryMsg).catch(e => console.error(e));
-        } else {
-          // 1. Payment via immediate bank transfer (Contado)
-          order.paymentMethod = 'contado';
-          sellerUser.balance = Math.round((sellerUser.balance + totalAmount) * 100) / 100;
-          syncAccountToSupabase(sellerUser.id, sellerUser.name, sellerUser.balance, sellerUser.username, sellerUser.password, sellerUser.accountNumber, sellerUser.role).catch(e => console.error(e));
-
-          const txPayment = generateId('tx');
-          const transferPayment: Transfer = {
-            id: txPayment,
-            senderId: buyer.id,
-            senderName: buyerName,
-            senderAccount: buyer.accountNumber || 'ES990001000988776655',
-            receiverId: sellerUser.id,
-            receiverName: sellerUser.name,
-            receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
-            amount: totalAmount,
-            concept: `Venta El Des-Tornillo: ${summaryTitle}`,
-            timestamp: now.toISOString()
-          };
-          db.transfers.unshift(transferPayment);
-        }
+        const txPayment = generateId('tx');
+        const transferPayment: Transfer = {
+          id: txPayment,
+          senderId: buyer.id,
+          senderName: buyerName,
+          senderAccount: buyer.accountNumber || 'ES990001000988776655',
+          receiverId: sellerUser.id,
+          receiverName: sellerUser.name,
+          receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
+          amount: totalAmount,
+          concept: `Venta El Des-Tornillo: ${summaryTitle}`,
+          timestamp: now.toISOString()
+        };
+        db.transfers.unshift(transferPayment);
 
         // 2. Transport charge check on Seller
         const sellerHasTruck = (db.purchasedVehicles || []).some(
@@ -11331,26 +11095,14 @@ app.post('/api/raw-materials/orders', (req, res) => {
           syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
         }
 
-        if (isPayingByPromissory) {
-          const dueDate = new Date(now.getTime() + promissoryDays * 24 * 60 * 60 * 1000);
-          addNotification(
-            db,
-            sellerUser.id,
-            `¡Venta en El Des-Tornillo con Pagaré a ${promissoryDays} días!`,
-            `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} € emitiendo a tu favor el Pagaré Oficial ${order.promissoryNoteNumber} (vencimiento: ${dueDate.toLocaleDateString('es-ES')}). ${transportNote}`,
-            'order_approved',
-            order.id
-          );
-        } else {
-          addNotification(
-            db,
-            sellerUser.id,
-            '¡Venta en El Des-Tornillo!',
-            `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
-            'order_approved',
-            order.id
-          );
-        }
+        addNotification(
+          db,
+          sellerUser.id,
+          '¡Venta en El Des-Tornillo!',
+          `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
+          'order_approved',
+          order.id
+        );
       }
     } else {
       const txId = generateId('tx');
@@ -11997,14 +11749,6 @@ app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
   const order = db.rawMaterialOrders.find(o => o.id === id);
   if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
-  const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
-  const isStudentBuyer = order.studentId && order.studentId !== 'profesor-1' && order.studentId !== 'bricomaster';
-
-  // No invoice should be generated for student-to-student transactions
-  if (isStudentSeller && isStudentBuyer) {
-    return res.status(400).json({ error: 'En las transferencias o ventas entre alumnos no se debe generar factura al comprador.' });
-  }
-
   if (order.status !== 'entregado' && order.status !== 'aprobado' && order.status !== 'en_transito' && order.status !== 'finalizado') {
     return res.status(400).json({ error: `No se puede facturar un pedido en estado "${order.status}".` });
   }
@@ -12016,9 +11760,7 @@ app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
 
   order.status = 'facturado';
   order.invoiceNumber = invoiceNum;
-  if (!order.invoicedAt) {
-    order.invoicedAt = order.requestedAt || order.approvedAt || order.deliveredAt || now.toISOString();
-  }
+  order.invoicedAt = now.toISOString();
 
   syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
 
@@ -12552,8 +12294,6 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     deliveryAddress: selectedRecipientNave ? `${selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén'}, ${selectedRecipientNave.location || selectedRecipientNave.direccion || 'Polígono Industrial'}` : 'Almacén del destinatario',
     destinationNaveId: targetRecipientNaveId,
     status: 'entregado',
-    isDirectTransfer: true,
-    noInvoice: true,
     requestedAt: nowIso,
     approvedAt: nowIso,
     deliveredAt: nowIso,
@@ -13481,10 +13221,8 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
     linkedOrder = db.rawMaterialOrders.find(o => o.id === orderId);
     if (linkedOrder) {
       linkedOrder.status = 'facturado';
-      linkedOrder.invoiceNumber = linkedOrder.invoiceNumber || invoiceNum;
-      if (!linkedOrder.invoicedAt) {
-        linkedOrder.invoicedAt = linkedOrder.requestedAt || linkedOrder.approvedAt || linkedOrder.deliveredAt || now.toISOString();
-      }
+      linkedOrder.invoiceNumber = invoiceNum;
+      linkedOrder.invoicedAt = now.toISOString();
       linkedOrder.sellerLevel = sender.level || linkedOrder.sellerLevel || 1;
       linkedOrder.buyerLevel = recipient.level || linkedOrder.buyerLevel || 1;
       linkedOrder.deliveryAddress = linkedOrder.deliveryAddress || 'Dirección comercial registrada';
@@ -14305,56 +14043,6 @@ app.post('/api/market/messages/collect-promissory-note', (req, res) => {
     updatedMessage: msg,
     newBalance: beneficiary.balance
   });
-});
-
-app.get(['/api/teacher/students-inventory', '/api/raw-materials/inventories'], (req, res) => {
-  const db = readDb();
-  const students = (db.users || []).filter(u => u.role === 'student');
-  const inventories: { [studentId: string]: any } = {};
-
-  for (const student of students) {
-    const inv = checkAndCalculateProduction(db, student.id);
-    const starRods = (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0;
-    const flatRods = (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0;
-    const totalRods = inv.producedRodsUnits || (starRods + flatRods) || 0;
-
-    const starScrewdrivers = (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0;
-    const flatScrewdrivers = (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0;
-    const totalScrewdrivers = inv.producedScrewdriversUnits || (starScrewdrivers + flatScrewdrivers) || 0;
-
-    inventories[student.id] = {
-      studentId: student.id,
-      studentName: student.name,
-      studentLevel: student.level || 1,
-      ironKg: inv.ironKg || 0,
-      plasticKg: inv.plasticKg || 0,
-      epoxiKg: inv.epoxiKg || 0,
-      metalKg: inv.metalKg || 0,
-      producedRodsUnits: totalRods,
-      starRodsUnits: starRods,
-      flatRodsUnits: flatRods,
-      producedScrewdriversUnits: totalScrewdrivers,
-      starScrewdriversUnits: starScrewdrivers,
-      flatScrewdriversUnits: flatScrewdrivers,
-      rawMaterials: {
-        fragmentos_hierro_kg: inv.ironKg || 0,
-        fragmentos_metal_kg: inv.metalKg || 0,
-        pellets_plastico_kg: inv.plasticKg || 0,
-        pegamento_epoxi_kg: inv.epoxiKg || 0
-      },
-      producedGoods: {
-        varillas_punta: totalRods,
-        varillas_punta_estrella: starRods,
-        varillas_punta_plana: flatRods,
-        productos_ensamblados: totalScrewdrivers,
-        destornilladores_punta_estrella: starScrewdrivers,
-        destornilladores_punta_plana: flatScrewdrivers
-      }
-    };
-  }
-
-  writeDb(db);
-  res.json({ success: true, inventories });
 });
 
 app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {

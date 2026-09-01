@@ -10,10 +10,6 @@ import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
 import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import {
-  getStoredWarehouseRequirementsMet,
-  setStoredWarehouseRequirementsMet
-} from '../lib/marketRequirements.js';
-import {
   Package,
   Layers,
   Truck,
@@ -145,15 +141,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Cached Warehouse Requirements (stored in browser to avoid double checks)
-  const initialWarehouseCache = getStoredWarehouseRequirementsMet(currentUser.id);
-  const [isWarehouseConfiguredCached, setIsWarehouseConfiguredCached] = useState<boolean>(
-    isTeacher || initialWarehouseCache.warehouseMet
-  );
-  const [isForkliftConfiguredCached, setIsForkliftConfiguredCached] = useState<boolean>(
-    isTeacher || initialWarehouseCache.forkliftMet
-  );
-
   // Property & Floorplan State
   const [floorPlans, setFloorPlans] = useState<any[]>([]);
   const [acquisitions, setAcquisitions] = useState<any[]>([]);
@@ -172,8 +159,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [quantity, setQuantity] = useState<number>(1);
   const [needsTransport, setNeedsTransport] = useState<boolean>(true);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
-  const [orderPaymentMethod, setOrderPaymentMethod] = useState<'contado' | 'pagare'>('contado');
-  const [orderPromissoryDays, setOrderPromissoryDays] = useState<number>(30);
 
   // Teacher / Student Announcement Modal State
   const [isAnnModalOpen, setIsAnnModalOpen] = useState(false);
@@ -189,8 +174,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [annStock, setAnnStock] = useState<number | string | 'ilimitado'>('ilimitado');
   const [annUnitWeightKg, setAnnUnitWeightKg] = useState<number>(1000);
   const [annIsPallet, setAnnIsPallet] = useState<boolean>(true);
-  const [annAcceptsPromissory, setAnnAcceptsPromissory] = useState<boolean>(true);
-  const [annPromissoryTerms, setAnnPromissoryTerms] = useState<number[]>([30, 60, 90]);
 
   // Mercado Filters
   const [mercadoFilter, setMercadoFilter] = useState<'todos' | 'comprables' | 'materia_prima' | 'producto_final' | 'mis_anuncios'>('todos');
@@ -1392,39 +1375,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   const isOfficialCommercialInvoice = (order: RawMaterialOrder) => {
     if (!order) return false;
-
-    // Exclude direct stock transfers between students or 0€ inventory movements
-    if (
-      order.isDirectTransfer === true ||
-      order.noInvoice === true ||
-      (order.announcementId && String(order.announcementId).startsWith('tr-')) ||
-      ((order.totalAmount || 0) === 0 && (order.basePrice || 0) === 0) ||
-      (order.note && (
-        order.note.includes('Envío directo de existencias') ||
-        order.note.includes('Traslado entre almacenes')
-      ))
-    ) {
-      return false;
-    }
-
-    const isStudentSeller = order.sellerId &&
-      order.sellerId !== 'proveedor-materia-prima' &&
-      order.sellerId !== 'profesor-1' &&
-      order.sellerId !== 'LOGISTICA_EXTERIOR' &&
-      order.sellerId !== 'SUMINISTROS_ESTACION_SERVICIO';
-    const isStudentBuyer = order.studentId && order.studentId !== 'profesor-1';
-
-    const isTeacherBuyingFromStudent = (order.studentId === 'profesor-1' || !isStudentBuyer) && isStudentSeller;
-
-    // When a student seller sends inventory/existencias to a student buyer, no invoice is generated for the buyer
-    if (isStudentSeller && isStudentBuyer && order.status !== 'facturado') {
-      return false;
-    }
-
-    const isFacturado = order.status === 'facturado' ||
-      (Boolean(order.invoiceNumber) && (!isStudentSeller || isTeacherBuyingFromStudent)) ||
-      (order.status === 'entregado' && (order.totalAmount || 0) > 0 && (!isStudentSeller || isTeacherBuyingFromStudent));
-
+    const isFacturado = order.status === 'facturado' || Boolean(order.invoiceNumber) || (order.status === 'entregado' && (order.totalAmount || 0) > 0);
     if (!isFacturado) return false;
 
     // Exclude invoices sent/received via direct messaging (chat / manual invoice)
@@ -1468,24 +1419,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     return `${title} — Dirección del inmueble de destino: ${address}`;
   };
 
-  const getOrderInvoiceDate = (ord: RawMaterialOrder | any): string => {
-    if (!ord) return '';
-    const rawDate = ord.invoicedAt || ord.requestedAt || ord.approvedAt || ord.deliveredAt;
-    if (!rawDate) return '';
-    try {
-      const d = new Date(rawDate);
-      if (isNaN(d.getTime())) return String(rawDate);
-      return d.toLocaleDateString('es-ES');
-    } catch {
-      return String(rawDate);
-    }
-  };
-
   const openPrintableInvoiceWindow = (rawOrder: RawMaterialOrder) => {
     if (!rawOrder) return;
     const order = normalizeInvoiceOrder(rawOrder);
     const invoiceNum = order.invoiceNumber || `FACT-2026-${order.id.slice(-4)}`;
-    const invDate = getOrderInvoiceDate(order);
+    const invDate = order.invoicedAt ? new Date(order.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
 
     const isTransport = isTransportInvoiceOrder(order);
 
@@ -1720,33 +1658,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         if (compData.hiredEmployees) setEmployees(compData.hiredEmployees);
         if (compData.naveFloorPlans) setFloorPlans(compData.naveFloorPlans);
         if (compData.acquisitions) setAcquisitions(compData.acquisitions);
-
-        // Dynamically check and cache warehouse and forklift fulfillment if newly completed
-        const fetchedAcqs = compData.acquisitions || [];
-        const fetchedVehicles = compData.purchasedVehicles || [];
-        const hasRealWarehouse = fetchedAcqs.some((a: any) => {
-          const pType = (a.propertyType || a.type || "").toLowerCase();
-          const title = (a.propertyTitle || a.title || "").toLowerCase();
-          return (
-            ["nave_industrial", "almacen", "almacen_logistico", "industrial", "warehouse"].includes(pType) ||
-            title.includes("nave") ||
-            title.includes("almacen") ||
-            title.includes("almacén")
-          );
-        });
-        const hasRealForklift = fetchedVehicles.some((v: any) => v.vehicleType === 'carretilla_elevadora');
-
-        if (hasRealWarehouse) {
-          setIsWarehouseConfiguredCached(true);
-          setStoredWarehouseRequirementsMet(currentUser.id, { warehouseMet: true });
-        }
-        if (hasRealForklift) {
-          setIsForkliftConfiguredCached(true);
-          setStoredWarehouseRequirementsMet(currentUser.id, { forkliftMet: true });
-        }
-        if (hasRealWarehouse && hasRealForklift) {
-          setStoredWarehouseRequirementsMet(currentUser.id, { allMet: true, warehouseMet: true, forkliftMet: true });
-        }
       }
 
       if (invData) {
@@ -1811,13 +1722,12 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     });
   }
 
-  const isWarehouseConfigured = isTeacher || isWarehouseConfiguredCached || warehouseProperties.length > 0;
-  const rawMaterialWarehousesCount = isWarehouseConfigured ? Math.max(1, warehouseProperties.length) : warehouseProperties.length;
+  const rawMaterialWarehousesCount = Math.max(1, warehouseProperties.length);
 
   // Forklifts requirement check (1 forklift for the property)
   const ownedForklifts = vehicles.filter(v => v.vehicleType === 'carretilla_elevadora').length;
-  const hasEnoughForklifts = isTeacher || isForkliftConfiguredCached || (rawMaterialWarehousesCount > 0 && ownedForklifts >= 1);
-  const canPurchaseRawMaterials = (isLevel1 || isTeacher) && isWarehouseConfigured && hasEnoughForklifts;
+  const hasEnoughForklifts = rawMaterialWarehousesCount > 0 && ownedForklifts >= 1;
+  const canPurchaseRawMaterials = (isLevel1 || isTeacher) && rawMaterialWarehousesCount > 0 && hasEnoughForklifts;
 
   // Stored inventory quantities & pallet conversions (Identical to "Existencias" in CompanyDashboard)
   const ironKg = inventoryData?.ironKg ?? rawMaterialsState?.fragmentos_hierro_kg ?? 0;
@@ -1929,8 +1839,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   const handleOpenCreateAnnModal = () => {
     setEditingAnnId(null);
-    setAnnAcceptsPromissory(true);
-    setAnnPromissoryTerms([30, 60, 90]);
     if (isTeacher) {
       handleSelectPreset('hierro');
       setAnnDurationDays('indefinido');
@@ -1970,8 +1878,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     setAnnDurationDays(ann.durationDays || 'indefinido');
     setAnnUnitWeightKg(ann.materialType === 'producto_final' ? 0 : (ann.unitWeightKg || (ann.materialType === 'epoxi' ? 5 : 1000)));
     setAnnIsPallet(ann.isPallet !== undefined ? ann.isPallet : (ann.materialType !== 'epoxi' && ann.materialType !== 'producto_final'));
-    setAnnAcceptsPromissory(ann.acceptsPromissoryNotes !== false);
-    setAnnPromissoryTerms(Array.isArray(ann.promissoryTerms) && ann.promissoryTerms.length > 0 ? ann.promissoryTerms : [30, 60, 90]);
 
     if (isTeacher) {
       setAnnStock(ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'ilimitado' : ann.stock);
@@ -2071,9 +1977,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         sellerLocation: primaryWh?.location || primaryWh?.municipality || primaryWh?.propertyTitle || (currentUser as any).location || (currentUser as any).municipality || '',
         sellerMunicipality: primaryWh?.municipality || (currentUser as any).municipality || (currentUser as any).city || '',
         sellerProvince: primaryWh?.province || (currentUser as any).province || (currentUser as any).provincia || '',
-        isDesTornillo: !isTeacher && studentLevel === 3,
-        acceptsPromissoryNotes: annAcceptsPromissory,
-        promissoryTerms: annPromissoryTerms
+        isDesTornillo: !isTeacher && studentLevel === 3
       };
 
       let res;
@@ -2368,8 +2272,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     setQuantity(1);
     setNeedsTransport(true);
     if (ownedTruck) setSelectedVehicleId(ownedTruck.id);
-    setOrderPaymentMethod('contado');
-    setOrderPromissoryDays(ann.promissoryTerms && ann.promissoryTerms.length > 0 ? ann.promissoryTerms[0] : 30);
   };
 
   const handleOpenNegotiationModal = (ord: RawMaterialOrder) => {
@@ -2444,9 +2346,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           quantity,
           needsTransport,
           pickupVehicleId: !needsTransport ? selectedVehicleId : undefined,
-          destinationNaveId: selectedDestinationNaveId || (studentWarehouses[0]?.id),
-          paymentMethod: isTeacher ? orderPaymentMethod : 'contado',
-          promissoryDaysTerm: isTeacher && orderPaymentMethod === 'pagare' ? orderPromissoryDays : undefined
+          destinationNaveId: selectedDestinationNaveId || (studentWarehouses[0]?.id)
         })
       });
 
@@ -2887,17 +2787,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           {/* Requirements Status Checklist */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
-              isWarehouseConfigured ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              rawMaterialWarehousesCount > 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
               <span>1. Almacén configurado:</span>
-              <strong className="font-bold">{isWarehouseConfigured ? `${realWarehouseM2} m² (${maxPalletsAllowed} pal.) ✅` : '0 m² ❌'}</strong>
+              <strong className="font-bold">{rawMaterialWarehousesCount > 0 ? `${realWarehouseM2} m² (${maxPalletsAllowed} pal.) ✅` : '0 m² ❌'}</strong>
             </div>
 
             <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-medium ${
               hasEnoughForklifts ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
             }`}>
               <span>2. Carretilla elevadora (mín. 1 en propiedad):</span>
-              <strong className="font-bold">{Math.max(ownedForklifts, hasEnoughForklifts ? 1 : 0)}/1 {hasEnoughForklifts ? '✅ OK' : '❌ Pendiente'}</strong>
+              <strong className="font-bold">{ownedForklifts}/1 {hasEnoughForklifts ? '✅ OK' : '❌ Pendiente'}</strong>
             </div>
           </div>
         </div>
@@ -3307,7 +3207,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
                   {/* Eligibility Badge */}
                   {!isMyAnnouncement && (
-                    <div className="pt-1 flex flex-wrap items-center gap-1.5">
+                    <div className="pt-1">
                       {eligibility.allowed ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-lg">
                           <CheckCircle2 className="w-3 h-3" />
@@ -3317,12 +3217,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-2 py-1 rounded-lg" title={eligibility.reason}>
                           <ShieldAlert className="w-3 h-3 text-amber-400" />
                           {ann.isDesTornillo ? 'Venta exclusiva al Profesor' : 'No comprable para tu nivel'}
-                        </span>
-                      )}
-                      {ann.acceptsPromissoryNotes !== false && (ann.sellerLevel === 3 || ann.isDesTornillo || (ann.promissoryTerms && ann.promissoryTerms.length > 0)) && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 px-2 py-1 rounded-lg" title="Admite pago formal mediante pagaré cambiario a 30, 60 o 90 días">
-                          <Clock className="w-3 h-3 text-indigo-400" />
-                          <span>Pagaré 30/60/90d</span>
                         </span>
                       )}
                     </div>
@@ -4126,9 +4020,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <Receipt className="w-5 h-5 text-purple-400" />
                 {studentLevel === 1
                   ? 'Facturas compras materias primas y servicios transporte'
-                  : studentLevel === 3
-                    ? 'Facturas de ventas (El Des-Tornillo), compras y servicios de transporte'
-                    : 'Facturas de compras y servicios de transporte'}
+                  : 'Facturas servicios de transporte'}
               </h2>
               <p className="text-xs text-slate-400 mt-1">
                 Consulta e imprime los documentos tributarios y facturas emitidas y recibidas en tus operaciones de mercado.
@@ -4156,7 +4048,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   .map((rawOrd) => {
                     const ord = normalizeInvoiceOrder(rawOrd);
                     const invNumber = ord.invoiceNumber || `FACT-2026-${ord.id.slice(-4)}`;
-                    const invDate = getOrderInvoiceDate(ord);
+                    const invDate = ord.invoicedAt ? new Date(ord.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
 
                     return (
                       <tr key={ord.id} className="hover:bg-slate-800/30 transition-colors">
@@ -4250,7 +4142,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     {selectedInvoiceOrder.invoiceNumber || `FACT-2026-${selectedInvoiceOrder.id.slice(-4)}`}
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Fecha: {getOrderInvoiceDate(selectedInvoiceOrder)}
+                    Fecha: {selectedInvoiceOrder.invoicedAt ? new Date(selectedInvoiceOrder.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES')}
                   </div>
                   <div className="text-xs text-slate-500">
                     Ref. Pedido: {selectedInvoiceOrder.id}
@@ -4683,65 +4575,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               />
             </div>
 
-            {/* Configuración de pago con pagaré cambiario (30, 60, 90 días) */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-emerald-400" />
-                  <div>
-                    <span className="text-xs font-bold text-white block">Admitir pago con pagaré</span>
-                    <span className="text-[10px] text-slate-400">Permite al comprador (Profesor / BricoMaster) emitir pagarés oficiales a plazo</span>
-                  </div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={annAcceptsPromissory}
-                    onChange={(e) => setAnnAcceptsPromissory(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
-                </label>
-              </div>
-
-              {annAcceptsPromissory && (
-                <div className="pt-2.5 border-t border-slate-800/80 space-y-2">
-                  <span className="text-[11px] font-semibold text-slate-300 block">Plazos de vencimiento permitidos para pagaré:</span>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[30, 60, 90].map((days) => {
-                      const isSelected = annPromissoryTerms.includes(days);
-                      return (
-                        <button
-                          key={days}
-                          type="button"
-                          onClick={() => {
-                            if (isSelected) {
-                              if (annPromissoryTerms.length > 1) {
-                                setAnnPromissoryTerms(annPromissoryTerms.filter(d => d !== days));
-                              }
-                            } else {
-                              setAnnPromissoryTerms([...annPromissoryTerms, days].sort((a, b) => a - b));
-                            }
-                          }}
-                          className={`py-2 px-2 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 ${
-                            isSelected
-                              ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm'
-                              : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Clock className="w-3 h-3" />
-                          <span>{days} días</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block leading-tight">
-                    El comprador podrá seleccionar entre estos plazos (30, 60 o 90 días) al tramitar su pedido en el Mercado.
-                  </span>
-                </div>
-              )}
-            </div>
-
             <div className="flex gap-3 pt-2">
               {editingAnnId && (
                 <button
@@ -4986,97 +4819,6 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     }
                     return null;
                   })()}
-                </div>
-              )}
-
-              {/* Selector de forma de pago (Contado vs Pagaré 30/60/90 días) */}
-              {isTeacher && (
-                <div className="space-y-2.5 pt-2 border-t border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">
-                      Forma de pago de la compra:
-                    </label>
-                    <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
-                      📑 Pagaré habilitado
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label
-                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                        orderPaymentMethod === 'contado'
-                          ? 'bg-amber-500/10 border-amber-500/50 text-white'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="radio"
-                          name="orderPaymentMethod"
-                          checked={orderPaymentMethod === 'contado'}
-                          onChange={() => setOrderPaymentMethod('contado')}
-                          className="text-amber-500 focus:ring-amber-500"
-                        />
-                        <div>
-                          <div className="font-semibold text-xs text-white">💳 Al contado</div>
-                          <div className="text-[10px] text-slate-400">Transferencia inmediata</div>
-                        </div>
-                      </div>
-                    </label>
-
-                    <label
-                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                        orderPaymentMethod === 'pagare'
-                          ? 'bg-emerald-500/10 border-emerald-500/50 text-white'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="radio"
-                          name="orderPaymentMethod"
-                          checked={orderPaymentMethod === 'pagare'}
-                          onChange={() => setOrderPaymentMethod('pagare')}
-                          className="text-emerald-500 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-semibold text-xs text-white">📑 Con Pagaré</div>
-                          <div className="text-[10px] text-emerald-400 font-medium">Pago formal a plazo</div>
-                        </div>
-                      </div>
-                    </label>
-                  </div>
-
-                  {orderPaymentMethod === 'pagare' && (
-                    <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl space-y-2.5 animate-in fade-in duration-200">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-emerald-300">Seleccionar plazo de vencimiento:</span>
-                        <span className="text-[10px] font-mono text-emerald-400 font-semibold">
-                          Vence: {new Date(Date.now() + orderPromissoryDays * 86400000).toLocaleDateString('es-ES')}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        {(selectedAnn.promissoryTerms && selectedAnn.promissoryTerms.length > 0 ? selectedAnn.promissoryTerms : [30, 60, 90]).map((days) => (
-                          <button
-                            key={days}
-                            type="button"
-                            onClick={() => setOrderPromissoryDays(days)}
-                            className={`py-2 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1 ${
-                              orderPromissoryDays === days
-                                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md font-extrabold'
-                                : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                            }`}
-                          >
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>{days} días</span>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="text-[10px] text-slate-300 leading-tight">
-                        * Al formalizar el pedido se emitirá automáticamente el <strong>pagaré oficial vinculante</strong> a favor del alumno vendedor y se generará la factura comercial. El alumno podrá conservarlo en cartera o descontarlo en su banco para anticipar liquidez.
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
