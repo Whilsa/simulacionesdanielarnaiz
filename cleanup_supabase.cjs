@@ -20,9 +20,14 @@ const INITIAL_USERS = [
     username: 'pupdaniel',
     password: '1987',
     role: 'teacher',
-    level: 1,
+    accountNumber: 'ES000000000000000000',
     balance: 0,
-    accountNumber: 'ES000000000000000000'
+    initialBalance: 0,
+    level: 1,
+    companyName: 'Administración Docente',
+    nifCif: 'P00000000',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-tie33g796',
@@ -30,9 +35,14 @@ const INITIAL_USERS = [
     username: 'cliente01',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES36000100029058060348',
     balance: 260959.17,
-    accountNumber: 'ES36000100029058060348'
+    initialBalance: 260959.17,
+    level: 1,
+    companyName: 'Tododestornilladores, S.A.',
+    nifCif: 'A36000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-wu3u6x6zz',
@@ -40,9 +50,14 @@ const INITIAL_USERS = [
     username: 'cliente02',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES38000100022204910071',
     balance: 30080.42,
-    accountNumber: 'ES38000100022204910071'
+    initialBalance: 30080.42,
+    level: 1,
+    companyName: 'Productora Varillas, S.A.',
+    nifCif: 'A38000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-yqafq0s1b',
@@ -50,9 +65,14 @@ const INITIAL_USERS = [
     username: 'cliente03',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES50000100021406089898',
     balance: -32593.53,
-    accountNumber: 'ES50000100021406089898'
+    initialBalance: -32593.53,
+    level: 1,
+    companyName: 'Destornilladores S.A.',
+    nifCif: 'A50000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-3p8azs8z1',
@@ -60,9 +80,14 @@ const INITIAL_USERS = [
     username: 'cliente04',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES51000100024856898921',
     balance: 151565.00,
-    accountNumber: 'ES51000100024856898921'
+    initialBalance: 151565.00,
+    level: 1,
+    companyName: 'Destornilladores Por Mayor S.A.',
+    nifCif: 'A51000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-n4szf2cvx',
@@ -70,9 +95,14 @@ const INITIAL_USERS = [
     username: 'cliente05',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES23000100023677414359',
     balance: 186720.75,
-    accountNumber: 'ES23000100023677414359'
+    initialBalance: 186720.75,
+    level: 1,
+    companyName: 'Leroy Merlin, S.A.',
+    nifCif: 'A23000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-26iyne9mz',
@@ -80,9 +110,14 @@ const INITIAL_USERS = [
     username: 'cliente06',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES820001000222178917770',
     balance: 57335.36,
-    accountNumber: 'ES82000100022178917770'
+    initialBalance: 57335.36,
+    level: 1,
+    companyName: 'Minorista S.L.',
+    nifCif: 'B82000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'user-4rd635i0n',
@@ -90,9 +125,14 @@ const INITIAL_USERS = [
     username: 'cliente07',
     password: '1987',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES41000100029262515901',
     balance: 60000.00,
-    accountNumber: 'ES41000100029262515901'
+    initialBalance: 60000.00,
+    level: 1,
+    companyName: 'Fabricante Industrial S.A.',
+    nifCif: 'A41000100',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'alumno-1',
@@ -100,9 +140,14 @@ const INITIAL_USERS = [
     username: 'ana',
     password: '123',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES910001000212345678',
     balance: 1000.00,
-    accountNumber: 'ES910001000212345678'
+    initialBalance: 1000.00,
+    level: 1,
+    companyName: 'Ana López',
+    nifCif: '91234567A',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'alumno-2',
@@ -110,9 +155,14 @@ const INITIAL_USERS = [
     username: 'carlos',
     password: '123',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES910001000287654321',
     balance: 1000.00,
-    accountNumber: 'ES910001000287654321'
+    initialBalance: 1000.00,
+    level: 1,
+    companyName: 'Carlos Ruiz',
+    nifCif: '91876543B',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
     id: 'alumno-3',
@@ -120,11 +170,46 @@ const INITIAL_USERS = [
     username: 'beatriz',
     password: '123',
     role: 'student',
-    level: 1,
+    accountNumber: 'ES910001000244556677',
     balance: 1000.00,
-    accountNumber: 'ES910001000244556677'
+    initialBalance: 1000.00,
+    level: 1,
+    companyName: 'Beatriz Gómez',
+    nifCif: '91445566C',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   }
 ];
+
+function standardizeUser(u) {
+  const id = String(u.id || `user-${Date.now()}`);
+  const name = String(u.name || u.alumno || 'Usuario');
+  const role = u.role === 'teacher' || id === 'profesor-1' ? 'teacher' : 'student';
+  const balance = Number(u.balance !== undefined ? u.balance : u.saldo !== undefined ? u.saldo : 1000);
+  const initialBalance = Number(u.initialBalance !== undefined ? u.initialBalance : balance);
+  const username = String(u.username || u.usuario || name.toLowerCase().replace(/[^a-z0-9]/gi, '')).trim();
+  const password = String(u.password || (role === 'teacher' ? '1987' : '123'));
+  const accountNumber = String(u.accountNumber || u.account_number || `ES9100010002${Math.floor(10000000 + Math.random() * 90000000)}`);
+  const level = (u.level === 2 || u.level === 3) ? u.level : 1;
+  const companyName = u.companyName || name;
+  const nifCif = u.nifCif || (role === 'teacher' ? 'P00000000' : 'B' + accountNumber.slice(-8));
+
+  return {
+    id,
+    name,
+    username,
+    password,
+    role,
+    accountNumber,
+    balance: Number.isFinite(balance) ? balance : 0,
+    initialBalance: Number.isFinite(initialBalance) ? initialBalance : balance,
+    level,
+    companyName,
+    nifCif,
+    createdAt: u.createdAt || new Date().toISOString(),
+    updatedAt: u.updatedAt || new Date().toISOString()
+  };
+}
 
 async function ensureTables(client) {
   console.log('Verifying & creating required PostgreSQL tables if needed...');
@@ -436,24 +521,24 @@ async function syncLocalDbFile() {
 
   if (!Array.isArray(db.users)) db.users = [];
 
-  // Ensure all initial users exist in db.users
+  // Ensure all initial users exist in db.users and standardize all user objects
   for (const initUser of INITIAL_USERS) {
     const existingIndex = db.users.findIndex(u => u.id === initUser.id);
     if (existingIndex >= 0) {
-      db.users[existingIndex] = {
+      db.users[existingIndex] = standardizeUser({
         ...initUser,
-        ...db.users[existingIndex],
-        username: db.users[existingIndex].username || initUser.username,
-        password: db.users[existingIndex].password || initUser.password,
-        accountNumber: db.users[existingIndex].accountNumber || initUser.accountNumber
-      };
+        ...db.users[existingIndex]
+      });
     } else {
-      db.users.push(initUser);
+      db.users.push(standardizeUser(initUser));
     }
   }
 
+  // Standardize any other user in db.users
+  db.users = db.users.map(u => standardizeUser(u));
+
   fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
-  console.log(`✓ db.json updated with ${db.users.length} verified users.`);
+  console.log(`✓ db.json updated with ${db.users.length} standardized and verified users.`);
 }
 
 async function run() {

@@ -244,9 +244,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const fetchData = async () => {
     try {
       const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes, invsRes] = await Promise.all([
-        fetch('/users?role=teacher'),
-        fetch('/transfers?role=teacher'),
-        fetch('/logs'),
+        fetch('/api/users?role=teacher').catch(() => null),
+        fetch('/api/transfers?role=teacher').catch(() => null),
+        fetch('/api/logs').catch(() => null),
         fetch('/api/supabase-status').catch(() => null),
         fetch('/api/raw-materials/announcements').catch(() => null),
         fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null),
@@ -257,36 +257,64 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       let transfersList: Transfer[] = [];
       let logsList: SystemLog[] = [];
 
-      if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
-        const usersData = await usersRes.json();
-        usersList = usersData.users || [];
-      }
-      if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
-        const transfersData = await transfersRes.json();
-        transfersList = transfersData.transfers || [];
-      }
-      if (logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
-        const logsData = await logsRes.json();
-        logsList = logsData.logs || [];
-      }
-      if (supabaseRes && supabaseRes.ok) {
-        const sbData = await supabaseRes.json();
-        setSupabaseStatus(sbData);
-        if (sbData.dbUrlMasked && !supabaseUrlInput) {
-          setSupabaseUrlInput(sbData.dbUrlMasked);
+      if (usersRes && usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const usersData = await usersRes.json();
+          usersList = usersData.users || [];
+        } catch (e) {
+          console.warn('Error parsing users response:', e);
         }
       }
-      if (annRes && annRes.ok) {
-        const annData = await annRes.json();
-        if (annData.announcements) setRmAnnouncements(annData.announcements);
+      if (transfersRes && transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const transfersData = await transfersRes.json();
+          transfersList = transfersData.transfers || [];
+        } catch (e) {
+          console.warn('Error parsing transfers response:', e);
+        }
       }
-      if (ordRes && ordRes.ok) {
-        const ordData = await ordRes.json();
-        if (ordData.orders) setRmOrders(ordData.orders);
+      if (logsRes && logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const logsData = await logsRes.json();
+          logsList = logsData.logs || [];
+        } catch (e) {
+          console.warn('Error parsing logs response:', e);
+        }
       }
-      if (invsRes && invsRes.ok) {
-        const invsData = await invsRes.json();
-        if (invsData.inventories) setStudentInventories(invsData.inventories);
+      if (supabaseRes && supabaseRes.ok && supabaseRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const sbData = await supabaseRes.json();
+          setSupabaseStatus(sbData);
+          if (sbData.dbUrlMasked && !supabaseUrlInput) {
+            setSupabaseUrlInput(sbData.dbUrlMasked);
+          }
+        } catch (e) {
+          console.warn('Error parsing supabase status:', e);
+        }
+      }
+      if (annRes && annRes.ok && annRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const annData = await annRes.json();
+          if (annData.announcements) setRmAnnouncements(annData.announcements);
+        } catch (e) {
+          console.warn('Error parsing announcements:', e);
+        }
+      }
+      if (ordRes && ordRes.ok && ordRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const ordData = await ordRes.json();
+          if (ordData.orders) setRmOrders(ordData.orders);
+        } catch (e) {
+          console.warn('Error parsing orders:', e);
+        }
+      }
+      if (invsRes && invsRes.ok && invsRes.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const invsData = await invsRes.json();
+          if (invsData.inventories) setStudentInventories(invsData.inventories);
+        } catch (e) {
+          console.warn('Error parsing student inventories:', e);
+        }
       }
 
       setUsers(usersList);
