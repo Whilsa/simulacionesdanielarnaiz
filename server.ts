@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, TradingPartner } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -2285,10 +2285,18 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       if (restoredTransfers.length > 0) {
         const seenTxIds = new Set<string>();
+        const seenLogicalKeys = new Set<string>();
         const uniqueTransfers: Transfer[] = [];
         for (const tr of restoredTransfers) {
           if (!seenTxIds.has(tr.id)) {
             seenTxIds.add(tr.id);
+            const isPayroll = tr.concept && (tr.concept.includes('nÃ³mina') || tr.concept.includes('nomina') || tr.concept.includes('NÃ³mina'));
+            const isNote = tr.concept && (tr.concept.includes('gestiÃ³n de cobro') || tr.concept.includes('gestion de cobro') || tr.concept.includes('descuento de pagarÃ©'));
+            if (isPayroll || isNote) {
+              const logicalKey = tr.senderId + '|' + tr.receiverId + '|' + tr.concept + '|' + tr.amount;
+              if (seenLogicalKeys.has(logicalKey)) continue;
+              seenLogicalKeys.add(logicalKey);
+            }
             uniqueTransfers.push(tr);
           }
         }
@@ -4237,69 +4245,17 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
   }
 }
 
-function cleanupErroneousAugustPayrolls(db: DatabaseSchema) {
-  if (!db) return;
-  if (!db.payrollRecords) db.payrollRecords = [];
-  if (!db.transfers) db.transfers = [];
-  if (!db.taxObligations) db.taxObligations = [];
-
-  // Find any payroll records for 8/2026 (created prematurely before September 1st)
-  const badPayrollIds = new Set<string>();
-  const refundsByStudent: { [studentId: string]: number } = {};
-
-  for (const pr of db.payrollRecords) {
-    if (pr.periodMonth === 8 && pr.periodYear === 2026) {
-      badPayrollIds.add(pr.id);
-      refundsByStudent[pr.studentId] = (refundsByStudent[pr.studentId] || 0) + (pr.totalNetSalaryPaid || 0);
-    }
-  }
-
-  // Also find bad transfers with concept of lumped payroll for 8/2026 or receiverId 'empleados-nomina'
-  const badTransferIds = new Set<string>();
-  for (const tx of db.transfers) {
-    if (
-      (tx.concept && (tx.concept.includes('nÃ³minas del mes 8/2026') || tx.concept.includes('nominas del mes 8/2026') || tx.concept.includes('nÃ³minas del mes 08/2026'))) ||
-      tx.receiverId === 'empleados-nomina'
-    ) {
-      badTransferIds.add(tx.id);
-    }
-  }
-
-  if (badPayrollIds.size > 0 || badTransferIds.size > 0) {
-    console.log(`[Payroll Cleanup] Found ${badPayrollIds.size} bad Aug 2026 payroll records and ${badTransferIds.size} lumped transfers. Restoring student balances...`);
-
-    for (const [studentId, refundAmt] of Object.entries(refundsByStudent)) {
-      const student = db.users.find(u => u.id === studentId);
-      if (student && refundAmt > 0) {
-        student.balance = Math.round((student.balance + refundAmt) * 100) / 100;
-        console.log(`[Payroll Cleanup] Restored ${refundAmt} â‚¬ to student ${student.name} (${student.id}). Current balance: ${student.balance} â‚¬`);
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-      }
-    }
-
-    db.payrollRecords = db.payrollRecords.filter(pr => !badPayrollIds.has(pr.id));
-    db.transfers = db.transfers.filter(tx => !badTransferIds.has(tx.id));
-    db.taxObligations = db.taxObligations.filter(to => {
-      if (to.payrollRecordId && badPayrollIds.has(to.payrollRecordId)) return false;
-      if (to.concept && (to.concept.includes('Mes 8/2026') || to.concept.includes('Mes 8 / 2026') || to.concept.includes('Mes 08/2026'))) return false;
-      return true;
-    });
-
-    safeDbQuery('DELETE FROM registros_nomina WHERE mes = 8 AND anio = 2026').catch(e => console.error(e));
-    safeDbQuery("DELETE FROM movimientos WHERE concepto ILIKE '%nÃ³minas del mes 8/2026%' OR concepto ILIKE '%nominas del mes 8/2026%'").catch(e => console.error(e));
-    safeDbQuery("DELETE FROM obligaciones_fiscales WHERE concepto ILIKE '%Mes 8/2026%' OR concepto ILIKE '%Mes 08/2026%'").catch(e => console.error(e));
-  }
-}
+const inMemoryPayrollLockedKeys = new Set<string>();
 
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
   if (!db.taxObligations) db.taxObligations = [];
+  if (!db.transfers) db.transfers = [];
   if (!db.jobListings) db.jobListings = [];
-
-  cleanupErroneousAugustPayrolls(db);
   normalizeAndFixTaxObligations(db);
 
+  let modified = false;
   const now = new Date();
   const currentDay = now.getDate();
   const currentMonth = now.getMonth() + 1; // 1 - 12
@@ -4314,260 +4270,276 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
     prevYear = currentYear - 1;
   }
 
-  // On day 1 or later of current month, ensure previous completed month's payroll is processed
+  // On day 1 or later of current month, ensure previous completed month's payroll is processed exactly once
   if (currentDay >= 1) {
     const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
-
     for (const studentId of studentsWithEmployees) {
       const student = db.users.find(u => u.id === studentId && u.role === 'student');
       if (!student) continue;
 
+      const payrollLockKey = studentId + '-' + prevMonth + '-' + prevYear;
+      if (inMemoryPayrollLockedKeys.has(payrollLockKey)) continue;
+
       const alreadyProcessed = db.payrollRecords.some(
-        pr => pr.studentId === studentId && pr.periodMonth === prevMonth && pr.periodYear === prevYear
+        pr => pr.studentId === studentId && Number(pr.periodMonth) === Number(prevMonth) && Number(pr.periodYear) === Number(prevYear)
+      );
+      if (alreadyProcessed) {
+        inMemoryPayrollLockedKeys.add(payrollLockKey);
+        continue;
+      }
+
+      // Strict check: if transfers already exist for this student and period, do not pay again
+      const existingTxForPeriod = (db.transfers || []).filter(
+        t => t.senderId === student.id &&
+             t.concept &&
+             (t.concept.includes('Mes ' + prevMonth + '/' + prevYear) || t.concept.includes('Abono de nÃ³mina neta Mes ' + prevMonth + '/' + prevYear))
       );
 
-      if (!alreadyProcessed) {
-        const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
-        if (myEmployees.length === 0) continue;
+      if (existingTxForPeriod.length > 0) {
+        // Register the missing payrollRecord object without deducting funds again
+        const prId = generateId('payroll');
+        const totalNet = existingTxForPeriod.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+        const myEmps = db.hiredEmployees.filter(e => e.studentId === studentId);
+        const newPR: PayrollRecord = {
+          id: prId,
+          studentId: student.id,
+          studentName: student.name,
+          payrollDate: new Date(currentYear, currentMonth - 1, 1, 9, 0, 0).toISOString(),
+          periodMonth: prevMonth,
+          periodYear: prevYear,
+          employeeCount: existingTxForPeriod.length || myEmps.length,
+          totalGrossSalary: totalNet,
+          totalEmployeeSS: 0,
+          totalEmployeeIRPF: 0,
+          totalNetSalaryPaid: totalNet,
+          totalCompanySS: 0,
+          isProportional: false,
+          status: 'paid',
+          createdAt: now.toISOString()
+        };
+        db.payrollRecords.push(newPR);
+        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+        modified = true;
+        continue;
+      }
 
-        let totalGross = 0;
-        let totalEmployeeIRPF = 0;
-        let totalEmployeeSS = 0;
-        let totalNetPaid = 0;
-        let totalCompanySS = 0;
-        let isProportionalPayroll = false;
-        let activeEmployeesCount = 0;
+      const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+      if (myEmployees.length === 0) continue;
 
-        const daysInPeriod = new Date(prevYear, prevMonth, 0).getDate();
-        const payrollPayDate = new Date(currentYear, currentMonth - 1, 1, 9, 0, 0);
+      let totalGross = 0;
+      let totalEmployeeIRPF = 0;
+      let totalEmployeeSS = 0;
+      let totalNetPaid = 0;
+      let totalCompanySS = 0;
+      let isProportionalPayroll = false;
+      let activeEmployeesCount = 0;
 
-        for (const emp of myEmployees) {
-          let empGross = 0;
-          let empIsProportional = false;
-          let workedDays = daysInPeriod;
+      const daysInPeriod = new Date(prevYear, prevMonth, 0).getDate();
+      const payrollPayDate = new Date(currentYear, currentMonth - 1, 1, 9, 0, 0);
 
-          if (emp.hireDate) {
-            const parts = emp.hireDate.split('T')[0].split('-');
-            const hireYear = parseInt(parts[0], 10);
-            const hireMonth = parseInt(parts[1], 10);
-            const hireDay = parseInt(parts[2], 10);
+      for (const emp of myEmployees) {
+        const empName = emp.employeeName || (emp as any).name || 'Empleado/a';
+        const empId = emp.id || generateId('emp');
 
-            if (hireYear > prevYear || (hireYear === prevYear && hireMonth > prevMonth)) {
-              // Employee was hired after prevMonth (e.g. hired in August, checking July) -> did not work in prevMonth
-              continue;
-            } else if (hireYear === prevYear && hireMonth === prevMonth) {
-              empIsProportional = true;
-              workedDays = Math.max(1, daysInPeriod - hireDay + 1);
-              empGross = (emp.grossSalaryMonthly / daysInPeriod) * workedDays;
-            } else {
-              empGross = emp.grossSalaryMonthly;
-            }
+        // Strict idempotency: check if this employee was already paid for this period
+        const alreadyPaidThisEmp = (db.transfers || []).some(
+          t => t.senderId === student.id &&
+               (t.receiverId === empId || t.receiverName === empName) &&
+               t.concept &&
+               (t.concept.includes('Mes ' + prevMonth + '/' + prevYear) || t.concept.includes('Abono de nÃ³mina neta Mes ' + prevMonth + '/' + prevYear))
+        );
+        if (alreadyPaidThisEmp) continue;
+
+        let empGross = 0;
+        let empIsProportional = false;
+        let workedDays = daysInPeriod;
+
+        if (emp.hireDate) {
+          const parts = emp.hireDate.split('T')[0].split('-');
+          const hireYear = parseInt(parts[0], 10);
+          const hireMonth = parseInt(parts[1], 10);
+          const hireDay = parseInt(parts[2], 10);
+
+          if (hireYear > prevYear || (hireYear === prevYear && hireMonth > prevMonth)) {
+            // Employee was hired after prevMonth -> did not work in prevMonth
+            continue;
+          } else if (hireYear === prevYear && hireMonth === prevMonth) {
+            empIsProportional = true;
+            workedDays = Math.max(1, daysInPeriod - hireDay + 1);
+            empGross = (emp.grossSalaryMonthly / daysInPeriod) * workedDays;
           } else {
             empGross = emp.grossSalaryMonthly;
           }
-
-          empGross = Math.round(empGross * 100) / 100;
-          if (empGross <= 0) continue;
-
-          if (empIsProportional) isProportionalPayroll = true;
-
-          const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
-          const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
-          const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
-          const eSSComp = Math.round(empGross * 0.75 * 100) / 100;
-
-          // Individual payment to this employee
-          student.balance = Math.round((student.balance - eNet) * 100) / 100;
-
-          const txId = generateId('tx');
-          const empName = emp.employeeName || (emp as any).name || 'Empleado/a';
-          const empId = emp.id || generateId('emp');
-
-          let hash = 0;
-          for (let i = 0; i < empId.length; i++) hash = (hash << 5) - hash + empId.charCodeAt(i);
-          const empAccountNum = (emp as any).accountNumber || `ES${Math.abs(hash) % 900000000000000000 + 100000000000000000}`;
-
-          const transfer: Transfer = {
-            id: txId,
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: empId,
-            receiverName: empName,
-            receiverAccount: empAccountNum,
-            amount: eNet,
-            concept: `Abono de nÃ³mina neta Mes ${prevMonth}/${prevYear} - ${empName}${emp.role ? ` (${emp.role})` : ''}`,
-            timestamp: payrollPayDate.toISOString()
-          };
-          db.transfers.unshift(transfer);
-          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', eNet, payrollPayDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-          totalGross += empGross;
-          totalEmployeeIRPF += eIRPF;
-          totalEmployeeSS += eSSEmp;
-          totalNetPaid += eNet;
-          totalCompanySS += eSSComp;
-          activeEmployeesCount++;
+        } else {
+          empGross = emp.grossSalaryMonthly;
         }
 
-        if (activeEmployeesCount > 0) {
-          totalGross = Math.round(totalGross * 100) / 100;
-          totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
-          totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
-          totalNetPaid = Math.round(totalNetPaid * 100) / 100;
-          totalCompanySS = Math.round(totalCompanySS * 100) / 100;
+        empGross = Math.round(empGross * 100) / 100;
+        if (empGross <= 0) continue;
 
-          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+        if (empIsProportional) isProportionalPayroll = true;
 
-          const prId = generateId('payroll');
-          const newPR: PayrollRecord = {
-            id: prId,
-            studentId: student.id,
-            studentName: student.name,
-            payrollDate: payrollPayDate.toISOString(),
-            periodMonth: prevMonth,
-            periodYear: prevYear,
-            employeeCount: activeEmployeesCount,
-            totalGrossSalary: totalGross,
-            totalEmployeeSS: totalEmployeeSS,
-            totalEmployeeIRPF: totalEmployeeIRPF,
-            totalNetSalaryPaid: totalNetPaid,
-            totalCompanySS: totalCompanySS,
-            isProportional: isProportionalPayroll,
-            status: 'paid',
-            createdAt: now.toISOString()
-          };
-          db.payrollRecords.push(newPR);
-          syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+        const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
+        const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
+        const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
+        const eSSComp = Math.round(empGross * 0.75 * 100) / 100;
 
-          // TGSS SS due date: 20th of current month (month following prevMonth)
-          const ssDueDateObj = new Date(currentYear, currentMonth - 1, 20, 9, 0, 0);
+        // Individual payment to this employee
+        student.balance = Math.round((student.balance - eNet) * 100) / 100;
+        const txId = generateId('tx');
+        let hash = 0;
+        for (let i = 0; i < empId.length; i++) hash = (hash << 5) - hash + empId.charCodeAt(i);
+        const empAccountNum = (emp as any).accountNumber || 'ES' + (Math.abs(hash) % 900000000000000000 + 100000000000000000);
 
-          // AEAT IRPF due date: 15th of first month of following quarter of prevMonth/prevYear
-          let qNum = 1;
-          let irpfDueDateObj: Date;
-          if (prevMonth >= 10) {
-            qNum = 4;
-            irpfDueDateObj = new Date(prevYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
-          } else if (prevMonth >= 7) {
-            qNum = 3;
-            irpfDueDateObj = new Date(prevYear, 9, 15, 9, 0, 0); // Oct 15
-          } else if (prevMonth >= 4) {
-            qNum = 2;
-            irpfDueDateObj = new Date(prevYear, 6, 15, 9, 0, 0); // Jul 15
-          } else {
-            qNum = 1;
-            irpfDueDateObj = new Date(prevYear, 3, 15, 9, 0, 0); // Apr 15
-          }
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: empId,
+          receiverName: empName,
+          receiverAccount: empAccountNum,
+          amount: eNet,
+          concept: 'Abono de nÃ³mina neta Mes ' + prevMonth + '/' + prevYear + ' - ' + empName + (emp.role ? ' (' + emp.role + ')' : ''),
+          timestamp: payrollPayDate.toISOString()
+        };
 
-          const ssEmpObl: TaxObligation = {
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', eNet, payrollPayDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+        totalGross += empGross;
+        totalEmployeeIRPF += eIRPF;
+        totalEmployeeSS += eSSEmp;
+        totalNetPaid += eNet;
+        totalCompanySS += eSSComp;
+        activeEmployeesCount++;
+      }
+
+      if (activeEmployeesCount > 0) {
+        totalGross = Math.round(totalGross * 100) / 100;
+        totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
+        totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
+        totalNetPaid = Math.round(totalNetPaid * 100) / 100;
+        totalCompanySS = Math.round(totalCompanySS * 100) / 100;
+
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+        const prId = generateId('payroll');
+        const newPR: PayrollRecord = {
+          id: prId,
+          studentId: student.id,
+          studentName: student.name,
+          payrollDate: payrollPayDate.toISOString(),
+          periodMonth: prevMonth,
+          periodYear: prevYear,
+          employeeCount: activeEmployeesCount,
+          totalGrossSalary: totalGross,
+          totalEmployeeSS: totalEmployeeSS,
+          totalEmployeeIRPF: totalEmployeeIRPF,
+          totalNetSalaryPaid: totalNetPaid,
+          totalCompanySS: totalCompanySS,
+          isProportional: isProportionalPayroll,
+          status: 'paid',
+          createdAt: now.toISOString()
+        };
+        db.payrollRecords.push(newPR);
+        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+
+        // TGSS SS due date: 20th of current month (month following prevMonth)
+        const ssDueDateObj = new Date(currentYear, currentMonth - 1, 20, 9, 0, 0);
+
+        // AEAT IRPF due date: 15th of first month of following quarter of prevMonth/prevYear
+        let qNum = 1;
+        let irpfDueDateObj: Date;
+        if (prevMonth >= 10) {
+          qNum = 4;
+          irpfDueDateObj = new Date(prevYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+        } else if (prevMonth >= 7) {
+          qNum = 3;
+          irpfDueDateObj = new Date(prevYear, 9, 15, 9, 0, 0); // Oct 15
+        } else if (prevMonth >= 4) {
+          qNum = 2;
+          irpfDueDateObj = new Date(prevYear, 6, 15, 9, 0, 0); // Jul 15
+        } else {
+          qNum = 1;
+          irpfDueDateObj = new Date(prevYear, 3, 15, 9, 0, 0); // Apr 15
+        }
+
+        const ssEmpObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_employee',
+          concept: 'Cuotas Seguridad Social Trabajador (6,48%) Mes ' + prevMonth + '/' + prevYear,
+          amount: totalEmployeeSS,
+          dueDate: ssDueDateObj.toISOString(),
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        const ssCompObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'ss_company',
+          concept: 'AportaciÃ³n patronal Seguridad Social (75%) Mes ' + prevMonth + '/' + prevYear,
+          amount: totalCompanySS,
+          dueDate: ssDueDateObj.toISOString(),
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+
+        db.taxObligations.push(ssEmpObl, ssCompObl);
+        syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
+        syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+        const existingIrpf = db.taxObligations.find(t => 
+          t.studentId === student.id &&
+          t.type === 'irpf' &&
+          t.status === 'pendiente' &&
+          new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() &&
+          new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
+        );
+
+        if (existingIrpf) {
+          existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
+          existingIrpf.concept = 'Retenciones IRPF de nÃ³minas (17%) Trimestre Q' + qNum + ' ' + prevYear;
+          syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
+        } else {
+          const irpfObl: TaxObligation = {
             id: generateId('tax'),
             studentId: student.id,
             studentName: student.name,
-            type: 'ss_employee',
-            concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${prevMonth}/${prevYear}`,
-            amount: totalEmployeeSS,
-            dueDate: ssDueDateObj.toISOString(),
+            type: 'irpf',
+            concept: 'Retenciones IRPF de nÃ³minas (17%) Trimestre Q' + qNum + ' ' + prevYear,
+            amount: totalEmployeeIRPF,
+            dueDate: irpfDueDateObj.toISOString(),
             status: 'pendiente',
             payrollRecordId: prId
           };
-
-          const ssCompObl: TaxObligation = {
-            id: generateId('tax'),
-            studentId: student.id,
-            studentName: student.name,
-            type: 'ss_company',
-            concept: `AportaciÃ³n patronal Seguridad Social (75%) Mes ${prevMonth}/${prevYear}`,
-            amount: totalCompanySS,
-            dueDate: ssDueDateObj.toISOString(),
-            status: 'pendiente',
-            payrollRecordId: prId
-          };
-
-          db.taxObligations.push(ssEmpObl, ssCompObl);
-          syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
-          syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
-
-          const existingIrpf = db.taxObligations.find(t => 
-            t.studentId === student.id && 
-            t.type === 'irpf' && 
-            t.status === 'pendiente' && 
-            new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
-            new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
-          );
-
-          if (existingIrpf) {
-            existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
-            existingIrpf.concept = `Retenciones IRPF de nÃ³minas (17%) Trimestre Q${qNum} ${prevYear}`;
-            syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
-          } else {
-            const irpfObl: TaxObligation = {
-              id: generateId('tax'),
-              studentId: student.id,
-              studentName: student.name,
-              type: 'irpf',
-              concept: `Retenciones IRPF de nÃ³minas (17%) Trimestre Q${qNum} ${prevYear}`,
-              amount: totalEmployeeIRPF,
-              dueDate: irpfDueDateObj.toISOString(),
-              status: 'pendiente',
-              payrollRecordId: prId
-            };
-            db.taxObligations.push(irpfObl);
-            syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
-          }
-
-          db.systemLogs.unshift({
-            id: generateId('log'),
-            action: 'PAYROLL_AUTOMATED',
-            details: `NÃ³minas del mes ${prevMonth}/${prevYear} pagadas automÃ¡ticamente el dÃ­a 1 para ${student.name}: ${activeEmployeesCount} transferencias individuales realizadas por un lÃ­quido total de ${totalNetPaid}â‚¬. Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}â‚¬) y Seguridad Social (Empleado: ${totalEmployeeSS}â‚¬, Empresa: ${totalCompanySS}â‚¬).`,
-            timestamp: now.toISOString(),
-            studentId: student.id,
-            studentName: student.name
-          });
+          db.taxObligations.push(irpfObl);
+          syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
         }
+
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'PAYROLL_AUTOMATED',
+          details: 'NÃ³minas del mes ' + prevMonth + '/' + prevYear + ' pagadas automÃ¡ticamente el dÃ­a 1 para ' + student.name + ': ' + activeEmployeesCount + ' transferencias individuales realizadas por un lÃ­quido total de ' + totalNetPaid + 'â‚¬. Generadas deudas con Hacienda (IRPF: ' + totalEmployeeIRPF + 'â‚¬) y Seguridad Social (Empleado: ' + totalEmployeeSS + 'â‚¬, Empresa: ' + totalCompanySS + 'â‚¬).',
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+
+        modified = true;
       }
     }
   }
 
-  // 2. Process Tax Obligations on day 1 or later
-  if (currentDay >= 1) {
-    const pendingTaxes = db.taxObligations.filter(t => t.status === 'pendiente' && new Date(t.dueDate) <= now);
-    for (const tax of pendingTaxes) {
-      const student = db.users.find(u => u.id === tax.studentId && u.role === 'student');
-      if (!student) continue;
-
-      student.balance = Math.round((student.balance - tax.amount) * 100) / 100;
-      tax.status = 'pagado';
-      tax.paidDate = now.toISOString();
-
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-      syncTaxObligationToSupabase(tax).catch(e => console.error(e));
-
-      const txId = generateId('tx');
-      const receiverName = tax.type === 'irpf' ? 'Agencia Tributaria - Hacienda PÃºblica' : 'TesorerÃ­a General de la Seguridad Social';
-      const transfer: Transfer = {
-        id: txId,
-        senderId: student.id,
-        senderName: student.name,
-        senderAccount: student.accountNumber,
-        receiverId: tax.type === 'irpf' ? 'hacienda' : 'seguridad-social',
-        receiverName: receiverName,
-        receiverAccount: 'ES000000000000000000',
-        amount: tax.amount,
-        concept: `Pago automÃ¡tico de ${tax.concept}`,
-        timestamp: now.toISOString()
-      };
-      db.transfers.unshift(transfer);
-      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', tax.amount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-      db.systemLogs.unshift({
-        id: generateId('log'),
-        action: 'TAX_AUTOMATED_PAYMENT',
-        details: `Pago automÃ¡tico fiscal realizado por ${student.name}: ${tax.concept} por importe de ${tax.amount}â‚¬`,
-        timestamp: now.toISOString(),
-        studentId: student.id,
-        studentName: student.name
-      });
+  if (modified) {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Error writing db in payroll:', e);
     }
   }
 }
@@ -7616,7 +7588,40 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
   for (const msg of db.marketMessages) {
     if (msg.type === 'promissory_note' && msg.promissoryNoteData) {
       const pn = msg.promissoryNoteData;
-      if ((pn.status === 'descontado' || pn.status === 'gestion_cobro') && !pn.maturityProcessed) {
+      if (pn.status === 'pagado' || pn.maturityProcessed) {
+        continue;
+      }
+      if (pn.status === 'descontado' || pn.status === 'gestion_cobro') {
+        // Strict idempotency: check if note was already collected, settled, or returned
+        const alreadySettledTx = (db.transfers || []).find(t => 
+          t.concept && t.concept.includes(pn.promissoryNoteNumber) &&
+          (t.concept.includes('gestion de cobro') || t.concept.includes('LiquidaciÃ³n al vencimiento') || t.concept.includes('Cobro al vencimiento') || t.concept.includes('Cobro automÃ¡tico'))
+        );
+        if (alreadySettledTx) {
+          pn.status = 'pagado';
+          pn.maturityProcessed = true;
+          pn.paidAt = pn.paidAt || alreadySettledTx.timestamp;
+          pn.paidTransferId = pn.paidTransferId || alreadySettledTx.id;
+          const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
+          if (obl && obl.status !== 'pagado') {
+            obl.status = 'pagado';
+            obl.paidDate = pn.paidAt;
+            syncObligationToSupabase(obl).catch(e => console.error(e));
+          }
+          modified = true;
+          continue;
+        }
+
+        const alreadyReturnedTx = (db.transfers || []).find(t => 
+          t.concept && t.concept.includes(pn.promissoryNoteNumber) && t.concept.includes('devoluciÃ³n')
+        );
+        if (alreadyReturnedTx) {
+          pn.status = 'impagado';
+          pn.maturityProcessed = true;
+          modified = true;
+          continue;
+        }
+
         const dueStr = (pn.dueDate || '').slice(0, 10);
         const isMaturity = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime();
 
@@ -7632,7 +7637,6 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               u.username === pn.issuerId
             );
           }
-
           let beneficiary = db.users.find(u => u.id === pn.beneficiaryId);
           if (!beneficiary) {
             beneficiary = db.users.find(u =>
@@ -7641,7 +7645,6 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               u.username === pn.beneficiaryId
             );
           }
-
           if (!payer || !beneficiary) continue;
 
           const isDiscountedNote = pn.status === 'descontado';
@@ -7653,10 +7656,7 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
             const txId = generateId('tx');
 
             if (isDiscountedNote) {
-              // Note was previously discounted: seller already received cash in advance.
-              // Debtor pays the bank which financed the advance.
-              const transferConcept = `LiquidaciÃ³n al vencimiento de pagarÃ© descontado ${pn.promissoryNoteNumber} - Librador: ${payer.name}`;
-
+              const transferConcept = 'LiquidaciÃ³n al vencimiento de pagarÃ© descontado ' + pn.promissoryNoteNumber + ' - Librador: ' + payer.name;
               const payTransfer: Transfer = {
                 id: txId,
                 senderId: payer.id,
@@ -7679,27 +7679,31 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.paidTransferId = txId;
               modified = true;
 
-              // Notification to seller: no further charges
+              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
+              if (obl) {
+                obl.status = 'pagado';
+                obl.paidDate = now.toISOString();
+                syncObligationToSupabase(obl).catch(e => console.error(e));
+              }
+
               addNotification(
                 db,
                 beneficiary.id,
                 'PagarÃ© descontado atendido al vencimiento',
-                `El deudor ${payer.name} ha liquidado correctamente al vencimiento el pagarÃ© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} â‚¬ que habÃ­as descontado. OperaciÃ³n concluida con Ã©xito sin costes adicionales.`,
+                'El deudor ' + payer.name + ' ha liquidado correctamente al vencimiento el pagarÃ© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' â‚¬ que habÃ­as descontado. OperaciÃ³n concluida con Ã©xito sin costes adicionales.',
                 'transfer_received',
                 txId
               );
 
-              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Cargo de pagarÃ© al vencimiento',
-                `El banco ha cargado en tu cuenta ${formatNumber(amount)} â‚¬ correspondiente al vencimiento del pagarÃ© oficial ${pn.promissoryNoteNumber} emitido a favor de ${beneficiary.name}.`,
+                'El banco ha cargado en tu cuenta ' + formatNumber(amount) + ' â‚¬ correspondiente al vencimiento del pagarÃ© oficial ' + pn.promissoryNoteNumber + ' emitido a favor de ' + beneficiary.name + '.',
                 'transfer_received',
                 txId
               );
 
-              // Chat message in direct message thread
               const successMaturityMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7707,25 +7711,20 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: payer.name,
                 recipientId: beneficiary.id,
                 recipientName: beneficiary.name,
-                content: `ğŸ¦ PagarÃ© descontado liquidado al vencimiento: El deudor ${payer.name} ha atendido el cargo del pagarÃ© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} â‚¬. El banco confirma la liquidaciÃ³n definitiva. No procede ningÃºn cargo adicional para el vendedor acreedor.`,
+                content: 'ğŸ¦ PagarÃ© descontado liquidado al vencimiento: El deudor ' + payer.name + ' ha atendido el cargo del pagarÃ© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' â‚¬. El banco confirma la liquidaciÃ³n definitiva. No procede ningÃºn cargo adicional para el vendedor acreedor.',
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(successMaturityMsg);
 
-              // Sync to Supabase
               if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, payTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
               syncMarketMessageToSupabase(successMaturityMsg).catch(e => console.error(e));
             } else if (isCollectionNote) {
-              // Note was placed in collection management (gestiÃ³n de cobro):
-              // Seller pays zero at maturity and automatically receives the full nominal amount.
               beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
-
-              const transferConcept = `Cobro automÃ¡tico al vencimiento por gestiÃ³n de cobro de pagarÃ© ${pn.promissoryNoteNumber} - Librador: ${payer.name} -> Beneficiario: ${beneficiary.name}`;
-
+              const transferConcept = 'Cobro automÃ¡tico al vencimiento por gestiÃ³n de cobro de pagarÃ© ' + pn.promissoryNoteNumber + ' - Librador: ' + payer.name + ' -> Beneficiario: ' + beneficiary.name;
               const collectionPayTransfer: Transfer = {
                 id: txId,
                 senderId: payer.id,
@@ -7749,27 +7748,31 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.collectionAutoCollectedAt = now.toISOString();
               modified = true;
 
-              // Notification to seller
+              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
+              if (obl) {
+                obl.status = 'pagado';
+                obl.paidDate = now.toISOString();
+                syncObligationToSupabase(obl).catch(e => console.error(e));
+              }
+
               addNotification(
                 db,
                 beneficiary.id,
                 'PagarÃ© en gestiÃ³n de cobro cobrado con Ã©xito',
-                `El pagarÃ© oficial ${pn.promissoryNoteNumber} emitido por ${payer.name} ha vencido hoy y el banco ha tramitado el cobro automÃ¡tico. Se han ingresado +${formatNumber(amount)} â‚¬ en tu cuenta corriente sin necesidad de ninguna acciÃ³n adicional.`,
+                'El pagarÃ© oficial ' + pn.promissoryNoteNumber + ' emitido por ' + payer.name + ' ha vencido hoy y el banco ha tramitado el cobro automÃ¡tico. Se han ingresado +' + formatNumber(amount) + ' â‚¬ en tu cuenta corriente sin necesidad de ninguna acciÃ³n adicional.',
                 'transfer_received',
                 txId
               );
 
-              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Cargo de pagarÃ© al vencimiento (gestiÃ³n de cobro)',
-                `El banco ha cargado en tu cuenta ${formatNumber(amount)} â‚¬ correspondiente al vencimiento del pagarÃ© oficial ${pn.promissoryNoteNumber} presentado en gestiÃ³n de cobro por ${beneficiary.name}.`,
+                'El banco ha cargado en tu cuenta ' + formatNumber(amount) + ' â‚¬ correspondiente al vencimiento del pagarÃ© oficial ' + pn.promissoryNoteNumber + ' presentado en gestiÃ³n de cobro por ' + beneficiary.name + '.',
                 'transfer_received',
                 txId
               );
 
-              // Chat message in direct message thread
               const successCollectionMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7777,14 +7780,13 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: payer.name,
                 recipientId: beneficiary.id,
                 recipientName: beneficiary.name,
-                content: `ğŸ›ï¸ PAGARÃ‰ EN GESTIÃ“N DE COBRO LIQUIDADO AUTOMÃTICAMENTE: El banco ha tramitado con Ã©xito el cobro automÃ¡tico al vencimiento del pagarÃ© ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} â‚¬ en la cuenta del comprador deudor (${payer.name}) y se han abonado Ã­ntegramente +${formatNumber(amount)} â‚¬ en la cuenta del vendedor acreedor (${beneficiary.name}).`,
+                content: 'ğŸ›ï¸ PAGARÃ‰ EN GESTIÃ“N DE COBRO LIQUIDADO AUTOMÃTICAMENTE: El banco ha tramitado con Ã©xito el cobro automÃ¡tico al vencimiento del pagarÃ© ' + pn.promissoryNoteNumber + '. Se han cargado ' + formatNumber(amount) + ' â‚¬ en la cuenta del comprador deudor (' + payer.name + ') y se han abonado Ã­ntegramente +' + formatNumber(amount) + ' â‚¬ en la cuenta del vendedor acreedor (' + beneficiary.name + ').',
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(successCollectionMsg);
 
-              // Sync to Supabase
               if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, collectionPayTransfer).catch(e => console.error(e));
@@ -7797,17 +7799,14 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
             const txId = generateId('tx');
 
             if (isDiscountedNote) {
-              // Discounted note returned: seller repays nominal (advanced earlier by bank) + 1% return commission
               const unpaidCommission = Number((amount * 0.01).toFixed(2));
               const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
-
               beneficiary.balance = Number((beneficiary.balance - totalDebitVendor).toFixed(2));
 
               const txNominalId = generateId('tx');
               const txFeeId = generateId('tx');
-
-              const nominalReturnConcept = `Reintegro del nominal de pagarÃ© descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${payer.name}) - DevoluciÃ³n de anticipo bancario: -${formatNumber(amount)} â‚¬`;
-              const feeReturnConcept = `ComisiÃ³n bancaria por devoluciÃ³n de pagarÃ© descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} â‚¬) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} â‚¬`;
+              const nominalReturnConcept = 'Reintegro del nominal de pagarÃ© descontado devuelto por impago ' + pn.promissoryNoteNumber + ' (librador: ' + payer.name + ') - DevoluciÃ³n de anticipo bancario: -' + formatNumber(amount) + ' â‚¬';
+              const feeReturnConcept = 'ComisiÃ³n bancaria por devoluciÃ³n de pagarÃ© descontado impagado ' + pn.promissoryNoteNumber + ' (1% sobre ' + formatNumber(amount) + ' â‚¬) - Falta de fondos del librador: -' + formatNumber(unpaidCommission) + ' â‚¬';
 
               const nominalReturnTransfer: Transfer = {
                 id: txNominalId,
@@ -7850,27 +7849,30 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.unpaidFeeTransferId = txFeeId;
               modified = true;
 
-              // Notification to seller
+              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
+              if (obl) {
+                obl.status = 'vencido';
+                syncObligationToSupabase(obl).catch(e => console.error(e));
+              }
+
               addNotification(
                 db,
                 beneficiary.id,
                 'PagarÃ© descontado devuelto por impago (cargo de nominal + comisiÃ³n)',
-                `El deudor ${payer.name} no disponÃ­a de saldo para atender el pagarÃ© ${pn.promissoryNoteNumber} (${formatNumber(amount)} â‚¬). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} â‚¬; 2) ComisiÃ³n de devoluciÃ³n (1%): -${formatNumber(unpaidCommission)} â‚¬. Total cargado: -${formatNumber(totalDebitVendor)} â‚¬. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                'El deudor ' + payer.name + ' no disponÃ­a de saldo para atender el pagarÃ© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' â‚¬). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -' + formatNumber(amount) + ' â‚¬; 2) ComisiÃ³n de devoluciÃ³n (1%): -' + formatNumber(unpaidCommission) + ' â‚¬. Total cargado: -' + formatNumber(totalDebitVendor) + ' â‚¬. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).',
                 'transfer_received',
                 txNominalId
               );
 
-              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'PagarÃ© devuelto impagado al tenedor',
-                `No disponÃ­as de saldo suficiente para atender el vencimiento del pagarÃ© ${pn.promissoryNoteNumber} (${formatNumber(amount)} â‚¬). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrÃ¡ iniciar acciones ejecutivas judiciales.`,
+                'No disponÃ­as de saldo suficiente para atender el vencimiento del pagarÃ© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' â‚¬). El banco ha devuelto el efecto como impagado a ' + beneficiary.name + ', quien podrÃ¡ iniciar acciones ejecutivas judiciales.',
                 'transfer_received',
                 txNominalId
               );
 
-              // Chat message in direct message thread
               const protestMaturityMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7878,26 +7880,23 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: beneficiary.name,
                 recipientId: payer.id,
                 recipientName: payer.name,
-                content: `âŒ PagarÃ© descontado devuelto por impago: El librador ${payer.name} no disponÃ­a de fondos suficientes para atender el pagarÃ© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} â‚¬ a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${beneficiary.name}):\nâ€¢ Reintegro del nominal anticipado: -${formatNumber(amount)} â‚¬\nâ€¢ ComisiÃ³n bancaria por devoluciÃ³n (1%): -${formatNumber(unpaidCommission)} â‚¬\nâ€¢ Total adeudado: -${formatNumber(totalDebitVendor)} â‚¬\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
+                content: 'âŒ PagarÃ© descontado devuelto por impago: El librador ' + payer.name + ' no disponÃ­a de fondos suficientes para atender el pagarÃ© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' â‚¬ a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (' + beneficiary.name + '):\nâ€¢ Reintegro del nominal anticipado: -' + formatNumber(amount) + ' â‚¬\nâ€¢ ComisiÃ³n bancaria por devoluciÃ³n (1%): -' + formatNumber(unpaidCommission) + ' â‚¬\nâ€¢ Total adeudado: -' + formatNumber(totalDebitVendor) + ' â‚¬\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.',
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(protestMaturityMsg);
 
-              // Sync to Supabase
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txNominalId + '-out', beneficiary.id, 'TRANSFER_OUT', amount, now.toISOString(), nominalReturnConcept, nominalReturnTransfer).catch(e => console.error(e));
               syncMovimientoToSupabase(txFeeId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, new Date(now.getTime() + 1000).toISOString(), feeReturnConcept, feeReturnTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
               syncMarketMessageToSupabase(protestMaturityMsg).catch(e => console.error(e));
             } else if (isCollectionNote) {
-              // Collection management note returned: seller charged 40 â‚¬ fixed unpaid return commission
               const unpaidCommission = 40.00;
-
               beneficiary.balance = Number((beneficiary.balance - unpaidCommission).toFixed(2));
-              const returnConcept = `ComisiÃ³n por devoluciÃ³n de pagarÃ© impagado en gestiÃ³n de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${payer.name}) - Tarifa bancaria fija: -40,00 â‚¬`;
 
+              const returnConcept = 'ComisiÃ³n por devoluciÃ³n de pagarÃ© impagado en gestiÃ³n de cobro ' + pn.promissoryNoteNumber + ' por falta de fondos del librador (' + payer.name + ') - Tarifa bancaria fija: -40,00 â‚¬';
               const returnTransfer: Transfer = {
                 id: txId,
                 senderId: beneficiary.id,
@@ -7921,27 +7920,30 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.unpaidReturnTransferId = txId;
               modified = true;
 
-              // Notification to seller
+              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
+              if (obl) {
+                obl.status = 'vencido';
+                syncObligationToSupabase(obl).catch(e => console.error(e));
+              }
+
               addNotification(
                 db,
                 beneficiary.id,
                 'PagarÃ© en gestiÃ³n de cobro devuelto por impago',
-                `El librador ${payer.name} no disponÃ­a de saldo para atender el pagarÃ© ${pn.promissoryNoteNumber} (${formatNumber(amount)} â‚¬). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 â‚¬ por comisiÃ³n de devoluciÃ³n. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                'El librador ' + payer.name + ' no disponÃ­a de saldo para atender el pagarÃ© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' â‚¬). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 â‚¬ por comisiÃ³n de devoluciÃ³n. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).',
                 'transfer_received',
                 txId
               );
 
-              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'PagarÃ© Devuelto Impagado al Tenedor',
-                `No disponÃ­as de saldo suficiente para atender el vencimiento del pagarÃ© ${pn.promissoryNoteNumber} (${formatNumber(amount)} â‚¬). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrÃ¡ iniciar acciones ejecutivas en los Tribunales.`,
+                'No disponÃ­as de saldo suficiente para atender el vencimiento del pagarÃ© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' â‚¬). El banco ha devuelto el efecto como impagado a ' + beneficiary.name + ', quien podrÃ¡ iniciar acciones ejecutivas en los Tribunales.',
                 'transfer_received',
                 txId
               );
 
-              // Chat message in direct message thread
               const protestCollectionMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7949,14 +7951,13 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: beneficiary.name,
                 recipientId: payer.id,
                 recipientName: payer.name,
-                content: `âŒ PAGARÃ‰ EN GESTIÃ“N DE COBRO DEVUELTO POR IMPAGO: El deudor ${payer.name} no disponÃ­a de saldo suficiente para atender el vencimiento del pagarÃ© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} â‚¬. El banco ha devuelto el pagarÃ© al vendedor acreedor (${beneficiary.name}) como IMPAGADO con un cargo de 40,00 â‚¬ en concepto de comisiÃ³n por efecto devuelto. El pagarÃ© conserva plena fuerza ejecutiva cambiaria para su reclamaciÃ³n judicial.`,
+                content: 'âŒ PAGARÃ‰ EN GESTIÃ“N DE COBRO DEVUELTO POR IMPAGO: El deudor ' + payer.name + ' no disponÃ­a de saldo suficiente para atender el vencimiento del pagarÃ© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' â‚¬. El banco ha devuelto el pagarÃ© al vendedor acreedor (' + beneficiary.name + ') como IMPAGADO con un cargo de 40,00 â‚¬ en concepto de comisiÃ³n por efecto devuelto. El pagarÃ© conserva plena fuerza ejecutiva cambiaria para su reclamaciÃ³n judicial.',
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(protestCollectionMsg);
 
-              // Sync to Supabase
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, now.toISOString(), returnConcept, returnTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
@@ -7968,6 +7969,13 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
     }
   }
 
+  if (modified) {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Error writing db in maturity:', e);
+    }
+  }
   return modified;
 }
 
@@ -8286,7 +8294,7 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             timestamp: new Date().toISOString()
           };
           db.transfers.unshift(principalTransfer);
-          syncElectricityBillToSupabase(bill).catch(e => console.error(e));
+          // electricity bill updated in local db
           syncMovimientoToSupabase(principalTransfer.id + "-out", student.id, "TRANSFER_OUT", item.principal, principalTransfer.timestamp, principalTransfer.concept, principalTransfer).catch(e => console.error(e));
 
           if (item.penaltyInterest > 0) {
@@ -12036,113 +12044,26 @@ app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
   res.json({ success: true, order, message: 'Solicitud rechazada.' });
 });
 
-// Helper to check trade permission between two users/roles
-function canTradeUsers(
-  buyer: { id: string; role?: string; level?: number },
-  seller: { id: string; role?: string; level?: number | string }
-): { allowed: boolean; reason?: string } {
-  const isBuyerTeaxœì½[oIÖ ö®_-ôLUÈ"%u÷t—F-°)ª‡3º­Hõø³,“ÉÊ$™ÓY™Õ™UT³5†_ø`ØXk‹öƒÏğ<ßËbWÿdşÀîOğ9'n'"#³²x“zFÌˆ•—qî'Î'¥¸/æ§I9Lcqÿş}Ñ›–ÅaRåêíøË_ÔË²Èùz–Dcø¬wï†ã"¯f"­v’,KÊ]ù:¬èwSêm½Kö’}z’$1|;‰fI™F«Ó2D¼i–œ$™l]¦ã4Ê`rfv4ÿÇ²Lõü©gú€=}¹TÙô{`×(Ç²İ¸+vûy:Ÿ$eß™êúKEßÆ@¼…çúÓó@”Él^æâ­ˆ²¬x“Ä#qeU²/¢ªÈG¢·•	`‘ø<KŠ`Ş“iU"Õ»¿ŠIZMŠaOœİ£¡ê½ÎÊy"ßÙYzs±Óä@ÀßÍÓöÏ_ÅN‘"ƒù&0í¤‚?âD<Mq„Ûb:Oâ$WK*…:
-• ³ KÌÄs½D³ˆúLí*œM½œe<.p:óI^8¨puŞ*Ø¬Eß[Ò@°qÅ¬w×¯æp.ge4‹Æé»Í‹Ö}çÖı0­fez0O]“J<‰N‹Á¢úrâ0‰   ·ƒ2Gù,áË\´¦»mkºs5kJsoMw›Ö»_šeİq–µxÏ¦I)7±~LÒYGb
-Çñ¥L2‰- }“ˆğG5Ÿ¤9NAa=Œ¶¶&vÓé4ÍD’ÇÓ"Íg¢ÿü‰¼ûk$&I	;1Æ?OìA_Õxä3Õ«¨fÅøûÁh:N‹jÖï­EÓt­ŒŞh
-UkE'eµ6Jãµ
-Fì­ˆ~™ü€‹‚“}ÿkÚ6IWß
- ôg@Ráıp•Ñ¤ºÇ^Î«¤Ü¶ŠøÔ¾èq?<è[ÚúI|0„Ù<Q“yFSˆĞSøüÕkÛÍ…šÓ<î8ùB3§4&AƒÒ·æÈÁ:‡pHfóªÿÙúgƒáŸa+ûoER–E)i°©Ù<ÆMr‰É10µ3»êPu">Aæ•?ˆâ¢§}h°u°ı§î"OÜâç<‡sÃÁ„"oá¯›Ÿ¾åCİŠ‡ÉAB¯K J	|9c=á>ÍWd#
-À² ™ä LÕ)ı„üõ¯ı'Ÿ´²ùæöZ¢`LÕ›uŒ 3õvRŸ{ÉGĞ=…!~7´½ ÙLnq¢LîA4Ÿ	ù	€
-Mç
-…¼ó†=Z®0`ïV^ÍËDb €>‹çãY‹Ã²˜(E¤9CœŠ(áy1ÏÇ	nt«' 
-zxH_§Eş¨(é÷ãƒ	•“Ÿòâlc¼akú4-çp°’|Np^¥³¢ÇŞ#±Iâ~_¼ÎŠíg;@ó#…¯Õi>~á¡Ún±3ŸFQ•HÇÑl|ÜO÷pJ 6	Ôıd »‰âøi1KAö‹p=},†şÕs¥£±Ë‡½'–ÊR Aí2ÌÊw?Ó2=Ùp¤+³EÒOP®ëíhRHQöÎÄq¤…°E‘üˆØ&I8ì´Á4M/wÓY– Â=v¨/`Ş»ŸŸôÒ­˜ÍáhM¢ñ»É‡ûj=ÔãeD¤¸Ç—ÆğCêM™Î –ñüY^j_ÍÇx:$Ÿd]È?'ğ*:JF.ğhm1Š›e™Œg’FÅN‚`@ŞÄá Ÿ)æ| ‚=çØhUØ 7·ØZo{xòaDáôoùaZNÄ‹dœ¤Ó™X•K-3Û$ö‹{5–­q+ÆÉT
-I–i½ZÀµbÙ30®Õ0«¥œTïõ9Yİ?/#E	È-ÈÌƒêïa†
-šDc˜İÒÜ”%ÉúN#<|•ä‚j6œÏ|¶,-ÔK³oÕqj¥…kx‘";ÔœfSq„h^Ì€àq9q‘'ç£ìÀ)`6 Ú¿ßÈãÍ(Ï3X(%êsû™¥Ÿ´æË Û²—mÍ­Øç0¯<¸ÈÕac's}Xı)=æ°g;ŒçHôi²Ët„×©~Ú{a¨‘¡PJ–i`¬©WO·ß·R-yb0ãô •ü…ñŒöTWŸ÷èˆNh„¶¹¢2-47iâ'G!¢°£™¯x<Eñ+¤Œív·¨5¢ó•6"†È`ÏáO¢|z5œª"' 0iÆ ¼…D_E7n.¡À wYMe‡™åˆÿ{T
-jƒ“ÅMÔˆëÌ<ò{klƒV‹bU3²‡J"ú–:-¢:.æY,@‹:JrĞâIT/¨S/«³bUı)H|ˆêVa}'á.fIÎ—“¹€:^”ÑÜDê	š3ˆm[S^HÕßLİ`š­rydXme¬1 Ö†_sÕ"Ü‚É
-ç×ŒÕêºêÆÕ7$È7§IT*¶”ÌÍ³ìŸà	oŒ‹ÉÓùšº³ØÖíõõuqK>‘Múññ<f«Ó&¿VÚ<:€ƒÔş£ÍİÕOßâTÎà_3àÙ>[_ˆ±â•bÜNï³q]â¡‚°£÷Ãn&
-´p@¦gFÎÓ\‡?ã<ˆPj3ŞŸJùH!`ğ0Û0°%tIm–jdB¶>U•’Jì^#b!}Ğ“İ‰3%tß³begğ÷£ôÇ$îßœ‰¿ıÿïu*ÎÁ±Ÿ^¹¯!è®(QÏS{iGb
-í×4ÅÉ4ÊOÉ¼fIeä€Š¸> ¡bú“¨ü>™­eûÕ©jßÂæOÒäqÉÇáô–§CóèhE²‘·[Ö®Õs$Æî=Slİš´ÊÉºÙ@ŒDd‡ºÊ’™˜Úê£êIªÑ€æÊ¿¤Ãîî°ÓøÍúÓÂ|2@ÁşTÃÿƒ½Ù˜Ï‘æ‚°•o¢S \ßÏ“´Å›\÷#ÆQ«¯qRSÆ‚íaÁFdÁ#xO}Á}wr­°šz*ğ“JYU÷d¿g×#=·-NÒ*=€‰Ï
-ñø6Ùàß¹§šİ	7»«ßß¥ŸŸ¹ÖF‡wáœ'/qêjWVÔ¢Cå7PÆBK›Epo»GvN‡<Ù8Œ&­Â°%d*Ó)’Ñ‘GÅË2ë&ëÇ¸i¶Ïİ<Ú8lÛU}YÍQrÄØÂ±a,²Ï‚h&WAèájw1añ"`A ü½{ˆ©Ç&6sŸàI*ó=!u¦8’ãñy…ÀWâøm.N…Bv§?¶§¸8öéÃx¬.!úÄŞBßßs:Öçã¾9)~‡úùÈÿÆëH¹êi­Öï6šOãhf­2„< ˆƒTè€Şj
-–ÆÀ§Ôc£ÌNÕÙ<É±S£ü³MÙ=XYv‡éÈ0JFWW`ˆ¹o$#<ú­Ìá"iË=%Õòt^›ƒçb›NK&†éÖmDİ-ªKnKx”ğ"*¨@šÇ(G¹æêoh$"GåtfEøÓ1ºxAçıØMÕ0*o‚PãK5ƒ¡¢ôÑêTöŞJE¥Õ Ö&Û†ÒÁ;ØÀOLË0å««…êÛS64$˜— {V2ß(ÏÈå)HÚè>rI£ƒ$nCIÇt&†j~H­o<TŸ«7vÕfFª&„v8ÉZ-ßû=Õ¢708PqËpdG3ï [´‡BŞ‚	ƒôŒe#DŸ'¼Ãİr!öÔsí‚uË1hKáMôîÿ‹ÈÍƒŞ§J·”A)€BUôç¤´~KHÊXQ‰Ç)œ‹FĞ’d€ˆF¨%MS”ß“·K(HF4vÂ'¹+*[­fĞu5Hús&UÔµÔª„¢¦>èÉ„ı›Ê6oíñ€n£ñsëÈŠ]È‡Î#ÀĞW¯z:PŸ¡JÄÄPY=Ÿ“ˆûë_›öıW½<:Iö Uæ¨sD:«È,šäìÏ= ş ¢t\àCÖú5èããÆªú0*PÏiRÎNwO§¤ˆFÃ™ú«×Ã£ü„Ìrß` OÍ4ÿÍêcıgík;*Í¿wi½i‹ğ%÷ÀTwF1»ı&*“ãî5ßg:?æ“í6TÜ·ÛZuC7:*Àï³ôp¦Ñt^ái—§c3ÕIªŠIÒ?áçÈœ¤“®'Iˆ“á‰ì—vŸÎ;¨]À?Ò,‹ö QOPÍ&Ã+ûªÏşf£FU•¨ö\A]¯–Î÷†¶‡Ã-Kò£Ù±ŒIC:Ïºû“ö6È‚?zR!ê¨m-Qù5»H;işfĞ×±X¬2	¾U+ì¡‘Xp¾¶óÉ<AEöÖx-zN? t§›:
-´fŸEq\ñ@ –V*ùUœEkqğy‘½ûëQŠÍ6£¬vÚÌÓ3”3p4s&İ
-YñIµæ)WıFÿmßj14 ƒ
-†`z:\Ímfd†ºsfd<‚|¤bWñÃ—|yÍğ5Í’VÉÛ®÷¢}d6ÃÖğpàÉ“ÓñÃ<ÊápÀ_Ôé´(gO’Ùq!õdà‡´‘O2âgè	–7(Ì?ÌNá¹
-8Ö}3¥UO‡dC6#ú­&…§ÕÓèizCâI½şî¾X_ÎÁ bTPRˆAÖ+ĞÍ€Ñ @ÄÈÒßıœÁŸuç™- 6ÛåæñTcV*Üm3úX òx€“ÚphßŠß$/ĞÌÙ Ôô¹aßÈ6íŸòÅú»çî],êvh<¥¨½Âœ¯º¡ÃàÊ#˜¡^³ƒ„x0—‘rH8zšË|ÎåI7—+Ù\–TcÛSÍ†¿–LøK…:!¢¢Õ†,¤@år=y÷3ı;Ïø¢Œ9­¤r€,LFIê×x„‘¾d@F™„¦KÁ)nLÔ1[*I¼c*îó“,Ñ2G´T'2'I‰Qˆ¼€b¾~µÎüï€b ©ØÈ]ÿAà!R„‘`CÑ~‚ Í³Ù<TÚÕühè‡§èR–Âbš×Öì®?SŒFïÒ¼å°˜¦¼‚ã¿˜Z¹ï^mlÑU¶¥ı`²í¹¶F?Î#×Z™v¡<oC(uµ’­üW‡…p°<”²·ì¦¡26–ìlXDE™™ñäÇV’aˆÆ>»ô œï8ú)Š£†VÌ€Â‰ èÌa“æ9^|Ğû*Ì¾
-Éß¦I)Ë§$j‚èÜ× ÀÜçQ‰ñXˆD2¶µ§Øû’"&F(Rkóƒt,'»B!Şı@šWJZ×0;½r_ra›‡|¿°Æ‘:6BÁ%³bGôúÈß7vwÖgÈ5Má<|yË\PpCut—áÖI5…é¢cï=ı0÷/¶=âC®ñ*Y–W¿à`÷½ßc×!EŒÛí'À»öíNéAø¹bâµÑ›x9gÑNG.—6Ó^È¨k³a”Û}×À®]Ç‘™+fÚä|;Œ|×Îºƒ[Ğ{‡÷·ÆÀİfun8·w ^Jg|_«³Îæ÷ç#å§†“s'ù¶ûæ¥‰­ÿé[gò2ZœÖúµëP+&ã\òEÆ©šBÑ"^Èè0Wª ˜ÃºD±œ@!ğîPbfÓ*_|¡)f–Xs”˜=ê†tÓ™Ç<cë÷ÔóÃy’m|”WÎc¼ôåãä¿ñ“â„èh¯wwÍ+BèÆL€ij<¡|·œ¿ïd%×ä&£HåF¡w€ M€†c jš©<^3ù5p¾È@Ä,‹î„Z. Ô‡CAêğyXÒ5)	¥ã´Lâ­É4+N“0ˆÈŸ˜´(a19¾Y¥zU[^‘ã¥’¢ì9ó$Bg¶]îœÛ¯^6ˆ¡™º„Ç/Z¢øbÎW"ä©y2N@b|Á]àÚÈÈ;‡Y1Ã0Äz…¾º%AA¬	³Võİ4CÛ'àªw8&Ò?$çc¼hÅ… Ky!-ùÉìM’õ£ÊÊ€f°¦=Úv¦Qš×TğÇÅ8l0 à~æJA\¢R.nNôB˜PVÇÍË¾™ÒŠ3’æƒ2œŞ’& Ş'X˜$+â`æÓivJšR"®Gb#ĞM œuç-
-«D?ö¿~¾¾¢¢¬‹9r16ıßˆõág_Š[âóá:_ß†S{|›B°Í–ëDmİïøPç<Ãû;Q£½šc /qñ^‰ÏÊ”õQTÍ
-÷²?ş‚ÇElö@ı¢8CuÅ`y
-;Hí>}k×y&¾Ÿ §dóöC†C!§$‘{AîÒëqÆG^ßvÃıò÷QŞ€£³~åßë¨(úÔƒõ}gç¼—«îFğí³a²s`¡zIã=šŒÔr{7¿[K?˜‚Ø÷¦(íçjşÒQc"¥4?ÈÖ!2]8ì”G°LŠ“CÿóâÍvU´†²µ‡«ÎóêäLsÑÍg41nŠŒ„…”óJÆ¸qØ9¯ÄGağl'Èp˜ŞÎË'ÛO·wv_<ÛÙÛÚÙİØÜ~ötogëÅwÛğWÏÿDßÛªTzÂ¢@íW=taXRëÈL´·µ³¾¾º¾îüß·;vìh"[²Çb‡ÆÉŞí«1vÇNa#ÇôÖ¾UÈ+6ïé×Ğäµ$èLøá, Qj2©íg¶Š**NÒ	~Z°o·˜m©èí¾ØxºóhëÅŞ³—»½gmªû•«\T‡'®Ù(7&?â=Â†ªáy™§‡)°‡ÇÊRU	nG@çï~‰$ÈÃ4ÊPB]#¢İ%øösX0ƒul´M’ÙÚ÷“îu[»;õy%@-“®‚²g÷‰bÁ	Ë[ÓêGÛ³9æ«^ZùĞ„âx”É?AÀùÊÉ´ø1•§Ö¢0¸ÙMù{¡ÿ¹šÚ};Â’X®ãösİéD­ÓöaXëmÅWq­}o,CÏ~©Ò‰§16ää7Â(à ÕYQPàc\º ¡$XyŒ.!küAŒåsñù¼ºwä.üL–ô«¡·‹ñ NìÎEåI ¹G¦ğDŠäREwş>dGù¾!Âøş¤ˆÇÏ¾b{scoë¿Ùİz±ıìE“è°£ÑÁ €ƒK
-
-8nMPàÇª.),˜ Ë-“;Èo©ñQÄİ bÅ»ÿ½®Db}EòAdq«€§-ØÆ·É8¬pñÁ¡c¼µ¥C2Û§D”’)ñš—™Ü—nwÊÊÑkÔ­‡¶#èaˆVK3—b¤[ã+ª?3÷|õNÚŞª~NåU=¾âµæK}Äo¼52„‡ş‡vÿ&:º–Q° ¹h]#ˆÕ:ö¢Z×»1b^ÇLûzWJHìØ‘j˜¬Š¸éyVu™ÿ]s×;°?İº·ı£`Ş†a°2G6·İ†Mì0¯G€:—ÓÉ‚y=ÁcÑ`ã2y“•ô\{Rû¾>¦ş[n˜Àº‚4À «Ã¼œW°“†yªv˜Xpş ÀÂóŸ“¢CÍíoˆ3±°¥ˆ9»£VsàSoı½‘±S½
-Æ¼æ*ØÒ3vcÎºw7ìƒ=c¼€=5d·¬ÓèÀ[ÌZx/ÔGı ±VDƒµh@_Ö¢|X…šhÕk†F]^zËè€²“UÖUà°ñÈqŒ2K)ü£1ÈNÒçË½CD‡ä),„G2¥¹4Ùlªêr YÑN¢ıWÕŞ4—h´€2ßäñ7”&)ÙŞØŞøx½ïTSòÉQ;aúuŒKó²Ä$H$KßçQ•‹%€µw¥ hÏŒ1ÎÈ¿t;¢“ÆZ^d¦Vnym8i^9z1{?3Roas9ó!3™T“Hø¥€ÄÌuë+.¸WiÑ÷ºôé²cŸN—iÑí¦¿¨¹ä.z 9ëÆ.FÙOä¨·pÔ{ÇôÕaÌ¸ÊÆô¿³6J#MÏÌ¾ŞFĞÅİFˆ\/IdŸç'®Ğ½˜x‚÷{£´îë!.ˆ.‡x`üQ°²¦Ø-K	jĞê0hPC|´ CİŠ2ÇsLµJ	µ”«Ö0(†	ÈC¯ÏË+ÂºX3-	ëc×CJ|¨^»xÖÅ¨J "*‹ºk .MÊlG"Óœ|o4t%2MÀk³Í Ğ…Ä‡[¢õÅHNƒRkMâH½]X©\šŞœWp	ÛWš‰Mƒå½S›k`Â º©i ç/Ö4A§ïm{]iM#ôZm5~@ÔFv0+ª=Lu49À#_ÕÉGã8a
-ò\÷*X¯òÒG¬ÁE¬!Á_=q˜—v9á|ˆ¶,1è"Ëô—úÖÅàŠ<MC·±o‡x\Jı£ˆDM¤CÅñ	À£2:Âüƒ2kŠÔDÿû£ó`<sI_=z†&Ş»¿?Z»ÕªÜ³Ïcµh-´t„–T¬`·kÕ]ı ;®ş[¡Úv_ÇnvØ~jzŞİç¡×½ırâW±ûzUW±ı^ßûïi,} lÄnXHd€(²ÌìİÏº{Ş3àF\Íı*]ØU„ZïGÁ³Yú0èˆí†£pDÉhéÜ=ï)à!<×qÜI_Åöë]Åæ{}7n½µhãßŞè×Şn:õBegØóbœú©¹à¹æÛÅÚ&§ÀP©ñšÚq¸”m…“»%Ø×ñ£wûèFsµ/3¾'}şêa|v,Ê±k‰0™s¥(cs5¯RÖ+.Uà/tˆ>yºn)³õ
-º›.ï`ş>EUî”ÅÄªv¸.'ğ¼ç¦z_q­ø¦Ä¥ì3º’<è/s%È;!ôX©h{T>§'î×éˆÎ°<Ë‡ÆÕØøÑ"YÈÿTÎµùKÎDıoÍêš?·d×ÿXBƒ…wè-§=	¿Œ	àÁxvµ™2$…%}·'.u_ÊÈr÷@Ê¶®5ïgÄÔÅ®jáò¶„L XÕÅ6oıyyAìV®~úOŞÎb “ÛsøyOd.TÃÑä[r„S>šƒòô§$=:aø’Ú'v›öé¸1bC5=*cÓÚ/&8ÇxÑæ¶s]CA¨Äó2'& ¸Eï?OÊ1€€R_{¯6TĞşº.iSÍKŒ—7ÇäÃã¨ÚÖÏuoÙú$ò¾7ì›Ex*o°üN*XvÏ”ÀÙCq„¥†0æGÚÃ¼;EAÑ›F$qµ«iÏ\¡S‘•˜N7tşÙ¦Ì8ûxçrS’œ­ˆ¦NyÜp‹yqÏö½©ÌI%b à¥õ…³iìGæ?â…ĞÔ©¨âŒf:-¯”Û²ÈŠeé
-MÁ,÷9+šå¾H5ßÜ„—€U1±æûJˆ]©Cˆ>,¢Aq>*qétÂ¥R>}-_!ÓÙéîe$ÈyrTÌR: J`àôë@c[s ¢êHÁ+QòUã•¨ÚåóİXÖ	!ºç'ÚKsªÖkİƒ).("š»Xèe­l ‹MÔîŠé]˜â!jÍ°Ö˜¾5D(X»=”8ÕùİÇ†™í–^RšXíòRïl°¯NÒYzŞZŸÁêúæ#Éy¹¥0ûA·Rºíì3Å8Wd¿ëæİkÈn¶1ş¡c2ÃÎ‰1U8¿fã™åpp•®>1Éòxsú\¬ÌîŒÏä¾©±@Ët ïàN£¬Î~t²°Q˜}‰(ği+bãdˆÇ:‹lqû³§6ø}’GèÀí?‰âàÔs®eè)ÉÎÎÕŞ¹º«®¶k¨­“U;VsOæÅIêªbéX²èBf:Á²MõÛ¨\€Ğ^.¿7ˆØ\|o»†ÊeùÎ—P¿Wºä=ÀÀ¡¬i¼†E>~©÷2ÿöoÿ7ñPJg2YG0•Úˆ©PÑÎÙò°Ûa)bıêÅ„N<²A£hdZÓ+–f´Xfè‚²¯18ó©©şv±‹eR&¶uf-œb¡²píõ;_ÀYíX×ŠF‰¹Yfn‘šÍäÂoš%êºL}¤£å‡˜AÔlDN†ìYÃ°äìµÙ—êÒŠéuÅ: MËàâzMwe÷ÎT½E¦ï$Õ7 Ş•ëm¥^dª™ø,A~: #ÀëbÁx(yJ~ÖõÔ›ì"¯¥¤nò[,¶}©„åEX$w×>½pŞ#­„€¼Í³Ş)Üd{r%psË¼ˆ®°Æûé,ğ-ìiÕµ¹Süì"bŸYõû‘úº¥0sÀó'0[V$ÄœŠùÀäùBúlèê3CâYv¼ã÷Şd¸‘4W#ÔÒÓ-'ÓÙŠf,ËqœèÜËö~”ñ–Ä²Nxö>0íRE¸FŒÊt²ÉUJvÁ`‚]7²íÉxç'Ü×+õù;ğáÈ~:ıšjr7w<ëË}¾8ÒMŞ«}Õ-©TÇOá@c‘Êà¤¦'AÃR9É½°Š'3ÎB¼ÿ{ö`òÃìô‘:bY®ëæ§o¿æì¦¬âÃ72×‰ÎÎe"'®Qê
-uaƒ¹§†
-K{äßÓ$3kKÃt+¤tÚ¬`¢¼á.œäâ»€)¤H»åÆ-Á/zî'ìÈb—Od‘fyÛ O=°î$´ >ÿàôDè–Ï»ù15äRŠ4—‰©+‡ö9û­ŠDtPä*ú‚\Örš-Ù©»$¸V‰#GWµ¤Î_2åIY˜0“çİŸøá¾Wö^c§Ş)=25»ÃÇD6RÁZ&lJ3N•º!Ùæ›odbJÃSu¢Jz_H½Ëqİ^UXÇªÉI/ôL¸¢2â™Èª¤{éUü¼KıU­Ğñâ©+ÀZô_‹+±·Ôª)—€eÜú}Ÿèñ¯´î*¬£Â›6ç¨¼Ê¦‹ÔCOw¹‰<¨«­vŠŞ'ıÌê
-TÉ Nz
-;‹±Z¦«„³XP‹Õøïy´\Õ—Õ|Q½TgZ”Këò*±±§ë°]g6Ãt	Ä}gåsĞ^‘#ƒA„ØÍ§¡{?şœd+¯ş—iÎåzv¾^‹jnÖç²Õ»tÍ™…•»ê‹6%»úÎŞ\C¹.·Vß'.€]“jn©£ô@¨]ªŸUõ<œÔK‘ÏzV/ıâŞbR­ Ö¡ŒV­{·ÕE*eu)‚5Ï-7Ó±8„ pP¥ Y­4ñ–sUßtë__qU¬ï¯Ğ•ùõ±Ò•hªtåÀè—WêÊ Î‡YìJùr”ÀÙ**iæi©àv‚‚Šå»bœ’KBèh•â—W©JîÌRUîÚ/³V•RJê•&<p{¥&¼·ç-W¥º¡ZêoUKÂÀ>`å&ÔVoB=ñN¨Çªâ„úÕ½ä„ÄÕÉuÖœ˜4”›°ğrŞ)W/‡ óŞœBÈ ÎßqİªªÉÇduÍvwO»pa‰‰ª)ÁNÿ’«.u5K æ"Rò·|•ıw]=0oÎ™õ×g˜zôëQLøÈ6ZşVçÀÎ€GN7M*4wD¿×hé¿ÏšIsôL¤:á3šêÄÏpnòK ™|Á3’@œÄ‰ÍˆôŸ¾eøÿ1 æ}Ô8$ñcôŒQ.–@±÷9³4šı¢ijÄ¼{8Mmg>†ÒüBBiv€2,Xxø™lÎ–á™áá<W?”œe‹ÌşİÚ¸>–Îe;ò”Î½Š´5á?hÚ¥…ê4×ŠĞ^–mğœuh??TãàßU9Zãv
-¦RÈ).æı¢í`/<wÚkXıGûâGû¢Ñ6¶ôA¼Œ¬]:[­}ÅYŞ¯±ñCÊÑĞjP4ÉîT
-P:º	,O¼‰¦õkÆÕ¯}kÇWÇ”ı°:Œê‡şC0gúsùĞÒ>|´hÒëår>,0ivEó_¢_•=ÔÇ’ ET7zo6Ñ_zŞˆ:”?Ãç¥æhŒGí‚%×k}é(Tàìã"Š<ÅÖ¼¨kÁ °½fIæ#„Råñq2ş~#7õgÏÍWıø`Å
-ö:GZ/â<‡(dòÎÆ¾J>xe-°¯ı ûæ´­õµç#±K@ùÉrWP <šÛ'%À1Ãû>úÖ)]R!‹F< ÕÃvJ½Ó½­òaÕ}~NÃ¶ºhäĞ\\õ¹­õµ×|Nr«®îF-_
-­;îêİ[Ü‰_–¸©ÖÇâR­íCuÍ,ª-®ÕÜµm½DPó—õêÌ]ÛÖF1†k°¶½ş
-1Kô|¾°aÛ¡ª—ank}ıE˜¯9ıÂÂçBÎZ¥à;ëõ“»¶];“;7~øyiÅ‘»W!½ Sm®yjıŞ*_!Ş6¦[
-o›*Í-ƒ¶Ë vû¨7—ãëÚ¶7àëÚ¶èÒì:Ë/‹ĞçcÃÍE…C­ß_Iá+Dç¦r¸K¡sc}ÛŸ›« wmÛŸ[êşvnü`t÷:¿Wu:ÿØ^ŸïäµçÎ¶v-*ÌX“ë1\\‰ÍßßpÎÚû«¯¿ùDÖß\bW¯·èfh¶—¿«á²˜ËokCyÍzƒ+¯«ùÜÖÕ\bo¯»˜fpÂ—¿½MÅ.—ßàÆ²™¡&W[/sKÖË\bw¯·H¦?ÓËßÖpËå7µ¡f½Á‡[3U0ÓË(M™RQJM²Ør©ûv™wVe«ó“Ôñ(3Jıw”¬ï2 ğMÏ—ó¹q»7Üü{ ­6&Ù™åè4Ì ¬&Óè?¢dI,ä©˜EX)]G²5Y–NÈ©a^JÏw”èì|*tŠ©ùp UıiK^¾y¥êbZ½æIy:TLòëikÈû¦Èúãä~“]³MìÓÁEò¾ItÃúm%$6%¥ÓÖ}¤<¶Ò9*!o@=¢$ ³$Ã¯=±(#¼ˆ“ˆra¨ÆCñ«·‹<;@9€Ú¾^qS•7Å´âgéø{L0Rê#XI;´€Õ‡@˜í¸Rs'™ıNîÎ×r'jëÂ¶`ı±ŞpÅKõşâ~0ğSz³À€Ã(á#õÆÜX‘]™§KöfÎàûfÖ P¯Ò\¾öÂ,nb'û˜u¼øRSšY¦^µDİ!{³dŸz*Z<ğ3Ô¶XCu.B‹<ŸÔÇ­·äpàmš$u¤{×êÕªG¡åGUça"ŸDSwd
-;?İÄ¨ºË”#ÕKpŸÔŠ˜0«4 h‡?›¯ğµ{ŸQ¨(Æá ÖÊòĞ¿Ë)ZMüEÑ¯õï×,¨UˆÛè¿O1Ìô6PŞè L1g2`+wL“;¢·°Êô`O	BØ)H‡@¤xó»¦ù]¿yš×›«½Àå²8L*¼E³ues4/®™+øk`6¹kÇCq«$˜Ø¢úV£Dhè/
-04ÔêmŠ¾´­Føµ»ÕÆ+uµi¾¥Rtwfvœƒ˜n€D­O2q.¹U49w¶ÔÍ¦*6WÇv/§áø"4ÄŒ`îÏÕãOğÛ(VıTB¾ÀGÀ©ˆº›%$³7	ÿœµağ­š-6N`ª°S y'bRÈš„¸üSëÊ˜.
-ğÿh£à´'ÕQµ<(Úiœ„,B^›—Qıç÷4oü>D{t¦EücWP©TØµan÷ 1K£Éï…¿BÖ•È{:Íßqó`¨3K~mô*€»ÍààÏúıhEd4ƒ¡‰Ë 4…Óï£×´ˆ‚-)ÁÅ#!ó¦ğjıµí)øµBÃ·cõ“Üû6éUp,åw×u˜Ğ]Wfí™ÉŸİğ(ÒIKÓiD'~¯ÕB›Îf‹x'ËÎe»d!;bãÌİ3X·'v†c RıË_ÔIs¢8:gq¦ üS èÜ¹Ğ „¾¥‡oÌ=ói4¾¡yöÈûóÀİa™Üˆñ»Wœü¿Æ/ö%ûùô­ê…¶wûf~úH÷Ê ®˜íÈ^ñ&‰†;ğv·Àvš•›‹®·Qu¾›úgl`¥}‚oz¬p$w6Øå”Jº¿ƒ¹ÿŒÀE,Œ“k åY™ßğ‘ï=ªñ–Y²•7àHEÃĞÔTp2jÇ(Šúd„	“kG×éÈË	×H¸W™qšßÀ4:N3Ü.8ÍƒÖiÖßÖ§iÔ	9K”t	¬5Ÿ|¿*ßŞ“÷y+Ø,Ò©û|3Ó²š˜IN+p„§tÅ,ƒ“4-Æ9Êµ½õä·xgïïŸP”u­MÆÀ5ğL
-ö<q5ÿ	K±yiMú–Òò«°Æ®5‰«¦İšN_‘¿3®º£Î®ß.zfâr•ÖµÀîÇğ6H-½Aÿwµm«¶Õê“{Ä?µ~+ßy £^uZÍ’É@³œQ#ü9ÛèZ…œÙñİÄnÄšxœE™xdşù&Šq}¿¼´Ió~ÓT–İåâ‹÷úµ{p™[¿xïs¾nÚzç‰Ùyİ ğ8zSÍSe˜qX»Œ:*¨ºè$äÌn ÓKìJ'Ö}ªÏ=níÃuÍ+”ÂCóÎj˜iŞÑ–+íİi¦pîÚ^r:¨fèª§Óiõ¨(•-wœ”¸jß. ;MœE»o¸ÒÇS›ášgDšZŞ’¨ÿ§¯Zœ±{~û÷ÿî¿üÇf¥ œ·q2µ*jzıçy,oÀ4¼¯Ğ“ƒ.‰¦Ñ|V4½K&QyÔø?­š'öÓšYi…-î‘bÇ„ëKÒ¯‹¤!Î#>²ŠŸ.ONt1•%…™4˜K&×€÷“"–ÙrîÛ#_ÇaecÌ}©ïzÑÔ†¼N“×âÖMe‡ÖÕŠ¦u1ªv@Övt]ˆ°P¶im™j'áJ~?kü ¸/Ğ1É9>óMæ‹}‘øß™‘O™	\7pİ•ÍÃ%re'ª0Õß.’†iìJ—$(J>,ÍÁhwÜÀ5c¬š¹Å˜ĞãIZÎœÒİÁJ¼!‡Kp¡"ÇŞVbĞYÜ‚ù895ÀCÓ÷sÓõSìù	Ğ@Ø‘SÜ}n‡Cß¶CÀZ+J2tÊ ê¦u³)ëd'/GØ%a…aÏ¢gG´‚²=ö“Ğ¡o8ò”»…O§oérâõIo=èæM¤i´ƒjP3b2Xøp2àpmN~Ôš mKÍLÚl‹aË!·-†­5]SŸ¦‘„M“p°â›š‹NJ¡ŒAÁ 
-ïMrÈàofÔ8Lúƒåê•½Ğ¥'WÔ-õH^£<UsÃª˜”M „¿–*QF³_à¥vÜvò;³ĞŸº^Df.Ä.äîö\™‹.éŞ®9Îä¸lw¹Ó?¹SûÄ4]Q`°ä[b¬|HPd'úÑr{üTÍŞı,¦èA™¥2IJJ‘§pŞó*úsQ‰lš âIXTÉÑ»ÿ„±ZH;ğ™¿gËÈ½â³¡Ã1>—Å« ¼–È3¾ßÛë1°åÅ'fé§X#áPHãoD»±“8­:ê¤	SNEşí–@ur›ù5îkueÍù[sE¯Ò½âb¦|é&&p#±ôQì¤™É„¾³äG²­œâ/ºX„ê$~:¯€çUG6¬‘ñ@£Å¹·|Ó¬}™X è¸+…]ÃÍYéxe«ÚëÒBu[]ÛM•İMşPÙJÊèf°TY[ü<6ğVË.jwÜœğŞ$‰Qİ:Ù°wı@¾§‚¢Û(˜¸|`#X
-lU”@ØÑt;ÅbE¿xºŞ¼üfê´p2…¶‘Cçå@Ï““âÂ÷"bwŠtù>‘
-XÍ³ìŸà	o!Ó =OtÌêâLAL½7i‡àk™tèÓ·8æükz>Û7
-½Â‘²ŒN÷VÌd‚­«Ø¬)24ä¥°QYiô#›‚FÅœ}í@ú¦ıÛ×ØˆåjüĞ41<²º	ÆÌ¤õ˜™„›`VU³M‡¦­Ëà_M½[Jæ+³¾Œöb|¬Ş« ¥H}ÊL›’Y®œ¡Q±üÏBö7?.sâYøş ğÓyÑÉr&q;UE"iª:IL…Yez’¢²ó)ØŸyC
-35k–pÌÎÊ©¾öHMtGµ2oGJ^{ê÷A‘¥‰À/8ıøs¨{^üä»t=¼½ŒÖ³íeñÌšì7~nXAí{Î?7œÂ|~Ce‹VÏEZ¡BĞû3¬Â)úncWô“ÌÍ0·oô#Q"—¡’ÚL#Š"F¦JUÚ*€VD,u|Vó1Íç•VeC&g²ão¢ÊŸ¾»M«>¤o¹ c 9‰f/Ğ˜p_Ü¹í<u÷H§fdÀ<v¡4jª6!RK·ØH·œíñûU¤0Kóï“XåuD{É}Õ€tLñuM XsÉëÉ‹ˆx|Íu'ÖLÉú±öPqA¼ bÓÌİ´sRÎAóæwx›×<àÎOßÄ3nï·ğ†c	ëp0şÊ&¬óß°„udãõ¥i×şçÁÈ¦¢Z^±!M-‘1„ i3k
-&Á„ûcm›ºó’	z°òß"]fÉç1FMÆ5FÁí×dÑ †ƒ·Áyù$Ó}úÄ§’Îïğ¡tÈ"ÿ„¼ÎÁ†}[dö¬SGBSƒé¡†œà,j¨è•ú+ÆìW¨±›cÚS€–å}_3AÃYb%ï-(1Så/óì‹î<±¸]UÌKjĞC5:LM”‘ºÂËƒï§~ìIUn¿hÎİ¨$%Ù/üÜJV–ŠJLh	M©ì˜øSêwöµ&/ÖÓ° ±§Ü]í¸F	}4ÜSLiÄ)èºXÓµŠñ¼šağAYp­õj¶øo¤jâÀÊI–‚?‘#Z¨šãçò4½Õ¾&Ô3!Ëa\ÓÆ½$Æ!Û
-OPìêönRâš!ÇK?ì“|#ò,ÉRnÚ5fm˜¸ágiÄÑÅ6ü·òP3Y›vãÕúëLSĞá¥VQ¨‹ÙÎ®†³›5˜4¢ÁXBQFZIy‘lJ•ÛLÅ:]¸yHÂ¯—Sö‘Îøº’ÉŠÌ9÷9²3“(‡ò5ëgŠß±Ÿ^GvvËç>¶?ò‡Œ¦õ¤ÇáVµDÍe's¨)g*×†½hoEi'téïN"¯D¹2°—ïşj{³j/{2çÎî+ÉGŠKv!IrkVTÎDdóËdYgWÑÆ×ïÿ×ÿğ¿şK/_lˆ­'Û»Û70²İé3ĞåmVŸæ=×f†5c|èQ{Æj7W·¿Û =w8Øw]çvŒ:»0®×Å`}Q÷‚Ë¸Ô¯‡Ñ,9Œİ‘ùëUjjÓë…>ÖUVÎÍ?²…0°îë'şiUÍæëë„Nz×&rv•	ÏÏ\¦Ñ)K“Ü{W]‘—i `"¬–Ï°Ÿ˜ªUˆòµ:ı.ÃçÅ1Ïê+&Ô@ÚzOçÉI$Ôtéı²N¼ˆœL¶Úÿô-Ûè3AFóœcÖ‚Ì~_È"+AŞ;ÏE:‘‰¤’Ò%´ñ˜cÔÔCu³§GnO[£ÔD]jwCÇ©4ûA%7hÉ @g^A‡:„¹NJoˆîÔô(_µ!]«(Ú\Ô“Yÿ(Çıx<Dú=Ê¿Õ:$<Ï¢±ò‰šŸìµùr[ÿr¼¶ôj“{p	hRÓ‚WÏô/ù‹ÏmÃÿÑ»oÔûJ ùê©Á~¹Ûê7®ÅSÛ?LË	Ş”^Ãlòz2wßöA¹§ÌºÀ`G7ÒF(ë_;e#OTd¾ÕÓèi_ş&çƒzõ»ûÖåÖq9™ÁD¬30¢òİ¿Àß”m°a*³Š`½¯u*ğÆÚã³ÜèX$@ZÿOšÊ’hXßpÀ°ˆ(–eÄTCˆÿ”r¦dæqrŠ…_R$¾äa'¹b]Ï²ôˆ…œ×°nò&?9w×Yj©|åÏ7¾mr•»÷' J”M„°ø«,6K5‚Ùo@úh±ê´óõ2¨{:¼ÏÅT.qóóÓŸyîõ(’¿ ‰µ½9àĞp’Õeõ6ã¶Ÿ*-çöÌşÄèüh/‹ö°INWªùO8¢y±Ç°(;¥7ğùlZ]¢ ã˜XêytTˆhšE?¡d¡µ‹OßšŸíãøx™‘B!ÆŠ2PR¦)vÄøvÕU@¦ãÌRs"y›—¤§l&İ7ŞÚ¹s[¬¯ö•¸ı9œ×õÏÅí;w?ûü‹ß~ùÕú~ÂšŸÕ¢‡¸9ğc\ˆMLÂÑ˜6ª,™Øn{“
-¨k»TüoHÇŞ!¤ÕÒø¥HUJgÇı³UÊ…a`b+zlÄ½4>ÛÔ—câàø ¸“ È©&a¥ôæyğ6l*üqp6ªÖ©qÎ©›¯wÌÁQ§†R®ì_`mcBíÔ¿=ß*ê‹ÀÊ…Ç[‰Ø~ Hµr±Ó¼g"îµÀóíb@Äˆûä÷QuL1@Û/¬>Üşv{wãñêæÆ“o¶7^lo¬n¼Øıê3]‹LÓI j/î~1@ÅTÆõï¬ˆÛëøöåtª/Æ •DB3ºâé6ôL6®é@x7^¼ûŸNtãá3´#9ÄùLÕ@–¤PÉ:ŠÎJIÃ\Y C}
-,/øàEfü¥fİKªÕ­Ş Ó®6r"“¢ñÃ#5—şãô€D7œ&×iCA´GygTu%«ó9ìúĞã­ø1ëÔ¹O¡õDØÇˆÉìòïíœXÔˆ³±šl^ç7¾tï©>tkr»e€O¹qø’İ-ö;ú½1?qòĞ¨ä»4d3=9T§Öh¡5@EkÏ0ÓQÔ2lÎ0¤”f`ˆ.iŒâ-Úm!zc•"Ë”ÍRS†İ…&E‡ˆ¨GÚ21Å¼hï	YQ¥šãÄG³ìb³¬EÜ=©¦\Zi]*qõ Ş+İP<üæµØÂ‡ÔŞQcÆ´m£·"´ÑÓİ¡s‘#×0³“´æ1>8Ÿ©0Š¦Ó”µ©h°2’H*wŒ×_uS"³¹"ğLyµ}ZÔûdB}?¥Éª¨3dcŒQK·ÚSEÓãÚñÚ¾\«VæÄíXpNt~
-i`˜Ì…Ì¦ìÙ°YŞ=EêYv*")/2‹é~–1é5"ıq8Ñ
-M@‰ğÁ^æKyßØ´^ÎÀa{)øˆĞhÙ ÿs¨åtÑ³:j¸?˜ÇòB¥<Úxa'<I½ª“³Ë6¬Zô}Ÿ‰®.ÕÛ'ƒr;+J
-ÿÈä`Ÿ¨«æõ&ë6©¹œ©æy9÷ÖP,ÅÔ½˜IzyNèĞi˜¢R˜¹¹››ĞRZZ$ïx/gÄÛešŠFHs+y!ÄdÀßä$¥Tá	›epü8©(çÑ¥ÍÁvÈ§¡ ‰.˜bÑ”ÒÉÅr˜)g!t©™˜Î™ šÍ4´•Œ…íˆ45cLt¨–A2›O­µQcw€“Óà†JåQÏ1Áš=hH²é4qfÙ›búè<M2¿¡Iı`ğá7¨ÆpúİÅ¶³ÑËüç/¨Hÿú|‹€-ê-˜»¯kwdò§¼¿\=«·t³YÔ&’×š0
-ÈÙ†wk°Sdä×ÓfgåÚˆÖìØiä¸úÑ¸LĞë!¬ûC!H‘Á³ˆ6Ä”9ÉWÊ‡ZÔKÁN£Ó…Æz ”Vè,¯¤õB[zQû&±åA Â¦÷§fß¡3mbBüjŞ½?ÅÙ©gég§ ëê-µ›Î&†6.ìeà0^nÀL]"Ìİ©|g“Ş7æ™ì­€]ƒl;à ƒy¼û9«~À¨_SY:Nñjö$JsÔºædÃÕY9n,ö›Äu/,Y=unK¢ ¸|é¦X~ù›}³{a&çŞ»£¿AéÈú¦ï5!o-şF|aşïÎg«3>Jó('uËˆüºVt—¾øLg-3ù™óÆ ÿg©Ìf‚ğ†o¢“Ç>û¤ÕŞ…ÀùÑaØfÀ ";U7 Ö‡ë_Ô/—mcnâ¤bª¯Î,Íéá7.°ğ®?`Q
-
-›0%ÀTªa¿>üüW¢8ÊcÖLİß°~İØNtıóúLm§l®fªn/ÁY=JÅ't)M}ˆ§3UfşF)øöh&ö²…7ìjŒ«ù†aDÃ9¢-ÁšzÊF½½eçYNEÓÿX³ÃÏ~ä	´®½i<Uû€®cUõÅrªØ
-ƒŸ¾l©"g¨ÅĞ†Ú¬+"Æº€¯>}ë°3_Äª÷±qİ€¡X_ùüWÍŸ°Qeïşúæe¯MÑ“Z:Aš@‡tğÓHè¿ƒ BÚµæalQNWIH_K§V¯nãkôzõèÛ0-,Åsˆ•jàôµ!½sÈovî ÁÂÿİùê«/¿üío××{Æ*…šœ+É¹ïåÄ|ËmcäÍj>B˜z×kÿ×stğ½Xï|.¶[£6è¤ÍÀüâ	(ÌC’ÌöÛ`ïK*S3æÄÒ¬É”.G¼'ß¥,·»Ò„lÍ<—õBnÖì!ò„û.]öš(šú…÷˜‘}ÿ‘×r³N?olÂº³½Ö@†_([1uv}µÒ'’…ø¤!¯êŞ(›‰“’ËâPDûìXåÑr9È“™ñÑôJÑÆÔ¸£­Â#)›sÔãv|ù2`Ãßÿ¯ÿáŸÿoñÜÄ+ë@’KsÀHl¿õÅY vş”È¶IbOddğ(yY’›h>\Í±ĞSG±8”Ò@uøßåû·ÿ—ĞRdÎ ¿°dÏtVˆş+ëë\ˆšãİù:ÿx÷WPG#ÀEÇ¸Ü•©Èlâ:)>Öá}à50‡
- dÖÓÒ³Ï{dßÿ“{„zÜ:!ZÄ“ ¤Ñ¯„däVÃü`ÅØ@R-q£Æ': îİ_$G%uŞ¸UU.ONœÎŒ¯Õà÷öŸÿ¥$jt!1Ì7¤{#…L]ËçÛêÅ	ay/€{cSÎL{q~OJq;n5ã”-Š¦J»µ¤¨E…2›ë1ÑÙË‰dW*|-vñ Õ7ìÖ­q©ghST¡8
-F¨·†“ÇªÈÉêR´°c†H™›ÑN“6g%’ƒEÏ…úËí€ï\ÃB
-§ùU§çE5úµóoípUB‡¨µ•ª;´½9c•ğÈ¼ºªÕhHAZ|û‹ÉÅ‰‚4£[¢·šæ½ÑEo÷ÅÆÓG[/ö¶ŸÂk+(VMFåÚBÇÿ²C{œ.¾5±„ïtÿùbe0H i³ìïÖê¦56—Ânbô2vùJ•m|Rsøò¢c¥D.fÄ1—Í’ê;®<@I¸B¹¯éE}á?ÖdÕŞ9ã²7ÙRüO,YÕoÄè·Nµº„³zJñ±uOuJBå÷0«,K¨šÆ†0Ñ%úG˜S‰IÄß‹¼Ù¶£UÛÑG×öG×öG×öG×öÒ®m¢?E¾G´ç‚³ªpdb-xyË©}­Q¹Ûî½ºŞ>ºŞ?ºŞw÷ëz‡;áò.ø.ø_¤¾ƒV¼IgÇ˜A3Ì'¢8wĞùŠŠÖº{–»ÇïØ$ ÖK[Çûhñ?ä³üë¼(Ô¡TÙß‰2²VsìZfµ‰`CÉRF(>æÆÛ:¾û&šqÍH%äxíNšcŒ³!ƒ„4ÓîËY×8q=äA98’ƒÔ;¨äT\9ÖnœÇO¼Êa~‰bÇJ^©<8a wô£9Q™×[•“w…ã[ÀÑUw³g­Õ1->œÃ{{>ç½s”»k›}É®Ó¶Ù›¼Ó¶C¯³Nîdí¼{‰÷í½m; ¾;×¿Ì¨Ä÷Yák7<¯ûÖ¸y7ÍØO¬¡Äqø-Z]¿¡åøq3ÍÄ}¶9µv×íĞ³AK„aœ¯i.>ñ½­lIşÖÿã¿üÇ6.×BH>Wãj5‚L?à^È¤1F½\Ê½°èúN„Xéaê­}Ë¥g©ÎÔìĞx- Ó&(H£ßBÛoñ^›¼ûy–µ
-Ÿqo†reÀ8%°Vœä…¢‚“˜µªÈíŒfUT.d¼òz|Î¹¿Zoc»E‚»ÇIœº'ë¼«VãG¤,ùÒ—%3 9¢×‚ƒ%¹½äåCàäşak;_YQµãÁ%8É¯ŞW¹ÀÈtÿåyéË…NÃòÎÍè£oój}›Å|ÖêÜ|ör··ÂÅ·NîÍVñêıú;]‚|íÏÍ½ ›Ksb†aYŠQc²ó‘Œ<>[w˜¶mä¥xPM¯7–öHª¹­1Hİ1©.Ï
-€(J\‡3¼€¦otóA~ô:~ô:~ô:¾¯ã©¦`çwı]š7òpøQc<pÍH<ô¼uòÔ\^ç£hÇJEæÏÃ2«+“~ôÓ}ôÓıCúé¤O[£
-àä/‰”(SwkP!pÍŞA
-™¶ÀhqtŠüUörYó½Bjÿr6ÙÚ†U–¬v{İÿ„tŞ§s³Ğ½iøS‘'Ï«dF¿ Œ†‚õALİf5²÷š¾H«ç°ğgå.Áá¾]ß×÷uoğ=[‚óÜ]Ä×áË–¬9¶Šñ³ÃæĞ‰{*d·J1Ç©´Ş8§"ÇÊîTÔ÷RuEßCó‹ğøê.Íåkgô>|¾WæßµÙ‰ÃƒÜø…ùuñâïíUX<T~O\ò¸¢MLß«¤B¤œLbõk2Ãã1¹©Ã†njQŠìQÖ%«W¤/÷r˜¦{úÒ^èÂ&N®Àû&×†6³ËL‚€ãmwµZ½ÍşƒE„.>„V/ÂB?÷$üíÿüŸÁDr¡¼yet…ÔaP+ò&(NÚdáÓıÔ™kŠëjú]àLXÁÊì…wÅG#˜µ/¦ªæG¤šèÌEo‹›ó³ºgF”_#¨¤XŞrpŠd&~4ãSĞ „´¦€ğ^ş¯ÿœŒç³ôÄ…w1üLÿ5ã?/`r Ø“«OtĞlMÁa+?3
-·SamÀv¸n„w¬ä:›œ<l;ñ€ÁùšgqgFU-üÂ‚¼Ñî*]£$Y5]³•n@ó±®·q‚ÉYX!TŒ´í|4ºLì±¶îv/»^Æe@Õ±p±»¨éµ½†‹-¯§tCc„u3­¶hÜšSZŒôñ‡ˆ¨òºlz5P×^½ÛvvÛ–S_âÔŒıÎHìølØ·ºõ,ï_dI„´k„
-0…²ü•¿BH«é&õ¨ ÷ùªføn,ĞùRP»ºq±°"/bÈğµt\•/Ç¬&EGk˜²ÕèŠ	½³‹'vpÉ—!|şï…É×µ@ TçÒ×Ÿ¨a¿)ißõá7ŞwœO-Kƒ#º2ÁM”¶'XÀ€˜E2ïr/3"›Ê  HÙ]gÒG¢²ŸKøwJcSh[°“·€i‡Å9yöÅÃhüÀ†ÚEw#ŸšÚµ6Z~ï¿H‡†? “ÏÕu]†·G©C˜Bkü‰Ù.t_VÒ¦íDØí4É.E’’R,cŞ&>×‚¾v)ôòƒ66á08\Éµç³à¹öãˆù8.¡ƒ?Ë¶×
-!áÓ=ÂÀ“WbY,€şbc0ìêıè‹èJ/–_øêûÕNïªâ@İ»š MîlHG®Â®¤?1%ï
-®°ßğêî%³ş+¡\rk
-c*8'xBÊSØnÙ¤ŒŞ¬ê’£Õš~Ÿ&UïusDSÙ15:6´EÎW¯ÃÃ4ƒA´=€ÌÌ×a'1oÅ+V±]Öwy=B{8Å`¼•²%—ôIàu=mî4İc¬4:š6òØ¤²Tu~‘9 _Ğß¢[ïû+ù¼(¨V;Ò¦ù)}Ä;êıË<ÑÚƒ­¶Ë"wZ­ó1a:mc<RïÛÇx’Ì¢¬yªD©FÏÍgnÇf¹·Ì¬ª+(;  ¾‰KÔBj÷ß‡'P‚­jÀiËk‚ÀY<É+<P·j³v€ÈÎû+{ì^3‹¸ƒºÁŠûRUQ¯µò™®Ê¢ZÔ«ÇâüñˆJzåßNİûiU³t¬[˜ŸN£dZü˜ê&ê‡Ó€ ¯¨î0şAÙ³jWÄ°ld~ê×‡AFæ§?Bm÷Fõç#ÚûùÍıÇÆ:m W6	tSFG(~ÕŞqŠœlïûæıqšdMëœ˜	uVí©´‡·?8"m Ø£5íù>«Æg>°¿-ŠØYÛ	(I´7Ó»Ú&ûMö@y*aÊQ}ÃkMayTßy=„Ú‹&YD^˜Æ}ÇšÊàf½ƒ’—„'³Ô§lrü;9i;4¦CÏ´k%Ozád¤Q sûEÒÀéÚÈP 6±À4RÁ‘x[s‚ÎQıXVÆûaˆQŒ§ì9eÉÙ­+Ö¼\ÎÛjûL*.ÉÌ‚Ìs	NíT-w,(ºê|‰rí¶2“iafDËËÈ¾f7VUG-e1e	²²IYŠœt$%¼L—CIÌZà¡İœ'E<Ğáôµ÷3ÏT}zŸ
-5ŠBë¡öŒ
-\ª4K‘Ë	½‘ÔqPÀ¸Ê5ÉÓÔ6Ğ×Ô@éŠoêó…dÿR%ÜÖ1Ca1·aDy ®gu4»«YW‹ˆ·ø º³ØZ`8$õ«Œ¸Œäº³!Êå«ëìö‚Ë}á£Õ©!]« ]­÷kYØ6|EÁáÅŸ`»óò×S9Š{-Áä¦&7¯§Gúæ1í%ÃºékS¾]w,(µt¶ˆ×_„Õ/`-÷iel8eÊ #}D&F5à*ú{ >J‹9è%ğûŠé]";£®®‰¯­‰Õ‹ü‡l>{ùbWüZ<ŞøÓÎËíİ±ñ|[l=}øüÙöSøÕÿÃËÿöÛ‡ÏÄÃ-qû?ÿ?bûéÎîÆÓÍíÁÅGÇ~ŸdÓ„.ÕÒ'ş<¥ƒtŒ±'9ªoÎs™İS{•10E±•»±(ã4§ 
-,xlÃ)Ú ËøÎi•.}ƒ‘&ı¼àävRä³c[<İıà	¾ìÄ-qyD(2Ã2Ş½unÆºß¶JWt˜@Â¨lÏ-á¿_aD¾R›‰³Ğ=.²;ÛU‰bëŒ¯~ús¶öé[š+Ç¾Îö±8û³›ÀòÀ?6’æUšc9v*ñÓWYëßı|f ¢®ŠäÇq6?Å°QÁSDXà­1^¢>*ªİ¯(¿Q}ae23ÎdQk*dMŒÔ6äCÚ(w«ØçuÌñ¼ôK/™.%C8†)¢YŸeù!mI—ß«„š÷õï#õ[î$7¥Â×Ïÿ”$ß#Ïå­OûªÊ¶Jë(+¸¾€ Ór©rx·"¾€?±ø3üP&šñ­[²Û3%¨ ÆÖ;ö-VÊ2‘Eoª9Òô$DÙ¯èãŸğ&¦)€QGÉÀXU¤ØÃ•³5İC«Œ†ı‚ì¤E3²ƒ°k!M8i„Çj 
-›qØë›ô$ S…íFzâ£z¿µ{k—vE~Ïf¹›/«yışcà]Zı·CÈ1n¢cœıZë;¡‹Şµ¦.ÒÚ…µöÖîHÃ4ÄÙgØ›ZjqW¶‹ììøh_œáæf(­¥ù,=<Üæ»ŒëÍ†qrä+’†?óî†9è2ggFœ!#~ÎsØZÃwx1Ì»î ,PŞIô}Â.Ñaâ‘DÕikeßt)ü|˜Ûq-ZŒê0l¦\L–¸ÓÍ®·É[gMÊHÃİ³$K0ZX`¯×î¿zm\/Ê-ÀÇ>]+ÿZ‡µ¡r¨/Vß^¬F=±õ^uÇ›Îz¸àNwçlŸiõL·…—ôğNî=ÓM[Š`²gø—¯…( ™n†ğ©	w+Ô½„|`G=sJºmEÂ\îªÓ³ƒ‚P
-ˆèĞ(„Åre|@çÖ’"hß›Z¢ªe†ïÎ iÚx&T¬âüÀş`$Hë†î¨ğCÄuP¸YÜê
-ùXe¨L§3“µî0Ï”6€iª²o¢*ÕÚA2Kgó‰ü‘œ¤ A“ùõ©
-Íà8£šZÙ¨Çz$)LQ ıâg%Åaµ£zC”Óµİh´'dA»‚ıÍ)3şæÔ;@¡'´zúË‡Îrì^Y¡pkØkQÀ	ŠĞÿ?(O'ÅÇ`ø]ò¤QfªÔ ĞÅx^ırŒÎ”ôLóTàõÇË_Ó{Œ! 5Ï1Ê5‹&QY+Ó<·ùæ“wÿR¦cs‡Äu¼Ó:KOê×ù¾ PòAvj¤5e§âùÃGâ"ÏNNğ«şÅ&¢}b(®ÆFYF§Ã´¢ûl(C>X€¼ÆàŞÊ^½£[3yNà_i:¢æúæ»“ÒÕõûB·õd8‰ÕŸRPízÃi|Ø:@2ĞhX`ïeIQ	ì'fª|6¢:ª2’súmûâ +F=u©YÍ˜ó…Oì:0m‹™§¼Î¥ë*ÇÇpÄÍOßjœİ$I¶2W>]¥<Š'é,ÉAÙÏ¥9#\eXYAg£`÷Õ©â$Ş?#’Ø)cà8NA^â!ä0œ½O)DN#z¶öy•şÏux¼Æ/$`>ÍŠ(F#§ìÂş&„l4˜‹\nØHxÛßë±6Åx—ÔFş 6n{@B$íéi0¸úw‰*–’94Õ]t…ÜRg~ÿ_Óè_3ZÎr8˜>»Ş™VÜ:§äl9eÜKÙfè%‰[óÖØ;ÙNéT×«DûÎ‡Jôï®ÿ
-o<ÿyN‰l­@–r6_Ş¹-om®`V˜Œ]Æ’Ûş>§>Œ”b«'ëhùÇñÓ	Zˆè$=0×£,ŸÁ¬Øwİ*É²ñ¨¡±—AÁÍ$ôY”m"·«U$¶Üj˜z­[eä1Æ=v7Ë³ø±æMY«70ÅĞÛ±8H³-€ÀA 70ûÁa¨y3j	Lß–¿%îÜş•ØşnÃÑ7’ä4I†ˆPº]‡’÷ùöIÄ¾v{ÅîÜ^ÔÃ.B»±[ÎPg“Ÿ @Wx«íÑ‹Õo}»úé[şa™På¥şÚ«ÿ~}õ«×kG+®&ñå@İV£$áhÅWı#€e–pKtlè¯yºX{·ê­¿é2¹»è>´aWù€| Œüq"±¾¢Z«U34òšJ4yO’U¡•
-¶3ñê†Q—ø8 ï³×ûş~,¸ä§–V»çg`¼ëgŞ6ß÷3MœwõK~2½wœTS`İÅjtP RX…S|?TÍÄæå»¿Æ(uşZ¹BUT¹åÇáãáóaKjï¯¾”©½?ûìóÏ¿øâ·¿ıòK/µ·{2¼kv³¯ëÆŸ»™“®®ä‡Lâ/ ²Kó$Ö<-HÚ1ÃR@3sCÆQG~ÎŠ÷@òm%uPv¼É"«ÆrùéB/h8f7×„ŞÕŸ­v“ú;q¿åÃ $¥Ôy¥š(9©ñÚ"¨|æÚ¢An}Æà{uÜÿ0ÿéH¥~ ÷XŒ}œF"¡¿ËùX^ñ}úŸÿ“¸yî¡áŞÈ,á)h:·}W‚yĞŒæ¶IzÈ[pòËéÔñ¶ÍÖNÏğ ÊĞˆš9Ã<“3?ÙälœœmÑirv@šœı:09G	YM[;^C"‰Ú
-Oª©ÛLFÎ/¯ªÙ2¹´egÄş&Û[³‡b^ÄË
-äËÛ_‰¤ÌßâiÌµâ_[9‰¤‘JIµ™`ÅDâTÈ/?ûjE|õüDò	Â§Ék¥z1–2tôp¼yŒ`èdsóx0ÔÌHOäîW_5ôµµyOy÷Îç+âîİ/ áİÏ>—½¾û×8•7‹IR‚}OJÎ·oßùÌiB‹jU&°‘ş£dbû/¤	[ÁÄøåJL"g'Â7§<™€>‚]Ç¬Œ™˜¼û¹–ÿ»A V7'Ñò¤ZH@éÁÜPSÅ+	”@VªºÑ'cĞoJÉä€n~bšJXªñãh>K2ÌcO•J2¼ıJ·OÑG{ «¥!2mÑÂ{^f÷öwĞœKÔŠ“œÔÓÜà¨Ğ+eÏ‡•Î'ÓLÃN£Â\Í?¤Œ’füAP­ç|ñ@¹"Á‡)Ô-DhÚ°È#ån¦…Tœ@ÛÛÍ #ÿ)ãOl:R¾ˆ‘üH•ÉîP­Ô®pŸ‚Ìr:bYH€VédNa#Z¤qìg¾íã2¬®¡§¥Õ`˜´K ø4Pì‡æ³ïï¡Õ%«…Áñ“Qb·ÂMYc#ºmø²*3^ĞgFÎ/ï=‰aq0 €  xn„Àšw‘	xøÀŞCYÒñkrñşl¹Ò
-uA¾÷·ÿï°¬‡Ö/Ìåj¤¿©·¨ÌÜüš;»ƒEıˆf 6\‰dGU	$°I 5o%ô9LM‚8=]MÕRhj„[­ÚÜjì	•YÙõ®Uñ¨¤D!ÍJææ"rkê$St™³ŒsF`à¿òXS–sâØÏhÚÔ…ş0O~ZxO])f7´ßíò©˜'n†è—ù@ºc]S'oŒ”JÍ_¶D-,0o1˜"Œ!ÍN dsó¿ø„›ñA¨ÊRã¥\˜B‹÷¢Ÿi$x:ONìivv2´ƒN-¤â”?Ì“)Sñ—)&E!lùômC¤•6²$=Â­¥®G*rS®]A8˜LÁc„Cñœ/Hæ£m=¹(æE§]ŠÌ­vV¿ÁuÃÉ¹À-4¤RàÔÌ×OêÆŸ•€‚ÂŸM£ªz@^iTEØ<íü7İ½@2mTb©œÕùé<ÊKÀÌõ§Û<¹îÊfªYÓå&Û·7³¢O4³0¼¢‘ğsî€] eh†æü6"ı$"†ZåôZÁ¢Š ~ø\Á^ö¬Y˜¬TD2,(Å1,‡P¨ïbÄF@èX6|MPtÕh	€­Ô¶Ç7¬ÒX²©UÃ–ZC‹RV$oLŞc/M*RcERwŠäÆXNˆZ›ıE·-Èá˜–d…ò^•˜où§¨ì–ó›ÛnŒ¯ü¦æ& ğ¦î÷æ2ÁMK:ã2c|
-„²«W1lŠK§,8Q#úr•‘ÈH¬‹Â»º5¹˜ëP÷Rs!¶8z$v?ïó£!¤»µ¹×dï9L?:Æ8”‹MÔ§ùC–æ‰úÌz†nVÄ?ÍzÃĞ2–é¾
-D%µİI,ˆ‹zHr{£}’²4&_–iI
-7’õ¹ˆ¸NyÄPÜW©
-­­#%Å~Í“ƒHÚ“€vgÑO…òiÂË;ëÂÇ¤r:(í”­R½q®#5$i¦¨5ë^6<,qr™3¤xq¹³òÌ×b¦xÌ¯¶†z‘'"æÙîª¥¥ZÌĞà”j)7€ªfàãU™,X’L`)?)K‹5»0ÁS^©’1ú=J¬´_£ú>¬ Ù*BÖ„Hcä?³ûÃ<óKíW%êû³%­ˆšÒ2ôo’Â|g²ˆ|‘ £øîı6m °2¼€°‰º©5êù´IG0İ9ñeJÉ¾%­a€ƒeîØ*Œ€Ú•²Ì†Å*TX«ZÖ»Á3‰µbªK8"˜dUÒH–Ó¼0]*²ù¬3e¶í›É©#&]€Š:‰°#™òVSJë(YĞQÆÊÆ¦‹Yªª(@Bÿ é^êJ’êŒ,¦|J~’F¨0ÛJø¡k wO
-´gØko_Ï.çP2–\·Õ ÁXÿÎ~')€¥{ëÂOlø“aÜĞ†)]ºweNeÈÒÊ©oi;[ÊÃñÜz86µ‡£ÿIŠ7M¤Õªgµ ª›´å9¡2Ò«Êr~Õg‘¾ó¥DàPcıÄe¬K–FËZİ]Öa‡ôšQağª´
-W“Ç¦²çÆ«MÈçÍ/<ÈBhs§[DQ†7…ãh®M4·‹Ñ¯5K'mm;\P®	ü4Â”ï~¦²	IO8>†´Üil—£=Şğ£:İ«ËV*,Q `JSw§
-…õ·ê–¾[hÊdP‹†„³X½ºè&~#nûÁ˜ÚŞú"™ÁRFÖaN}™xŸbê,Dfd¥Ğpæ–åÄõÅV5.aşÊ8{ƒKÒõ˜»ú»UoM1w
-Æİ©v,ön·vJ±	môİ!æHÜ‰ßX´³A?!@,ˆ¯cËğcìê±Å·x1v­!*¡;º—Q¬z:Œc·)=tßÄ3/!·[N:ûÃdúî_±«ÊœxŞW‚ì -ìî+v÷ÕW_~ùÛß~ñÅçŸ{awîáğÂîÜ½¾®Ğ;wŸUè]MÃPsÛ³üƒoİP½nS2¼¦6ÛI ¥“¼Ÿ¸@ÓšÒ"E±?°•6¬‘á!Ò.0C4ÃkúX*+Â"Ü¨Ô^=¯Õ`ï×£J-}ncn(Ù!È…ÜfØ1Å`â‡†ûf‹U¥V×{¿}-¨Eæ`iÕC ³IPráK'P’sŞî ÎÚ_¹Òø"êèQÕ…>nvVotKMßÍ°U‚> VuÑ@•-r‘.9ÓL£M˜M‚ĞT(`RˆàÿºÏVŞ
-©©Wdßö¶:ØgHu¶ÏYo«}f½­MŒ‹½ŞVûû¢ŞV.NX«»Bßãêñ¢ÇÕãHLğz]xÒ‘D4Ó{êÀ?ÒÌ`>°'Õ$‚ÿÿ  ÿÿì]ÛRÉ}ç+*6Á`Z;Ö/È²‹a—	ËáP(Dk¦Y7Óã¹ |’Ÿü	ûc®Ì¬KÖ¥»«gd!í>H‚êêêºdeÌ<éÍ gÂ¿Îçó"—ŠëI¶4&êMY “ÒtT,!½	UùN4—”•â\Z™ùí¿ã$+>[îÌğ½«ÛîX¡ÒI©~ÛÎÓ]®Ê˜ğõãÕ†5OúÆ¸¢æ	®®ğ<ÉH%!é©:ÎdOg¹-é>%àq1´ŠGšíŸjÙ[Œ`•Âïñe5êgòÂA¡aĞîòa¯Hıwk~H
-Q$I”M	Y2gå	V¦Úæúl„ÖñŸùã«•¦R¦p¯W©í ¨G*U%/#©[Eğ<ì­ñş |Ãu …u¨¥|ï‚Sé¿¹½ÚB|\~²b»ÁG5}¥à9MğÅ€—ÿc7“œ½ˆj7–ÙN"¾~a¿û#BŞ bYG”P›:äVìÃ•s€„û‚*}‘pOô·0?Ûú0«=˜çq]é·ÿH¡q9-Œw´6AÄ¼=qwLUÕåÕD™¢Ê-ìà(ä #•
-Iv]È%Í‡‚>sbm«œÿç*A>Qz·s4ûØ÷B¦©ÏÊ@­äy²,OŠç©Û|Èº!sÎX·l#:ÅÎ+Û××’lx0Zcï ÿ&X0õS+‚5 L©³ÂA²:Úş¤ûXÕ.q7GÜÜG)¿jêÀ›"S³ÏIú`ÓEeGĞ¤³9¼IWåT™	Q—ŒI¨5Jü=0¤ãaÈÏÛ`5ü®5ƒ»¬$X¸ÏêŞÅÈî9\ÁÅ…‘<N¿º “»J&˜>«<áQP+Çá‡ÕƒŒ•(¿^:3€“œHQ7l­—ìaŞ»#Gö1Ÿ®ñÌwAÇÓ¶Êææ¹Ÿ€·²[!8©–(°ŞŒ‹"ëí?1ÃÄ*¾·S[)ÒŞkjb6Ş/•\6´ƒFï³«ršµÏ?MPAp×{l¸ë¢ÇwÍ¥ŞêEOƒ£®¯@5p´¸ë‘Çù¥r?7Bj,µcHŒ&±wíš‘0˜ğ¡â^#¡À5¡±	Ë°‡!oyœÿ‘¯ŞU¦'–œaU3‹ĞV5T9ÂÑÜ™Mò(Ÿ”„®Ë¹ÑYO¡=ß"£åªŒm¼±îo›–Fg–fëpVKÿê•©bÏéVº­úí¦·máØî­¦ l¹ğò1à_ ˜F'0­ä„ıÑ$ŸÒOøé §’‹ëù¿ÃÃlöµs2R yÖ˜¸WÓØL·H`Ì•êÙtâR#X&ÒÖ¼£›5|¢Ùğ×E±èf2±¨ü¬8£fe Ì™øÃˆK9ñêTD$…è“ÌH~/cRç^6“n©Â$ÍÓ:Õ8c½¦1áåR99¬.}`4$1JfØa·„†¬(–ÏbxĞ?Ü‰ÁéŒ†Õ¾/‡Ùìüïr<?÷†îYÁDZ‚VSÃ£PT‡:ÿâp"¯ò´U6lÛ-“#`ùjñjH3bïJóyƒ	Ü;iQ
-ÈÄc§¾÷Y@y g0NY“®åÒH>w”›©>cÄh&éÜ¾céŞP_A\)õo¹¼Ö7ë41.*6fg]J„ˆs,B‰Yï#kö’µó“µ¡Æìˆ³%=f=AfEf£ÃM»ÜÒn-¨2#©ÕÚ¤gÄT“¹W´j™µ½ÏÎ>µ­±ÁSaÊ$_ÜÏÄæójüŠj ÌV@ş57?İ¥¾‹9¨ì4Ê†~šêè»ŒlÒ´`†ó"ä…á:Óe¤ùP?Lù’óãëc¾p9À(Ã* MO‘Âu„¦'´¾á‹Æ÷pâù4	®ö›$H1ÙÕbƒ[Â>Ã£`ûÆ(“¼©áS
-)Æ\«¼Eû×Ç7¦®«­$b%K¦]\	ËËÊÕkt¦sı($’™›àC5…N pX´^GT9,µ”í+¬ÈÇ—ó«[kÜõä-!M¹¹©˜–ğE9ÒîŒ%-1{;Æ•&ê¿V(sÅè¥p'l•.Ù>¸×š'ŠÏìã\¨?¤S$öÑ®¸'<¿òò,·â,«÷ÊwËYÖ‘4ROPëî¡G”ûDİó`åãMÙË«Ñ›YZ³sO²éÖ:FÙ3>EYIYMYQY@UFWŸƒ¹¹0*gÜ1€*¯ihwõdóbQA¤—ÇF×”•Ë*x¬ˆoák@ìl™ ÈV,‡uãæ–âEåĞ;RY]¸QN”}ªÕè69¬¸ì9¾.ÏĞ$~bp—£ÁyŠ¥ÎyÉåy×ò“°ãd¤sU§+2çœ“õÈ¸ù;‹Ö¥ş0û¡Ò6T†ZÄ¦@\ÌKW2)¿Ô>Ä9İœÍú d=-ª³¿ØÚlğ_;ë‘Rô%ê¦ş23¼ƒµCí!µ˜G}ê°m[™<œ–+l;JÊ&™]SÌ[TÇóVi±Å\6ñÅj£ b4“M‚ v‹¤¡ 8ˆ·êf[TŞîZPu×Ä¾ßß€)7»CèÔ*]‚51¿ÌîÁi±°W'lÊââÂñP¶ıúÙ(.ºÌXSşÄiÚšQ×¶¸ëwyr·ò¤‹Î5%ÊW#ù¾0`WÛ×›í?(¯¥”çBÈŸŒ.r¬OÈâL>@•åòfRq©#‘ÜRG'íºÈ Y¢ä“ş+›Øœ“ER?ğ6Ør}ÖN—”‚nBÎ’ê›°ïlNÈÁëfŒ°K«t›¦„uPÚÔke×$ç×|Ñ›ö96kdÙ¤æÙ8FÒEıéJ›µdÌTôÊiÏèÄ·€µ°éôØÆ^2NTA
-76×¯Òrä4ËóX•’Sª©nÌÇô6­8z3³:[h©¢fm½ëHÑíÚ%é4á•´‹Aü¾Y+ÏÚCÇVDŞÎ—_õéĞ›½%äšº—+±U›âéxIà«ƒtêÜä%–©tºÀâÂ=[:Íˆ‚RğRm@a@è—³,%c…Š2Ğ;VÏV¡ç!éšŠ5TdPßê¯”•Xïhş;ÃhI¿n™ó¡z²õX_X“Áíş{e†j6ƒo.¨;ÿW›é©¿e]âO"vÍzÏï ô5üÔ€ñGô­0¬‡$Äu€Š¾w§„~I”RÂº_åƒÂôhî´Ìq3*3p«Ç°‡€|ß!ò•BÁÈ¬€S‰´OŠ–TİrO<×Dß ûf§¸À¾~_/g«‚c¶ç(ÖÆ×On:œ’ı°CÌpaø^Õ€Ì°y_Ä €›ßúïQ‡>4€]Ü °ûB Ë9¢¦µƒ,fö¥İ%1(?ÄyärÌ…@w1jäı¶ JÁI^‘‡¥t'8xM‡kœÁo	ç3¸ö‰º›#ÅÎÔ±H»¢`p¯K!Ñ»³á)íö·ål…ıò¦àâVbÊ·¸@ˆê‡d+UÚì 4¢kø~IÆ×ÒP/ÅsU4ÉCÖÑ>~®ÌeùUÚr&¿‰*İ£²%—Á‡¬ãª1j×¯Uî­R{ÖwxşKÁóó;Çæ#Ø7\90_Sin=xÉAùccBX:r¤²–Ğû¼SÜ]?iÎ—ıú%íçnÉ8Ç¥8 ±œŸ$‡ZO”§}c%GÂöw Ìı <;n%@¤‚ö%<æÓ
-i€t>²e½œÍg]¤cGnº°í»!U²´ÚÄVnÅ¾à‘yLİ—zb .OÅÖ B˜°Õ÷ø¦Ø;là‘ok?XÙY0SÍ1¬Øî¹Ãh:ÌÇ('è.äYˆ=/‹Ônìp÷d3	ª;æ¦\Oóea¶gL¨r«+nıx6WƒåÃ-®˜Drí­¸X[v¶µìÂ¹›|ï;{ÓY7½ˆn]ı)_¥áXi•Yy‘ZÜmÆ¸iÆ6¤{´;(ÚU6.Úw7L}c]¨r\êå€è6ê^ù6æWùµn»aëëbí$I§/Ÿ ·½zLÇUÈ¸yyíİã6e×Ï‹üF¾ĞÆ$ä7&#,^èh½‹ÇsİİC·ı¸¯|C”)—WûëË^`fûD‚e½°"p½ÜµıÖğ@vÓ¦]£˜¼tWÉ;7+„ÊZ[Á¼7À
-şIîkvSDÚ8€¹ƒZ _nÈÂúĞ×'H½Ï*`¥Ì±#¶(3!"¦l?â¢œ{«Ş·ÂÃìBÖCbúÖæĞã·¬;<ÍÒĞ1¶.]¢0ŞÒí„nÄÌ”” “mvJf}å<¥@5ÁJË]b“d2q‘İ”S­…ïÁƒ^Æ!ËøÂ¬Iw`N`gRd0´ÜŒÓ.É»ë†ÀH5¢í'‡‘_Óä&¬…®ºÃßëÙ¿í[³@áÁâÄ3˜š"8½ìä²oq3Ÿ‰Íı™¼/f×å6q‚¹¡ŠÀ0ÑÛˆ]UN3Gü@dóv¥ñÿQtıœ“ØÀh%¦ÛE*ÖÖ4ß?9?ıøÌ÷°æìq¶€È˜ñR,Æ×ğMùP@ ±9£z
-æƒÔ_¿:†ky.~9{ù¥Ò¡â¬§:?…mCr¢¨€áâ ¥¼»³âoÓâöÜùŠŸ‹òÔã”ObWñÏ‘
-‘Ô1áu‚•ˆ¡„1}XíõdŸ{Ğ|Ë¿ö”œíÒ|àòŸ+8¸?ÍíÏå¿ã¼Ù‰´eó-|AşşB&¦SÀç}¿C…	ßPÔø§0¨Qş±«6ypÖ0yLé!0YR¼Lm›ÀêÑ¨ôÌïxÿ‰7Gg}ñòèààEÿïû§}ñX¾:>ëˆ×ıÓ7GÇ?Ïlldp¾ÀnÅÙøq¯qµzôY$6ÍA‰ÒçNÌ3È?¨"‚?ÈŠ®Ö)"'NÚ¸K!E,jşIŞ„²³ìc6jÆÑ\wv†}‘:F¿…lîršJëØœôš#¾ùÖŒë5~1úè-§­Ÿß†ÕcF!uò|®ÊgOŠÑà±”v…´¥ä‡Xi¼ß@Ôm¤‰mO²ù¦iÌ¯v-Gã	âÙîàãTäMjF¶®=¢ò¾¸Ìg0*µ=i0=Öé^v¢šom9İøÏš'ì—¾êê©]¸¶x¿KK¢œ€àVÛ[:ßì¿:è¿ï¿¡Ø]ùàmäLÎŠèv„*5-× 7¼LmÿÜŸÅõh(EÂÇlš¿,‡9I]qk@ÍÉ²×ä½1›h§–ö¢éÏ…7îÚnf¡DE¹ÊmÖ¸,ĞhÓ{7ŸºŸ-Öì2Ÿ÷6ã²•¿|Zª*‡£"gk©{‚•”ÚÁ§İ«ùuaØryáù
-`ÂÉÇ½“W§g²ı»ø?¼‘½Iïş¢¼ì¿ı«TJ ‘Jy¿Ãİ¢C¶šNMîİÕ|>Ù{ü¸(Yq%oİ½ß}†WÜÓÛA¦ll8'ÿÉÆÿ   ÿÿ 	ÿE*
+// --- RAW MATERIALS INVENTORY & PRODUCTION MODExœì][oÜF–~×¯¨ Ş4;é¦dç‚]:C–åDHÔÔ²aHÕdµÄ˜M¶y‘Üpô2˜0?`‘§Å û¶ïûâ²¿`ÂS÷â¥»%[3±£4ërêTÕ¹|ç°H’½Ñ“£ÃıÑÉ˜‡Ã:Ÿûç¬ô^ô6é<ŞÌéÕpFK–Ç4)6ãô’¥e–/z²´~3(Ê*‚ßûQïå€x9{= 9+údû/äí!	+‰nB¶¡îµ?§9¾)şõWŞÓ]±|a•ÓúæqzŞ¤Â,-JM8=™x¼8ï3‡–5Şö6éUiÄ¦qÊ¢^KeZ%I¯ÏYU#Lã¼(Ç¢ŒMüª`yáÈ«pb•Ÿg	$½ç…8su=r.ı8"éÍólÊŠ,Şïa÷k=KX` ^°ğÕNíÒ$¬Xı£<‹ª°Œ³Ô‹&3˜µ>Èk×±˜´Û­X¤á¾ÚÏ“l\Íé„ÌœÚ#?¥3Ö÷CZ†CR8¬€Ïò<Ë=Öç„®ò¸d°+Ñ.áÄÀÿ¥ VÅâU²¢H™WlÀ‹´øS” (9ä¾2ÍéùÛ§1zúêœwòã<K<Çİ4ÏXIİ–_ÕÏY2ZœÎZ”qhË‚FósÊiŸ²yö&Ö­ù•lË›^‹s¾c,ú>Ë"k>—4àt^¥%=e æÀ•#Ë>ã’æÇĞíY—yôÈ©Ü‡y;•šÅm˜GZ#üd©“ğ.R;åøÌò©Glo+÷p=svåñ%H 3îVkåª1¬YLûÎø/A¯”$>À‡]y!v-„?ØÊŞïfÅ9÷f­afÆfddÅ¨7=%G=­lj;êcÔv«Á‚ÑB´ª`ğÿÜåÍ³¢ôÚ\ĞÎ5OÃ0ÕkshÂÊ¾5Ft@°-¹–Îm’E‹¦[êC]Yå)7Š°_eUx_omõ¥$ÜÚ›€û`É&I|Naoâ¬ÇgÑéoï4Úwc[Ì‰;8®y=ğ_êW`í”š)’Ié%S$ÆÆnšåÄ¦0¯lJ'¿°°ô_±EÑÚ±¯ÍdKí ò²•åÖ©<4bğÉE~r‘Ÿ\ä'ùu‘wä771$;Ç?îİÃƒ£ÑÏäèøğéşO{cò999Şy²?úíŸŒöká£p¥3š¿båf˜Íæ4] Æ	+–8Ğö0L²¤q$IôI³z¾xÉí'F—à©âiÌxÀ‘[|ËçTèq”©WkâÈçŸ“&ü"›1o3˜ûn ‰ÃrXbLœ@v"ÀjãG9“«4¼÷‰\Ÿtµ"àôM…äkö«Ğé˜JÒ0ç(/@}o6‡U§ Q…A4MÈ‚ÌXÒ´ŒÂRÂqedHF (	AV†¿@XîÛ,%Ùyö,‘ï]”å¼67Ã(Æ8ßá<=çZ€W¸t›ßÜ°ùÍWÿ*şÜ¿ÿµ-z-ù7C™Êjo‹vÊ€¤ìŠ<¯ï—ÙşøpÌs^_¶½~¨´³¹aóª¸ğpûªúpwG,GÎ[®ôŞøÏ’6tÒ.¼@±RúKœ}ÍÑ“÷A›Ìw¡ØvÕ[ºZ23P{üÁ¡,Ğª ­Dë¡Ø£3Î¶mçìëgÏŠ
+¼PFÒÔ -sjx»µÂ•|×…‘Ï Õz´L„‹¢4’¤FÃ®ÕĞšÕöÈ6°FÍp,†uÁ£1­°Zõ•|¸µR™‘vSŸ×Õf©Ë+5ù¬VÁ¬åñm¶·I|†æYåş ~±ë‚Fç‡†¤šç¶q”*œ	kİŒ^x{¾VÛµ…³ªp­öz%¡O×Rªâ°uñZf»¤<Š•p­T ¢£Ã9ÍËt{‰•ÂeÑ	c‘–E:)¼*'Â$Æ= vé¹Ôa·Hªp½Ç.–vUd”^úz9—€œˆÙ‰‚/5mÑoã>C³æZ¸¢9ËÆqqã³£g\Rnö:.N/¸µ!N)Jy\ÒzZ¯şOR:5ˆÿ³é4H`
+À³½·ôhy¡û ÷‰÷”Nò‘-äF)KÁNÁ–ÈayAeà”CDù’1ÀßäPğA6É]dy¶<†²ˆGaÒ+[!°T7˜óƒò‚Ù³,-èlÂA9Õ¯–RıŠxOb”ÚIÆïş;%3Í7Ì!NÅo=Ä†µ3#©éU’£°	
+7ó¦*W Uh Û™Ÿ³0Ç5ğÊï¾Ô;¡€´wbÉGì.ÎKÏ£2áê«íõË/élŞG3pW^`¦n1im!Ä]KaŠ:½›Uê>ÌêÙßpïc%äŒ–—˜ä8(Î1)¦F­È_Èè…*}Q¯’û/AUğ“¥ @m‰¸¹dêP äHVşËúåb.UÂ¼,Y¯oE.Ù³ÿûÿüòìU•SÂfq	æ" x¯ˆI°ô‘ºU³	(:÷î×g
+ğZòŞäÌÇ,.@
+§iV®àèï#Gôœæïşaâ›'Cl´knÙR»FVäCQ¢{5U-&Ş–5eõ†S ŠëY¨’+N¡/É4tÌí %³ÑÜÖ/)†ÊÅ,d£A;:L[‚B¤¦ÊÕo“wHx9ş·æ¸ùÔí™•4}\-ÂÖ0;WÉkÆ,IN²–
+tµRKÁõ`¸[BN”´
+>Ò»©­‡T°–şR[.æ‹n¡6ÿ‘úå‡Àœ@\b!0d-ÇDrÃVm|$…‡–mB04m—Ö0MŠÈÛgºåº›ì»°ÆĞ¡[±"v»~Bk¸ÊİHá¬i7´ÎLl©ê	ÅãS’M,Œ%ùµÕğœQ•ıÈëÉ½¾­ƒv@&‡3ºN	ÜÚÁRmÅ¸}PËó
+Ø­¬H@µ\#ñQVÈ¿Z¥$ãÁŞx¼óıŞx@öGÏ÷wyšñèøğ`<><ş™ŒOö–¥•Ÿİöc¢ùˆb‰¡	[VâM–­¼=èòXL-â‡Z7£Zv{SzK½±Hæòë¬öM rÍšÔz:ö¤,­½#°ŒVTæ:2à3gz1M|©ÓvN\;iOÛº(Ÿm¬Ël½„ªá½=Ÿ*ëo’NÕÒ°Âı®¡@[î7ÖêÅ&ñA0< æ)‘íH©*QBomQW‹¾fUQYØhd Ğşûº[ıD± ·*+µúéÁWtµ'Z[
+w!–-Ã“º×–©(ÎâÈ¬væuWM•/(÷Ù/ZÅá¥Ğmà)‹S¯wªzéÆÖ•HÅŠßV·…Ë-ô¥Õ'T Wş°³¥A¶]XBCa^ÜnÈ ĞÿËé•ìMÙÓg”öO)©ì¨¾§_S M-ìØÜÊá6+GB°úøF§•‚6ïql£Ãô(fëšŸM†áŒ¦M†*¶¿I
+ÙL0;+$ŠŒvfƒlµÊiZÌAXwQ§E¥!{Ê˜(Éò¨5Àø£˜ŒÂµÒNjöÜÜÈ69{º³{2<Ø;Ş{{@Ëšd (÷·ğù’ğ2XÎ(›ÿ‚ü¯è‹l…<•]99|7™\°h÷šx|#qv/^öAÂç„¦.2PÆ%Æñ±Ïp••ç2©¶¯+Lµ”‹€ˆYx±¯ŠúÖÍš*Ë£æjµÓe}ë„OQMÊŒ“éŠ<¯ƒ6®×E+aåúdÿƒ ogÃÙå`dÛ^À"xÈĞTbpä…Ü›õ*Ø,óÇÒĞ/é:IØc0@ÏeFßx  ö¼\.†jm\åêÃH²ÂÑ0«ÜV³¾;q‹§KZƒP ?î;¥Z‰-Şì	|A¶ü÷²ÖL‘÷6
+‰/Í8ı¡º:pãİå6¡r€Ò’8îC¬‡ö`h²õƒ‹¯J[†¦	ñ~ƒì;Øb`•«’>ÌLK¸Ûtí¢rgƒÍ5ÍíİZ·Üj,7Y_ˆÑå¸f«$å¢¨dN »jsàÎËœHPGvEŞ•?‰|Ÿ¬­ß¾TAØ€E›Wu#^-‰›ú:}aœÁOÅ#^ƒ0‘KšFÿ¼¨M$é`2?Ÿ‘„¹±‰;\÷Ş:ZsM@øH<CdBVğ†Ú½·îÍh©¤ÔÈPÿšüï_ÿ‹x¨	A£ÑÙîK²ÿ|LÏ¿4ÚÓÀ[öı³&Îl—Ï€©ïb4°åG" ¯1ìåªe"®¶ùZM´-ÃªIQ<w…R)g}vï­%S×6õßµ@¨İëÑ4…ÒáyİS€$’¯Ş"Št&tíÃ ®‰¿%ÏÓ¡‰†üÆÒ8Ü¢³µ¤–A*”2fY×£„†F99†6Şëã{aÔhújş˜+sS„ÓÉGñTV‚=â±N<Ev ôŸKNÓ DJ¦ØÍD\ŒèÈÓí¸Ó4½¾ÛFÈx“ÜÈ¾T`ëòİoIÜšhâqëgóî#Ä G;ßüG{wÎÊ§U’üÌhîõ¯[b‚®€G‰pù¨.o›ƒO¾l9lR@Ûİ˜–Şİx˜+\ı3¢¡6Sæœª%âÁÒn à(
+Ş-²y°ÇPlP	è´”ØÅûé¿ƒ*B k?§i\\ğRKÌ¬U@hqe~1Ob°X'½ş‹­—!	Ô.¬ët4F'°~sì{@£<zKĞñáN¾‡!cÓ5YùÉ»¥Ù)=Mè)–¦=× ú@Vì4„O¸6¶p)“è_œôc€¸Ùe¨ô	9ĞGŒÇş/GB›JšÛ÷t»à¬jú-.@…Çûß†½ºAOÙí«oûß‰{Şƒ,Š’‚—s˜Šëı9Påßÿf£Ê>x<ÃSŞ ¾çò †m¶ÄEM<a4GÀFœ\‚İgÈUÍ¥J\¿?L¬1éÊ/~Ì¨QH›ÌÆóÃ¶GtëPu
+ôR"DÃ×U\ÄØœß?îôÖóõ˜PÔtPëR.NDNéìhMiQ¢†põ$‡KŒ+¥Ê^«]EÊj3;lø­ík§âá˜××_H³Ø’f­_¥ÅE<-=³·ZdL3K^¬v>Ø¨o—:²`ã‚ZWVrïnh$.i¢6|©‰ğ—Y`†ş]… ­Zq»H$Ì’„áñœõƒ5:!Hj äš‰õÛßç§Û@( ÈP@ó‹Ú5[ÿö532ìâĞBÌZôİì–’çU·ôæh=ÛT|ÍS9<·”‘¸Oa•€›¸Ä³ò(Iì†7`÷
+°MJgõª@¥
+³	2L ÁpG”—¥OC°”c‰}W¶…OØ4ÔüS$•õŞ­3‡‡iÿ²s
+RÂGÁSÉül6Œ„ø.Ä€Î'{	¿€9È	åï~#´*³Ù»ßJ0L¨µìGQÙÀ_1/|îÏEï;)µÖ† |²3í·	]¬­[H‰ãò)?Ím× µ"EK×WĞv¬‚sh;•Ö)4Á4ê•ÕâV÷ÇÛCô5ãaTøz\S+{®yæ,ûš`œ|gõÕO7™ = ›B'ª:i}ñbQ?!ÒR/Œ©ãû©p¾xW­İÏË»l|Ç2Ü±Ìwà“@ON¹Í&òÈ|¥©mmo~gæ¤\XÃµJ¯Ërh±Î‰yâ¹[táDæÖ!cm“Õ~q ¨½¤h=¦YŠ2¥[ï0!\ÇB@MÓÁ6.Š°„!’ ù­Ÿgê=>+(íl †àbÇõ;@ã(.ğid¯ 	ö©p^h·|rT1ØQDJ	g	Fî—*â¨‡6ßL…‡Ó§9ÃWW°H—k˜ÂŠÚ ÷:mĞ ;Šw$^‹}¹!ªD[ÌÜ_ |Åjà5J@åyPàÀš	u•Ú½•èÖ…¯ß–´…«Z[‹/—ĞÔ6ª|Ã Ú!Tù¦gßöÅ{xS–ó¶ø/'öÂşnÄÈiÇ-±»7»nGäNTuK*á£ùH½MÓT½L·X-œ4o£G³›µŒ©Ã,½ˆµ4So—;@üv0±F@°D—W‡û:P;¬öÂRª„o˜ã!,ÿĞ†Ù,÷€¬Ñx‰CÔşsÁ}—uK<ÏüÎÆÇìvjNÇu9'Æ*\¬'âXB‡ƒ}?¯Äm’¢l?­ªTÏV5×­¦ßNº¦wM-k3Sëv]Jõ±Æã–¥®í¤wr¼3?İ;>İõ¶r¶dÊ´ñòõa/­0ïÇzËaVá1z³ä†·Ãg'¿swsFOhË«•,Ÿiåuª@cUĞEzÜ½ûÇ›â2æÎ•†9‹â’ñå:èF@ß…ÀmRhQÕİè~ÇY=¥¡¼|Êiü“ç4î4Ú6ù'òçì2¦87§tG1²Ü$'0^o/ë.íçÆ×ˆˆUjÚªe©İ.NñŞN\TºOzˆ[ÉâÚêEÅ1›Ñ8kŸQ¼/Ï( L<M{“ğ{Î€Œ¿Õ|İï»S™Å)?NÙ¿–…©ç¿mÖìc"‹õ3…jˆ/ˆçĞgy±3¯MòÕ·[ıfÊ‡rg(ÿ€*$#[ş7MVvu+g™jg9-ÎjdoÇ2SÖz S6×dØÂ[KĞrëHˆ­:ªyP§Õ†¡¸×ÛkÆCkİvc¤ŞŞx«ñ¯÷„I¬l’Î€Å«xh¤Ò¤vŒtïmT¸&ŞHˆKãp#q«d@¤á‹ †µ–u1S]vq<Ìávw±ÄPá[ãÖì†¼m¶*T«Çj–Ç‘QS\<‘|Ôã©H—/ØT³'`;ĞŠÚ&¤ÖD
+û²ÖÂ²\õ¢ZËİºùqGgk‹²)¬µ1ˆ"¹pFÜHy«µj‰Rÿ`!V¤,h¨Gë::Ğ7Ç—(¼Q”úßÇ0	ÖÃº`eÛ	ÍÒRÉÿòƒ*©ìè‹J^Öe¿^n$WÕh.e.yıÈC¦Mø»•i
+Eˆ?…!¢0Ä½™y—qŠs«S[»ûg	PÖÇûa;„ş¦Boù[[ß4ó­!íĞbàwÅ´m¸Ò†´í¨²bW`JÇ¶bhÈ®ƒ¢°vV˜6¬tj5€T –ò;rÍ£kAİ;„–®ÑèrW»—í]ZóöN‹¥ˆÓth€@.ûKš98±ÑîcGtV.¸Ú‰Œ°%P6p·üoB2BçIR|[=6k1Ùû >MÊeòÅ;û£ç{£|·Îøäp÷G¢vÑzËİÌ×ÔCüÃ°(³ğÕºoÂ¢ğÓğ»ÌÔ/|VóG¶è‡’W¼l˜CŠ_*jüBä¿Í“Ç7OñğBŠ7¿ßı6ceâF8Kp…‹Dì0ì5ÁEh;0ó!?Ç³oı˜FK!º¶k3.Ó>³í³f­wºvvPËüÒCR#ˆ]€_7[éQ&‘19˜É„bUñyT†§A™8Ã%äZŸ?±ıu¹0 Fï¼ZC¬­ÇÚO”pĞTxÂøÁş’NTPi–×!½¤q‚Oâ½]µ0À:>~şBJåK±'Óã;äşFkw6Fİãëã×/ZØ4€EÄ»÷Vs-O{Ä|õ™½†İw?	oø
+ş9HS(M¤K=!Q]T%¥®V¸Zà|ZˆË[z*´_PÒD’?Äb)Şéû.Æåœ(c›ÉŞÄÒ¤`ôùC>ó„•îFBí½ÇÏSÄi¦¼‡ûÍ˜%1z‹¡_ÃÆ·¿}Ä¶÷‚¸©áïx%ÒİÙzûIÃ¿¾±—Œ¯gò—<¹¹÷ÎÀ&â[ÈP'¿m³jhËƒş¹©n8´e•¶Óß–j¹¬›´8µåvMYq¤¶ÚŠ ÎÅM©^œkã½Êp·2¹Âpwm¹{e&Ò–D5ç†>ãFÙÛ6rYı‹E½¥m|¬ÑİÙZî‡–-’ñCû}+?¤¥P]íìÉÙ
+,ú?[Ã-1!kt¯? Şå õ|kë:Ã.¢öä.Û¿‡Ÿİ³|«Ö½H¼wÄxWëù5ÃÜUÉÇ¥×->W/Z-û%sØ ÏÍ;É–«¤Á„•W0\y•qÔ%°1­Rnúõ[”ùkÿñÈ6ÏJ N“[òõšüÅÎÌ%ëÊ#õ´øèšxûËÍ:ş*+@¿úØ“&IvÅ0–A?š>D¯{ )€‡7¸!.#¯æÛœõïˆºo(zc>CPÌ©ƒ¢¬l!Ù^+>4 >9œçñ?v¸¡^SàL(ÔØ©yk±P"EâK¾C·«TSÔ ¢w¿aVY~	Î]ÀÓïâ ¬ÏÀLŸìîóHôÌ×,k8¾Œy‹^Ñ¸”/~E’´ºcTğKÜéYE	»¢9Ÿ',ª[B€)Åç½b®>İy-…"ŞIöpDß)„?³ßÛ®s”G` ùÛ¾ÀNóg¨ÕÃ«sJ=lÔ«ÀŞà×®„ÿCOÑé[Íøp¿€unE·b·
+şz×§q‚OÕøŠØ ßY±7şE9Kzúy
+ã›q”„ïèğøÚoùü8¢5’2iIvî‰U'y•òÃ0°Ïø­`s3ÉÀ{\àÛ§î½Er×gb¤>—Gnü?   ÿÿ T½çD
