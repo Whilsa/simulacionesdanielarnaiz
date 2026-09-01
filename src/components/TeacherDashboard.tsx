@@ -193,6 +193,47 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
   };
 
+  const handleMaintenanceSupabase = async () => {
+    setIsConnectingSupabase(true);
+    setSupabaseMsg('');
+    setSupabaseErr('');
+    try {
+      const res = await fetch('/api/supabase-maintenance', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseMsg(data.message || 'Mantenimiento y deduplicación ejecutados con éxito.');
+        fetchData();
+      } else {
+        setSupabaseErr(data.error || 'Error durante el mantenimiento.');
+      }
+    } catch (e: any) {
+      setSupabaseErr('Error de red: ' + (e.message || String(e)));
+    } finally {
+      setIsConnectingSupabase(false);
+    }
+  };
+
+  const handleSeedSupabase = async () => {
+    if (!window.confirm('¿Deseas verificar e inicializar las cuentas y usuarios por defecto en Supabase?')) return;
+    setIsConnectingSupabase(true);
+    setSupabaseMsg('');
+    setSupabaseErr('');
+    try {
+      const res = await fetch('/api/supabase-seed', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseMsg(data.message || 'Usuarios iniciales verificados e insertados con éxito.');
+        fetchData();
+      } else {
+        setSupabaseErr(data.error || 'Error al sembrar usuarios.');
+      }
+    } catch (e: any) {
+      setSupabaseErr('Error de red: ' + (e.message || String(e)));
+    } finally {
+      setIsConnectingSupabase(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
     // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
@@ -1787,7 +1828,31 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       </div>
 
                       <div className="pt-2 border-t border-slate-100">
-                        <p className="text-xs font-semibold text-slate-700 mb-2">Tablas automáticas en Supabase:</p>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold text-slate-700">Tablas y herramientas de mantenimiento Supabase:</p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={isConnectingSupabase}
+                              onClick={handleMaintenanceSupabase}
+                              title="Ejecutar limpieza, eliminación de duplicados y optimización"
+                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isConnectingSupabase ? 'animate-spin' : ''}`} />
+                              <span>Deduplicar / Mantener BD</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isConnectingSupabase}
+                              onClick={handleSeedSupabase}
+                              title="Verificar y asegurar usuarios y cuentas iniciales"
+                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                            >
+                              <Database className="w-3 h-3" />
+                              <span>Sembrar usuarios iniciales</span>
+                            </button>
+                          </div>
+                        </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                           <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
                             <div>
