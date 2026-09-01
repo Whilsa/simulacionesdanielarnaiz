@@ -2599,31 +2599,42 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }));
       }
 
-      // Reconstruct db.telecomInvoices from Supabase "facturas_telecom"
+      // Reconstruct db.telecomInvoices from Supabase "facturas_telecom" with deduplication
       if (resTelInvoices.rows.length > 0) {
-        db.telecomInvoices = resTelInvoices.rows.map((row: any) => ({
-          id: String(row.id),
-          invoiceNumber: String(row.numero_factura),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          companyName: String(row.empresa_nombre || row.alumno_nombre),
-          nifCif: String(row.nif_cif || ''),
-          contractId: String(row.contrato_id),
-          planName: String(row.plan_nombre),
-          provider: String(row.proveedor),
-          periodMonth: Number(row.mes),
-          periodYear: Number(row.anio),
-          issueDate: new Date(row.fecha_emision).toISOString(),
-          dueDate: new Date(row.fecha_vencimiento).toISOString(),
-          subtotal: Number(row.subtotal),
-          ivaRate: Number(row.tipo_iva || 21),
-          ivaAmount: Number(row.importe_iva),
-          totalAmount: Number(row.importe_total),
-          status: String(row.estado) as 'pagado' | 'pendiente',
-          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-          items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
-          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
-        }));
+        const seenTelecomKey = new Set<string>();
+        const mappedTelInvoices: TelecomInvoice[] = [];
+        for (const row of resTelInvoices.rows) {
+          const sId = String(row.alumno_id);
+          const pM = Number(row.mes);
+          const pY = Number(row.anio);
+          const key = `${sId}_${pM}_${pY}`;
+          if (seenTelecomKey.has(key)) continue;
+          seenTelecomKey.add(key);
+          mappedTelInvoices.push({
+            id: String(row.id),
+            invoiceNumber: String(row.numero_factura),
+            studentId: sId,
+            studentName: String(row.alumno_nombre),
+            companyName: String(row.empresa_nombre || row.alumno_nombre),
+            nifCif: String(row.nif_cif || ''),
+            contractId: String(row.contrato_id),
+            planName: String(row.plan_nombre),
+            provider: String(row.proveedor),
+            periodMonth: pM,
+            periodYear: pY,
+            issueDate: new Date(row.fecha_emision).toISOString(),
+            dueDate: new Date(row.fecha_vencimiento).toISOString(),
+            subtotal: Number(row.subtotal),
+            ivaRate: Number(row.tipo_iva || 21),
+            ivaAmount: Number(row.importe_iva),
+            totalAmount: Number(row.importe_total),
+            status: String(row.estado) as 'pagado' | 'pendiente',
+            paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+            items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
+            paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
+          });
+        }
+        db.telecomInvoices = mappedTelInvoices;
       }
 
       // Reconstruct db.officeOrders from Supabase "pedidos_oficina"
@@ -4721,6 +4732,8 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   if (!db.electricityContracts) db.electricityContracts = [];
   if (!db.electricityBills) db.electricityBills = [];
 
+  let modified = false;
+
   // Filter out any erroneous bills for period months prior to contract creation, and refund if paid
   const validBills: ElectricityBill[] = [];
   for (const bill of db.electricityBills) {
@@ -4740,6 +4753,7 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
             db.transfers = db.transfers.filter(t => !t.concept.includes(`factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear}`));
           }
         }
+        modified = true;
         continue; // Skip invalid bill
       }
     }
@@ -4769,6 +4783,7 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const newBill = calculateElectricityForStudent(contract.studentId, prevMonth, prevYear, db);
       if (newBill) {
         db.electricityBills.push(newBill);
+        modified = true;
       }
     }
   }
@@ -4786,6 +4801,7 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
       bill.status = 'pagado';
       bill.paidDate = now.toISOString();
+      modified = true;
 
       syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
@@ -4802,9 +4818,11 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
         concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (NÂº ${bill.billNumber})`,
         timestamp: now.toISOString()
       };
+      if (!db.transfers) db.transfers = [];
       db.transfers.unshift(transfer);
       syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
+      if (!db.systemLogs) db.systemLogs = [];
       db.systemLogs.unshift({
         id: generateId('log'),
         action: 'ELECTRICITY_AUTOMATED_PAYMENT',
@@ -4815,12 +4833,108 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       });
     }
   }
+
+  if (modified) {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Error writing db in electricity automation:', e);
+    }
+  }
+}
+
+const inMemoryTelecomLockedKeys = new Set<string>();
+
+function normalizeAndDeduplicateTelecom(db: DatabaseSchema): boolean {
+  if (!db.telecomInvoices) db.telecomInvoices = [];
+  if (!db.transfers) db.transfers = [];
+  let modified = false;
+
+  // 1. Group invoices by studentId + periodMonth + periodYear
+  const invoiceGroups = new Map<string, TelecomInvoice[]>();
+  for (const inv of db.telecomInvoices) {
+    if (!inv || !inv.studentId) continue;
+    const k = `${inv.studentId}_${inv.periodMonth}_${inv.periodYear}`;
+    if (!invoiceGroups.has(k)) invoiceGroups.set(k, []);
+    invoiceGroups.get(k).push(inv);
+  }
+
+  const invoicesToKeep: TelecomInvoice[] = [];
+  const invoicesToDelete: TelecomInvoice[] = [];
+  const studentRefunds = new Map<string, number>();
+
+  for (const [k, invs] of invoiceGroups.entries()) {
+    invoicesToKeep.push(invs[0]);
+    for (let i = 1; i < invs.length; i++) {
+      const dup = invs[i];
+      invoicesToDelete.push(dup);
+      if (dup.status === 'pagado') {
+        const cur = studentRefunds.get(dup.studentId) || 0;
+        studentRefunds.set(dup.studentId, cur + Number(dup.totalAmount || 0));
+      }
+    }
+  }
+
+  if (invoicesToDelete.length > 0) {
+    db.telecomInvoices = invoicesToKeep;
+    modified = true;
+    for (const dup of invoicesToDelete) {
+      if (dbPool) {
+        safeDbQuery('DELETE FROM facturas_telecom WHERE id = $1', [dup.id]).catch(e => console.error(e));
+      }
+    }
+  }
+
+  // 2. Deduplicate transfers for telecom
+  const transfersToKeep: Transfer[] = [];
+  const transfersToDelete: Transfer[] = [];
+  const transferSeen = new Set<string>();
+
+  for (const tx of db.transfers) {
+    if (tx.receiverId === 'telecom-provider' || (tx.concept && tx.concept.toLowerCase().includes('telecomunicaciones'))) {
+      const match = (tx.concept || '').match(/\((\d{1,2})\/(\d{4})\)/);
+      const periodKey = match ? `${match[1]}-${match[2]}` : (tx.concept || '');
+      const key = `${tx.senderId}_${periodKey}`;
+      if (transferSeen.has(key)) {
+        transfersToDelete.push(tx);
+      } else {
+        transferSeen.add(key);
+        transfersToKeep.push(tx);
+      }
+    } else {
+      transfersToKeep.push(tx);
+    }
+  }
+
+  if (transfersToDelete.length > 0) {
+    db.transfers = transfersToKeep;
+    modified = true;
+    for (const tx of transfersToDelete) {
+      if (dbPool) {
+        safeDbQuery('DELETE FROM movimientos WHERE id = $1 OR id = $2', [tx.id, tx.id + '-out']).catch(e => console.error(e));
+        safeDbQuery('DELETE FROM movimientos WHERE id = $1', [tx.id + '-in']).catch(e => console.error(e));
+      }
+    }
+  }
+
+  // 3. Refund balances to students if duplicate payments occurred
+  for (const [studentId, refundAmt] of studentRefunds.entries()) {
+    const student = db.users.find(u => u.id === studentId);
+    if (student && refundAmt > 0) {
+      student.balance = Math.round((student.balance + refundAmt) * 100) / 100;
+      modified = true;
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+    }
+  }
+
+  return modified;
 }
 
 function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
   if (!db.telecomContracts) db.telecomContracts = [];
   if (!db.telecomInvoices) db.telecomInvoices = [];
 
+  let modified = normalizeAndDeduplicateTelecom(db);
   const now = new Date();
   const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
 
@@ -4834,7 +4948,7 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
 
     // 1. Clean up any premature invoices created on contract sign-up date before the 1st of the following month
     const prematureInvoices = db.telecomInvoices.filter(inv => {
-      if (inv.contractId !== contract.id) return false;
+      if (inv.studentId !== student.id && inv.contractId !== contract.id) return false;
       const invDate = new Date(inv.issueDate);
       const firstDueOfContract = new Date(startYear, startMonth, 1, 0, 0, 0); // 1st of month following contract month
       return invDate < firstDueOfContract;
@@ -4842,16 +4956,17 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
 
     for (const premInv of prematureInvoices) {
       student.balance = Math.round((student.balance + premInv.totalAmount) * 100) / 100;
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
 
       db.telecomInvoices = db.telecomInvoices.filter(i => i.id !== premInv.id);
 
       if (db.transfers) {
-        db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && t.concept.includes(premInv.invoiceNumber)));
+        db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && (t.concept.includes(premInv.invoiceNumber) || t.receiverId === 'telecom-provider')));
       }
+      modified = true;
     }
 
-    // 2. Process billing for any completed month where payment is due (due on 1st of month M+1)
+    // 2. Process billing for any completed month where payment is due (due on 1st of month M+1 at 00:00:00)
     const nowYear = now.getFullYear();
     const nowMonth = now.getMonth() + 1;
 
@@ -4859,98 +4974,129 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
     let curM = startMonth;
 
     while (curY < nowYear || (curY === nowYear && curM <= nowMonth)) {
-      // Due date for service month (curY, curM) is 1st of month (curM + 1)
-      const paymentDueDate = new Date(curY, curM, 1, 9, 0, 0);
+      const lockKey = `${student.id}-${curM}-${curY}`;
+      if (inMemoryTelecomLockedKeys.has(lockKey)) {
+        curM++;
+        if (curM > 12) {
+          curM = 1;
+          curY++;
+        }
+        continue;
+      }
+
+      // Due date for service month (curY, curM) is 1st of month (curM + 1) at 00:00:00
+      const paymentDueDate = new Date(curY, curM, 1, 0, 0, 0);
 
       // Only process if paymentDueDate is on or before now
       if (now >= paymentDueDate) {
-        const existingInvoice = db.telecomInvoices.find(
-          inv => inv.contractId === contract.id && inv.periodMonth === curM && inv.periodYear === curY
+        const existingInvoice = (db.telecomInvoices || []).find(
+          inv => (inv.studentId === student.id || inv.contractId === contract.id) && Number(inv.periodMonth) === Number(curM) && Number(inv.periodYear) === Number(curY)
         );
 
-        if (!existingInvoice) {
-          const daysInMonth = new Date(curY, curM, 0).getDate();
-          let baseAmount = contract.monthlyPrice;
-          let isProrated = false;
-          let activeDays = daysInMonth;
-
-          if (curY === startYear && curM === startMonth) {
-            const startDay = cDate.getDate();
-            activeDays = Math.max(1, daysInMonth - startDay + 1);
-            baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
-            isProrated = true;
+        if (existingInvoice) {
+          inMemoryTelecomLockedKeys.add(lockKey);
+          curM++;
+          if (curM > 12) {
+            curM = 1;
+            curY++;
           }
-
-          const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
-          const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
-
-          const invoiceNumber = `TEL-${curY}-${String(curM).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
-          const invoiceConcept = isProrated
-            ? `Cuota proporcional de Servicio ${contract.planName} (${activeDays}/${daysInMonth} dÃ­as del mes de alta ${curM}/${curY})`
-            : `Cuota Mensual de Servicio ${contract.planName} (Mes ${curM}/${curY})`;
-
-          const invoice: TelecomInvoice = {
-            id: generateId('tel_inv'),
-            invoiceNumber,
-            studentId: student.id,
-            studentName: student.name,
-            companyName: student.name,
-            nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
-            contractId: contract.id,
-            planName: contract.planName,
-            provider: contract.provider,
-            periodMonth: curM,
-            periodYear: curY,
-            issueDate: paymentDueDate.toISOString(),
-            dueDate: paymentDueDate.toISOString(),
-            subtotal: baseAmount,
-            ivaRate: 21,
-            ivaAmount,
-            totalAmount,
-            status: 'pagado',
-            paidDate: paymentDueDate.toISOString(),
-            items: [
-              {
-                concept: invoiceConcept,
-                amount: baseAmount
-              }
-            ],
-            paymentMethod: 'Adeudo directo automÃ¡tico en cuenta (1 de mes)'
-          };
-
-          db.telecomInvoices.unshift(invoice);
-          syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
-
-          student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-          const txId = generateId('tx');
-          const transfer: Transfer = {
-            id: txId,
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: 'telecom-provider',
-            receiverName: contract.provider,
-            receiverAccount: 'ES880004000199223344',
-            amount: totalAmount,
-            concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
-            timestamp: paymentDueDate.toISOString()
-          };
-          if (!db.transfers) db.transfers = [];
-          db.transfers.unshift(transfer);
-          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-          if (!db.systemLogs) db.systemLogs = [];
-          db.systemLogs.unshift({
-            id: generateId('log'),
-            action: 'TELECOM_AUTOMATED_PAYMENT',
-            details: `Cobro mensual automÃ¡tico de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}â‚¬ (IVA incl.)`,
-            timestamp: paymentDueDate.toISOString(),
-            studentId: student.id,
-            studentName: student.name
-          });
+          continue;
         }
+
+        // Lock in memory immediately before creating
+        inMemoryTelecomLockedKeys.add(lockKey);
+
+        const daysInMonth = new Date(curY, curM, 0).getDate();
+        let baseAmount = contract.monthlyPrice;
+        let isProrated = false;
+        let activeDays = daysInMonth;
+
+        if (curY === startYear && curM === startMonth) {
+          const startDay = cDate.getDate();
+          activeDays = Math.max(1, daysInMonth - startDay + 1);
+          baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+          isProrated = true;
+        }
+
+        const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+        const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+        const invoiceNumber = `TEL-${curY}-${String(curM).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const invoiceConcept = isProrated
+          ? `Cuota proporcional de servicio ${contract.planName} (${activeDays}/${daysInMonth} dÃ­as del mes de alta ${curM}/${curY})`
+          : `Cuota mensual de servicio ${contract.planName} (Mes ${curM}/${curY})`;
+
+        const invoice: TelecomInvoice = {
+          id: generateId('tel_inv'),
+          invoiceNumber,
+          studentId: student.id,
+          studentName: student.name,
+          companyName: student.name,
+          nifCif: student.nifCif || ('B-' + Math.floor(10000000 + Math.random() * 90000000)),
+          contractId: contract.id,
+          planName: contract.planName,
+          provider: contract.provider,
+          periodMonth: curM,
+          periodYear: curY,
+          issueDate: paymentDueDate.toISOString(),
+          dueDate: paymentDueDate.toISOString(),
+          subtotal: baseAmount,
+          ivaRate: 21,
+          ivaAmount,
+          totalAmount,
+          status: 'pagado',
+          paidDate: paymentDueDate.toISOString(),
+          items: [
+            {
+              concept: invoiceConcept,
+              amount: baseAmount
+            }
+          ],
+          paymentMethod: 'Adeudo directo automÃ¡tico en cuenta (1 de cada mes)'
+        };
+
+        db.telecomInvoices.unshift(invoice);
+        syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+
+        student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+
+        const txId = generateId('tx');
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'telecom-provider',
+          receiverName: contract.provider,
+          receiverAccount: 'ES880004000199223344',
+          amount: totalAmount,
+          concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
+          timestamp: paymentDueDate.toISOString()
+        };
+        if (!db.transfers) db.transfers = [];
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+        addNotification(
+          db,
+          student.id,
+          'Pago automÃ¡tico de telecomunicaciones',
+          `Se ha cargado automÃ¡ticamente en tu cuenta bancaria la cuota de ${contract.planName} correspondiente al mes ${curM}/${curY} por un importe total de ${totalAmount.toFixed(2)} â‚¬ (Factura ${invoiceNumber}).`,
+          'info'
+        );
+
+        if (!db.systemLogs) db.systemLogs = [];
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'TELECOM_AUTOMATED_PAYMENT',
+          details: `Cobro mensual automÃ¡tico de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}â‚¬ (IVA incl.) - Factura ${invoiceNumber}`,
+          timestamp: paymentDueDate.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+
+        modified = true;
       }
 
       curM++;
@@ -4958,6 +5104,14 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
         curM = 1;
         curY++;
       }
+    }
+  }
+
+  if (modified) {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Error writing db in telecom automation:', e);
     }
   }
 }
@@ -5544,6 +5698,65 @@ app.get('/api/users', (req, res) => {
       .map(({ password: _, ...u }) => u);
     res.json({ users: publicStudents });
   }
+});
+
+// Get students list with warehouse / logistics information
+app.get(['/api/students-list', '/api/students'], (req, res) => {
+  const db = readDb();
+  const students = (db.users || [])
+    .filter(u => u.role === 'student')
+    .map(student => {
+      const studentNaves = (db.acquisitions || []).filter(a =>
+        String(a.studentId) === String(student.id) &&
+        (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes(a.propertyType || a.type || '') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almacÃ©n') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+      );
+
+      const warehouses = studentNaves.length > 0
+        ? studentNaves.map(nave => {
+            const nId = String(nave.id || nave.propertyId);
+            const hasForklift = (db.purchasedVehicles || []).some(v =>
+              String(v.studentId) === String(student.id) &&
+              v.vehicleType === 'carretilla_elevadora' &&
+              (
+                String(v.assignedPropertyId) === String(nId) ||
+                (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined || !v.assignedPropertyId))
+              )
+            );
+            return {
+              id: nId,
+              title: nave.propertyTitle || nave.title || 'Nave industrial',
+              type: nave.propertyType || 'nave_industrial',
+              address: nave.location || nave.address || 'UbicaciÃ³n registrada',
+              hasForklift
+            };
+          })
+        : [
+            {
+              id: 'default_nave',
+              title: 'AlmacÃ©n Principal',
+              type: 'almacen',
+              address: 'Sede central de la empresa',
+              hasForklift: (db.purchasedVehicles || []).some(v =>
+                String(v.studentId) === String(student.id) &&
+                v.vehicleType === 'carretilla_elevadora'
+              )
+            }
+          ];
+
+      return {
+        id: student.id,
+        name: student.name,
+        username: student.username,
+        level: student.level || 1,
+        accountNumber: student.accountNumber,
+        warehouses
+      };
+    });
+
+  res.json({ students });
 });
 
 // Create new bank user account (Teacher only)
@@ -8690,7 +8903,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         );
 
         if (!hasInvoice) {
-          const dueDate = new Date(targetYear, targetMonth, 1, 9, 0, 0); // 1st of month following targetMonth
+          const dueDate = new Date(targetYear, targetMonth, 1, 0, 0, 0); // 1st of month following targetMonth
           if (dueDate >= now && dueDate <= thirtyFiveDaysLater) {
             const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
             let baseAmount = contract.monthlyPrice;
@@ -11850,220 +12063,45 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
         needsTransport: false,
         deliveryAddress: order.deliveryAddress || 'DirecciÃ³n comercial registrada',
         status: 'facturado',
-        invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-        requestedAt: new Date().toISOString(),
-        approvedAt: new Date().toISOString(),
-        deliveredAt: new Date().toISOString(),
-        invoicedAt: new Date().toISOString(),
-        items: [{
-          announcementId: `trans-inv-${txTransport}`,
-          materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
-          materialTitle: transportConcept,
-          title: transportConcept,
-          quantity: 1,
-          unitPrice: baseTransportFee,
-          subtotal: baseTransportFee,
-          totalCost: baseTransportFee
-        }],
-        lastTurnUserId: seller.id,
-        negotiationHistory: [{
-          id: generateId('neg'),
-          authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-          authorName: sellerHasTruck && sellerHasDriver ? 'EstaciÃ³n de servicio - suministro de combustible' : 'Agencia de LogÃ­stica y Transportes Express S.A.',
-          timestamp: new Date().toISOString(),
-          action: 'propuesta_inicial',
-          quantity: 1,
-          pricePerUnit: baseTransportFee,
-          discountPercentage: 0,
-          insuranceFee: 0,
-          transportCost: 0,
-          transportMethod: 'vendedor_envio',
-          totalAmount: transportExpense,
-          note: `Factura por ${transportConcept}`
-        }]
-      };
-
-      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-      db.rawMaterialOrders.unshift(transportInvoiceOrder);
-      syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
-    }
-  }
-
-  const now = new Date();
-  const buyerLevel = buyer.level || 1;
-  const isRawMaterialOrder = ['hierro', 'metal', 'plastico', 'epoxi'].includes(order.materialType) ||
-    (order.items && order.items.some(i => ['hierro', 'metal', 'plastico', 'epoxi'].includes(i.materialType)));
-  const isL1Raw = buyerLevel === 1 && isRawMaterialOrder;
-
-  const deliveryDays = isL1Raw ? 0 : ((order.needsTransport && (order.quantity > 3 || (order.items && order.items.length > 1))) ? 2 : 1);
-  order.status = isL1Raw ? 'entregado' : 'aprobado';
-  order.approvedAt = now.toISOString();
-  if (isL1Raw) {
-    order.deliveredAt = now.toISOString();
-  }
-  order.estimatedDeliveryDays = deliveryDays;
-  order.estimatedDeliveryAt = isL1Raw ? now.toISOString() : new Date(now.getTime() + deliveryDays * 24 * 60 * 60 * 1000).toISOString();
-
-  const inv = checkAndCalculateProduction(db, order.studentId);
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-  syncInventoryToSupabase(inv, buyer.name).catch(e => console.error(e));
-
-  if (!order.negotiationHistory) order.negotiationHistory = [];
-  order.negotiationHistory.push({
-    id: generateId('neg'),
-    authorId: userId || buyer.id,
-    authorName: userId ? (db.users.find(u => u.id === userId)?.name || buyerDisplayName) : buyerDisplayName,
-    timestamp: now.toISOString(),
-    action: 'aceptado',
-    quantity: order.quantity,
-    pricePerUnit: order.basePrice / order.quantity,
-    discountPercentage: order.discountPercentage || 0,
-    insuranceFee: order.insuranceFee || 0,
-    transportCost: order.transportCost,
-    transportMethod: order.transportMethod || 'vendedor_envio',
-    totalAmount: order.totalAmount,
-    note: 'Solicitud aceptada y operaciÃ³n formalizada'
-  });
-
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: buyer.id,
-    senderName: buyerDisplayName,
-    senderAccount: buyer.accountNumber,
-    receiverId: order.sellerId || 'proveedor-materia-prima',
-    receiverName: order.sellerName || 'Suministros Industriales S.A.',
-    receiverAccount: 'ES990001000988776655',
-    amount: order.totalAmount,
-    concept: `Compra Mercado: ${order.materialTitle}`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-  addNotification(
-    db,
-    buyer.id,
-    isL1Raw ? 'Materia prima recibida' : 'Compra formalizada',
-    isL1Raw
-      ? `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} â‚¬ ha sido aceptada por el profesor y entregada inmediatamente a tu almacÃ©n (Existencias).`
-      : `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} â‚¬ ha sido aceptada y formalizada.`,
-    'order_approved',
-    order.id
-  );
-
-  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
-    addNotification(
-      db,
-      order.sellerId,
-      'Venta aceptada',
-      `Se ha formalizado la venta de "${order.materialTitle}" a ${buyerDisplayName} por ${order.totalAmount.toFixed(2)} â‚¬.`,
-      'order_approved',
-      order.id
-    );
-  }
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'APROBAR_SOLICITUD_MERCADO',
-    details: `OperaciÃ³n aceptada entre ${buyerDisplayName} y ${order.sellerName} por "${order.materialTitle}" (${order.totalAmount.toFixed(2)} â‚¬).`,
-    timestamp: now.toISOString(),
-    studentId: buyer.id,
-    studentName: buyerDisplayName
-  });
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    order,
-    message: isL1Raw
-      ? 'Solicitud aceptada. Las materias primas han sido entregadas inmediatamente al almacÃ©n del alumno.'
-      : `OperaciÃ³n aceptada con Ã©xito. EnvÃ­o estimado en ${deliveryDays} dÃ­a(s).`
-  });
-});
-
-app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
-  const { id } = req.params;
-  const { rejectionReason, userId } = req.body;
-  const db = readDb();
-
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
-
-  order.status = 'rechazado';
-  if (rejectionReason) {
-    order.rejectionReason = rejectionReason;
-  }
-
-  const now = new Date();
-  if (!order.negotiationHistory) order.negotiationHistory = [];
-  order.negotiationHistory.push({
-    id: generateId('neg'),
-    authorId: userId || 'profesor-1',
-    authorName: userId ? (db.users.find(u => u.id === userId)?.name || 'Profesor') : 'Profesor',
-    timestamp: now.toISOString(),
-    action: 'rechazado',
-    quantity: order.quantity,
-    pricePerUnit: order.basePrice / order.quantity,
-    discountPercentage: order.discountPercentage || 0,
-    insuranceFee: order.insuranceFee || 0,
-    transportCost: order.transportCost,
-    transportMethod: order.transportMethod || 'vendedor_envio',
-    totalAmount: order.totalAmount,
-    note: `OperaciÃ³n rechazada: ${rejectionReason || 'No especificado'}`
-  });
-
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
-  addNotification(
-    db,
-    order.studentId,
-    'Solicitud rechazada',
-    `La solicitud de compra para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
-    'order_rejected',
-    order.id
-  );
-
-  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
-    addNotification(
-      db,
-      order.sellerId,
-      'Solicitud rechazada',
-      `La solicitud para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
-      'order_rejected',
-      order.id
-    );
-  }
-
-  writeDb(db);
-
-  res.json({ success: true, order, message: 'Solicitud rechazada.' });
-});
-
-// --- RAW MATERIALS INVENTORY & PRODUCTION MODExœì][oÜF–~×¯¨ Ş4;é¦dç‚]:C–åDHÔÔ²aHÕdµÄ˜M¶y‘Üpô2˜0?`‘§Å û¶ïûâ²¿`ÂS÷â¥»%[3±£4ërêTÕ¹|ç°H’½Ñ“£ÃıÑÉ˜‡Ã:Ÿûç¬ô^ô6é<ŞÌéÕpFK–Ç4)6ãô’¥e–/z²´~3(Ê*‚ßûQïå€x9{= 9+údû/äí!	+‰nB¶¡îµ?§9¾)şõWŞÓ]±|a•ÓúæqzŞ¤Â,-JM8=™x¼8ï3‡–5Şö6éUiÄ¦qÊ¢^KeZ%I¯ÏYU#Lã¼(Ç¢ŒMüª`yáÈ«pb•Ÿg	$½ç…8su=r.ı8"éÍólÊŠ,Şïa÷k=KX` ^°ğÕNíÒ$¬Xı£<‹ª°Œ³Ô‹&3˜µ>Èk×±˜´Û­X¤á¾ÚÏ“l\Íé„ÌœÚ#?¥3Ö÷CZ†CR8¬€Ïò<Ë=Öç„®ò¸d°+Ñ.áÄÀÿ¥ VÅâU²¢H™WlÀ‹´øS” (9ä¾2ÍéùÛ§1zúêœwòã<K<Çİ4ÏXIİ–_ÕÏY2ZœÎZ”qhË‚FósÊiŸ²yö&Ö­ù•lË›^‹s¾c,ú>Ë"k>—4àt^¥%=e æÀ•#Ë>ã’æÇĞíY—yôÈ©Ü‡y;•šÅm˜GZ#üd©“ğ.R;åøÌò©Glo+÷p=svåñ%H 3îVkåª1¬YLûÎø/A¯”$>À‡]y!v-„?ØÊŞïfÅ9÷f­afÆfddÅ¨7=%G=­lj;êcÔv«Á‚ÑB´ª`ğÿÜåÍ³¢ôÚ\ĞÎ5OÃ0ÕkshÂÊ¾5Ft@°-¹–Îm’E‹¦[êC]Yå)7Š°_eUx_omõ¥$ÜÚ›€û`É&I|Naoâ¬ÇgÑéoï4Úwc[Ì‰;8®y=ğ_êW`í”š)’Ié%S$ÆÆnšåÄ¦0¯lJ'¿°°ô_±EÑÚ±¯ÍdKí ò²•åÖ©<4bğÉE~r‘Ÿ\ä'ùu‘wä771$;Ç?îİÃƒ£ÑÏäèøğéşO{cò999Şy²?úíŸŒöká£p¥3š¿båf˜Íæ4] Æ	+–8Ğö0L²¤q$IôI³z¾xÉí'F—à©âiÌxÀ‘[|ËçTèq”©WkâÈçŸ“&ü"›1o3˜ûn ‰ÃrXbLœ@v"ÀjãG9“«4¼÷‰\Ÿtµ"àôM…äkö«Ğé˜JÒ0ç(/@}o6‡U§ Q…A4MÈ‚ÌXÒ´ŒÂRÂqedHF (	AV†¿@XîÛ,%Ùyö,‘ï]”å¼67Ã(Æ8ßá<=çZ€W¸t›ßÜ°ùÍWÿ*şÜ¿ÿµ-z-ù7C™Êjo‹vÊ€¤ìŠ<¯ï—ÙşøpÌs^_¶½~¨´³¹aóª¸ğpûªúpwG,GÎ[®ôŞøÏ’6tÒ.¼@±RúKœ}ÍÑ“÷A›Ìw¡ØvÕ[ºZ23P{üÁ¡,Ğª ­Dë¡Ø£3Î¶mçìëgÏŠ
-¼PFÒÔ -sjx»µÂ•|×…‘Ï Õz´L„‹¢4’¤FÃ®ÕĞšÕöÈ6°FÍp,†uÁ£1­°Zõ•|¸µR™‘vSŸ×Õf©Ë+5ù¬VÁ¬åñm¶·I|†æYåş ~±ë‚Fç‡†¤šç¶q”*œ	kİŒ^x{¾VÛµ…³ªp­öz%¡O×Rªâ°uñZf»¤<Š•p­T ¢£Ã9ÍËt{‰•ÂeÑ	c‘–E:)¼*'Â$Æ= vé¹Ôa·Hªp½Ç.–vUd”^úz9—€œˆÙ‰‚/5mÑoã>C³æZ¸¢9ËÆqqã³£g\Rnö:.N/¸µ!N)Jy\ÒzZ¯şOR:5ˆÿ³é4H`
-À³½·ôhy¡û ÷‰÷”Nò‘-äF)KÁNÁ–ÈayAeà”CDù’1ÀßäPğA6É]dy¶<†²ˆGaÒ+[!°T7˜óƒò‚Ù³,-èlÂA9Õ¯–RıŠxOb”ÚIÆïş;%3Í7Ì!NÅo=Ä†µ3#©éU’£°	
-7ó¦*W Uh Û™Ÿ³0Ç5ğÊï¾Ô;¡€´wbÉGì.ÎKÏ£2áê«íõË/élŞG3pW^`¦n1im!Ä]KaŠ:½›Uê>ÌêÙßpïc%äŒ–—˜ä8(Î1)¦F­È_Èè…*}Q¯’û/AUğ“¥ @m‰¸¹dêP äHVşËúåb.UÂ¼,Y¯oE.Ù³ÿûÿüòìU•SÂfq	æ" x¯ˆI°ô‘ºU³	(:÷î×g
-ğZòŞäÌÇ,.@
-§iV®àèï#Gôœæïşaâ›'Cl´knÙR»FVäCQ¢{5U-&Ş–5eõ†S ŠëY¨’+N¡/É4tÌí %³ÑÜÖ/)†ÊÅ,d£A;:L[‚B¤¦ÊÕo“wHx9ş·æ¸ùÔí™•4}\-ÂÖ0;WÉkÆ,IN²–
-tµRKÁõ`¸[BN”´
->Ò»©­‡T°–şR[.æ‹n¡6ÿ‘úå‡Àœ@\b!0d-ÇDrÃVm|$…‡–mB04m—Ö0MŠÈÛgºåº›ì»°ÆĞ¡[±"v»~Bk¸ÊİHá¬i7´ÎLl©ê	ÅãS’M,Œ%ùµÕğœQ•ıÈëÉ½¾­ƒv@&‡3ºN	ÜÚÁRmÅ¸}PËó
-Ø­¬H@µ\#ñQVÈ¿Z¥$ãÁŞx¼óıŞx@öGÏ÷wyšñèøğ`<><ş™ŒOö–¥•Ÿİöc¢ùˆb‰¡	[VâM–­¼=èòXL-â‡Z7£Zv{SzK½±Hæòë¬öM rÍšÔz:ö¤,­½#°ŒVTæ:2à3gz1M|©ÓvN\;iOÛº(Ÿm¬Ël½„ªá½=Ÿ*ëo’NÕÒ°Âı®¡@[î7ÖêÅ&ñA0< æ)‘íH©*QBomQW‹¾fUQYØhd Ğşûº[ıD± ·*+µúéÁWtµ'Z[
-w!–-Ã“º×–©(ÎâÈ¬væuWM•/(÷Ù/ZÅá¥Ğmà)‹S¯wªzéÆÖ•HÅŠßV·…Ë-ô¥Õ'T Wş°³¥A¶]XBCa^ÜnÈ ĞÿËé•ìMÙÓg”öO)©ì¨¾§_S M-ìØÜÊá6+GB°úøF§•‚6ïql£Ãô(fëšŸM†áŒ¦M†*¶¿I
-ÙL0;+$ŠŒvfƒlµÊiZÌAXwQ§E¥!{Ê˜(Éò¨5Àø£˜ŒÂµÒNjöÜÜÈ69{º³{2<Ø;Ş{{@Ëšd (÷·ğù’ğ2XÎ(›ÿ‚ü¯è‹l…<•]99|7™\°h÷šx|#qv/^öAÂç„¦.2PÆ%Æñ±Ïp••ç2©¶¯+Lµ”‹€ˆYx±¯ŠúÖÍš*Ë£æjµÓe}ë„OQMÊŒ“éŠ<¯ƒ6®×E+aåúdÿƒ ogÃÙå`dÛ^À"xÈĞTbpä…Ü›õ*Ø,óÇÒĞ/é:IØc0@ÏeFßx  ö¼\.†jm\åêÃH²ÂÑ0«ÜV³¾;q‹§KZƒP ?î;¥Z‰-Şì	|A¶ü÷²ÖL‘÷6
-‰/Í8ı¡º:pãİå6¡r€Ò’8îC¬‡ö`h²õƒ‹¯J[†¦	ñ~ƒì;Øb`•«’>ÌLK¸Ûtí¢rgƒÍ5ÍíİZ·Üj,7Y_ˆÑå¸f«$å¢¨dN »jsàÎËœHPGvEŞ•?‰|Ÿ¬­ß¾TAØ€E›Wu#^-‰›ú:}aœÁOÅ#^ƒ0‘KšFÿ¼¨M$é`2?Ÿ‘„¹±‰;\÷Ş:ZsM@øH<CdBVğ†Ú½·îÍh©¤ÔÈPÿšüï_ÿ‹x¨	A£ÑÙîK²ÿ|LÏ¿4ÚÓÀ[öı³&Îl—Ï€©ïb4°åG" ¯1ìåªe"®¶ùZM´-ÃªIQ<w…R)g}vï­%S×6õßµ@¨İëÑ4…ÒáyİS€$’¯Ş"Št&tíÃ ®‰¿%ÏÓ¡‰†üÆÒ8Ü¢³µ¤–A*”2fY×£„†F99†6Şëã{aÔhújş˜+sS„ÓÉGñTV‚=â±N<Ev ôŸKNÓ DJ¦ØÍD\ŒèÈÓí¸Ó4½¾ÛFÈx“ÜÈ¾T`ëòİoIÜšhâqëgóî#Ä G;ßüG{wÎÊ§U’üÌhîõ¯[b‚®€G‰pù¨.o›ƒO¾l9lR@Ûİ˜–Şİx˜+\ı3¢¡6Sæœª%âÁÒn à(
-Ş-²y°ÇPlP	è´”ØÅûé¿ƒ*B k?§i\\ğRKÌ¬U@hqe~1Ob°X'½ş‹­—!	Ô.¬ët4F'°~sì{@£<zKĞñáN¾‡!cÓ5YùÉ»¥Ù)=Mè)–¦=× ú@Vì4„O¸6¶p)“è_œôc€¸Ùe¨ô	9ĞGŒÇş/GB›JšÛ÷t»à¬jú-.@…Çûß†½ºAOÙí«oûß‰{Şƒ,Š’‚—s˜Šëı9Påßÿf£Ê>x<ÃSŞ ¾çò †m¶ÄEM<a4GÀFœ\‚İgÈUÍ¥J\¿?L¬1éÊ/~Ì¨QH›ÌÆóÃ¶GtëPu
-ôR"DÃ×U\ÄØœß?îôÖóõ˜PÔtPëR.NDNéìhMiQ¢†põ$‡KŒ+¥Ê^«]EÊj3;lø­ík§âá˜××_H³Ø’f­_¥ÅE<-=³·ZdL3K^¬v>Ø¨o—:²`ã‚ZWVrïnh$.i¢6|©‰ğ—Y`†ş]… ­Zq»H$Ì’„áñœõƒ5:!Hj äš‰õÛßç§Û@( ÈP@ó‹Ú5[ÿö532ìâĞBÌZôİì–’çU·ôæh=ÛT|ÍS9<·”‘¸Oa•€›¸Ä³ò(Iì†7`÷
-°MJgõª@¥
-³	2L ÁpG”—¥OC°”c‰}W¶…OØ4ÔüS$•õŞ­3‡‡iÿ²s
-RÂGÁSÉül6Œ„ø.Ä€Î'{	¿€9È	åï~#´*³Ù»ßJ0L¨µìGQÙÀ_1/|îÏEï;)µÖ† |²3í·	]¬­[H‰ãò)?Ím× µ"EK×WĞv¬‚sh;•Ö)4Á4ê•ÕâV÷ÇÛCô5ãaTøz\S+{®yæ,ûš`œ|gõÕO7™ = ›B'ª:i}ñbQ?!ÒR/Œ©ãû©p¾xW­İÏË»l|Ç2Ü±Ìwà“@ON¹Í&òÈ|¥©mmo~gæ¤\XÃµJ¯Ërh±Î‰yâ¹[táDæÖ!cm“Õ~q ¨½¤h=¦YŠ2¥[ï0!\ÇB@MÓÁ6.Š°„!’ ù­Ÿgê=>+(íl †àbÇõ;@ã(.ğid¯ 	ö©p^h·|rT1ØQDJ	g	Fî—*â¨‡6ßL…‡Ó§9ÃWW°H—k˜ÂŠÚ ÷:mĞ ;Šw$^‹}¹!ªD[ÌÜ_ |Åjà5J@åyPàÀš	u•Ú½•èÖ…¯ß–´…«Z[‹/—ĞÔ6ª|Ã Ú!Tù¦gßöÅ{xS–ó¶ø/'öÂşnÄÈiÇ-±»7»nGäNTuK*á£ùH½MÓT½L·X-œ4o£G³›µŒ©Ã,½ˆµ4So—;@üv0±F@°D—W‡û:P;¬öÂRª„o˜ã!,ÿĞ†Ù,÷€¬Ñx‰CÔşsÁ}—uK<ÏüÎÆÇìvjNÇu9'Æ*\¬'âXB‡ƒ}?¯Äm’¢l?­ªTÏV5×­¦ßNº¦wM-k3Sëv]Jõ±Æã–¥®í¤wr¼3?İ;>İõ¶r¶dÊ´ñòõa/­0ïÇzËaVá1z³ä†·Ãg'¿swsFOhË«•,Ÿiåuª@cUĞEzÜ½ûÇ›â2æÎ•†9‹â’ñå:èF@ß…ÀmRhQÕİè~ÇY=¥¡¼|Êiü“ç4î4Ú6ù'òçì2¦87§tG1²Ü$'0^o/ë.íçÆ×ˆˆUjÚªe©İ.NñŞN\TºOzˆ[ÉâÚêEÅ1›Ñ8kŸQ¼/Ï( L<M{“ğ{Î€Œ¿Õ|İï»S™Å)?NÙ¿–…©ç¿mÖìc"‹õ3…jˆ/ˆçĞgy±3¯MòÕ·[ıfÊ‡rg(ÿ€*$#[ş7MVvu+g™jg9-ÎjdoÇ2SÖz S6×dØÂ[KĞrëHˆ­:ªyP§Õ†¡¸×ÛkÆCkİvc¤ŞŞx«ñ¯÷„I¬l’Î€Å«xh¤Ò¤vŒtïmT¸&ŞHˆKãp#q«d@¤á‹ †µ–u1S]vq<Ìávw±ÄPá[ãÖì†¼m¶*T«Çj–Ç‘QS\<‘|Ôã©H—/ØT³'`;ĞŠÚ&¤ÖD
-û²ÖÂ²\õ¢ZËİºùqGgk‹²)¬µ1ˆ"¹pFÜHy«µj‰Rÿ`!V¤,h¨Gë::Ğ7Ç—(¼Q”úßÇ0	ÖÃº`eÛ	ÍÒRÉÿòƒ*©ìè‹J^Öe¿^n$WÕh.e.yıÈC¦Mø»•i
-Eˆ?…!¢0Ä½™y—qŠs«S[»ûg	PÖÇûa;„ş¦Boù[[ß4ó­!íĞbàwÅ´m¸Ò†´í¨²bW`JÇ¶bhÈ®ƒ¢°vV˜6¬tj5€T –ò;rÍ£kAİ;„–®ÑèrW»—í]ZóöN‹¥ˆÓth€@.ûKš98±ÑîcGtV.¸Ú‰Œ°%P6p·üoB2BçIR|[=6k1Ùû >MÊeòÅ;û£ç{£|·Îøäp÷G¢vÑzËİÌ×ÔCüÃ°(³ğÕºoÂ¢ğÓğ»ÌÔ/|VóG¶è‡’W¼l˜CŠ_*jüBä¿Í“Ç7OñğBŠ7¿ßı6ceâF8Kp…‹Dì0ì5ÁEh;0ó!?Ç³oı˜FK!º¶k3.Ó>³í³f­wºvvPËüÒCR#ˆ]€_7[éQ&‘19˜É„bUñyT†§A™8Ã%äZŸ?±ıu¹0 Fï¼ZC¬­ÇÚO”pĞTxÂøÁş’NTPi–×!½¤q‚Oâ½]µ0À:>~şBJåK±'Óã;äşFkw6Fİãëã×/ZØ4€EÄ»÷Vs-O{Ä|õ™½†İw?	oø
-ş9HS(M¤K=!Q]T%¥®V¸Zà|ZˆË[z*´_PÒD’?Äb)Şéû.Æåœ(c›ÉŞÄÒ¤`ôùC>ó„•îFBí½ÇÏSÄi¦¼‡ûÍ˜%1z‹¡_ÃÆ·¿}Ä¶÷‚¸©áïx%ÒİÙzûIÃ¿¾±—Œ¯gò—<¹¹÷ÎÀ&â[ÈP'¿m³jhËƒş¹©n8´e•¶Óß–j¹¬›´8µåvMYq¤¶ÚŠ ÎÅM©^œkã½Êp·2¹Âpwm¹{e&Ò–D5ç†>ãFÙÛ6rYı‹E½¥m|¬ÑİÙZî‡–-’ñCû}+?¤¥P]íìÉÙ
-,ú?[Ã-1!kt¯? Şå õ|kë:Ã.¢öä.Û¿‡Ÿİ³|«Ö½H¼wÄxWëù5ÃÜUÉÇ¥×->W/Z-û%sØ ÏÍ;É–«¤Á„•W0\y•qÔ%°1­Rnúõ[”ùkÿñÈ6ÏJ N“[òõšüÅÎÌ%ëÊ#õ´øèšxûËÍ:ş*+@¿úØ“&IvÅ0–A?š>D¯{ )€‡7¸!.#¯æÛœõïˆºo(zc>CPÌ©ƒ¢¬l!Ù^+>4 >9œçñ?v¸¡^SàL(ÔØ©yk±P"EâK¾C·«TSÔ ¢w¿aVY~	Î]ÀÓïâ ¬ÏÀLŸìîóHôÌ×,k8¾Œy‹^Ñ¸”/~E’´ºcTğKÜéYE	»¢9Ÿ',ª[B€)Åç½b®>İy-…"ŞIöpDß)„?³ßÛ®s”G` ùÛ¾ÀNóg¨ÕÃ«sJ=lÔ«ÀŞà×®„ÿCOÑé[Íøp¿€unE·b·
-şz×§q‚OÕøŠØ ßY±7şE9Kzúy
-ã›q”„ïèğøÚoùü8¢5’2iIvî‰U'y•òÃ0°Ïø­`s3ÉÀ{\àÛ§î½Er×gb¤>—Gnü?   ÿÿ T½çD
+        invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.randomxœì}ÛrG’è»¾¢<¡u’òegÀá0h’²/APŞP(È"ºH¶Õè†»”¸¾lììløic"vöı¼èOÎœO8™u¯êj A‘ÍX
+]×¬¬¼Ö%«Ó%_?¬­­uoÏVù_Á~±²bñv5 {CviÅ:İ~•G‡£ªH²ËN×§Ói‘_·-³4¹fEÛâIv'ãÖ¥+6)äå;àeY>ËÆlÂ²jÈYUĞ¬ìAÃ½Çïª·'ø5Í‹ÊÆ !è§Hhzr3eR²4eÅ÷´<)fã×äóÏMÊnÃ![$ç“óYY%ç)‹È€D•j™EÁ–“*…¦u©€œVvÑjq‘Ÿg4ƒb7²n'Ï²¤:* qrNK¦ùŒ1»X9;¯òŠ¦óKñ";yYÕ‹éR·¯L”–ÕÉ¬È^”¬@Œ\õ“ØÉØe^%´Jòìû¤¬òâÆ›µê]²Œ€­aÜ‰ BÔµ¢³ê*·š_09£ûÃƒáèäøptº7:ÙŞœöÂ/>]Ï¿ƒüáÎöéŞ¿ì£ztÒ–öÊŠ“÷ÿ›ÉC~qŒ“œô ç“$ƒ19føD³ƒ'³ç—ïÿYcJnˆF:+ÉŞÛiÁÊ’ŒúÛıÈ¥—	ğ-LÛğ
+iŒø‡N§Èñô ƒŞÓ¨‰M‘¼XñHm>ıÄI9¬ ğ˜^
+×ìIVÎ î˜AE/Ë¢}¤¿pŞ>ƒ¹Jˆ®Y³8/NYväQˆ·'‡ÅQ€J–•´Y^gÏ ; Rä„Ç‚·gåËŸ·ä¯ä‚t>‹Ïû}³/¹ı°ˆYQvI(•l’—¯6dİPş,+¯’‹ª£Á
+±È³»ªjy“½º'ùh6¥8;•ûcZ¯:Œlş	ˆ1+ó”õYQäE‡ueË·ğÿğó+@Ğ€ØØ†Î9Ÿİ°â9»f)àı”ıå/dİKJJÄ@t•`¿Ñ
+‰&¬BÂDQ’Œy"›æo“èU?ÉÆé,fe'Çš}[Pw¡#±Ìãê ÙÓúì—ù„uîò]&nwİ®=¨çë0,5p‰…ÍM² Ô‡¼a*UâÍ.½AZP-m‘59–Œ±¸Ô†mÊÅäOäKDô¼±§,»¬® ä:À<…Öù D)ÕÌ…!-Ø%s.Ÿ(ÈŠsü0•ŒşG²Èß¸Ë!?È»DHyQÕ2šêŞê~@@%ˆşx×Å—¾æÒ¼3®ZgÄš˜yÉª§ñÄ¡/ÈÓ¯àÏ7kêÏ:P>ä†0²kèx|ÅÆ¯·³x‡¦ãY
+}y<ã¸Ÿ¯hü™¡™Â‡¾€Ÿóvü‹­ ÇC³ e­ê ×ŠdÒ´Ú¢†ä4~¦¨Ñ×ß]Ò”£Å[SştV^u]ÌÑûFãÏ¸aÄ.àW–…­£e™-èíãGÙ¿H²¸3ÃñÍ 
+gNQª»ÅQ ÜMJ7Ø’…Ÿ&:³•­OK¥_)ªd‘nªËÁ"×Õ«¢N7çÈj°NHÃJ«åà(¥uõ®VšUÔÓÃ¢¬“è•S:Ù+)’±á°²vÔ´¬k’D¡¡£Q‚±C$~ÑNÊ§@:ÂìºÈ‹	M“ƒŒ‰ âû`*ÍÛÕ[ ±M‡`«·‘¥ø¸/X1ÜWu†Ò±¾S‰ÈàÄí’´H$¦CQb{<8Õ©ø<˜MÎY!ÊlÌPˆõ¤£U0RÄe8NGOª¸â„Fneˆ]ı@2N4ÒvmI†YF-â—9fªjFCíş€ş'ŠĞ?üş÷ÿüÏß|óõ×²0Oca‰©¶“O¦`©í‰“À\óLt£”{7mq#Û`jâ<ÛëBš[HEûùu2IP®ÚFRÄõòY­˜É$ÑÉñöÁèÙŞñéá‹“h%0ª€ÑôÓ—£5)-h”ÆñˆÚğ ¸¢â\àÁ%3KßKÎ |úqÆ’ó8•¿D´ÍXNui‡n‘³“)5{
+7kN)üù]x~~'Míbà÷³ä-‹;O»·äÿşûÿ+JÊ$ÎÛcE°¶€„/X	¿oˆ2Z(È¸	‹AİPôÿ¡¤ššNèøı_3ÒÙ{Ë=®²ÛW6ıà×†ÿÆFi_jÄ:UÖ•Ä´Ò1|¥ì±³6útÊg ê9\™dAr1C¼FUjô#ê=ítÔŒ,')%×¼0`´‹pèKºÛ¶¸íëEœ0úrJ×X¾¼R˜€×mx>l“¤¹±I”Šß>:>üvûøttø|¸3<y±{º¿w¼³½{(;Á¿HÒHëĞh(M œ\ƒã¾Ñ£6âV`£xêö[ˆC©_”MZSM"#¬›ŒÂ}S€ï±{f˜ø.XÙÿ©úÈ-gã1+KôÉgÌ¢qñ€+¹5ãK˜€öï“ç´TËk¥_%`&¸M‹„²&R#ÀÒ‡Ù$Ëû‘¡9™KŞÿõmRå}²—]¿ÿtÁ}ŞL›í4Ü’øıßhG
+ÄÇPg
+¶S'Z¥ÓdÅ›i¹ÊÑP®’xµ`?±1ê“NÁ~^AvQì¿ÓvÆ; Rr¶ä÷QJMÊ+SÔJ=fP¿¢¬cUã<oLùøœ'ÓfÍ²üï° !ÚË¥‹\ÚàFy£É•QÄÚkîF ©fEÆiGø¨¯Ö¾êJ:"\í9a†s ½ƒ¶Dİ%IÑsr#PnWôß”7‹ıyˆr½U/“#ÉIÑÒ¤y¡ä#ô¡"¥7{ë‘]êƒü¨èH6¡e¾–öÌ}rîÏy²%šÂ0EËÙ§qìë %ÛA4`"n•»?wj®©ê­HóÈ0»€DÃÙszëMYeºµ>Ù®ó&´Œ’ŒLx	='ê~Ì\3*}dşÚ(lBb£×lmx–†´2Œ…ÂB?2ºzu•ôz=r¼ı/d7ˆ¶ŸÈğàÇ½ƒ“Ãã?“Ï	X€»/vN†‡dÿpwììNFXOèúKVu^†t}¢èpÙy^şê@óAô*d¤¬2&›câËÄ˜ñóì+l£’‹án£5 U˜Ó–Õ’éDè˜¬@f6KSM°¢‡‹¤(«‘(&Ì„º)@fˆd{‘Üœ°Çê4´å|¢¢8ªN-./³Jë®ÏŠškÔR;Ö—ud±­V²w±¬5ğ§\“1ÒÊª=Ø‹‚^¢uœ—§b“äôõ%¯ÔOŠ<ûáÒÒnNa¾¢Ëò/¯ğ¥OUª]X&ÔŠ_r3=?å»1º4ÿ’eyÑ[eàŒ±ø»<­ñ\Ó"I¡ƒÓ)hBz
+ÖGpPÙ³¬3ªhqÕĞz(ÉÖ–“9„q;™D¯mGæ5üh©±á}DR¸å˜¡q—aë õYz0¤ŠÑ¸`ob¾÷ìv‚³Ì\Ô‡5Š€¾±>Åó{Ğø‘”Ä;¸_Ì²4|o˜°?Æ9ô÷ƒk™‘YûyÌD³µd®~i¥ª§ÃïÃ›­†[»·ĞVoªaêM ¨¹®±ÿ–­ù®®Z
+»Œk5—Ñ¨V’ü<M.)ÌXÔ|:ğîJ#<›bL\ÁqÎ‹pCşX3¥·S¡™Œ^3¥HÄ˜vyA:Ò…qåäğ§şkvS+vµ˜ä¾„F^AÅ>2ğIE~R‘ŸTä'ù÷©"H)J?rûø‡½²s¸´}ğgtŸŸïÀ<9ŞŞ|G¶Oö=÷Q¨Ò	-^³j6hvƒzô"IY9G†İ8É²#Ù_ÑõÒäê£ô.ASŸÎ¸Ã‘K|KçÌPã(Q¯4vrâp¥# „8¤5ÅLû®‰ÃRX¢Oÿ€ì8èvŞ?ü•Xê=~‡Øç}­=™sNUÂ%—B¹Ò±2—ã"™Š…Ê³½	ÊÄGµ÷MnÈ÷¤³*IqK€¥â;Æc 	CPÌ9¤4¿Ì_@òÑUUMËÁêê8Îz	·7Í.9à¢nõëõ§«_ù{ñg}ı«>”°N?ò~Ó•ÉœMcºà¬·,{kQô'Œ/?#‚ÓˆîŒXŠœ—lqôØÔ†JÚ5/¬Tîk?ôƒÍ7Y±aÖkkºZ4³¢æøŞMY~€¿HâvVìÒÖË¶İ—yQÎ@åÎ®Œ†íÎr1/àö‰‘ (=á¤(E…lR[Ã®ÔĞ•Ÿz‹Ò¾À(åá:K­‰a}poL3¬f}En®dæÒ9]«rÛr³äå…œ|R«dzú6Ø›Î pZ¯ıÿbçj•7L“jœ›zÄ~S*}àT°š°ğN6âíNä¹dqV–:¤,ËkL:{xáª÷ ëá5OvIz˜p¥TÍ>@F@{SZTğö)%÷ù„ ëÂ2I/
+/Zbıî‹5uÁÃn’ŞÈtkì€P ãÊ®¡’ÓK]/ÇÂÔáèDÂËWŞ¶3(Ş8Á9Ä{(¥+áRğæ,÷™ÙÂä=ùæŒÛ”»z”'Œ¯¸µMœJ¤ò5p-Hıh}ujŞ´ş~q!®cà9p[{KíˆR'J²„Q±N:Ïèy‘ åÁÔşWáY‡²+»G²e_ÆœrZ;RÛMäPÀAVÉ>½É‹d=ù:È÷Á…1J­,d…°õR} şiCóØ§°,+éäœıİù­~9·Õ/IgÏ"&ç3±É9ÑpÃ’LüÖ]<²¦bb(µF½Šr”m‚Ô™ôÕáMk+ÛIOÏMÏxå»/~%$pA–¼Ç.ØÅEÕéĞrÎÙWË%Ú×[ê]ëäzÏ”8–ènØCŸeÈÓ;¸YÜvôKƒÛû˜IåÆ¼’à€‹ûå%.Š©õÅ…5à•úÒÏî‘õWxŒ–¦ƒ@k(KÄæ’ÉC‚’=Yë_&±_İL%+ËKˆQ×ò(ÜfÏşßı÷ÿ!êÎ›$U"öÓUc²	˜
+º¥>Äé\¡İoÏ”ÁkÑ{“¤*¸9Åüùıç#zI‹÷5~ˆ“iì Ú ¹is!lêY5?)ºVÕÆBÄÛ´¦¤¾°á”QÅùl¬’KNã¾l¦ÆcnI™µâ6I2T*Æ>T#¬AÛ;ÌN!¶¦ÒÕo³îòtü×7æ¸ø_ñå™6*iöíìæLÍ>³×*yÎˆ¥éIÈ@õè¥Z®;ÃÙ|tbNå(ÜÒ³©¥‡d°@}I›Œ]Ì‘nu¡&Kıê8aq‰.Á˜½ı96‘œ°ÅNïIÙCs6AºíÀi9í‰]ğÏtÉ¶›¬{cõ¡]·rïvû	¥a;–[Šá¬a×¸Îl.ëY§eËÆ’ğÚlhŸn“%Ìí`9q.ááÒFç)‚kí,yãòAA,Ï#àÍ »”å	¨’-><w`ı+,5,2îïFÛßíVğ¼Êáp‡/3îG#<»rpx²7o™QéÙU!?züPÜGäK,e½H³e¡}bL“y˜·;ï‹)$ŞŞkÙåMêC úQ#™Ó¯ƒíeLdOšx5yÒh,®} c¥¨\hXŸ Ë8ÑÈ4+àm¨NË9ñí,{ÚÒEél#]&íTìáõT™¿Ìrª¦†ê·¼Ó7áVˆ…,!âĞ h¯ËæK"!Û°¤ªH	µµÕºBzËuVÕÊ!Á3Ö­¿o›ÙO$‹ö­ÀÊN­zºóUíz¨p1K.êZ§à'åå€84ë\´U9Uj||E¹Î~$‡W‚·¦<É:Ñ©ª¥[_*dG;‹±6q¹	¢‚ş´êŒ•+Ø³­co „Ü5yˆîãa{{[©ku†Èö_RR«£zOßcAˆ-ìŠTÈŠån]¹rKæÏÜl’RPæm4ˆ’Y[ñ³ŠÄĞ›ĞlFÓòíï&’ÄL\aE_$ÇíYk+îÑ‘ä\à)ü(rÛë8¡ØXJ`”®Ä(õí}¦ÊZÙ$gÏ¶wNzû{Ç½ÇïöiuÕ¿Hs ¼0¼¶FèŒóIGE³âñ¬Ìˆë÷pl#ªdñÇÊØ$4F÷òU(|Úé$B³Nr!@eJúü‡ºë‚çêWTÄ(:‰¾qÒµ6k¬MºœNëZ'|L”&1X ®¸ÓihqĞij¯+¢UtÉ*şƒÀ	a‚£ÉÎÈ¦°EğXSã1:çüZ9¯`ğY0˜ÖW¯@—¦ıŠ¾¥ç)ûÄ ´ÎÇ2¡o;À ö¸\(z
+7.saP™áp˜•n³Y×¸Ó5­( §ëNªfb6{ _µşÓu§Yk¤æÖÛ‚ÓÄÓO×kÈg.¼›Ô&”Q
+PJG}ØA ô¥yùƒ“¯Z¶ç¸LhÂ?ÉhjXéj†¤3Ãr/U©ÛH³ØxG*<¹M·¯BSn–“¬?ìûPµR 1grM áB¬¼>£
+«AİĞØ"ó¹Xï“¹şö-¿D‹ãCµÍ³š-sÈÎ÷ÛÂDñ…˜q´×ÀMä”¦­\«M,ÒÏäú<¿.1›ØázüÎáqÕ:™ğÈk‚VpCíñ;~­½RTjhH^ñï 'jå—ÈrOÈğÇm=ÿT+kDÃ²¶L½‹Q³-?ZCğÑ‚‹u6Ñ²LÅ­ÀsWH•êjàãwMİ’ŠÇ((œ ô•@;å)˜$®	n™+­¸"şÖpr™õŒ¯ĞãKsÌá ÏÖØ’Z5!•1Kº¥tl˜Ó„´äÚ#«I¡F³×Cøc¾Ì¦o§8H.d&È#>aàë$HĞ)ıµ¥ÁNÓFˆ¤L11VT¶zĞÑå¸Ò4µş¸‰&ã2k#CÉ Öõû_Ò$¸"Ğ@0¸û>ÀÑöw`şË¨lÏfiúgF‹N÷6à4¹Ü#hèH¸ËGuwyÓ|ªÁeÓaÀVcšzw’‹ùBìŸ!õ´˜2çT-o0,h6Fáİ»I6v
+•IS‰<Ìşx¸THû)Í’òŠ§ZdfaI  Êúå4M@bDİ—k¯A2P?8±¶©h„ÎÀúÍmß}‰ºU´åMù<c¥±qÓYó“WËòSzšÒSLÍ"W ô/~AVÌt d—yı‹7ı-˜¸9ÙÁ€& }öõc+ĞÊt`ÒÂŞÓm2gUÑïiy…× ‡ßô"Ÿ ¦¬öå7]ôïÄŞBçé
+8,:RŒ4/§0"$ı6¬ÊÿüÛª¼Á‹Ç"L
+Î“8€aÌ‰,q­Šº=a8G˜Ğ9FRËøclF°Äí‡›‰ş“¦õÅÙj”qgÄj<?l{DoĞä:ÔI„µLt§ŸgI™`q¾Ü¨¬û¾OhIª^fEu#cŸµ¤Ejh®^åpŠq©TÇ»“³Š-³h®¿³|md|CSÿ‚@êÉ6‘Ôsud.3·šdL1; ‰)wÿÎ†?]ÒéÈœ+jM\5“s·¤¸¦©šğ¹"¢ócÅÃn(ÁĞ}($ÈwóDÆyš2<ÓŞQ¡Rp,¤éFš-Öï¾ÎO+†€+ HW@Ã‹Ü5iëšp±kt!&Á}Ëmé)z^´¥7EéîPÁ5Ítœ-~n‘ŠÒxâ>Ã¸13 /<+”Ä–Ü€İ+A6)¹¡:ìÌ8?G€	øñ	î˜ò´ŒàÉbp–
+L±wep^b·<;Å¦òèÃÀ*ñ8óxÆÍ4}Ç†ã½È—xOhßÑ¡ë“½”Àä€Š÷¿`@®|òş|@…±,g¶Ğ_0.¼wg„â”ÂµiPŞlã@÷CÄBoºÖ ­r¤ÄqyFÌÉáÁ˜ïZ¼¾ mG*8‡ñ¡m'Ó:…&€F¾²JÜi<ì¢·ô‡‘á} ¦Öê¹†™ƒÜ?§).€“?Zuõí&C$cSğä†Ê“Ò÷X½şâœ	ä7Çl·0ÜUëy¹ËfÇÿsÌ¡-v:ÉD€¼ïXijbƒåÍÁo€Ìœ´1œ«4^æ›í^O6×¢Ø\¡Y‡ŒµLVóÅ °ÚEÕ‹<CšÒ¥÷Œ1.\"0@1oË¸V„E4X-	 ß+Œ±#ßã]A)g¢ª"Èó
+P8NJ¼mÂŸ=¡)Ö™á¸PnõÉÑŒÁŒ¢¥”RP– ä~šÅÜêá‚Í¼gÒ÷K›)2ê×=œ6¨;‹7,¼–C9!*EKÌÔGP± "š°<_v 'B]¦v·İ¼Ãğş¶¤M\áÖB%ÌiSË¨‡ˆ.†ŠnÈÍÎÓñÄEö‚èç!NsœÛ%œe7z¹],Ğ§v³4½e¦h‡+°ømg>f5‡`//v÷µ£¾8¬¹£!,ı²Ù,õ€ ÑdBÔüs‚Áy—ys4ÏzçÑÇ¬v<¥ãªGc"kWKhP°¦•nUèNIÊömUÅz6«¹r¨İ›#õ¦=¾«sYHLµë¬1ÿŠÏíV şáA´b3çıàoÿH€A¹ÿHÀC÷0gôB+Y:ÓZw48Zš.ÊÑ[!¸G\¹ÒqÁâ¤â]<icİ(ƒ¬ïoÁBThQì>jqæ/i¨/ŸÖ4şÁ×4ÔÛ6ëç=-ØuB¥á\ÒùÈr’Ç¸İ\|««„Ï·ğˆÕÒ´• ÊT»\rq{_8p‘éŞô°ø²jÑ›ò˜Mh’„µÏ(®Ë3Š` ¦İö*á{ÎÎc`O¿êvİ¡L’Œ§lòßÈBTÈóˆßÔs†¸ÅJÿL¡êâÒqÚgy²3®Uòå7kİº“0–—r'Hÿ¨Y ²ÖÿºÊ.å É;ËiAæ5+`k<–™±àLİ`¯“^ ¶€ÓrgOˆ-:ªùPÄ—Õzc±×Õı¡V›Á®íÖjÿE›Äª —t¶oÆ]#µLjûHß5˜
+·¤s È¥v¸N’‘Ø*Y!’†0TÏ+é“™ª²ƒıáns‹Å¾{|Ê÷Õ,#½¦¤Ü•pøşT¬Óç:lª˜zeÑ!^)(ìO¯„%¹ü$¯ä/~\ÁÑXÚjÙ$z¥x‘œ8c®@$½y¥^êß™K£é#s|¯¡Ó ½½9>‡áô©/1˜I€t|ÀªĞ	Í¥)©dà_~Ğ@-*;ü¢/}Ú÷Óåª¥\KnïyÈe[™f„vâ'7ä7ä†¸›™é§8[²[o'ö·â ´·÷Çaúë&z­¿¶öuÍb¾³IÛ³ øUmÚ]é<s´*ıgNçÛ”¶´¡]C¶z»´ÑV6íØècûÑRa@*£V<cY?ĞÊÔ}@ÓÒ•"ÚºÜÑêe_k—àº½Sb®Åi*ÔŒ@NûsŠ9vb­ÜÇnÑÙÆ6švbEØ"¨ßšq7ÿMß¸d„NS|GŠÖ}³±ç“}ˆÕ§›²2xÇ¼5:9Üù¨Y”QvøeıÀÁ¨ÊÇ¯ùÁñMmıCùºÑÓ#™î‡>¬ò¤İ.g‹	Ô—~E@%È‡€¹]Ì2Î2âÖ§†ŒßÊıİÔûP`èÊ£¥õal”ók"ş¿é¬¾À`46ækuéšÁğ ùóü+vìà«H&B@HµşÚìÏ™W1ºAÅÉrÈG\÷Úù¥ÁbÔízÖZ}VÔĞ¢]/B=ßŒàÑõ‰yVE<š¡õcÏ²A¯|<Ôj$Ój¦fø_rÔX”Xç´Ìhx/ ˜¥QøÊøõ¯?M/9ú‚£á´'/Ìhn5ÆûÇåØI¾"Q'Â"ğ—CØå{÷Ï/w„QËÊ¹0.fõ~zPÈNFğÑ@†“´<gÜË˜ñ!¾‚ããd õöH=İIY’#>dâ¤%ñ]£ œºzª€¾>©ttÏô@hµè¹•½¾œOó¨²ë0¨'‚9ü¡fğŒ` <qŸ#}ÿ‹h¹„Ü†A!ß&jDY6²­† €T˜:n®`ÎšÀ¾ÒRn¹òÉ…Ë°Í8¹‰ºÛIš`~;·–=xÉ*nàaÚzÍ0ü:ùùO< ÌJ£1ØU—Aù¸Äó×ç?é¾R¾IÀ³ lCşÄ)uÍ+Æá»æ-Ğ^¿ñ½!Ìl~oHòE¸xc0)k\³`½ğKCxú2^avÜvæ?ÔÅ°Öv g3ªÆŠ
+î[ù¯Ä&ÔT‡k–ÃÀ­Ô<R‰¾9o*mxsÅ)´i_²²3ë/YÍŸ£ğ+Vr^±š7G~©…s£+,;'Wõ¹h|—kÎˆü¹º'Ğº|›ÎZñéÔ7Ê! ~…Î¯¦Dy ’zŒÎT‰Ù¥•WvMˆ/Oôœ`@!òB>é‹¯./| ’+|FUÄ«5µxx)eÑCŠVœúàkŒÙµõ#ÆŒ…ÛÁ¨<0°—¯é	Ÿl6bl[à¡k¨Í	Ô®Æ®Ÿ8ÕoöàÕ\Uc,°»iƒò3ÆEËäAÚJ¸³B«ê³¢K‘wWm„ö†Ó«	ªj‡5S°ôpÔºF3\›ª»hÊ`Ñfuqòdj[,ğõ(ÎF_·Q6sççÃôÎ]±î5ˆÒ–FçŒ<¬êu×€ı€
+aınŠxšü°ùÃ3Ç.ts‹Š).¸«ªmÃKÌÃİ4ı‡bÛíu.
+=Z£»swj[‚ê•±3×‹ìùØ´7S]ÌŠSµuºÖõE÷—sK(³a–E6Ÿ¦œ'‚	Ò9:¶µõ7@ûUb<•~ÏÀ¹¦$ca‹äÿxVK#!«ÆŸà0>Y!o…4"ü“áñA+ ­ñüÉ ¸ƒb!‚?Ù-lO}=	©¯¿#³a™áü–ÂÀÃïm¢Ôÿª:ïÑÃå™^‰Ö@Ûg/äºş®rõK/³«í^~æ§OMSüSµÆ?¬£Ÿ™0ğÎÂ‚“œÏ0’?íñş ­"/ET–âq—2Çmª‚DB(zICHU@#
++6~½Å;òˆ4“¡ò1F|¾z9¸ZÛ$ïnMˆ¦!ï3Pö¥A¢õ`T•7WPh~ebÂ¨Ä,qqLäò˜,?Q
+,Ïä	¬bpp6óC³&ê:Ä“¨¤‰›¦zæ1WÄnmÚsJøyÇ˜Æ$fçŒGùà/¦¥22f…şõ|†‡ï‰m#NËáSCYĞkš¤{˜Ée’5®HJtëUI9¶zßb.¤Ã>ãòHò:"ÃYá“‚{ @
+—,
+2a–¿«u~‰8x¼z@~‡Ok>n'£~$P²\!SÀtƒá"av%[Ñªàº…ş™Kfª×YÔ¬h?äÜpBuòµ]ugñ•uíòà:°5[K?gucÖùA¾¼ŒmlñC”q»Üœ%<Q‚‹GÉ³qìÍ¾‹œ²Ê½JN¨M¸§œd¹:'¨•çQómŒ€i¡@ÂïÌØÊDÀÃïš,«U¿z8Eb¿†UÓ*í5‰¼>™£»]n¨î¿_5WWÉ–Ë1”ZzNŠÄŞ—¢®ÃóŸ =ËÚøüsƒúšòİjÎ³•­õ3öe Øtúİš£d©È q;Pd«¥éyy^NHıÍåšq4Ğ8ˆŸz»÷©Œ8Ë(ñ‘–ªõÛB¡n«f„M¦x-Î×J,»NZ¨$ ©]®•øôI“[¨Ûn'¹,³©ÜFDŸ5—Öã®¸-
+‰ÛˆÛ¹¦€KVıŠ¾6ï	%Y§ÇŠéÂ
+Ç«9»ûsõ­Óÿ
+ïT;íõ‘÷6y	ÛÓØ^êŠ9àóœIššÊ„Ç~âÕi«7	®`rr¬"ME¼#’æç4•
+‡RïÿOâdC3ÿz›ÙmiCiÔfW{AsîSëuÀ…µÜ4M%B>5K	Ê««ıÏ2Nmhr'™yES¶8Ÿè2ŸÚ–¡7›ØšÈmÁeM”¶ÖÌ;ëÎKòA
+Q 4‚á‰Â•zç:\^õ×l¡±ÇHŞZ¹*£ÄVÎu¯o^®vÿ©#’CùZ>Ş2’zû©YMHÿóZY«¡bèÈæ²Ml<òÎdxÊ a›ÍMs‘dZ­™ ë.~­¹—k¯$s9ch1“/#yÖç3¢W6,SlZ¡_¾N6P¯|‰ÿä™—ª±¼t¹”ä—ö—!òÕÈ†2Î
+iS;şê»W.¸|ï•	n-xe‚+ı!ü…
+é2·®¤Y‚¤¼éô´cØ}õônVK-y	­©œªm,Šú/Z¸¾sœÕıGš|gK
+ĞÚúÑMÚƒ_qÁş5\ô½·IYaÌK± ",ÜXÜ~ø`¾ïÎV¬Aí§üü:™Á|í6àÄkÜÚ®<è«ïY
+ö1ª,î/"Œx&ê¾é9«Ş0´¨ßä|]£\- A¥Ùiÿî+!D%FûåOôáµ9¼­nÆa¥-óÉìÛÒ‡o^ñpàrÿ¢/Û=â7õhšæoŞ½Î¡Í6ĞÍ†©Ú
+ŞÊKÊoÖFÇWœŠ9è}ìRœZ¯D) ò$IãyöVæEo=²–‚ËƒiPŒ©¡E™h2œ{ÍXÙŠQŞioZ$i¯Í´àS;p¯‘…„:N_+€›ÈhDÏ>JìjÄ
+ s``*b§övû‡»{§{?’ÏÌ= ¬¹ÎÑuÂï?Ó7~Ê0È!I6­´aÉ?q¦'I§ì-Ø~3¢ğt:=‘w¦T^U¿•&.`%w°Ç¾iFX«\Ëêl`¾¦0~Gpü&ÆëÈŠ¼Ø[ô@…KœŒ;ª®U,òNôà9¸\&f æ}–¤³Tõ¯Ã{ˆÀÙoûWÕ¯èlø,ö’rÔ9:<>òk}ş?ìÑêII¾4¿ìœ	¬“b–qæùªª¦ƒÕÕ4%s…—>~‡Íİ‰ºœ6bØxôÿ  ÿÿ &ä>H
