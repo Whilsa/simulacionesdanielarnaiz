@@ -193,47 +193,6 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
   };
 
-  const handleMaintenanceSupabase = async () => {
-    setIsConnectingSupabase(true);
-    setSupabaseMsg('');
-    setSupabaseErr('');
-    try {
-      const res = await fetch('/api/supabase-maintenance', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSupabaseMsg(data.message || 'Mantenimiento y deduplicación ejecutados con éxito.');
-        fetchData();
-      } else {
-        setSupabaseErr(data.error || 'Error durante el mantenimiento.');
-      }
-    } catch (e: any) {
-      setSupabaseErr('Error de red: ' + (e.message || String(e)));
-    } finally {
-      setIsConnectingSupabase(false);
-    }
-  };
-
-  const handleSeedSupabase = async () => {
-    if (!window.confirm('¿Deseas verificar e inicializar las cuentas y usuarios por defecto en Supabase?')) return;
-    setIsConnectingSupabase(true);
-    setSupabaseMsg('');
-    setSupabaseErr('');
-    try {
-      const res = await fetch('/api/supabase-seed', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSupabaseMsg(data.message || 'Usuarios iniciales verificados e insertados con éxito.');
-        fetchData();
-      } else {
-        setSupabaseErr(data.error || 'Error al sembrar usuarios.');
-      }
-    } catch (e: any) {
-      setSupabaseErr('Error de red: ' + (e.message || String(e)));
-    } finally {
-      setIsConnectingSupabase(false);
-    }
-  };
-
   useEffect(() => {
     fetchData();
     // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
@@ -244,9 +203,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const fetchData = async () => {
     try {
       const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes, invsRes] = await Promise.all([
-        fetch('/api/users?role=teacher').catch(() => null),
-        fetch('/api/transfers?role=teacher').catch(() => null),
-        fetch('/api/logs').catch(() => null),
+        fetch('/users?role=teacher'),
+        fetch('/transfers?role=teacher'),
+        fetch('/logs'),
         fetch('/api/supabase-status').catch(() => null),
         fetch('/api/raw-materials/announcements').catch(() => null),
         fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null),
@@ -257,64 +216,36 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       let transfersList: Transfer[] = [];
       let logsList: SystemLog[] = [];
 
-      if (usersRes && usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const usersData = await usersRes.json();
-          usersList = usersData.users || [];
-        } catch (e) {
-          console.warn('Error parsing users response:', e);
+      if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
+        const usersData = await usersRes.json();
+        usersList = usersData.users || [];
+      }
+      if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
+        const transfersData = await transfersRes.json();
+        transfersList = transfersData.transfers || [];
+      }
+      if (logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
+        const logsData = await logsRes.json();
+        logsList = logsData.logs || [];
+      }
+      if (supabaseRes && supabaseRes.ok) {
+        const sbData = await supabaseRes.json();
+        setSupabaseStatus(sbData);
+        if (sbData.dbUrlMasked && !supabaseUrlInput) {
+          setSupabaseUrlInput(sbData.dbUrlMasked);
         }
       }
-      if (transfersRes && transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const transfersData = await transfersRes.json();
-          transfersList = transfersData.transfers || [];
-        } catch (e) {
-          console.warn('Error parsing transfers response:', e);
-        }
+      if (annRes && annRes.ok) {
+        const annData = await annRes.json();
+        if (annData.announcements) setRmAnnouncements(annData.announcements);
       }
-      if (logsRes && logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const logsData = await logsRes.json();
-          logsList = logsData.logs || [];
-        } catch (e) {
-          console.warn('Error parsing logs response:', e);
-        }
+      if (ordRes && ordRes.ok) {
+        const ordData = await ordRes.json();
+        if (ordData.orders) setRmOrders(ordData.orders);
       }
-      if (supabaseRes && supabaseRes.ok && supabaseRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const sbData = await supabaseRes.json();
-          setSupabaseStatus(sbData);
-          if (sbData.dbUrlMasked && !supabaseUrlInput) {
-            setSupabaseUrlInput(sbData.dbUrlMasked);
-          }
-        } catch (e) {
-          console.warn('Error parsing supabase status:', e);
-        }
-      }
-      if (annRes && annRes.ok && annRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const annData = await annRes.json();
-          if (annData.announcements) setRmAnnouncements(annData.announcements);
-        } catch (e) {
-          console.warn('Error parsing announcements:', e);
-        }
-      }
-      if (ordRes && ordRes.ok && ordRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const ordData = await ordRes.json();
-          if (ordData.orders) setRmOrders(ordData.orders);
-        } catch (e) {
-          console.warn('Error parsing orders:', e);
-        }
-      }
-      if (invsRes && invsRes.ok && invsRes.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const invsData = await invsRes.json();
-          if (invsData.inventories) setStudentInventories(invsData.inventories);
-        } catch (e) {
-          console.warn('Error parsing student inventories:', e);
-        }
+      if (invsRes && invsRes.ok) {
+        const invsData = await invsRes.json();
+        if (invsData.inventories) setStudentInventories(invsData.inventories);
       }
 
       setUsers(usersList);
@@ -1856,31 +1787,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                       </div>
 
                       <div className="pt-2 border-t border-slate-100">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs font-semibold text-slate-700">Tablas y herramientas de mantenimiento Supabase:</p>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={isConnectingSupabase}
-                              onClick={handleMaintenanceSupabase}
-                              title="Ejecutar limpieza, eliminación de duplicados y optimización"
-                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${isConnectingSupabase ? 'animate-spin' : ''}`} />
-                              <span>Deduplicar / Mantener BD</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isConnectingSupabase}
-                              onClick={handleSeedSupabase}
-                              title="Verificar y asegurar usuarios y cuentas iniciales"
-                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50"
-                            >
-                              <Database className="w-3 h-3" />
-                              <span>Sembrar usuarios iniciales</span>
-                            </button>
-                          </div>
-                        </div>
+                        <p className="text-xs font-semibold text-slate-700 mb-2">Tablas automáticas en Supabase:</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                           <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between">
                             <div>

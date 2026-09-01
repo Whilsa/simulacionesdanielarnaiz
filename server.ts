@@ -8,12 +8,11 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseMaintenanceReport, DeduplicationSummary, InitialUserSeedConfig, DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, TradingPartner } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 import { numberToSpanishWords } from './src/lib/formatters.js';
-import { STANDARDIZED_SEED_USERS, standardizeUserObject, getStandardizedInitialUsers } from './src/lib/seeds.js';
 
 const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
@@ -715,24 +714,9 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
 }
 
 // Sync helper functions for Supabase
-async function syncAccountToSupabase(id: string, alumno: string, saldo: number, usuario?: string, password?: string, accountNumber?: string, role?: string, level?: number, fullUser?: Partial<User>) {
+async function syncAccountToSupabase(id: string, alumno: string, saldo: number, usuario?: string, password?: string, accountNumber?: string, role?: string, level?: number) {
   if (!dbPool) return;
   try {
-    const db = readDb();
-    const existing = db.users.find(u => u.id === id);
-    const std = standardizeUserObject({
-      ...(existing || {}),
-      ...(fullUser || {}),
-      id,
-      name: alumno,
-      balance: saldo,
-      username: usuario || existing?.username || (fullUser?.username),
-      password: password || existing?.password || (fullUser?.password),
-      accountNumber: accountNumber || existing?.accountNumber || (fullUser?.accountNumber),
-      role: (role || existing?.role || fullUser?.role || 'student') as 'teacher' | 'student',
-      level: (level || existing?.level || fullUser?.level || 1) as 1 | 2 | 3
-    });
-
     await safeDbQuery(
       `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -744,46 +728,8 @@ async function syncAccountToSupabase(id: string, alumno: string, saldo: number, 
          account_number = COALESCE(EXCLUDED.account_number, cuentas.account_number),
          role = COALESCE(EXCLUDED.role, cuentas.role),
          level = COALESCE(EXCLUDED.level, cuentas.level)`,
-      [std.id, std.name, std.balance, std.username, std.password, std.accountNumber, std.role, std.level]
+      [id, alumno, saldo, usuario || null, password || null, accountNumber || null, role || 'student', level || 1]
     );
-
-    // Also auto-sync/create company profile for students
-    if (std.role === 'student') {
-      try {
-        await safeDbQuery(
-          `INSERT INTO perfiles_empresa (id, student_id, company_name, description, logo_url, level, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO UPDATE SET
-             student_id = EXCLUDED.student_id,
-             company_name = COALESCE(perfiles_empresa.company_name, EXCLUDED.company_name),
-             level = EXCLUDED.level,
-             updated_at = CURRENT_TIMESTAMP`,
-          [
-            'comp-' + std.id,
-            std.id,
-            std.companyName || std.name,
-            'Empresa dedicada a la fabricaci√≥n y comercializaci√≥n de herramientas y componentes industriales.',
-            '',
-            std.level,
-            std.updatedAt || new Date().toISOString()
-          ]
-        );
-      } catch (eProfile) {
-        // Ignore perfiles_empresa sync errors
-      }
-
-      // Also ensure inventory row in Supabase
-      try {
-        await safeDbQuery(
-          `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, fecha_actualizacion)
-           VALUES ($1, $2, CURRENT_TIMESTAMP)
-           ON CONFLICT (alumno_id) DO NOTHING`,
-          [std.id, std.name]
-        );
-      } catch (eInv) {
-        // Ignore materias_primas_inventario sync errors
-      }
-    }
   } catch (e) {
     console.error('[Supabase DB] Error syncing account to Supabase:', e);
   }
@@ -2195,11 +2141,18 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       const db = readDb();
 
       // Synchronize students and balances from Supabase "cuentas" (Supabase is source of truth)
-      const rawRestoredMap = new Map<string, User>();
-      
-      for (const seedUser of STANDARDIZED_SEED_USERS) {
-        rawRestoredMap.set(seedUser.id, standardizeUserObject(seedUser));
-      }
+      const restoredUsers: User[] = [];
+      const existingTeacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
+      const teacherUser: User = existingTeacher || {
+        id: 'profesor-1',
+        username: 'pupdaniel',
+        password: '1987',
+        role: 'teacher',
+        name: 'Profesor de Contabilidad',
+        accountNumber: 'ES000000000000000000',
+        balance: 0
+      };
+      restoredUsers.push(teacherUser);
 
       for (const row of resCuentas.rows) {
         const rowId = String(row.id);
@@ -2208,25 +2161,68 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         const rowUsuario = row.usuario ? String(row.usuario) : undefined;
         const rowPassword = row.password ? String(row.password) : undefined;
         const rowAccount = row.account_number ? String(row.account_number) : undefined;
-        const rowRole = (row.role === 'teacher' || rowId === 'profesor-1') ? 'teacher' : 'student';
+        const rowRole = row.role ? String(row.role) : 'student';
         const rowLevel = row.level ? (Number(row.level) as 1 | 2 | 3) : 1;
 
-        const existing = rawRestoredMap.get(rowId);
-        const standardized = standardizeUserObject({
-          ...(existing || {}),
-          id: rowId,
-          name: rowAlumno,
-          username: rowUsuario || existing?.username || rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
-          password: rowPassword || existing?.password || (rowRole === 'teacher' ? '1987' : '123'),
-          role: rowRole as 'teacher' | 'student',
-          accountNumber: rowAccount || existing?.accountNumber || generateIBAN(),
-          balance: rowSaldo,
-          level: rowLevel
-        });
-        rawRestoredMap.set(rowId, standardized);
+        if (rowRole === 'teacher' || rowId === teacherUser.id) {
+          teacherUser.balance = rowSaldo;
+          if (rowUsuario) teacherUser.username = rowUsuario;
+          if (rowPassword) teacherUser.password = rowPassword;
+        } else {
+          restoredUsers.push({
+            id: rowId,
+            username: rowUsuario || rowAlumno.toLowerCase().replace(/[^a-z0-9]/gi, ''),
+            password: rowPassword || '123',
+            role: 'student',
+            name: rowAlumno,
+            accountNumber: rowAccount || generateIBAN(),
+            balance: rowSaldo,
+            level: rowLevel
+          });
+        }
       }
 
-      db.users = Array.from(rawRestoredMap.values()).map(u => standardizeUserObject(u));
+      // If no student accounts were retrieved from Supabase, preserve default students
+      if (restoredUsers.filter(u => u.role === 'student').length === 0) {
+        const defaultStudents: User[] = [
+          {
+            id: 'alumno-1',
+            username: 'ana',
+            password: '123',
+            role: 'student',
+            name: 'Ana L√≥pez',
+            accountNumber: 'ES910001000212345678',
+            balance: 1000,
+            level: 1
+          },
+          {
+            id: 'alumno-2',
+            username: 'carlos',
+            password: '123',
+            role: 'student',
+            name: 'Carlos Ruiz',
+            accountNumber: 'ES910001000287654321',
+            balance: 1000,
+            level: 1
+          },
+          {
+            id: 'alumno-3',
+            username: 'beatriz',
+            password: '123',
+            role: 'student',
+            name: 'Beatriz G√≥mez',
+            accountNumber: 'ES910001000244556677',
+            balance: 1000,
+            level: 1
+          }
+        ];
+        restoredUsers.push(...defaultStudents);
+        for (const st of defaultStudents) {
+          syncAccountToSupabase(st.id, st.name, st.balance, st.username, st.password, st.accountNumber, st.role, st.level).catch(() => {});
+        }
+      }
+
+      db.users = restoredUsers;
 
       // Reconstruct db.transfers from "movimientos"
       const outMovs = resMov.rows.filter(r => r.tipo === 'TRANSFER_OUT');
@@ -2289,18 +2285,10 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       if (restoredTransfers.length > 0) {
         const seenTxIds = new Set<string>();
-        const seenLogicalKeys = new Set<string>();
         const uniqueTransfers: Transfer[] = [];
         for (const tr of restoredTransfers) {
           if (!seenTxIds.has(tr.id)) {
             seenTxIds.add(tr.id);
-            const isPayroll = tr.concept && (tr.concept.includes('n√≥mina') || tr.concept.includes('nomina') || tr.concept.includes('N√≥mina'));
-            const isNote = tr.concept && (tr.concept.includes('gesti√≥n de cobro') || tr.concept.includes('gestion de cobro') || tr.concept.includes('descuento de pagar√©'));
-            if (isPayroll || isNote) {
-              const logicalKey = tr.senderId + '|' + tr.receiverId + '|' + tr.concept + '|' + tr.amount;
-              if (seenLogicalKeys.has(logicalKey)) continue;
-              seenLogicalKeys.add(logicalKey);
-            }
             uniqueTransfers.push(tr);
           }
         }
@@ -2603,42 +2591,31 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }));
       }
 
-      // Reconstruct db.telecomInvoices from Supabase "facturas_telecom" with deduplication
+      // Reconstruct db.telecomInvoices from Supabase "facturas_telecom"
       if (resTelInvoices.rows.length > 0) {
-        const seenTelecomKey = new Set<string>();
-        const mappedTelInvoices: TelecomInvoice[] = [];
-        for (const row of resTelInvoices.rows) {
-          const sId = String(row.alumno_id);
-          const pM = Number(row.mes);
-          const pY = Number(row.anio);
-          const key = `${sId}_${pM}_${pY}`;
-          if (seenTelecomKey.has(key)) continue;
-          seenTelecomKey.add(key);
-          mappedTelInvoices.push({
-            id: String(row.id),
-            invoiceNumber: String(row.numero_factura),
-            studentId: sId,
-            studentName: String(row.alumno_nombre),
-            companyName: String(row.empresa_nombre || row.alumno_nombre),
-            nifCif: String(row.nif_cif || ''),
-            contractId: String(row.contrato_id),
-            planName: String(row.plan_nombre),
-            provider: String(row.proveedor),
-            periodMonth: pM,
-            periodYear: pY,
-            issueDate: new Date(row.fecha_emision).toISOString(),
-            dueDate: new Date(row.fecha_vencimiento).toISOString(),
-            subtotal: Number(row.subtotal),
-            ivaRate: Number(row.tipo_iva || 21),
-            ivaAmount: Number(row.importe_iva),
-            totalAmount: Number(row.importe_total),
-            status: String(row.estado) as 'pagado' | 'pendiente',
-            paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-            items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
-            paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
-          });
-        }
-        db.telecomInvoices = mappedTelInvoices;
+        db.telecomInvoices = resTelInvoices.rows.map((row: any) => ({
+          id: String(row.id),
+          invoiceNumber: String(row.numero_factura),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          companyName: String(row.empresa_nombre || row.alumno_nombre),
+          nifCif: String(row.nif_cif || ''),
+          contractId: String(row.contrato_id),
+          planName: String(row.plan_nombre),
+          provider: String(row.proveedor),
+          periodMonth: Number(row.mes),
+          periodYear: Number(row.anio),
+          issueDate: new Date(row.fecha_emision).toISOString(),
+          dueDate: new Date(row.fecha_vencimiento).toISOString(),
+          subtotal: Number(row.subtotal),
+          ivaRate: Number(row.tipo_iva || 21),
+          ivaAmount: Number(row.importe_iva),
+          totalAmount: Number(row.importe_total),
+          status: String(row.estado) as 'pagado' | 'pendiente',
+          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+          items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
+        }));
       }
 
       // Reconstruct db.officeOrders from Supabase "pedidos_oficina"
@@ -4260,17 +4237,69 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
   }
 }
 
-const inMemoryPayrollLockedKeys = new Set<string>();
+function cleanupErroneousAugustPayrolls(db: DatabaseSchema) {
+  if (!db) return;
+  if (!db.payrollRecords) db.payrollRecords = [];
+  if (!db.transfers) db.transfers = [];
+  if (!db.taxObligations) db.taxObligations = [];
+
+  // Find any payroll records for 8/2026 (created prematurely before September 1st)
+  const badPayrollIds = new Set<string>();
+  const refundsByStudent: { [studentId: string]: number } = {};
+
+  for (const pr of db.payrollRecords) {
+    if (pr.periodMonth === 8 && pr.periodYear === 2026) {
+      badPayrollIds.add(pr.id);
+      refundsByStudent[pr.studentId] = (refundsByStudent[pr.studentId] || 0) + (pr.totalNetSalaryPaid || 0);
+    }
+  }
+
+  // Also find bad transfers with concept of lumped payroll for 8/2026 or receiverId 'empleados-nomina'
+  const badTransferIds = new Set<string>();
+  for (const tx of db.transfers) {
+    if (
+      (tx.concept && (tx.concept.includes('n√≥minas del mes 8/2026') || tx.concept.includes('nominas del mes 8/2026') || tx.concept.includes('n√≥minas del mes 08/2026'))) ||
+      tx.receiverId === 'empleados-nomina'
+    ) {
+      badTransferIds.add(tx.id);
+    }
+  }
+
+  if (badPayrollIds.size > 0 || badTransferIds.size > 0) {
+    console.log(`[Payroll Cleanup] Found ${badPayrollIds.size} bad Aug 2026 payroll records and ${badTransferIds.size} lumped transfers. Restoring student balances...`);
+
+    for (const [studentId, refundAmt] of Object.entries(refundsByStudent)) {
+      const student = db.users.find(u => u.id === studentId);
+      if (student && refundAmt > 0) {
+        student.balance = Math.round((student.balance + refundAmt) * 100) / 100;
+        console.log(`[Payroll Cleanup] Restored ${refundAmt} ‚Ç¨ to student ${student.name} (${student.id}). Current balance: ${student.balance} ‚Ç¨`);
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+      }
+    }
+
+    db.payrollRecords = db.payrollRecords.filter(pr => !badPayrollIds.has(pr.id));
+    db.transfers = db.transfers.filter(tx => !badTransferIds.has(tx.id));
+    db.taxObligations = db.taxObligations.filter(to => {
+      if (to.payrollRecordId && badPayrollIds.has(to.payrollRecordId)) return false;
+      if (to.concept && (to.concept.includes('Mes 8/2026') || to.concept.includes('Mes 8 / 2026') || to.concept.includes('Mes 08/2026'))) return false;
+      return true;
+    });
+
+    safeDbQuery('DELETE FROM registros_nomina WHERE mes = 8 AND anio = 2026').catch(e => console.error(e));
+    safeDbQuery("DELETE FROM movimientos WHERE concepto ILIKE '%n√≥minas del mes 8/2026%' OR concepto ILIKE '%nominas del mes 8/2026%'").catch(e => console.error(e));
+    safeDbQuery("DELETE FROM obligaciones_fiscales WHERE concepto ILIKE '%Mes 8/2026%' OR concepto ILIKE '%Mes 08/2026%'").catch(e => console.error(e));
+  }
+}
 
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
   if (!db.taxObligations) db.taxObligations = [];
-  if (!db.transfers) db.transfers = [];
   if (!db.jobListings) db.jobListings = [];
+
+  cleanupErroneousAugustPayrolls(db);
   normalizeAndFixTaxObligations(db);
 
-  let modified = false;
   const now = new Date();
   const currentDay = now.getDate();
   const currentMonth = now.getMonth() + 1; // 1 - 12
@@ -4285,276 +4314,260 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
     prevYear = currentYear - 1;
   }
 
-  // On day 1 or later of current month, ensure previous completed month's payroll is processed exactly once
+  // On day 1 or later of current month, ensure previous completed month's payroll is processed
   if (currentDay >= 1) {
     const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
+
     for (const studentId of studentsWithEmployees) {
       const student = db.users.find(u => u.id === studentId && u.role === 'student');
       if (!student) continue;
 
-      const payrollLockKey = studentId + '-' + prevMonth + '-' + prevYear;
-      if (inMemoryPayrollLockedKeys.has(payrollLockKey)) continue;
-
       const alreadyProcessed = db.payrollRecords.some(
-        pr => pr.studentId === studentId && Number(pr.periodMonth) === Number(prevMonth) && Number(pr.periodYear) === Number(prevYear)
-      );
-      if (alreadyProcessed) {
-        inMemoryPayrollLockedKeys.add(payrollLockKey);
-        continue;
-      }
-
-      // Strict check: if transfers already exist for this student and period, do not pay again
-      const existingTxForPeriod = (db.transfers || []).filter(
-        t => t.senderId === student.id &&
-             t.concept &&
-             (t.concept.includes('Mes ' + prevMonth + '/' + prevYear) || t.concept.includes('Abono de n√≥mina neta Mes ' + prevMonth + '/' + prevYear))
+        pr => pr.studentId === studentId && pr.periodMonth === prevMonth && pr.periodYear === prevYear
       );
 
-      if (existingTxForPeriod.length > 0) {
-        // Register the missing payrollRecord object without deducting funds again
-        const prId = generateId('payroll');
-        const totalNet = existingTxForPeriod.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-        const myEmps = db.hiredEmployees.filter(e => e.studentId === studentId);
-        const newPR: PayrollRecord = {
-          id: prId,
-          studentId: student.id,
-          studentName: student.name,
-          payrollDate: new Date(currentYear, currentMonth - 1, 1, 9, 0, 0).toISOString(),
-          periodMonth: prevMonth,
-          periodYear: prevYear,
-          employeeCount: existingTxForPeriod.length || myEmps.length,
-          totalGrossSalary: totalNet,
-          totalEmployeeSS: 0,
-          totalEmployeeIRPF: 0,
-          totalNetSalaryPaid: totalNet,
-          totalCompanySS: 0,
-          isProportional: false,
-          status: 'paid',
-          createdAt: now.toISOString()
-        };
-        db.payrollRecords.push(newPR);
-        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
-        modified = true;
-        continue;
-      }
+      if (!alreadyProcessed) {
+        const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+        if (myEmployees.length === 0) continue;
 
-      const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
-      if (myEmployees.length === 0) continue;
+        let totalGross = 0;
+        let totalEmployeeIRPF = 0;
+        let totalEmployeeSS = 0;
+        let totalNetPaid = 0;
+        let totalCompanySS = 0;
+        let isProportionalPayroll = false;
+        let activeEmployeesCount = 0;
 
-      let totalGross = 0;
-      let totalEmployeeIRPF = 0;
-      let totalEmployeeSS = 0;
-      let totalNetPaid = 0;
-      let totalCompanySS = 0;
-      let isProportionalPayroll = false;
-      let activeEmployeesCount = 0;
+        const daysInPeriod = new Date(prevYear, prevMonth, 0).getDate();
+        const payrollPayDate = new Date(currentYear, currentMonth - 1, 1, 9, 0, 0);
 
-      const daysInPeriod = new Date(prevYear, prevMonth, 0).getDate();
-      const payrollPayDate = new Date(currentYear, currentMonth - 1, 1, 9, 0, 0);
+        for (const emp of myEmployees) {
+          let empGross = 0;
+          let empIsProportional = false;
+          let workedDays = daysInPeriod;
 
-      for (const emp of myEmployees) {
-        const empName = emp.employeeName || (emp as any).name || 'Empleado/a';
-        const empId = emp.id || generateId('emp');
+          if (emp.hireDate) {
+            const parts = emp.hireDate.split('T')[0].split('-');
+            const hireYear = parseInt(parts[0], 10);
+            const hireMonth = parseInt(parts[1], 10);
+            const hireDay = parseInt(parts[2], 10);
 
-        // Strict idempotency: check if this employee was already paid for this period
-        const alreadyPaidThisEmp = (db.transfers || []).some(
-          t => t.senderId === student.id &&
-               (t.receiverId === empId || t.receiverName === empName) &&
-               t.concept &&
-               (t.concept.includes('Mes ' + prevMonth + '/' + prevYear) || t.concept.includes('Abono de n√≥mina neta Mes ' + prevMonth + '/' + prevYear))
-        );
-        if (alreadyPaidThisEmp) continue;
-
-        let empGross = 0;
-        let empIsProportional = false;
-        let workedDays = daysInPeriod;
-
-        if (emp.hireDate) {
-          const parts = emp.hireDate.split('T')[0].split('-');
-          const hireYear = parseInt(parts[0], 10);
-          const hireMonth = parseInt(parts[1], 10);
-          const hireDay = parseInt(parts[2], 10);
-
-          if (hireYear > prevYear || (hireYear === prevYear && hireMonth > prevMonth)) {
-            // Employee was hired after prevMonth -> did not work in prevMonth
-            continue;
-          } else if (hireYear === prevYear && hireMonth === prevMonth) {
-            empIsProportional = true;
-            workedDays = Math.max(1, daysInPeriod - hireDay + 1);
-            empGross = (emp.grossSalaryMonthly / daysInPeriod) * workedDays;
+            if (hireYear > prevYear || (hireYear === prevYear && hireMonth > prevMonth)) {
+              // Employee was hired after prevMonth (e.g. hired in August, checking July) -> did not work in prevMonth
+              continue;
+            } else if (hireYear === prevYear && hireMonth === prevMonth) {
+              empIsProportional = true;
+              workedDays = Math.max(1, daysInPeriod - hireDay + 1);
+              empGross = (emp.grossSalaryMonthly / daysInPeriod) * workedDays;
+            } else {
+              empGross = emp.grossSalaryMonthly;
+            }
           } else {
             empGross = emp.grossSalaryMonthly;
           }
-        } else {
-          empGross = emp.grossSalaryMonthly;
+
+          empGross = Math.round(empGross * 100) / 100;
+          if (empGross <= 0) continue;
+
+          if (empIsProportional) isProportionalPayroll = true;
+
+          const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
+          const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
+          const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
+          const eSSComp = Math.round(empGross * 0.75 * 100) / 100;
+
+          // Individual payment to this employee
+          student.balance = Math.round((student.balance - eNet) * 100) / 100;
+
+          const txId = generateId('tx');
+          const empName = emp.employeeName || (emp as any).name || 'Empleado/a';
+          const empId = emp.id || generateId('emp');
+
+          let hash = 0;
+          for (let i = 0; i < empId.length; i++) hash = (hash << 5) - hash + empId.charCodeAt(i);
+          const empAccountNum = (emp as any).accountNumber || `ES${Math.abs(hash) % 900000000000000000 + 100000000000000000}`;
+
+          const transfer: Transfer = {
+            id: txId,
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: empId,
+            receiverName: empName,
+            receiverAccount: empAccountNum,
+            amount: eNet,
+            concept: `Abono de n√≥mina neta Mes ${prevMonth}/${prevYear} - ${empName}${emp.role ? ` (${emp.role})` : ''}`,
+            timestamp: payrollPayDate.toISOString()
+          };
+          db.transfers.unshift(transfer);
+          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', eNet, payrollPayDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+          totalGross += empGross;
+          totalEmployeeIRPF += eIRPF;
+          totalEmployeeSS += eSSEmp;
+          totalNetPaid += eNet;
+          totalCompanySS += eSSComp;
+          activeEmployeesCount++;
         }
 
-        empGross = Math.round(empGross * 100) / 100;
-        if (empGross <= 0) continue;
+        if (activeEmployeesCount > 0) {
+          totalGross = Math.round(totalGross * 100) / 100;
+          totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
+          totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
+          totalNetPaid = Math.round(totalNetPaid * 100) / 100;
+          totalCompanySS = Math.round(totalCompanySS * 100) / 100;
 
-        if (empIsProportional) isProportionalPayroll = true;
+          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
-        const eIRPF = Math.round(empGross * 0.17 * 100) / 100;
-        const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
-        const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
-        const eSSComp = Math.round(empGross * 0.75 * 100) / 100;
+          const prId = generateId('payroll');
+          const newPR: PayrollRecord = {
+            id: prId,
+            studentId: student.id,
+            studentName: student.name,
+            payrollDate: payrollPayDate.toISOString(),
+            periodMonth: prevMonth,
+            periodYear: prevYear,
+            employeeCount: activeEmployeesCount,
+            totalGrossSalary: totalGross,
+            totalEmployeeSS: totalEmployeeSS,
+            totalEmployeeIRPF: totalEmployeeIRPF,
+            totalNetSalaryPaid: totalNetPaid,
+            totalCompanySS: totalCompanySS,
+            isProportional: isProportionalPayroll,
+            status: 'paid',
+            createdAt: now.toISOString()
+          };
+          db.payrollRecords.push(newPR);
+          syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
 
-        // Individual payment to this employee
-        student.balance = Math.round((student.balance - eNet) * 100) / 100;
-        const txId = generateId('tx');
-        let hash = 0;
-        for (let i = 0; i < empId.length; i++) hash = (hash << 5) - hash + empId.charCodeAt(i);
-        const empAccountNum = (emp as any).accountNumber || 'ES' + (Math.abs(hash) % 900000000000000000 + 100000000000000000);
+          // TGSS SS due date: 20th of current month (month following prevMonth)
+          const ssDueDateObj = new Date(currentYear, currentMonth - 1, 20, 9, 0, 0);
 
-        const transfer: Transfer = {
-          id: txId,
-          senderId: student.id,
-          senderName: student.name,
-          senderAccount: student.accountNumber,
-          receiverId: empId,
-          receiverName: empName,
-          receiverAccount: empAccountNum,
-          amount: eNet,
-          concept: 'Abono de n√≥mina neta Mes ' + prevMonth + '/' + prevYear + ' - ' + empName + (emp.role ? ' (' + emp.role + ')' : ''),
-          timestamp: payrollPayDate.toISOString()
-        };
+          // AEAT IRPF due date: 15th of first month of following quarter of prevMonth/prevYear
+          let qNum = 1;
+          let irpfDueDateObj: Date;
+          if (prevMonth >= 10) {
+            qNum = 4;
+            irpfDueDateObj = new Date(prevYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+          } else if (prevMonth >= 7) {
+            qNum = 3;
+            irpfDueDateObj = new Date(prevYear, 9, 15, 9, 0, 0); // Oct 15
+          } else if (prevMonth >= 4) {
+            qNum = 2;
+            irpfDueDateObj = new Date(prevYear, 6, 15, 9, 0, 0); // Jul 15
+          } else {
+            qNum = 1;
+            irpfDueDateObj = new Date(prevYear, 3, 15, 9, 0, 0); // Apr 15
+          }
 
-        db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', eNet, payrollPayDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-        totalGross += empGross;
-        totalEmployeeIRPF += eIRPF;
-        totalEmployeeSS += eSSEmp;
-        totalNetPaid += eNet;
-        totalCompanySS += eSSComp;
-        activeEmployeesCount++;
-      }
-
-      if (activeEmployeesCount > 0) {
-        totalGross = Math.round(totalGross * 100) / 100;
-        totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
-        totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
-        totalNetPaid = Math.round(totalNetPaid * 100) / 100;
-        totalCompanySS = Math.round(totalCompanySS * 100) / 100;
-
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-        const prId = generateId('payroll');
-        const newPR: PayrollRecord = {
-          id: prId,
-          studentId: student.id,
-          studentName: student.name,
-          payrollDate: payrollPayDate.toISOString(),
-          periodMonth: prevMonth,
-          periodYear: prevYear,
-          employeeCount: activeEmployeesCount,
-          totalGrossSalary: totalGross,
-          totalEmployeeSS: totalEmployeeSS,
-          totalEmployeeIRPF: totalEmployeeIRPF,
-          totalNetSalaryPaid: totalNetPaid,
-          totalCompanySS: totalCompanySS,
-          isProportional: isProportionalPayroll,
-          status: 'paid',
-          createdAt: now.toISOString()
-        };
-        db.payrollRecords.push(newPR);
-        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
-
-        // TGSS SS due date: 20th of current month (month following prevMonth)
-        const ssDueDateObj = new Date(currentYear, currentMonth - 1, 20, 9, 0, 0);
-
-        // AEAT IRPF due date: 15th of first month of following quarter of prevMonth/prevYear
-        let qNum = 1;
-        let irpfDueDateObj: Date;
-        if (prevMonth >= 10) {
-          qNum = 4;
-          irpfDueDateObj = new Date(prevYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
-        } else if (prevMonth >= 7) {
-          qNum = 3;
-          irpfDueDateObj = new Date(prevYear, 9, 15, 9, 0, 0); // Oct 15
-        } else if (prevMonth >= 4) {
-          qNum = 2;
-          irpfDueDateObj = new Date(prevYear, 6, 15, 9, 0, 0); // Jul 15
-        } else {
-          qNum = 1;
-          irpfDueDateObj = new Date(prevYear, 3, 15, 9, 0, 0); // Apr 15
-        }
-
-        const ssEmpObl: TaxObligation = {
-          id: generateId('tax'),
-          studentId: student.id,
-          studentName: student.name,
-          type: 'ss_employee',
-          concept: 'Cuotas Seguridad Social Trabajador (6,48%) Mes ' + prevMonth + '/' + prevYear,
-          amount: totalEmployeeSS,
-          dueDate: ssDueDateObj.toISOString(),
-          status: 'pendiente',
-          payrollRecordId: prId
-        };
-
-        const ssCompObl: TaxObligation = {
-          id: generateId('tax'),
-          studentId: student.id,
-          studentName: student.name,
-          type: 'ss_company',
-          concept: 'Aportaci√≥n patronal Seguridad Social (75%) Mes ' + prevMonth + '/' + prevYear,
-          amount: totalCompanySS,
-          dueDate: ssDueDateObj.toISOString(),
-          status: 'pendiente',
-          payrollRecordId: prId
-        };
-
-        db.taxObligations.push(ssEmpObl, ssCompObl);
-        syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
-        syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
-
-        const existingIrpf = db.taxObligations.find(t => 
-          t.studentId === student.id &&
-          t.type === 'irpf' &&
-          t.status === 'pendiente' &&
-          new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() &&
-          new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
-        );
-
-        if (existingIrpf) {
-          existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
-          existingIrpf.concept = 'Retenciones IRPF de n√≥minas (17%) Trimestre Q' + qNum + ' ' + prevYear;
-          syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
-        } else {
-          const irpfObl: TaxObligation = {
+          const ssEmpObl: TaxObligation = {
             id: generateId('tax'),
             studentId: student.id,
             studentName: student.name,
-            type: 'irpf',
-            concept: 'Retenciones IRPF de n√≥minas (17%) Trimestre Q' + qNum + ' ' + prevYear,
-            amount: totalEmployeeIRPF,
-            dueDate: irpfDueDateObj.toISOString(),
+            type: 'ss_employee',
+            concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${prevMonth}/${prevYear}`,
+            amount: totalEmployeeSS,
+            dueDate: ssDueDateObj.toISOString(),
             status: 'pendiente',
             payrollRecordId: prId
           };
-          db.taxObligations.push(irpfObl);
-          syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+
+          const ssCompObl: TaxObligation = {
+            id: generateId('tax'),
+            studentId: student.id,
+            studentName: student.name,
+            type: 'ss_company',
+            concept: `Aportaci√≥n patronal Seguridad Social (75%) Mes ${prevMonth}/${prevYear}`,
+            amount: totalCompanySS,
+            dueDate: ssDueDateObj.toISOString(),
+            status: 'pendiente',
+            payrollRecordId: prId
+          };
+
+          db.taxObligations.push(ssEmpObl, ssCompObl);
+          syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
+          syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+          const existingIrpf = db.taxObligations.find(t => 
+            t.studentId === student.id && 
+            t.type === 'irpf' && 
+            t.status === 'pendiente' && 
+            new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
+            new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
+          );
+
+          if (existingIrpf) {
+            existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
+            existingIrpf.concept = `Retenciones IRPF de n√≥minas (17%) Trimestre Q${qNum} ${prevYear}`;
+            syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
+          } else {
+            const irpfObl: TaxObligation = {
+              id: generateId('tax'),
+              studentId: student.id,
+              studentName: student.name,
+              type: 'irpf',
+              concept: `Retenciones IRPF de n√≥minas (17%) Trimestre Q${qNum} ${prevYear}`,
+              amount: totalEmployeeIRPF,
+              dueDate: irpfDueDateObj.toISOString(),
+              status: 'pendiente',
+              payrollRecordId: prId
+            };
+            db.taxObligations.push(irpfObl);
+            syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+          }
+
+          db.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'PAYROLL_AUTOMATED',
+            details: `N√≥minas del mes ${prevMonth}/${prevYear} pagadas autom√°ticamente el d√≠a 1 para ${student.name}: ${activeEmployeesCount} transferencias individuales realizadas por un l√≠quido total de ${totalNetPaid}‚Ç¨. Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}‚Ç¨) y Seguridad Social (Empleado: ${totalEmployeeSS}‚Ç¨, Empresa: ${totalCompanySS}‚Ç¨).`,
+            timestamp: now.toISOString(),
+            studentId: student.id,
+            studentName: student.name
+          });
         }
-
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'PAYROLL_AUTOMATED',
-          details: 'N√≥minas del mes ' + prevMonth + '/' + prevYear + ' pagadas autom√°ticamente el d√≠a 1 para ' + student.name + ': ' + activeEmployeesCount + ' transferencias individuales realizadas por un l√≠quido total de ' + totalNetPaid + '‚Ç¨. Generadas deudas con Hacienda (IRPF: ' + totalEmployeeIRPF + '‚Ç¨) y Seguridad Social (Empleado: ' + totalEmployeeSS + '‚Ç¨, Empresa: ' + totalCompanySS + '‚Ç¨).',
-          timestamp: now.toISOString(),
-          studentId: student.id,
-          studentName: student.name
-        });
-
-        modified = true;
       }
     }
   }
 
-  if (modified) {
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('Error writing db in payroll:', e);
+  // 2. Process Tax Obligations on day 1 or later
+  if (currentDay >= 1) {
+    const pendingTaxes = db.taxObligations.filter(t => t.status === 'pendiente' && new Date(t.dueDate) <= now);
+    for (const tax of pendingTaxes) {
+      const student = db.users.find(u => u.id === tax.studentId && u.role === 'student');
+      if (!student) continue;
+
+      student.balance = Math.round((student.balance - tax.amount) * 100) / 100;
+      tax.status = 'pagado';
+      tax.paidDate = now.toISOString();
+
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+      syncTaxObligationToSupabase(tax).catch(e => console.error(e));
+
+      const txId = generateId('tx');
+      const receiverName = tax.type === 'irpf' ? 'Agencia Tributaria - Hacienda P√∫blica' : 'Tesorer√≠a General de la Seguridad Social';
+      const transfer: Transfer = {
+        id: txId,
+        senderId: student.id,
+        senderName: student.name,
+        senderAccount: student.accountNumber,
+        receiverId: tax.type === 'irpf' ? 'hacienda' : 'seguridad-social',
+        receiverName: receiverName,
+        receiverAccount: 'ES000000000000000000',
+        amount: tax.amount,
+        concept: `Pago autom√°tico de ${tax.concept}`,
+        timestamp: now.toISOString()
+      };
+      db.transfers.unshift(transfer);
+      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', tax.amount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        action: 'TAX_AUTOMATED_PAYMENT',
+        details: `Pago autom√°tico fiscal realizado por ${student.name}: ${tax.concept} por importe de ${tax.amount}‚Ç¨`,
+        timestamp: now.toISOString(),
+        studentId: student.id,
+        studentName: student.name
+      });
     }
   }
 }
@@ -4736,8 +4749,6 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   if (!db.electricityContracts) db.electricityContracts = [];
   if (!db.electricityBills) db.electricityBills = [];
 
-  let modified = false;
-
   // Filter out any erroneous bills for period months prior to contract creation, and refund if paid
   const validBills: ElectricityBill[] = [];
   for (const bill of db.electricityBills) {
@@ -4757,7 +4768,6 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
             db.transfers = db.transfers.filter(t => !t.concept.includes(`factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear}`));
           }
         }
-        modified = true;
         continue; // Skip invalid bill
       }
     }
@@ -4787,7 +4797,6 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const newBill = calculateElectricityForStudent(contract.studentId, prevMonth, prevYear, db);
       if (newBill) {
         db.electricityBills.push(newBill);
-        modified = true;
       }
     }
   }
@@ -4805,7 +4814,6 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
       bill.status = 'pagado';
       bill.paidDate = now.toISOString();
-      modified = true;
 
       syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
@@ -4822,11 +4830,9 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
         concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (N¬∫ ${bill.billNumber})`,
         timestamp: now.toISOString()
       };
-      if (!db.transfers) db.transfers = [];
       db.transfers.unshift(transfer);
       syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
-      if (!db.systemLogs) db.systemLogs = [];
       db.systemLogs.unshift({
         id: generateId('log'),
         action: 'ELECTRICITY_AUTOMATED_PAYMENT',
@@ -4837,108 +4843,12 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       });
     }
   }
-
-  if (modified) {
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('Error writing db in electricity automation:', e);
-    }
-  }
-}
-
-const inMemoryTelecomLockedKeys = new Set<string>();
-
-function normalizeAndDeduplicateTelecom(db: DatabaseSchema): boolean {
-  if (!db.telecomInvoices) db.telecomInvoices = [];
-  if (!db.transfers) db.transfers = [];
-  let modified = false;
-
-  // 1. Group invoices by studentId + periodMonth + periodYear
-  const invoiceGroups = new Map<string, TelecomInvoice[]>();
-  for (const inv of db.telecomInvoices) {
-    if (!inv || !inv.studentId) continue;
-    const k = `${inv.studentId}_${inv.periodMonth}_${inv.periodYear}`;
-    if (!invoiceGroups.has(k)) invoiceGroups.set(k, []);
-    invoiceGroups.get(k).push(inv);
-  }
-
-  const invoicesToKeep: TelecomInvoice[] = [];
-  const invoicesToDelete: TelecomInvoice[] = [];
-  const studentRefunds = new Map<string, number>();
-
-  for (const [k, invs] of invoiceGroups.entries()) {
-    invoicesToKeep.push(invs[0]);
-    for (let i = 1; i < invs.length; i++) {
-      const dup = invs[i];
-      invoicesToDelete.push(dup);
-      if (dup.status === 'pagado') {
-        const cur = studentRefunds.get(dup.studentId) || 0;
-        studentRefunds.set(dup.studentId, cur + Number(dup.totalAmount || 0));
-      }
-    }
-  }
-
-  if (invoicesToDelete.length > 0) {
-    db.telecomInvoices = invoicesToKeep;
-    modified = true;
-    for (const dup of invoicesToDelete) {
-      if (dbPool) {
-        safeDbQuery('DELETE FROM facturas_telecom WHERE id = $1', [dup.id]).catch(e => console.error(e));
-      }
-    }
-  }
-
-  // 2. Deduplicate transfers for telecom
-  const transfersToKeep: Transfer[] = [];
-  const transfersToDelete: Transfer[] = [];
-  const transferSeen = new Set<string>();
-
-  for (const tx of db.transfers) {
-    if (tx.receiverId === 'telecom-provider' || (tx.concept && tx.concept.toLowerCase().includes('telecomunicaciones'))) {
-      const match = (tx.concept || '').match(/\((\d{1,2})\/(\d{4})\)/);
-      const periodKey = match ? `${match[1]}-${match[2]}` : (tx.concept || '');
-      const key = `${tx.senderId}_${periodKey}`;
-      if (transferSeen.has(key)) {
-        transfersToDelete.push(tx);
-      } else {
-        transferSeen.add(key);
-        transfersToKeep.push(tx);
-      }
-    } else {
-      transfersToKeep.push(tx);
-    }
-  }
-
-  if (transfersToDelete.length > 0) {
-    db.transfers = transfersToKeep;
-    modified = true;
-    for (const tx of transfersToDelete) {
-      if (dbPool) {
-        safeDbQuery('DELETE FROM movimientos WHERE id = $1 OR id = $2', [tx.id, tx.id + '-out']).catch(e => console.error(e));
-        safeDbQuery('DELETE FROM movimientos WHERE id = $1', [tx.id + '-in']).catch(e => console.error(e));
-      }
-    }
-  }
-
-  // 3. Refund balances to students if duplicate payments occurred
-  for (const [studentId, refundAmt] of studentRefunds.entries()) {
-    const student = db.users.find(u => u.id === studentId);
-    if (student && refundAmt > 0) {
-      student.balance = Math.round((student.balance + refundAmt) * 100) / 100;
-      modified = true;
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
-    }
-  }
-
-  return modified;
 }
 
 function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
   if (!db.telecomContracts) db.telecomContracts = [];
   if (!db.telecomInvoices) db.telecomInvoices = [];
 
-  let modified = normalizeAndDeduplicateTelecom(db);
   const now = new Date();
   const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
 
@@ -4952,7 +4862,7 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
 
     // 1. Clean up any premature invoices created on contract sign-up date before the 1st of the following month
     const prematureInvoices = db.telecomInvoices.filter(inv => {
-      if (inv.studentId !== student.id && inv.contractId !== contract.id) return false;
+      if (inv.contractId !== contract.id) return false;
       const invDate = new Date(inv.issueDate);
       const firstDueOfContract = new Date(startYear, startMonth, 1, 0, 0, 0); // 1st of month following contract month
       return invDate < firstDueOfContract;
@@ -4960,17 +4870,16 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
 
     for (const premInv of prematureInvoices) {
       student.balance = Math.round((student.balance + premInv.totalAmount) * 100) / 100;
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
 
       db.telecomInvoices = db.telecomInvoices.filter(i => i.id !== premInv.id);
 
       if (db.transfers) {
-        db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && (t.concept.includes(premInv.invoiceNumber) || t.receiverId === 'telecom-provider')));
+        db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && t.concept.includes(premInv.invoiceNumber)));
       }
-      modified = true;
     }
 
-    // 2. Process billing for any completed month where payment is due (due on 1st of month M+1 at 00:00:00)
+    // 2. Process billing for any completed month where payment is due (due on 1st of month M+1)
     const nowYear = now.getFullYear();
     const nowMonth = now.getMonth() + 1;
 
@@ -4978,129 +4887,98 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
     let curM = startMonth;
 
     while (curY < nowYear || (curY === nowYear && curM <= nowMonth)) {
-      const lockKey = `${student.id}-${curM}-${curY}`;
-      if (inMemoryTelecomLockedKeys.has(lockKey)) {
-        curM++;
-        if (curM > 12) {
-          curM = 1;
-          curY++;
-        }
-        continue;
-      }
-
-      // Due date for service month (curY, curM) is 1st of month (curM + 1) at 00:00:00
-      const paymentDueDate = new Date(curY, curM, 1, 0, 0, 0);
+      // Due date for service month (curY, curM) is 1st of month (curM + 1)
+      const paymentDueDate = new Date(curY, curM, 1, 9, 0, 0);
 
       // Only process if paymentDueDate is on or before now
       if (now >= paymentDueDate) {
-        const existingInvoice = (db.telecomInvoices || []).find(
-          inv => (inv.studentId === student.id || inv.contractId === contract.id) && Number(inv.periodMonth) === Number(curM) && Number(inv.periodYear) === Number(curY)
+        const existingInvoice = db.telecomInvoices.find(
+          inv => inv.contractId === contract.id && inv.periodMonth === curM && inv.periodYear === curY
         );
 
-        if (existingInvoice) {
-          inMemoryTelecomLockedKeys.add(lockKey);
-          curM++;
-          if (curM > 12) {
-            curM = 1;
-            curY++;
+        if (!existingInvoice) {
+          const daysInMonth = new Date(curY, curM, 0).getDate();
+          let baseAmount = contract.monthlyPrice;
+          let isProrated = false;
+          let activeDays = daysInMonth;
+
+          if (curY === startYear && curM === startMonth) {
+            const startDay = cDate.getDate();
+            activeDays = Math.max(1, daysInMonth - startDay + 1);
+            baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+            isProrated = true;
           }
-          continue;
+
+          const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+          const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+          const invoiceNumber = `TEL-${curY}-${String(curM).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+          const invoiceConcept = isProrated
+            ? `Cuota proporcional de Servicio ${contract.planName} (${activeDays}/${daysInMonth} d√≠as del mes de alta ${curM}/${curY})`
+            : `Cuota Mensual de Servicio ${contract.planName} (Mes ${curM}/${curY})`;
+
+          const invoice: TelecomInvoice = {
+            id: generateId('tel_inv'),
+            invoiceNumber,
+            studentId: student.id,
+            studentName: student.name,
+            companyName: student.name,
+            nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+            contractId: contract.id,
+            planName: contract.planName,
+            provider: contract.provider,
+            periodMonth: curM,
+            periodYear: curY,
+            issueDate: paymentDueDate.toISOString(),
+            dueDate: paymentDueDate.toISOString(),
+            subtotal: baseAmount,
+            ivaRate: 21,
+            ivaAmount,
+            totalAmount,
+            status: 'pagado',
+            paidDate: paymentDueDate.toISOString(),
+            items: [
+              {
+                concept: invoiceConcept,
+                amount: baseAmount
+              }
+            ],
+            paymentMethod: 'Adeudo directo autom√°tico en cuenta (1 de mes)'
+          };
+
+          db.telecomInvoices.unshift(invoice);
+          syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
+
+          student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+
+          const txId = generateId('tx');
+          const transfer: Transfer = {
+            id: txId,
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'telecom-provider',
+            receiverName: contract.provider,
+            receiverAccount: 'ES880004000199223344',
+            amount: totalAmount,
+            concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
+            timestamp: paymentDueDate.toISOString()
+          };
+          if (!db.transfers) db.transfers = [];
+          db.transfers.unshift(transfer);
+          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+          if (!db.systemLogs) db.systemLogs = [];
+          db.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'TELECOM_AUTOMATED_PAYMENT',
+            details: `Cobro mensual autom√°tico de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}‚Ç¨ (IVA incl.)`,
+            timestamp: paymentDueDate.toISOString(),
+            studentId: student.id,
+            studentName: student.name
+          });
         }
-
-        // Lock in memory immediately before creating
-        inMemoryTelecomLockedKeys.add(lockKey);
-
-        const daysInMonth = new Date(curY, curM, 0).getDate();
-        let baseAmount = contract.monthlyPrice;
-        let isProrated = false;
-        let activeDays = daysInMonth;
-
-        if (curY === startYear && curM === startMonth) {
-          const startDay = cDate.getDate();
-          activeDays = Math.max(1, daysInMonth - startDay + 1);
-          baseAmount = Math.round((contract.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
-          isProrated = true;
-        }
-
-        const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
-        const totalAmount = Math.round((baseAmount + ivaAmount) * 100) / 100;
-
-        const invoiceNumber = `TEL-${curY}-${String(curM).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
-        const invoiceConcept = isProrated
-          ? `Cuota proporcional de servicio ${contract.planName} (${activeDays}/${daysInMonth} d√≠as del mes de alta ${curM}/${curY})`
-          : `Cuota mensual de servicio ${contract.planName} (Mes ${curM}/${curY})`;
-
-        const invoice: TelecomInvoice = {
-          id: generateId('tel_inv'),
-          invoiceNumber,
-          studentId: student.id,
-          studentName: student.name,
-          companyName: student.name,
-          nifCif: student.nifCif || ('B-' + Math.floor(10000000 + Math.random() * 90000000)),
-          contractId: contract.id,
-          planName: contract.planName,
-          provider: contract.provider,
-          periodMonth: curM,
-          periodYear: curY,
-          issueDate: paymentDueDate.toISOString(),
-          dueDate: paymentDueDate.toISOString(),
-          subtotal: baseAmount,
-          ivaRate: 21,
-          ivaAmount,
-          totalAmount,
-          status: 'pagado',
-          paidDate: paymentDueDate.toISOString(),
-          items: [
-            {
-              concept: invoiceConcept,
-              amount: baseAmount
-            }
-          ],
-          paymentMethod: 'Adeudo directo autom√°tico en cuenta (1 de cada mes)'
-        };
-
-        db.telecomInvoices.unshift(invoice);
-        syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
-
-        student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
-
-        const txId = generateId('tx');
-        const transfer: Transfer = {
-          id: txId,
-          senderId: student.id,
-          senderName: student.name,
-          senderAccount: student.accountNumber,
-          receiverId: 'telecom-provider',
-          receiverName: contract.provider,
-          receiverAccount: 'ES880004000199223344',
-          amount: totalAmount,
-          concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
-          timestamp: paymentDueDate.toISOString()
-        };
-        if (!db.transfers) db.transfers = [];
-        db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-        addNotification(
-          db,
-          student.id,
-          'Pago autom√°tico de telecomunicaciones',
-          `Se ha cargado autom√°ticamente en tu cuenta bancaria la cuota de ${contract.planName} correspondiente al mes ${curM}/${curY} por un importe total de ${totalAmount.toFixed(2)} ‚Ç¨ (Factura ${invoiceNumber}).`,
-          'info'
-        );
-
-        if (!db.systemLogs) db.systemLogs = [];
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'TELECOM_AUTOMATED_PAYMENT',
-          details: `Cobro mensual autom√°tico de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}‚Ç¨ (IVA incl.) - Factura ${invoiceNumber}`,
-          timestamp: paymentDueDate.toISOString(),
-          studentId: student.id,
-          studentName: student.name
-        });
-
-        modified = true;
       }
 
       curM++;
@@ -5108,14 +4986,6 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
         curM = 1;
         curY++;
       }
-    }
-  }
-
-  if (modified) {
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('Error writing db in telecom automation:', e);
     }
   }
 }
@@ -5227,7 +5097,44 @@ function sanitizeDbStrings(db: DatabaseSchema) {
 function readDb(): DatabaseSchema {
   if (!fs.existsSync(DB_FILE)) {
     const defaultDb: DatabaseSchema = {
-      users: getStandardizedInitialUsers(),
+      users: [
+        {
+          id: 'profesor-1',
+          username: 'pupdaniel',
+          password: '1987',
+          role: 'teacher',
+          name: 'Profesor de Contabilidad',
+          accountNumber: 'ES000000000000000000',
+          balance: 0
+        },
+        {
+          id: 'alumno-1',
+          username: 'ana',
+          password: '123',
+          role: 'student',
+          name: 'Ana L√≥pez',
+          accountNumber: 'ES910001000212345678',
+          balance: 1000
+        },
+        {
+          id: 'alumno-2',
+          username: 'carlos',
+          password: '123',
+          role: 'student',
+          name: 'Carlos Ruiz',
+          accountNumber: 'ES910001000287654321',
+          balance: 1000
+        },
+        {
+          id: 'alumno-3',
+          username: 'beatriz',
+          password: '123',
+          role: 'student',
+          name: 'Beatriz G√≥mez',
+          accountNumber: 'ES910001000244556677',
+          balance: 1000
+        }
+      ],
       transfers: [],
       systemLogs: [],
       properties: getDefaultSeedProperties(),
@@ -5250,7 +5157,6 @@ function readDb(): DatabaseSchema {
     const data = fs.readFileSync(DB_FILE, 'utf-8');
     const db = JSON.parse(data) as DatabaseSchema;
 
-    if (!Array.isArray(db.users)) { db.users = getStandardizedInitialUsers(); } else { db.users = db.users.map(u => standardizeUserObject(u)); }
     if (!db.properties) {
       db.properties = [];
     }
@@ -5400,7 +5306,47 @@ function readDb(): DatabaseSchema {
   } catch (error) {
     console.error("Error reading database, recreating default:", error);
     const defaultDb: DatabaseSchema = {
-      users: getStandardizedInitialUsers(),
+      users: [
+        {
+          id: 'profesor-1',
+          username: 'pupdaniel',
+          password: '1987',
+          role: 'teacher',
+          name: 'Profesor de Contabilidad',
+          accountNumber: 'ES000000000000000000',
+          balance: 0
+        },
+        {
+          id: 'alumno-1',
+          username: 'ana',
+          password: '123',
+          role: 'student',
+          name: 'Ana L√≥pez',
+          accountNumber: 'ES910001000212345678',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-2',
+          username: 'carlos',
+          password: '123',
+          role: 'student',
+          name: 'Carlos Ruiz',
+          accountNumber: 'ES910001000287654321',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-3',
+          username: 'beatriz',
+          password: '123',
+          role: 'student',
+          name: 'Beatriz G√≥mez',
+          accountNumber: 'ES910001000244556677',
+          balance: 1000,
+          level: 1
+        }
+      ],
       transfers: [],
       systemLogs: [],
       properties: getDefaultSeedProperties(),
@@ -5552,69 +5498,6 @@ app.post('/api/supabase-sync', async (req, res) => {
   }
 });
 
-
-// Supabase Database Maintenance & Deduplication Endpoint
-app.post("/api/supabase-maintenance", async (req, res) => {
-  try {
-    const scriptPath = path.join(process.cwd(), "cleanup_supabase.cjs");
-    console.log("[Supabase Maintenance API] Running database maintenance and cleanup script...");
-    const { execSync } = await import("child_process");
-    const output = execSync(`node "${scriptPath}"`, {
-      encoding: "utf-8",
-      env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" }
-    });
-    console.log(output);
-
-    if (dbPool) {
-      await restoreFromSupabase().catch(e => console.error("[Restore After Maintenance Error]", e));
-    }
-
-    const currentDb = readDb();
-    res.json({
-      success: true,
-      message: "Mantenimiento y limpieza de la base de datos completados con √©xito.",
-      output,
-      usersCount: currentDb.users?.length || 0,
-      timestamp: new Date().toISOString()
-    });
-  } catch (err: any) {
-    console.error("[Supabase Maintenance API Error]", err);
-    res.status(500).json({
-      success: false,
-      error: err.message || String(err)
-    });
-  }
-});
-
-// Supabase Seed Initial Users Endpoint
-app.post("/api/supabase-seed", async (req, res) => {
-  try {
-    const scriptPath = path.join(process.cwd(), "cleanup_supabase.cjs");
-    console.log("[Supabase Seed API] Seeding initial users...");
-    const { execSync } = await import("child_process");
-    const output = execSync(`node "${scriptPath}"`, {
-      encoding: "utf-8",
-      env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" }
-    });
-    if (dbPool) {
-      await restoreFromSupabase().catch(e => console.error("[Restore After Seed Error]", e));
-    }
-    const currentDb = readDb();
-    res.json({
-      success: true,
-      message: "Usuarios y datos iniciales insertados y verificados correctamente.",
-      users: currentDb.users,
-      timestamp: new Date().toISOString()
-    });
-  } catch (err: any) {
-    console.error("[Supabase Seed API Error]", err);
-    res.status(500).json({
-      success: false,
-      error: err.message || String(err)
-    });
-  }
-});
-
 // Authenticate / Login
 const loginHandler = (req: express.Request, res: express.Response) => {
   const { username, password } = req.body;
@@ -5676,7 +5559,7 @@ app.post('/login', loginHandler);
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).
 // If student, returns limited public info (name, username, accountNumber) for transfer targets.
-app.get(['/api/users', '/users'], (req, res) => {
+app.get('/api/users', (req, res) => {
   const role = req.query.role as string;
   const db = readDb();
 
@@ -5691,102 +5574,37 @@ app.get(['/api/users', '/users'], (req, res) => {
   }
 });
 
-// Get students list with warehouse / logistics information
-app.get(['/api/students-list', '/api/students'], (req, res) => {
-  const db = readDb();
-  const students = (db.users || [])
-    .filter(u => u.role === 'student')
-    .map(student => {
-      const studentNaves = (db.acquisitions || []).filter(a =>
-        String(a.studentId) === String(student.id) &&
-        (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes(a.propertyType || a.type || '') ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('almac√©n') ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-      );
-
-      const warehouses = studentNaves.length > 0
-        ? studentNaves.map(nave => {
-            const nId = String(nave.id || nave.propertyId);
-            const hasForklift = (db.purchasedVehicles || []).some(v =>
-              String(v.studentId) === String(student.id) &&
-              v.vehicleType === 'carretilla_elevadora' &&
-              (
-                String(v.assignedPropertyId) === String(nId) ||
-                (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined || !v.assignedPropertyId))
-              )
-            );
-            return {
-              id: nId,
-              title: nave.propertyTitle || nave.title || 'Nave industrial',
-              type: nave.propertyType || 'nave_industrial',
-              address: nave.location || nave.address || 'Ubicaci√≥n registrada',
-              hasForklift
-            };
-          })
-        : [
-            {
-              id: 'default_nave',
-              title: 'Almac√©n Principal',
-              type: 'almacen',
-              address: 'Sede central de la empresa',
-              hasForklift: (db.purchasedVehicles || []).some(v =>
-                String(v.studentId) === String(student.id) &&
-                v.vehicleType === 'carretilla_elevadora'
-              )
-            }
-          ];
-
-      return {
-        id: student.id,
-        name: student.name,
-        username: student.username,
-        level: student.level || 1,
-        accountNumber: student.accountNumber,
-        warehouses
-      };
-    });
-
-  res.json({ students });
-});
-
 // Create new bank user account (Teacher only)
 const handleCreateUserRoute = (req: express.Request, res: express.Response) => {
-  const { name, username, password, initialBalance, level, companyName, nifCif } = req.body;
+  const { name, username, password, initialBalance, level } = req.body;
 
   if (!name || !username || !password) {
     return res.status(400).json({ error: 'Nombre, usuario y contrase√±a son requeridos' });
   }
 
   const db = readDb();
-  const exists = db.users.some(u => u.username.toLowerCase() === username.toLowerCase().trim());
+  const exists = db.users.some(u => u.username.toLowerCase() === username.toLowerCase());
   
   if (exists) {
     return res.status(400).json({ error: 'El nombre de usuario ya existe' });
   }
 
   const userLevel = (level && [1, 2, 3].includes(Number(level))) ? (Number(level) as 1 | 2 | 3) : 1;
-  const initialBal = Number(initialBalance) || 0;
 
-  const newUser: User = standardizeUserObject({
+  const newUser: User = {
     id: generateId('user'),
     username: username.toLowerCase().trim(),
     password: password.trim(),
     role: 'student',
     name: name.trim(),
     accountNumber: generateIBAN(),
-    balance: initialBal,
-    initialBalance: initialBal,
-    level: userLevel,
-    companyName: companyName ? String(companyName).trim() : name.trim(),
-    nifCif: nifCif ? String(nifCif).trim() : 'B' + Math.floor(10000000 + Math.random() * 90000000),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
+    balance: Number(initialBalance) || 0,
+    level: userLevel
+  };
 
   db.users.push(newUser);
   if (newUser.role === 'student') {
-    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance, newUser.username, newUser.password, newUser.accountNumber, newUser.role, newUser.level, newUser).catch(e => console.error(e));
+    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance, newUser.username, newUser.password, newUser.accountNumber, newUser.role, newUser.level).catch(e => console.error(e));
   }
 
   const newLog: SystemLog = {
@@ -5807,7 +5625,7 @@ app.post('/users', handleCreateUserRoute);
 // Update user details (Teacher only)
 app.put('/api/users/:id', (req, res) => {
   const { id } = req.params;
-  const { name, username, password, level, companyName, nifCif, initialBalance } = req.body;
+  const { name, username, password, level } = req.body;
 
   const db = readDb();
   const userIndex = db.users.findIndex(u => u.id === id);
@@ -5828,33 +5646,24 @@ app.put('/api/users/:id', (req, res) => {
 
   if (name) user.name = name.trim();
   if (password) user.password = password.trim();
-  if (companyName) user.companyName = String(companyName).trim();
-  if (nifCif) user.nifCif = String(nifCif).trim();
-  if (initialBalance !== undefined && initialBalance !== null && !isNaN(Number(initialBalance))) {
-    user.initialBalance = Number(initialBalance);
-  }
   if (level && [1, 2, 3].includes(Number(level))) {
     user.level = Number(level) as 1 | 2 | 3;
   }
-  user.updatedAt = new Date().toISOString();
 
-  // Apply full standardization
-  db.users[userIndex] = standardizeUserObject(user);
-
-  if (db.users[userIndex].role === 'student') {
-    syncAccountToSupabase(db.users[userIndex].id, db.users[userIndex].name, db.users[userIndex].balance, db.users[userIndex].username, db.users[userIndex].password, db.users[userIndex].accountNumber, db.users[userIndex].role, db.users[userIndex].level, db.users[userIndex]).catch(e => console.error(e));
+  if (user.role === 'student') {
+    syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level).catch(e => console.error(e));
   }
 
   const newLog: SystemLog = {
     id: generateId('log'),
     action: 'UPDATE_USER',
-    details: `Detalles de cuenta actualizados: ${db.users[userIndex].name} (${db.users[userIndex].username})`,
+    details: `Detalles de cuenta actualizados: ${user.name} (${user.username})`,
     timestamp: new Date().toISOString()
   };
   db.systemLogs.unshift(newLog);
 
   writeDb(db);
-  res.json({ user: db.users[userIndex] });
+  res.json({ user });
 });
 
 // Adjust balance of a user (Teacher only)
@@ -6066,7 +5875,7 @@ app.post('/api/transfers', (req, res) => {
 });
 
 // Get transfers
-app.get(['/api/transfers', '/transfers'], (req, res) => {
+app.get('/api/transfers', (req, res) => {
   const { userId, role } = req.query;
   const db = readDb();
 
@@ -6082,7 +5891,7 @@ app.get(['/api/transfers', '/transfers'], (req, res) => {
 });
 
 // Get system logs (Teacher only)
-app.get(['/api/logs', '/logs'], (req, res) => {
+app.get('/api/logs', (req, res) => {
   const db = readDb();
   res.json({ logs: db.systemLogs });
 });
@@ -7745,13 +7554,13 @@ function calculateFrenchAmortization(
   startDateISO: string = new Date().toISOString()
 ): { monthlyPayment: number; schedule: AmortizationRow[] } {
   const r = (annualInterestRatePercent / 100) / 12;
-  let regularMonthlyPayment = 0;
+  let monthlyPayment = 0;
   if (r > 0) {
-    regularMonthlyPayment = principal * (r * Math.pow(1 + r, termMonths)) / (Math.pow(1 + r, termMonths) - 1);
+    monthlyPayment = principal * (r * Math.pow(1 + r, termMonths)) / (Math.pow(1 + r, termMonths) - 1);
   } else {
-    regularMonthlyPayment = principal / termMonths;
+    monthlyPayment = principal / termMonths;
   }
-  regularMonthlyPayment = Number(regularMonthlyPayment.toFixed(2));
+  monthlyPayment = Number(monthlyPayment.toFixed(2));
 
   let pendingBalance = principal;
   let totalAmortized = 0;
@@ -7761,12 +7570,11 @@ function calculateFrenchAmortization(
   for (let k = 1; k <= termMonths; k++) {
     const dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0);
     const interest = Number((pendingBalance * r).toFixed(2));
-    let principalPart = Number((regularMonthlyPayment - interest).toFixed(2));
-    let currentPayment = regularMonthlyPayment;
+    let principalPart = Number((monthlyPayment - interest).toFixed(2));
 
     if (k === termMonths) {
       principalPart = Number(pendingBalance.toFixed(2));
-      currentPayment = Number((principalPart + interest).toFixed(2));
+      monthlyPayment = Number((principalPart + interest).toFixed(2));
     }
 
     pendingBalance = Math.max(0, Number((pendingBalance - principalPart).toFixed(2)));
@@ -7775,7 +7583,7 @@ function calculateFrenchAmortization(
     schedule.push({
       period: k,
       dueDate: dueDate.toISOString(),
-      payment: currentPayment,
+      payment: monthlyPayment,
       interest,
       principal: principalPart,
       totalAmortized,
@@ -7784,14 +7592,12 @@ function calculateFrenchAmortization(
     });
   }
 
-  return { monthlyPayment: regularMonthlyPayment, schedule };
+  return { monthlyPayment, schedule };
 }
 
-function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date, now: Date, isOverdue: boolean = false): number {
-  if (dueDate >= now) return 0;
-  if (!isOverdue) return 0;
-  const daysElapsed = Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 3600 * 24));
-  if (daysElapsed <= 0) return 0;
+function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date, now: Date): number {
+  if (dueDate > now) return 0;
+  const daysElapsed = Math.max(0, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 3600 * 24)));
   const monthsElapsed = Math.max(1, Math.ceil(daysElapsed / 30));
   return Number((principal * 0.05 * monthsElapsed).toFixed(2));
 }
@@ -7807,40 +7613,7 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
   for (const msg of db.marketMessages) {
     if (msg.type === 'promissory_note' && msg.promissoryNoteData) {
       const pn = msg.promissoryNoteData;
-      if (pn.status === 'pagado' || pn.maturityProcessed) {
-        continue;
-      }
-      if (pn.status === 'descontado' || pn.status === 'gestion_cobro') {
-        // Strict idempotency: check if note was already collected, settled, or returned
-        const alreadySettledTx = (db.transfers || []).find(t => 
-          t.concept && t.concept.includes(pn.promissoryNoteNumber) &&
-          (t.concept.includes('gestion de cobro') || t.concept.includes('Liquidaci√≥n al vencimiento') || t.concept.includes('Cobro al vencimiento') || t.concept.includes('Cobro autom√°tico'))
-        );
-        if (alreadySettledTx) {
-          pn.status = 'pagado';
-          pn.maturityProcessed = true;
-          pn.paidAt = pn.paidAt || alreadySettledTx.timestamp;
-          pn.paidTransferId = pn.paidTransferId || alreadySettledTx.id;
-          const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
-          if (obl && obl.status !== 'pagado') {
-            obl.status = 'pagado';
-            obl.paidDate = pn.paidAt;
-            syncObligationToSupabase(obl).catch(e => console.error(e));
-          }
-          modified = true;
-          continue;
-        }
-
-        const alreadyReturnedTx = (db.transfers || []).find(t => 
-          t.concept && t.concept.includes(pn.promissoryNoteNumber) && t.concept.includes('devoluci√≥n')
-        );
-        if (alreadyReturnedTx) {
-          pn.status = 'impagado';
-          pn.maturityProcessed = true;
-          modified = true;
-          continue;
-        }
-
+      if ((pn.status === 'descontado' || pn.status === 'gestion_cobro') && !pn.maturityProcessed) {
         const dueStr = (pn.dueDate || '').slice(0, 10);
         const isMaturity = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime();
 
@@ -7856,6 +7629,7 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               u.username === pn.issuerId
             );
           }
+
           let beneficiary = db.users.find(u => u.id === pn.beneficiaryId);
           if (!beneficiary) {
             beneficiary = db.users.find(u =>
@@ -7864,6 +7638,7 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               u.username === pn.beneficiaryId
             );
           }
+
           if (!payer || !beneficiary) continue;
 
           const isDiscountedNote = pn.status === 'descontado';
@@ -7875,7 +7650,10 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
             const txId = generateId('tx');
 
             if (isDiscountedNote) {
-              const transferConcept = 'Liquidaci√≥n al vencimiento de pagar√© descontado ' + pn.promissoryNoteNumber + ' - Librador: ' + payer.name;
+              // Note was previously discounted: seller already received cash in advance.
+              // Debtor pays the bank which financed the advance.
+              const transferConcept = `Liquidaci√≥n al vencimiento de pagar√© descontado ${pn.promissoryNoteNumber} - Librador: ${payer.name}`;
+
               const payTransfer: Transfer = {
                 id: txId,
                 senderId: payer.id,
@@ -7898,31 +7676,27 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.paidTransferId = txId;
               modified = true;
 
-              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
-              if (obl) {
-                obl.status = 'pagado';
-                obl.paidDate = now.toISOString();
-                syncObligationToSupabase(obl).catch(e => console.error(e));
-              }
-
+              // Notification to seller: no further charges
               addNotification(
                 db,
                 beneficiary.id,
                 'Pagar√© descontado atendido al vencimiento',
-                'El deudor ' + payer.name + ' ha liquidado correctamente al vencimiento el pagar√© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' ‚Ç¨ que hab√≠as descontado. Operaci√≥n concluida con √©xito sin costes adicionales.',
+                `El deudor ${payer.name} ha liquidado correctamente al vencimiento el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨ que hab√≠as descontado. Operaci√≥n concluida con √©xito sin costes adicionales.`,
                 'transfer_received',
                 txId
               );
 
+              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Cargo de pagar√© al vencimiento',
-                'El banco ha cargado en tu cuenta ' + formatNumber(amount) + ' ‚Ç¨ correspondiente al vencimiento del pagar√© oficial ' + pn.promissoryNoteNumber + ' emitido a favor de ' + beneficiary.name + '.',
+                `El banco ha cargado en tu cuenta ${formatNumber(amount)} ‚Ç¨ correspondiente al vencimiento del pagar√© oficial ${pn.promissoryNoteNumber} emitido a favor de ${beneficiary.name}.`,
                 'transfer_received',
                 txId
               );
 
+              // Chat message in direct message thread
               const successMaturityMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7930,20 +7704,25 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: payer.name,
                 recipientId: beneficiary.id,
                 recipientName: beneficiary.name,
-                content: 'üè¶ Pagar√© descontado liquidado al vencimiento: El deudor ' + payer.name + ' ha atendido el cargo del pagar√© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' ‚Ç¨. El banco confirma la liquidaci√≥n definitiva. No procede ning√∫n cargo adicional para el vendedor acreedor.',
+                content: `üè¶ Pagar√© descontado liquidado al vencimiento: El deudor ${payer.name} ha atendido el cargo del pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨. El banco confirma la liquidaci√≥n definitiva. No procede ning√∫n cargo adicional para el vendedor acreedor.`,
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(successMaturityMsg);
 
+              // Sync to Supabase
               if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, payTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
               syncMarketMessageToSupabase(successMaturityMsg).catch(e => console.error(e));
             } else if (isCollectionNote) {
+              // Note was placed in collection management (gesti√≥n de cobro):
+              // Seller pays zero at maturity and automatically receives the full nominal amount.
               beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
-              const transferConcept = 'Cobro autom√°tico al vencimiento por gesti√≥n de cobro de pagar√© ' + pn.promissoryNoteNumber + ' - Librador: ' + payer.name + ' -> Beneficiario: ' + beneficiary.name;
+
+              const transferConcept = `Cobro autom√°tico al vencimiento por gesti√≥n de cobro de pagar√© ${pn.promissoryNoteNumber} - Librador: ${payer.name} -> Beneficiario: ${beneficiary.name}`;
+
               const collectionPayTransfer: Transfer = {
                 id: txId,
                 senderId: payer.id,
@@ -7967,31 +7746,27 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.collectionAutoCollectedAt = now.toISOString();
               modified = true;
 
-              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
-              if (obl) {
-                obl.status = 'pagado';
-                obl.paidDate = now.toISOString();
-                syncObligationToSupabase(obl).catch(e => console.error(e));
-              }
-
+              // Notification to seller
               addNotification(
                 db,
                 beneficiary.id,
                 'Pagar√© en gesti√≥n de cobro cobrado con √©xito',
-                'El pagar√© oficial ' + pn.promissoryNoteNumber + ' emitido por ' + payer.name + ' ha vencido hoy y el banco ha tramitado el cobro autom√°tico. Se han ingresado +' + formatNumber(amount) + ' ‚Ç¨ en tu cuenta corriente sin necesidad de ninguna acci√≥n adicional.',
+                `El pagar√© oficial ${pn.promissoryNoteNumber} emitido por ${payer.name} ha vencido hoy y el banco ha tramitado el cobro autom√°tico. Se han ingresado +${formatNumber(amount)} ‚Ç¨ en tu cuenta corriente sin necesidad de ninguna acci√≥n adicional.`,
                 'transfer_received',
                 txId
               );
 
+              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Cargo de pagar√© al vencimiento (gesti√≥n de cobro)',
-                'El banco ha cargado en tu cuenta ' + formatNumber(amount) + ' ‚Ç¨ correspondiente al vencimiento del pagar√© oficial ' + pn.promissoryNoteNumber + ' presentado en gesti√≥n de cobro por ' + beneficiary.name + '.',
+                `El banco ha cargado en tu cuenta ${formatNumber(amount)} ‚Ç¨ correspondiente al vencimiento del pagar√© oficial ${pn.promissoryNoteNumber} presentado en gesti√≥n de cobro por ${beneficiary.name}.`,
                 'transfer_received',
                 txId
               );
 
+              // Chat message in direct message thread
               const successCollectionMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -7999,13 +7774,14 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: payer.name,
                 recipientId: beneficiary.id,
                 recipientName: beneficiary.name,
-                content: 'üèõÔ∏è PAGAR√â EN GESTI√ìN DE COBRO LIQUIDADO AUTOM√ÅTICAMENTE: El banco ha tramitado con √©xito el cobro autom√°tico al vencimiento del pagar√© ' + pn.promissoryNoteNumber + '. Se han cargado ' + formatNumber(amount) + ' ‚Ç¨ en la cuenta del comprador deudor (' + payer.name + ') y se han abonado √≠ntegramente +' + formatNumber(amount) + ' ‚Ç¨ en la cuenta del vendedor acreedor (' + beneficiary.name + ').',
+                content: `üèõÔ∏è PAGAR√â EN GESTI√ìN DE COBRO LIQUIDADO AUTOM√ÅTICAMENTE: El banco ha tramitado con √©xito el cobro autom√°tico al vencimiento del pagar√© ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} ‚Ç¨ en la cuenta del comprador deudor (${payer.name}) y se han abonado √≠ntegramente +${formatNumber(amount)} ‚Ç¨ en la cuenta del vendedor acreedor (${beneficiary.name}).`,
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(successCollectionMsg);
 
+              // Sync to Supabase
               if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, collectionPayTransfer).catch(e => console.error(e));
@@ -8018,14 +7794,17 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
             const txId = generateId('tx');
 
             if (isDiscountedNote) {
+              // Discounted note returned: seller repays nominal (advanced earlier by bank) + 1% return commission
               const unpaidCommission = Number((amount * 0.01).toFixed(2));
               const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
+
               beneficiary.balance = Number((beneficiary.balance - totalDebitVendor).toFixed(2));
 
               const txNominalId = generateId('tx');
               const txFeeId = generateId('tx');
-              const nominalReturnConcept = 'Reintegro del nominal de pagar√© descontado devuelto por impago ' + pn.promissoryNoteNumber + ' (librador: ' + payer.name + ') - Devoluci√≥n de anticipo bancario: -' + formatNumber(amount) + ' ‚Ç¨';
-              const feeReturnConcept = 'Comisi√≥n bancaria por devoluci√≥n de pagar√© descontado impagado ' + pn.promissoryNoteNumber + ' (1% sobre ' + formatNumber(amount) + ' ‚Ç¨) - Falta de fondos del librador: -' + formatNumber(unpaidCommission) + ' ‚Ç¨';
+
+              const nominalReturnConcept = `Reintegro del nominal de pagar√© descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${payer.name}) - Devoluci√≥n de anticipo bancario: -${formatNumber(amount)} ‚Ç¨`;
+              const feeReturnConcept = `Comisi√≥n bancaria por devoluci√≥n de pagar√© descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} ‚Ç¨) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} ‚Ç¨`;
 
               const nominalReturnTransfer: Transfer = {
                 id: txNominalId,
@@ -8068,30 +7847,27 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.unpaidFeeTransferId = txFeeId;
               modified = true;
 
-              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
-              if (obl) {
-                obl.status = 'vencido';
-                syncObligationToSupabase(obl).catch(e => console.error(e));
-              }
-
+              // Notification to seller
               addNotification(
                 db,
                 beneficiary.id,
                 'Pagar√© descontado devuelto por impago (cargo de nominal + comisi√≥n)',
-                'El deudor ' + payer.name + ' no dispon√≠a de saldo para atender el pagar√© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' ‚Ç¨). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -' + formatNumber(amount) + ' ‚Ç¨; 2) Comisi√≥n de devoluci√≥n (1%): -' + formatNumber(unpaidCommission) + ' ‚Ç¨. Total cargado: -' + formatNumber(totalDebitVendor) + ' ‚Ç¨. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).',
+                `El deudor ${payer.name} no dispon√≠a de saldo para atender el pagar√© ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} ‚Ç¨; 2) Comisi√≥n de devoluci√≥n (1%): -${formatNumber(unpaidCommission)} ‚Ç¨. Total cargado: -${formatNumber(totalDebitVendor)} ‚Ç¨. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`,
                 'transfer_received',
                 txNominalId
               );
 
+              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Pagar√© devuelto impagado al tenedor',
-                'No dispon√≠as de saldo suficiente para atender el vencimiento del pagar√© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' ‚Ç¨). El banco ha devuelto el efecto como impagado a ' + beneficiary.name + ', quien podr√° iniciar acciones ejecutivas judiciales.',
+                `No dispon√≠as de saldo suficiente para atender el vencimiento del pagar√© ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podr√° iniciar acciones ejecutivas judiciales.`,
                 'transfer_received',
                 txNominalId
               );
 
+              // Chat message in direct message thread
               const protestMaturityMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -8099,23 +7875,26 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: beneficiary.name,
                 recipientId: payer.id,
                 recipientName: payer.name,
-                content: '‚ùå Pagar√© descontado devuelto por impago: El librador ' + payer.name + ' no dispon√≠a de fondos suficientes para atender el pagar√© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' ‚Ç¨ a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (' + beneficiary.name + '):\n‚Ä¢ Reintegro del nominal anticipado: -' + formatNumber(amount) + ' ‚Ç¨\n‚Ä¢ Comisi√≥n bancaria por devoluci√≥n (1%): -' + formatNumber(unpaidCommission) + ' ‚Ç¨\n‚Ä¢ Total adeudado: -' + formatNumber(totalDebitVendor) + ' ‚Ç¨\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.',
+                content: `‚ùå Pagar√© descontado devuelto por impago: El librador ${payer.name} no dispon√≠a de fondos suficientes para atender el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨ a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${beneficiary.name}):\n‚Ä¢ Reintegro del nominal anticipado: -${formatNumber(amount)} ‚Ç¨\n‚Ä¢ Comisi√≥n bancaria por devoluci√≥n (1%): -${formatNumber(unpaidCommission)} ‚Ç¨\n‚Ä¢ Total adeudado: -${formatNumber(totalDebitVendor)} ‚Ç¨\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(protestMaturityMsg);
 
+              // Sync to Supabase
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txNominalId + '-out', beneficiary.id, 'TRANSFER_OUT', amount, now.toISOString(), nominalReturnConcept, nominalReturnTransfer).catch(e => console.error(e));
               syncMovimientoToSupabase(txFeeId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, new Date(now.getTime() + 1000).toISOString(), feeReturnConcept, feeReturnTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
               syncMarketMessageToSupabase(protestMaturityMsg).catch(e => console.error(e));
             } else if (isCollectionNote) {
+              // Collection management note returned: seller charged 40 ‚Ç¨ fixed unpaid return commission
               const unpaidCommission = 40.00;
-              beneficiary.balance = Number((beneficiary.balance - unpaidCommission).toFixed(2));
 
-              const returnConcept = 'Comisi√≥n por devoluci√≥n de pagar√© impagado en gesti√≥n de cobro ' + pn.promissoryNoteNumber + ' por falta de fondos del librador (' + payer.name + ') - Tarifa bancaria fija: -40,00 ‚Ç¨';
+              beneficiary.balance = Number((beneficiary.balance - unpaidCommission).toFixed(2));
+              const returnConcept = `Comisi√≥n por devoluci√≥n de pagar√© impagado en gesti√≥n de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${payer.name}) - Tarifa bancaria fija: -40,00 ‚Ç¨`;
+
               const returnTransfer: Transfer = {
                 id: txId,
                 senderId: beneficiary.id,
@@ -8139,30 +7918,27 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
               pn.unpaidReturnTransferId = txId;
               modified = true;
 
-              const obl = (db.paymentObligations || []).find(o => o.propertyTitle?.includes(pn.promissoryNoteNumber) || o.acquisitionId === pn.promissoryNoteNumber);
-              if (obl) {
-                obl.status = 'vencido';
-                syncObligationToSupabase(obl).catch(e => console.error(e));
-              }
-
+              // Notification to seller
               addNotification(
                 db,
                 beneficiary.id,
                 'Pagar√© en gesti√≥n de cobro devuelto por impago',
-                'El librador ' + payer.name + ' no dispon√≠a de saldo para atender el pagar√© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' ‚Ç¨). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 ‚Ç¨ por comisi√≥n de devoluci√≥n. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).',
+                `El librador ${payer.name} no dispon√≠a de saldo para atender el pagar√© ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 ‚Ç¨ por comisi√≥n de devoluci√≥n. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`,
                 'transfer_received',
                 txId
               );
 
+              // Notification to buyer
               addNotification(
                 db,
                 payer.id,
                 'Pagar√© Devuelto Impagado al Tenedor',
-                'No dispon√≠as de saldo suficiente para atender el vencimiento del pagar√© ' + pn.promissoryNoteNumber + ' (' + formatNumber(amount) + ' ‚Ç¨). El banco ha devuelto el efecto como impagado a ' + beneficiary.name + ', quien podr√° iniciar acciones ejecutivas en los Tribunales.',
+                `No dispon√≠as de saldo suficiente para atender el vencimiento del pagar√© ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podr√° iniciar acciones ejecutivas en los Tribunales.`,
                 'transfer_received',
                 txId
               );
 
+              // Chat message in direct message thread
               const protestCollectionMsg: MarketMessage = {
                 id: generateId('msg'),
                 chatId: msg.chatId,
@@ -8170,13 +7946,14 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
                 senderName: beneficiary.name,
                 recipientId: payer.id,
                 recipientName: payer.name,
-                content: '‚ùå PAGAR√â EN GESTI√ìN DE COBRO DEVUELTO POR IMPAGO: El deudor ' + payer.name + ' no dispon√≠a de saldo suficiente para atender el vencimiento del pagar√© ' + pn.promissoryNoteNumber + ' por ' + formatNumber(amount) + ' ‚Ç¨. El banco ha devuelto el pagar√© al vendedor acreedor (' + beneficiary.name + ') como IMPAGADO con un cargo de 40,00 ‚Ç¨ en concepto de comisi√≥n por efecto devuelto. El pagar√© conserva plena fuerza ejecutiva cambiaria para su reclamaci√≥n judicial.',
+                content: `‚ùå PAGAR√â EN GESTI√ìN DE COBRO DEVUELTO POR IMPAGO: El deudor ${payer.name} no dispon√≠a de saldo suficiente para atender el vencimiento del pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨. El banco ha devuelto el pagar√© al vendedor acreedor (${beneficiary.name}) como IMPAGADO con un cargo de 40,00 ‚Ç¨ en concepto de comisi√≥n por efecto devuelto. El pagar√© conserva plena fuerza ejecutiva cambiaria para su reclamaci√≥n judicial.`,
                 timestamp: now.toISOString(),
                 read: false,
                 type: 'text'
               };
               db.marketMessages.push(protestCollectionMsg);
 
+              // Sync to Supabase
               if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
               syncMovimientoToSupabase(txId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, now.toISOString(), returnConcept, returnTransfer).catch(e => console.error(e));
               syncMarketMessageToSupabase(msg).catch(e => console.error(e));
@@ -8188,13 +7965,6 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
     }
   }
 
-  if (modified) {
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('Error writing db in maturity:', e);
-    }
-  }
   return modified;
 }
 
@@ -8213,7 +7983,7 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
   for (const student of students) {
     interface PendingItem {
       id: string;
-      sourceType: "obligation" | "loan" | "tax" | "electricity";
+      sourceType: 'obligation' | 'loan';
       dueDate: Date;
       principal: number;
       penaltyInterest: number;
@@ -8222,39 +7992,35 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
       obligationRef?: PaymentObligation;
       loanRef?: BankLoan;
       loanRowIndex?: number;
-      taxRef?: any;
-      electricityRef?: any;
     }
 
     const pendingItems: PendingItem[] = [];
 
-    // 1. Obligations (Exclude promissory notes/pagares which must be settled manually by student transfer)
+    // 1. Obligations (Exclude promissory notes/pagar√©s which must be settled manually by student transfer)
     if (db.paymentObligations) {
       for (const ob of db.paymentObligations) {
-        if (ob.type === "pagare" || (ob.acquisitionId && ob.acquisitionId.startsWith("promissory_"))) {
-          continue; // Pagares are manual student-initiated transfers, not automated direct debits
+        if (ob.type === 'pagare' || (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_'))) {
+          continue; // Pagar√©s are manual student-initiated transfers, not automated direct debits
         }
-        if (ob.studentId === student.id && (ob.status === "pendiente" || ob.status === "vencido")) {
+        if (ob.studentId === student.id && (ob.status === 'pendiente' || ob.status === 'vencido')) {
           const dDate = new Date(ob.dueDate);
           if (dDate <= now) {
             const principal = ob.amount;
-            const isOverdue = ob.status === "vencido";
-            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
             const totalRequired = Number((principal + penalty).toFixed(2));
-
-            const instrumentName = ob.type === "pagare" ? "Pagar√©" : ob.type === "letra_cambio" ? "Letra de cambio" : "Cuota / Alquiler";
+            const instrumentName = ob.type === 'pagare' ? 'Pagar√©' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
             let concept = `Atenci√≥n a vencimiento de ${instrumentName}: ${ob.propertyTitle}`;
-            if (ob.type === "alquiler" || ob.type === "cuota_alquiler") {
+            if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
               concept = `Cuota de alquiler n.¬∫ ${ob.installmentNumber || 1} de ${ob.propertyTitle}`;
-            } else if (ob.type === "compra" || ob.type === "compra_inmueble") {
+            } else if (ob.type === 'compra' || ob.type === 'compra_inmueble') {
               concept = `Pago aplazado de compra de ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 12})`;
-            } else if (ob.type === "maquinaria" || (ob.propertyTitle && (ob.propertyTitle.toLowerCase().includes("l√≠nea") || ob.propertyTitle.toLowerCase().includes("maquina") || ob.propertyTitle.toLowerCase().includes("m√°quina")))) {
+            } else if (ob.type === 'maquinaria' || (ob.propertyTitle && (ob.propertyTitle.toLowerCase().includes('l√≠nea') || ob.propertyTitle.toLowerCase().includes('maquina') || ob.propertyTitle.toLowerCase().includes('m√°quina')))) {
               concept = `Pago aplazado de la m√°quina ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`;
             }
 
             pendingItems.push({
               id: ob.id,
-              sourceType: "obligation",
+              sourceType: 'obligation',
               dueDate: dDate,
               principal,
               penaltyInterest: penalty,
@@ -8267,84 +8033,33 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
       }
     }
 
-    // 2. Loans (Prevalece siempre la informacion de la tabla de amortizacion del prestamo)
+    // 2. Loans
     if (db.loans) {
       for (const loan of db.loans) {
-        if (loan.studentId === student.id && loan.status === "active") {
+        if (loan.studentId === student.id && loan.status === 'active') {
           loan.schedule.forEach((row, idx) => {
             if (!row.paid) {
               const dDate = new Date(row.dueDate);
               if (dDate <= now) {
-                const principal = row.payment; // Cuota exacta estipulada en la tabla de amortizacion
-                const isOverdue = Boolean(row.isOverdue);
-                const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+                const principal = row.payment;
+                const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
                 const totalRequired = Number((principal + penalty).toFixed(2));
                 const periodNum = row.period || (row as any).installmentNumber || 1;
 
                 pendingItems.push({
                   id: `${loan.id}-row-${periodNum}`,
-                  sourceType: "loan",
+                  sourceType: 'loan',
                   dueDate: dDate,
                   principal,
                   penaltyInterest: penalty,
                   totalRequired,
-                  concept: `Cuota ${periodNum}/${loan.termMonths} de pr√©stamo hipotecario (${loan.collateral?.propertyTitle || "Garant√≠a inmobiliaria"})`,
+                  concept: `Cuota ${periodNum}/${loan.termMonths} de pr√©stamo hipotecario (${loan.collateral?.propertyTitle || 'Garant√≠a inmobiliaria'})`,
                   loanRef: loan,
                   loanRowIndex: idx
                 });
               }
             }
           });
-        }
-      }
-    }
-
-    // 3. Tax Obligations (IRPF / Seguridad Social)
-    if (db.taxObligations) {
-      for (const tax of db.taxObligations) {
-        if (tax.studentId === student.id && (tax.status === "pendiente" || (tax.status as string) === "vencido")) {
-          const dDate = new Date(tax.dueDate);
-          if (dDate <= now) {
-            const principal = tax.amount;
-            const isOverdue = (tax.status as string) === "vencido";
-            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
-            const totalRequired = Number((principal + penalty).toFixed(2));
-            pendingItems.push({
-              id: tax.id,
-              sourceType: "tax",
-              dueDate: dDate,
-              principal,
-              penaltyInterest: penalty,
-              totalRequired,
-              concept: `Pago de ${tax.concept}`,
-              taxRef: tax
-            });
-          }
-        }
-      }
-    }
-
-    // 4. Electricity Bills (IberLuz)
-    if (db.electricityBills) {
-      for (const bill of db.electricityBills) {
-        if (bill.studentId === student.id && (bill.status === "pendiente" || (bill.status as string) === "vencido")) {
-          const dDate = new Date(bill.dueDate);
-          if (dDate <= now) {
-            const principal = bill.totalAmount;
-            const isOverdue = (bill.status as string) === "vencido";
-            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
-            const totalRequired = Number((principal + penalty).toFixed(2));
-            pendingItems.push({
-              id: bill.id,
-              sourceType: "electricity",
-              dueDate: dDate,
-              principal,
-              penaltyInterest: penalty,
-              totalRequired,
-              concept: `Factura IberLuz N¬∫ ${bill.billNumber}`,
-              electricityRef: bill
-            });
-          }
         }
       }
     }
@@ -8357,9 +8072,9 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
         student.balance = Number((student.balance - item.totalRequired).toFixed(2));
         modified = true;
 
-        if (item.sourceType === "obligation" && item.obligationRef) {
+        if (item.sourceType === 'obligation' && item.obligationRef) {
           const ob = item.obligationRef;
-          ob.status = "pagado";
+          ob.status = 'pagado';
           ob.paidDate = new Date().toISOString();
           ob.penaltyInterest = 0;
           ob.totalOverdueAmount = 0;
@@ -8369,47 +8084,32 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
             syncAcquisitionToSupabase(acq).catch(e => console.error(e));
           }
+
           const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
           if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
             machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
             syncMachineryToSupabase(machAcq).catch(e => console.error(e));
           }
 
-          // 1. Movimiento principal del cargo/obligacion
-          const principalTransfer: Transfer = {
-            id: generateId("tx"),
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
             senderId: student.id,
             senderName: student.name,
             senderAccount: student.accountNumber,
-            receiverId: "corp-tenedor-efectos",
-            receiverName: "Tenedor de Efectos Comerciales S.A.",
-            receiverAccount: "ES210001000299887755",
-            amount: item.principal,
-            concept: item.concept,
+            receiverId: 'corp-tenedor-efectos',
+            receiverName: 'Tenedor de Efectos Comerciales S.A.',
+            receiverAccount: 'ES210001000299887755',
+            amount: item.totalRequired,
+            concept: item.penaltyInterest > 0
+              ? `${item.concept} (inc. 5% inter√©s demora: +${item.penaltyInterest} ‚Ç¨)`
+              : item.concept,
             timestamp: new Date().toISOString()
           };
-          db.transfers.unshift(principalTransfer);
-          syncObligationToSupabase(ob).catch(e => console.error(e));
-          syncMovimientoToSupabase(principalTransfer.id + "-out", student.id, "TRANSFER_OUT", item.principal, principalTransfer.timestamp, principalTransfer.concept, principalTransfer).catch(e => console.error(e));
+          db.transfers.unshift(newTransfer);
 
-          // 2. Movimiento independiente para intereses de demora por mora (si procede)
-          if (item.penaltyInterest > 0) {
-            const penaltyTransfer: Transfer = {
-              id: generateId("tx"),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: "corp-tenedor-efectos",
-              receiverName: "Tenedor de Efectos Comerciales S.A.",
-              receiverAccount: "ES210001000299887755",
-              amount: item.penaltyInterest,
-              concept: "Intereses de demora por mora en el pago de: " + item.concept,
-              timestamp: new Date(Date.now() + 100).toISOString()
-            };
-            db.transfers.unshift(penaltyTransfer);
-            syncMovimientoToSupabase(penaltyTransfer.id + "-out", student.id, "TRANSFER_OUT", item.penaltyInterest, penaltyTransfer.timestamp, penaltyTransfer.concept, penaltyTransfer).catch(e => console.error(e));
-          }
-        } else if (item.sourceType === "loan" && item.loanRef && item.loanRowIndex !== undefined) {
+          syncObligationToSupabase(ob).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
           const loan = item.loanRef;
           const row = loan.schedule[item.loanRowIndex];
           row.paid = true;
@@ -8417,141 +8117,41 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
           row.isOverdue = false;
           row.penaltyInterest = 0;
 
-          // 1. Movimiento principal de amortizacion: Prevalece estrictamente la cuota mensual especificada en la tabla de amortizacion
-          const principalTransfer: Transfer = {
-            id: generateId("tx"),
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
             senderId: student.id,
             senderName: student.name,
             senderAccount: student.accountNumber,
-            receiverId: "corp-banco-central",
-            receiverName: "Banco Central Hipotecario S.A.",
-            receiverAccount: "ES210001000299887700",
-            amount: item.principal,
-            concept: item.concept,
+            receiverId: 'corp-banco-central',
+            receiverName: 'Banco Central Hipotecario S.A.',
+            receiverAccount: 'ES210001000299887700',
+            amount: item.totalRequired,
+            concept: item.penaltyInterest > 0
+              ? `${item.concept} (inc. 5% inter√©s demora: +${item.penaltyInterest} ‚Ç¨)`
+              : item.concept,
             timestamp: new Date().toISOString()
           };
-          db.transfers.unshift(principalTransfer);
-
-          // 2. Movimiento independiente para intereses de demora por mora (si procede)
-          if (item.penaltyInterest > 0) {
-            const penaltyTransfer: Transfer = {
-              id: generateId("tx"),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: "corp-banco-central",
-              receiverName: "Banco Central Hipotecario S.A.",
-              receiverAccount: "ES210001000299887700",
-              amount: item.penaltyInterest,
-              concept: "Intereses de demora por mora en: " + item.concept,
-              timestamp: new Date(Date.now() + 100).toISOString()
-            };
-            db.transfers.unshift(penaltyTransfer);
-            syncMovimientoToSupabase(penaltyTransfer.id + "-out", student.id, "TRANSFER_OUT", item.penaltyInterest, penaltyTransfer.timestamp, penaltyTransfer.concept, penaltyTransfer).catch(e => console.error(e));
-          }
+          db.transfers.unshift(newTransfer);
 
           if (loan.schedule.every(r => r.paid)) {
-            loan.status = "paid_off";
+            loan.status = 'paid_off';
           }
+
           syncLoanToSupabase(loan).catch(e => console.error(e));
-          syncMovimientoToSupabase(principalTransfer.id + "-out", student.id, "TRANSFER_OUT", item.principal, principalTransfer.timestamp, principalTransfer.concept, principalTransfer).catch(e => console.error(e));
-        } else if (item.sourceType === "tax" && item.taxRef) {
-          const tax = item.taxRef;
-          tax.status = "pagado";
-          tax.paidDate = new Date().toISOString();
-          tax.penaltyInterest = 0;
-
-          const receiverName = tax.type === "irpf" ? "Agencia Tributaria - Hacienda P√∫blica" : "Tesorer√≠a General de la Seguridad Social";
-          const principalTransfer: Transfer = {
-            id: generateId("tx"),
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: tax.type === "irpf" ? "hacienda" : "seguridad-social",
-            receiverName: receiverName,
-            receiverAccount: "ES000000000000000000",
-            amount: item.principal,
-            concept: item.concept,
-            timestamp: new Date().toISOString()
-          };
-          db.transfers.unshift(principalTransfer);
-          syncTaxObligationToSupabase(tax).catch(e => console.error(e));
-          syncMovimientoToSupabase(principalTransfer.id + "-out", student.id, "TRANSFER_OUT", item.principal, principalTransfer.timestamp, principalTransfer.concept, principalTransfer).catch(e => console.error(e));
-
-          if (item.penaltyInterest > 0) {
-            const penaltyTransfer: Transfer = {
-              id: generateId("tx"),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: tax.type === "irpf" ? "hacienda" : "seguridad-social",
-              receiverName: receiverName,
-              receiverAccount: "ES000000000000000000",
-              amount: item.penaltyInterest,
-              concept: "Intereses de demora por mora en: " + item.concept,
-              timestamp: new Date(Date.now() + 100).toISOString()
-            };
-            db.transfers.unshift(penaltyTransfer);
-            syncMovimientoToSupabase(penaltyTransfer.id + "-out", student.id, "TRANSFER_OUT", item.penaltyInterest, penaltyTransfer.timestamp, penaltyTransfer.concept, penaltyTransfer).catch(e => console.error(e));
-          }
-        } else if (item.sourceType === "electricity" && item.electricityRef) {
-          const bill = item.electricityRef;
-          bill.status = "pagada";
-          bill.paidDate = new Date().toISOString();
-          bill.penaltyInterest = 0;
-
-          const principalTransfer: Transfer = {
-            id: generateId("tx"),
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: "corp-iberluz",
-            receiverName: "IberLuz Energ√≠a S.A.",
-            receiverAccount: "ES990001000299887711",
-            amount: item.principal,
-            concept: item.concept,
-            timestamp: new Date().toISOString()
-          };
-          db.transfers.unshift(principalTransfer);
-          // electricity bill updated in local db
-          syncMovimientoToSupabase(principalTransfer.id + "-out", student.id, "TRANSFER_OUT", item.principal, principalTransfer.timestamp, principalTransfer.concept, principalTransfer).catch(e => console.error(e));
-
-          if (item.penaltyInterest > 0) {
-            const penaltyTransfer: Transfer = {
-              id: generateId("tx"),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: "corp-iberluz",
-              receiverName: "IberLuz Energ√≠a S.A.",
-              receiverAccount: "ES990001000299887711",
-              amount: item.penaltyInterest,
-              concept: "Intereses de demora por mora en: " + item.concept,
-              timestamp: new Date(Date.now() + 100).toISOString()
-            };
-            db.transfers.unshift(penaltyTransfer);
-            syncMovimientoToSupabase(penaltyTransfer.id + "-out", student.id, "TRANSFER_OUT", item.penaltyInterest, penaltyTransfer.timestamp, penaltyTransfer.concept, penaltyTransfer).catch(e => console.error(e));
-          }
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
         }
 
-        } else {
+        syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
+      } else {
         // Insufficient balance -> mark overdue with 5% default interest
-        if (item.sourceType === "obligation" && item.obligationRef) {
-          item.obligationRef.status = "vencido";
+        if (item.sourceType === 'obligation' && item.obligationRef) {
+          item.obligationRef.status = 'vencido';
           item.obligationRef.penaltyInterest = item.penaltyInterest;
           item.obligationRef.totalOverdueAmount = item.totalRequired;
           modified = true;
-        } else if (item.sourceType === "loan" && item.loanRef && item.loanRowIndex !== undefined) {
+        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
           item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
           item.loanRef.schedule[item.loanRowIndex].penaltyInterest = item.penaltyInterest;
-          modified = true;
-        } else if (item.sourceType === "tax" && item.taxRef) {
-          item.taxRef.status = "vencido";
-          item.taxRef.penaltyInterest = item.penaltyInterest;
-          modified = true;
-        } else if (item.sourceType === "electricity" && item.electricityRef) {
-          item.electricityRef.status = "vencido";
-          item.electricityRef.penaltyInterest = item.penaltyInterest;
           modified = true;
         }
         break;
@@ -8587,8 +8187,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         const dDate = new Date(ob.dueDate);
         const instrumentName = ob.type === 'pagare' ? 'Pagar√©' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
         const principal = ob.amount;
-        const isOverdue = ob.status === 'vencido';
-        const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+        const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
         const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
         const item: UpcomingPaymentItem = {
@@ -8623,8 +8222,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           if (!row.paid) {
             const dDate = new Date(row.dueDate);
             const principal = row.payment;
-            const isOverdue = Boolean(row.isOverdue);
-            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
             const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
             const item: UpcomingPaymentItem = {
@@ -8660,8 +8258,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
       if (tax.studentId === studentId && tax.status !== 'pagado') {
         const dDate = new Date(tax.dueDate);
         const principal = tax.amount;
-        const isOverdue = (tax.status as string) === 'vencido';
-        const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+        const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
         const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
         const isIRPF = tax.type === 'irpf';
@@ -8909,7 +8506,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         );
 
         if (!hasInvoice) {
-          const dueDate = new Date(targetYear, targetMonth, 1, 0, 0, 0); // 1st of month following targetMonth
+          const dueDate = new Date(targetYear, targetMonth, 1, 9, 0, 0); // 1st of month following targetMonth
           if (dueDate >= now && dueDate <= thirtyFiveDaysLater) {
             const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
             let baseAmount = contract.monthlyPrice;
@@ -8956,8 +8553,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     for (const bill of studentBills) {
       const dDate = new Date(bill.dueDate);
       const principal = bill.totalAmount;
-      const isOverdue = (bill.status as string) === 'vencido';
-      const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now, isOverdue);
+      const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
       const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
       const item: UpcomingPaymentItem = {
@@ -12022,45 +11618,3921 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
 
     if (transportExpense > 0) {
       seller.balance = Math.round((seller.balance - transportExpense) * 100) / 100;
-      syncAccountToSupabase(seller.id, seller.name, seller.balance, seller.username, seller.password, seller.accountNumber, seller.role).catch(e => console.error(e));xúÏ=€R$«ïÔ|E °UwkËFóµ{å	å‘°·¿»Î H∫(MuU´™ö<Êecˇ`?`COéX?Ì˚æÃüÏÏ'Ï9yœ¨¨Íjck‰∞DWﬁNû<˜Ã<π¥D¯?„,-JRæ9ŒiZL≥º$Î‰ä•,ß%E›N˘¶”{Ê÷≈öó,◊-Ü‰X~Ç∂oe]B‚hh˜ª¨
-ñF,Aq¡íÑÂÉ8Ú˜ËÑÈ‚~¯6«„lññ∫ø˜fì „/!ùù£ﬂ˝nuuu˛ˇªﬂ˛ˆüˇ˛ª⁄1›‰lÃ‚åÔhqúœ∆Ø»güô/€9V"§sÙrw¥7::>‹?:€9:ﬁ‹ÌÔùÌ˛0Çø:dH:/ˆøÖÚ—÷ÊŸŒøÔéˆ„Ÿ3õ7‚lßqQÊYA"Fæ•Eñƒ)%∑d+õ\Ãä2æH9l¯õ∞l„òb’Ÿ’ªøA˘+Î`Ÿy3ÕYQàFU‡4V+ÿ[[{˙‘j@'¢^©˙ÜéYZXÀ¥2fSª ñ¯b™îÒÑ%ùLá$eØ…6P\∑7(≥——˛Qô«ÈU∑'Îﬁ)
-å.ä¸ä¡,-Æ„À≤[!H ÿ*≈b¡(Ω…‚1€œÅÇÜ‰êæﬁÖ1Ûò&¸KÖzœÛIñGgº˘Ÿßo-bæ;∑≤úE,-ÎËYî6Ù≈ÏñÂ/ÿKtÖ!ØŸtèEøπä ÷X…q¸ÓøS§øÇÂ7Ò8ŒHüöà±`l˜}iV¿ Ò÷…./a@öÿ4ö¶@§c6ëãsŒ◊±ß7˝⁄µúHz8æù∂ù∏?%Ml¨Ë7.÷ƒ?ÕhZ∆ÂÌ–^˙YódÒ’u˘˝’êdH´U—bß¨§ISÖZ∞ÉË»ˇ‘xŒlÒ:ª‡mJØØâPÕÌ.ä.RX>Üu†WP{µZ¨F≥ä‚¥òAóc˝9◊¥©≤!π§â-v‚™˙Ç?√0›–≤MùCX≥!yj≠ÉµlÖ¨.ŸeÂuƒ÷πA5e˘Ko‚¨„-”Ê\˘ô2ñäıÊ±	v3äê9‘¢{üπ"‹éAº÷ZÖu :âÖLI#j≥TIÀÙ’π§„Ÿp«Bv
-‹Ù|sÎ∏ˇtıÈ◊¿M FØóIñÂ]‘‰	·_ ˙(õt{‰sÇ §gsZŒ~öÅÙg—fY/˛-fûNÛÏ¶mmâÜ∂’Â‘⁄÷.Ÿêtbt≈˝dÕ„Iõ‰j·πUÇB©• 0•πØ"¯ Ø¶k›ùö	- „Yûæ,jM…î]eeLÀ8KøbœÚ[o’P«€∂.4ËÙl†Ë∏˘”πjºYÎ∂≤⁄ú)çˇ0(Ô9ûûdû™Æ%±)íËéó@jÕÙ3G—4Ëì&πæêdo-€Å43‘-ÁœÖú%PãÄúXÓ‹¢|c	Àø‚K“˝Ï·‹≥bã	}„ˆ‰‘2£+\s⁄∑ñµX‹¶cﬂp>ŒéfSä´S”x0¶Â¯∫À»˙∏Iû%l¿Ú‘Î…ûÔñˇK dO≥◊ ±!∞g∫ƒòÀPÅˇ∞ÃeS-.Ê˝IÁ:∆q;À§3a%“ &äíxÃ?≤iˆ&Óú‚túÄ›^tÖZµu‚À2Æê=≠üÉm7∆È.>dÏ◊ÎŸìz±”RóXX_'k@u œBïe∞MoëTOd$BWŒ≈5:∞œÆkLí?ê/—MsOXzU^CÕ5Äx
-¨ÒIàZ¬ p`Ë «ÇEÇ '
-≤‚òFFˇ#YdØ]ÅÉıêdè=È«96QS€;=®—mª¯≤—˜¨æ6¬Ã´2±Ñ&^±Ú‰)<qWËsÚÙK¯◊◊´Í_hWı|»a§70¯öç_m¶—M∆≥∆8»≥h∆p7∫X÷¯ó˛*ü˙~Œ⁄Ò/ˆ›Çñµö\ÀíI—Èù◊ë\∆O5˙˙ªGÍJ¥x´´0òŒäÎÆ†ãΩo4˛åHÏ~eYÿ:Z÷Ÿ Äﬁ˛(óqug8ø4·Ã)jı68
-tá€qb‡;B≤øâ¡leÎ”íGÈWä*√òÏF°Ü‹AWØä⁄=$+¡6!+9¨RÇ≥îj‘’ªRPXﬂ¨™ûuùè^=•ìΩö‚3w~Ç ⁄Q”≤≠˘$Í›9 0VÄcàƒ/⁄IŸHGò]óY>°I¸gt§Pê"~¶Z2±Y ±pP÷»‚∞";í§kØ.I€1◊0zAW—‹âπäzvTUJ∂‚´¡e8.G_™∏>‚Dπ†nà‘næ'«	âé“åZƒ/sÃ‘˘¡ÃØø˛Í+Yô6SÅébûoeì)Xjª@‚¿dC0◊<” ›(Âﬁ5±Ìíg6Ü2µP›Õn‚Iår’6≤ê"ûêN?õïùe≥ò§s|∏πwÙ|ÁlˇÂqg90´Ä—Ù3ê≥5_Z–(ç¢=µó‡Ap=#D≈Ö¿ÉKfñæóúA¯Ú„ä≈1p*âhõ±úÊ“› Á«3Rhˆn∂úR¯◊o¬ÎÛijW?èﬂ∞®˚¥wG˛˜_ˇã\SRƒQfÿÇµ$|…
-¯˚ñ(£ÖÇåõ∞‘EˇüJ °…Ñéﬂ˝5%›ù7@±‹„*ze”i¯omî$°vxGg ∫íòñB:ÇF){Ï¨ç>˝ÂPuµÆL≤ πÇ!^ßÍkÁ‘+z2⁄È:?b8S3≥å$î‹ Ä—Z,R¿°/ÈÓ⁄‚v†É8aÙ9‰(îÆ∞|q§0Ø€|ÿ&I2cì(øyp∏ˇÕÊ·Ÿ—˛ã—÷Ë¯ÂˆŸÓŒ·÷Êˆæ8ˇ"N
- ≠}£°4prŒ˚Vœ⁄à[ÅçZv[‡©7h!•~1{(ûj≤∑O|»ç¬}ùÉÔ±}fò¯ù≥bcÙ%ê[Ã∆c%-Û≥h\¸	¿‹öÒ%L@˚»Z®Z!‰W$ò
-n”"°®»ÑƒH∞Ù·«lífÉé°5ôKﬁ˝ıM\f≤ìﬁº˚¡}>,õÌ4‹ëË›ﬂhW
-ƒ«PÁ`
-∂S∑≥BßÒ
-8˛ä7ìbÖ£°X∆—JŒ~dc‘'›ú˝¥å(Ï°ÿ´Ìå∑@§‰l(†îöœ¨B—(ıêQ@˝≤≤éUãã,∫5ı£˛ôF∞jñÂèÄÜË/ì.~0¥¡çÚgì)£<é¥◊(‹ç@SŒÚî”éQª_Æ~ŸìtD∏⁄s,¬◊ FatEäûì€ÂvMˇ¨ºYœCîÎ≠zÖIŒ-MÍ%†’Qz≥ø÷±kΩó’9êùv–É2øˆùÃ}tûŒy≤%ö¬0EÀŸßqk%€A4`!Óî{8w™—Tıb#“<2ÃÆ' —p˛Çﬁ√zSVôÓm@v§õ¨-GqJ&ºÜáœÇm?dÆï>2i÷!±÷é´∑6<KCZ∆¬aa–1∫zeÖÙ˚}r∏˘G≤ªâDõ/é»hÔáùΩ„˝√?ëœXÄ€/∑éG˚{dw{áÏÏmÏèˆéè∞ù–ıW¨Ïû]_2:æf˘ä$kæ!)btyÊUEßı&Äßµ’gŸ	Ó≈B+!û¿‚)1ûKrAﬁëıÌ Ü>fÄº∑‰ƒ>U√ÖˆÈê–Ùñ[o≈.X˝§Î @≤KE≥ãIe˚Å4àŸâ)<≈@oz¶â6®’≠o≠Y+ËZk’Â´)_j¸Öó3a•1∫ìŒ»@Ë«Çüf`aZﬂ¡∫k“´µÁ§‚ÙeçáD0ÂZÿ-PòŒí§„.ﬂeúÂë\há»å•PCbƒô´”—ÜÛMç°c¨®ÌÅ{êêå∞ãñk‘“æ©ÊkCÍÿ«F´ê˙}|#MFC¸SF’å˛EïÚ2ßWËﬂd≈ôÿÊ:{u≈‚<Køø≤Ïß2ﬂ	”u˘/ØÚıGYú©≠2]Y~®Tø‚éVv∆˜”tm˛K÷ÂUÔîá+∆¢o≥,≤ÊsCÛ8ÅŒ¶`À–3∞sÄÉ ëeõ£íÊá–ÌøÇll8Ö#ò∑S®AÙ˙Üy§^«œÅñj;ﬁE$Ö{éöÁ)ˆzõÖ°S8?ÁÏuƒO∏É‡jÁçaÕ‚†ØÄ/qÛ?íí¯ ãyAvÅéÛˆ«¡8á˛ap332k7ãòË∂ÚôPäé¥Y§ó√√[≠
-Ü[(†Ø˛T√‘ü Pç!
-c¡¨[â>∏j)ÏÙØVú~£>XA≤ã$æ¢®∫3a∫Õ±éÓ£4¬´±.ÊƒÁºF©‰_Ck•ÙÜ8tì“62∆ÜR™ñıî¬º¿r⁄ø@Ûwä›¡Ü=-&•'–…i‰‡TÏCU‰G˘QE~Tëü*Úëî¢åÏn~øsL∂ˆw6˜˛ÑÓˇÛ—ãù#Ú9>‹‹Ì}K6è˜vΩ ÄP•öøbÂ
-Ü¶¿wF=
-9+hÿçë,˚8ê]òº˜M∆è•w	ö*æåw∏Ï˙3◊cü°∆Q¢^i,‰ƒa¨* Ñ8f7≈LÆâ√RXbLúˇ/OYùT/˝H,ı?}ãù‘‹Ùô9'ç%\2òÌ›Ô"ÁÒTÑöœw&xÆ∑å’ÈrKT>Fã‹‘aâ¯·AﬁΩè¯!(Êê£Rí]e/sºs]ñ”b∏≤2é“~åÛÌO”+Œ¯Q∑Ú’⁄”ïØæ¯≠¯◊⁄⁄ó®aù_Mƒ]öY˙—l—9ßıe]˚≤ñø`|Ïú'uWƒR‰ºfã√£ƒ¶6T“ÆyÅd•*Ùàﬁy–C4_g≈ÜYØ≠Èj—Ã≤Z„7e˘å<é⁄Y±[g<¨€vgÌe1-î9˚j∂{À!ƒºÄ€'F>É†ÙLÑì¢≤KmªRC76|Ím+¯£Ó:√˙¡Ω1Õ∞öı}∏•íôã‡u¬∂‹,yy.'ﬂÅ‘*òÖûÅˆ∫3	‹e–±?_Ï≤a•Ò3”•öÁ∫û±ﬂï˙>tX]Xx'ÎÒˆ Údπã8´H3óı5&ù]ÿ„êuµaf_vIzò®Üó!ÖåÄˆß4/S‡Ì)%wjÖ qa˘IÖÁ≈ÑÅòƒ∏ªbWD∞˚IoEª-∂@(–qi∑Pü”K]/Á¬E‚ÏƒáìSÔ‡ (ﬁ(∆5ú≥{ã˝1π	Ìo@ps∆Ì €|(é≈f“ñe‚»-◊Ç‘@kÏ´{¶∑ÎÓ+û‰∑µ∑‘é(˘GIˆaT¨ëÓszë«hy0µÉô•xZ•Ë…a≈°z9ñ1ßúﬁ‘Ü!Ÿpê≤Ko≥<YOæÅ≤]GaéR+Y!lΩD_axZ”Ω ˆ©,K:π‡FØπ◊/{˝Çt∑Ò4i|1€‘7Ã!N≈ﬂzà%k)&ÜR+‘´(GŸ&H@›…@øµ3†a;‡˘«iÏØ|˜≈oÑn"»íèÿª8/ª]∫L.8˚jπD˙PDœ∫{–75.Ç5‘ÖzIÖ)ÚÙn˜∑ù˝ÇÛ‡ˆ>Rπı*/ï8``êc∑∏¬†òY_=YæP_O¸‚>Y;≈ã≥$±zCY"6óLî…äôèÉÚv*YY^#ÌÙ,è¬Ìˆ¸ˇ˛„?ˇá®[_ló±8°:ì]¿R–ı√ i—π;WØEÔUH@|L‚®‡ˆèb4CÙÔˇFËÕﬂ˝’¯!6L¶≥=ËKÄÊ~kÑ∞nd’˝X|—≠™¨6"ﬁ¶5%ıÖßå*Œgc•ê\rd7sH ¨T∑˘Kí°R1ˆ±(a⁄ﬁap
-±7ı]˝m‚	ˇéˇıç9.˛ó}y¶çJö~3ª}K≥ÀÏX%/9bIrú
-P=z_-◊É·j	>:6Á™nË’‘“C2X†Ω$Å°M∆.ÊH∑ÜPãø°˛å8aqâ!¡ò”6ë\∞˘NIŸCçNõ ›w‡º£ˆÉƒ.¯'∫f[èM∂Ωµ∆–Æ[1«wªá˝Ñ“∞À-ƒp÷¥+\g&÷»z÷9QY≈≤±$º6⁄Áesø[.úKx⁄—¿Ë2Ep≠ù%c\>(àÂyº€a◊≤<U≥E‡√sÊ–ø¬RMêqwÁËhÛ€ù£e<q¥?⁄‚a∆É√˝›——û>⁄€?ﬁi
-3*=ª"‰Gük¸Ä|âÖ¨i∂ÃµOåi“Ñy{–f_L!Ò°fXÀÆoæ>™ó⁄…ú~l/b"{“ƒkÈ»ìZcYpÌ#À(Eel†&>Aóq¢ëi"‡m®NÀ9Ò€	{⁄“EÈl#]&Ì™ˆp<Uñ/N’‘0G˝∂`Å∑˙.„2±ê%D⁄ç·ebŸ”<$‚≤5!UEJ®≠≠ﬁ“[∆YU/∑6ÑO•Z¥˛æ´g?yƒë˜7/+µ⁄È¡Á4µ'Í°¬EDÍZ˜&≈’ê84Î\bµU9TUj||MπŒ>	í√©‡mÄ)ã”nÁLµ“ï≠_*ÈJ9¡Xõ∏‹¢Å˛iµ+W˛af[gOAp≤>ï<I˜Ò∞øíΩ)’≈HC‰C˚)©Ë®ﬁ”˜X`bª·íJ:≤∏¬≠*Wn	¡˙ô˚≠uR
-Íº«±ç—3D2k+~Vê˙öŒh“Wæ˝˝Dí∏UÀ”c,{9œ Y´ÀÓÂÒ…πÊ¡ø√‰m/T}Äbc!ÅQ∏£–˜´Ùô*+6≤.”ëÌÓV≥ë’Ê#„…Ãå´7©l#™`—àg;Y']ëˆfwr⁄
-üvª1?úŒ)BdZ≠x¿ˇP∑ï‹@ıíëòE7÷wÜz÷fçïeK◊”ﬂz÷	ìgKL®+Ívk˙FtÎ˙Îâ|#=≤ÇˇA‡$°¡Ÿ…¡»∫ç∞EêXS„1:Á<1 o`E∞¯m† ^Ü!Mˇ%}C/ˆàËùœeBﬂtÅÏyπPÙn\Ê¬¥*≤¿·0ÎªÕf=w‚L2 ¿ÛtÕ˘™ôÿÇÕû¿ÁdutÕÈ÷ö©π7Âˆ‡tÒƒå”Û:ÚŸÅÔ:µ	uîîíƒQvùˆ@˛¡…WÖ-uA•~D><ã¨ÔjÖ§3”rØ≈©˚d5´X{À-º∏u˜ÁBKnUñã¨ÿ7⁄*W‹@cŒdL†ÊJ≥ïØ5çúlvjUœﬁp≤ö R˚ñ_É∆éçÒ°˙ÊEıñâùj÷î˚˝“@¢õ»)M[ˇ∏Võ“«d|ûgêò èMÏp}˙÷·qY>û‹yÇVpCÌ”∑<1A©®‘–êL“–ENVÍ.ëıûê—õ z˛©R◊àÜEØ‹◊òz£b[~∞Ü‡“ú´ùU6—≤Le¡sWHïÍrÁßo-ö∫#%œ2ë?:AËKùv>—30I$\‹"2ó:[pE¸=≠·¯*Ì_°œ7ñÃ· œVÿíZ5ö!ï1K∫$tlò”$%Â⁄s„I°F”W#¯ó˘e6Ex?˘^|)AÒ_'æDÇvLÈ_©-vö6B$eäÖ±ÚÍÌ—ΩÆÆ«ï¶iı˚u4âçå$c X7Ô~N‚`D†>dp˜|ÄÉÕo¡¸óyıûœí‰OåÊ›ﬁ]¿'®s	∏GP3êpó™ÓÚ∫9¯TÅÀ¶√Ä1 	4¨∆4ın≈óCÛ±éD‘◊b úSµHº∆D∞x†ﬁPpÖÔ~≤a∞«P`®ºZöJÏœ£Ùè¿√ÖÚ@⁄Oi◊¸´Ef∂y2Óä*”$âu‹Èù¨û:Çd®˛‡ƒ⁄¶°:CÎon˚Ó“(è’Ω†u,sd)+åÖå1LWdÕüºYöù—≥Ñû·◊¥„
-¥°˛ã_ê+H∫¶DﬁPˇ≈ª˛L‹ålaJ–>ª˙à±ï*e:0inÔÈ÷ô≥™Íw¥∏∆ãÏ£o˜˙üç†•lˆ≈◊=ÙÔƒﬁB˜È28,:◊è4/ß0#$÷˘uXïˇ˛o∂UyãèE"üú'q √ò!Y‚ZU{¬pé0apÃÖ5ñ‰0]ê`âª˜7˝#&uÒ≈Ÿj‘&£Ò¸∞ÌΩEìk_™%<heÚs˝4ãã´Û˝„Z-‡º‚˙ÑÓ+!·aÍlñó∑2õ˚˘AKjQ§ÜÊÍPßóJu∆Bπ™ÿ3Î4 {À◊Z∆7ƒ1ıÒ/§˙Ÿ&íj©Œ≠f÷Vìå©fßê1ıﬁŸóK:Yç≥qM≠Ö+grÌ74Qﬁ("∫?î<qäΩ«rAÇ\q?Odú%	√„9Ìù5*«BZÊπä§	Ÿ2∞~ˇÌp~Z1t‰ \y‡@∫^‰ÆI˚3xÿ÷Ã»ÄãC£1	Ë[lKO—Ûº-Ω)JœÄ
-Æi™3•ÒsãT‰ «˜)f˛ôy·Yy§$∂‡ÏN≤IÒÃ-’âÉ∆ŸL¿èèApGîK	û,g)«/ˆÆl Œ+L¬ó•gÿU÷y?∞
-<Œ<ûq3MÁ‰Ÿ˝¯(Úm>⁄wctËd'·?`rB˘ªü1•Z6y˜3æÊ†ë3€Ãôﬁª¿3B—˚NJ·⁄t(o∂q†!b°∑s]kÄV9R‚∏<OÁît⁄Üw-^ü”∑#ú√¯–∑ShùB@#_Y5Óµ?v—[˙√»æPS+zÆaÊ .hÇpÚ{´≠æ›dhÇt¿ÿ<˘LïIÈ{®ﬁÔqNà Î≥Ó[Ó™Öıº‹e≥38:Ê–Üy8…DéÄl‡XijaÉıÕ¡oÄÃú¥Åb8Wiº4õÌﬁø6◊ºÏj°YáåµLVÎ≈ç ∞⁄E‹À,Eö“µwå1Å.\"0≈4ÔÎ∏VÑE4X	-	†ﬂkÃí!ﬂ„]A)gáb™ﬁ ‡†rx€Ñ?\Cl3√y°‹êÉÉEK)°†,A»˝8ã∏’√õyë¶.sõ6Sdﬁ∂8mP1vØ	º#π Íãñò	®é†|6D><`yv†'B]¶v∑›≤æ√˛∂§M\·ﬁB5û4Ù©e‘cd±Se±7‰fóÈå¢xN˛˙ßπ)ÍÌNò¿Õ?oWå©›,çD/Ã‘Ÿ‚ ,~€ôèX≈!h‡Â˘Óæv‘Á'¶w4Ñ•B6õ•47(YA≠?'\wY÷†y–;K≤⁄Òîé´rMåEà¨mq,°F¡æüV∫S…W%)€∑UÎŸ¨Ê °vØ∆Tªˆ¯Æ e!1’n∞⁄◊ñ}n∑ûRÌuñmÊ|ÿ'⁄?Û`PÓ?Ûÿ¿=Œ=A†Å‘JñŒ¥‚é&áÍAK”E9zc+â˙WÆtú≥(.˘O⁄X7 ‡ Î˚Ap√ZgT ªKı9Œ¸êÜ:Ú1¶Ò”xTo€ƒ3œ{ö≥õòJ√π:•GÚëÂ"9éqªµ¯F7	üo·´–¥U
-  ØvΩ¯Ú˜æp‚¢–ΩÈa?—fµ¢∑≈!õ–8	küQ\ìg¡ L∫∫Ô"^≈µüs{˙eØÁNeß¸8eùˇn@¢BûG¸∫Z2¬@+¸3ÖjàœI◊ÈCúu‰üùy≠ê/æ^ÌUùÑ±ºî;A˙«T€ê’¡WUP∂t-MﬁYN2Ø[[Ì±Ãî`Í˚UúÙ∞úñ{{BlﬁQÕ«pÑ:<¨÷ãΩﬁN’jµÏ˙Hùù£’ ?ù¿Mbe–K:ﬂâ7„Æë
-ì⁄>“ßokLÖ;“›‰R9\'…Hlï,ICò™Ô’Ù…L5Ÿ¬Ò0Ü[ﬂƒ"CqÑÔﬂÛ}5K„HØ).∂%æ?ÈÔçõ™¶ﬁ…¥EàWE
+      syncAccountToSupabase(seller.id, seller.name, seller.balance, seller.username, seller.password, seller.accountNumber, seller.role).catch(e => console.error(e));
 
-˚ßW√í\˛'ØÊñ/~\¡Q[€ÍŸ|ÙjÔ1"9qF\ÅHzÛjº‘ø3óF3“Ê4¯^CßA{zsºÅ·Ä©Ø0òIÄt|¿ –	ÕÖ)©d‚_~–@ï~Q¡Küˆ˝ÔÜrUâÜR∆í€{2l¬s+”>°ù¯—˘π!ÓfÊc˙)ŒVß÷€â˝µ8(ÌÌ˝qÿÑ˛™ŒÑ^¨Æ~U±òÔm“ˆ- ~Qõ6dW:’≠Jˇ°⁄fõ“∂cÉ6¥k»∂±¢CØœ÷⁄— ¶{}l?;+He‘äáH´GZô∫èhZ∫RD[ó[ZΩÏjÌå€;5-N”†br⁄o®Êÿâïz∫Eg?˘[k⁄âà∞EPø6„Æ˘Õ¿∏dÑN|	åV}≥±ÁìΩè’ßª≤ç2ôx«ºÏutºøı=Q´(≥ÏÀ˛˙ÅÉ£2ø‚«◊	ÙıLÂÎfOÔ»Ô~ÍÛéUì¥€ıÏﬂ‚AıKø"†>»áÄπó.g)gqÎSC∆oÂ~œn’õ]=| K-≠N„IËøÊ(ÚœõŒÍå∆∆|•.]C◊"ô4ëΩf˘í¸ „âR≠ø2˚sÊUåfPqä‹ÚÆ{ÌÚ¬`±”Îy÷èöZuñ’‘:€^Üzæ¡≥ÎÛ¨äúygÜ÷è}<ÀEºÚÒXS®êL´)òÍ·?·®± (∞&vŒi-XPÛ^@∞H£‘L¯’/øL'}¡Ÿá⁄ÕìWñ4∑ö„CØ„bÏ$_ë®aûEs¯áÀ!ÏÚ=äáÁó{¬®ee#åÛBΩÅsÜ?=®dß ¯ËG†¿˘¥8g<»ò˘!æÇÛ„dû†ıˆHıªÛeAéxüÖêñƒwÖÇpÈ™_ÙµI•k†{Æﬂ B´EØ≠ÑÏ’U3Õ£ Æ¬†û
-îGÑÍ¡3VÄÅ@<<ƒ}é‰›œ¢Ávr"Ö|õ®e}ÿ`»FDÙÇ  BPaÍºπÇ9+˚tJKπÂ '.√6˜‡‰:Ín?%iÇ˘˝‹Yˆ‡+πÅáYh˜Ë€œ¡Îf?Ú0Àµ∆`O]ÂÛò_¸®2<Rºé¡≥ ]ÏC'˛ƒ)UêMÄÛ›@Ù7®}oÎﬂRá|.ﬁ, *◊,ÿ.¸“û˛Ç¬öóÜDö∑üÊ'Çzò÷⁄N‰lfU€P¡}'ˇ+±	-’°cÉ√äÂ0t’œT¢Ø·M•gﬁZq
-≠[£⁄ó¨Ï¬ÍKVÕk~≈JÆQÕ+VMk‰◊öª6∫¡¢k"pU]ã⁄wπf‰ØÖ‘=ÅﬁÂ€tˆ“äüN{£B ÍWË¸fJî©«ËLìà]“YRzuWÖ¯ÚDœ1&‘Ú'ÀÂìæ¯‡‚¬π¬iTeºZU¡„¿;àH)ÛR¥Ú‘_cLo¨ÁÅ0f,‹fÂÅâùú“ >YØƒÿ∑¿CœPõì®]Õ1‹>vöﬂÌ¡õπ™ ¬\`˜”À‰'Ããñ É¥!ïpoÖ £Í≥<°»˚´Ö6B˚ô3™I™jß5S∞Ùq÷∫E=\Î™ªj `’zêuuÚ§IµÕ¯z9£Ø⁄(õ∆ıy?Ωs_ÏáG¢¥ÜÖ—ﬂ}#´z√’`?†ÇCXøü"nRìÔ∑axqÏB◊X5PMq¡}Um.X`ÓßÈﬂ€Ó®ç(Ù`hçÓÓ˝©m™W∆N#ÆÁŸ=Õÿ¥7S]ÃäùSµu∫⁄ÛE˜˜WÇ%TX3IÀ"k¶)Áâ`gÅt…˚Œ≠Dm˝5høJlÉßæ?0pÆ)I£Hÿ"Ÿ?û’RK»™Û'8çèV»„[!µˇhxºW†5û?cPÃEG¢Ö·©Ø'!ııwd6,2ù_¬Rxx∏q‡ù£çï˙_QÁ=˙ûÈh¥}Ê˘R∆EÔ2SÈ0ªJŸ>ÁÂg~˙‘t≈™ﬁ¯ÎËƒ'&º≥Å0Á$ÁsÃ$¡O{º˚h+œ
-ëïÄ%x‹•Hƒqõ2gë ^RìR–à‰öç_m¶—ñ<"Õd™|ÃÄ],áﬁc∆√BÒ∏uÚˆŒåáhÒ1uO≠£ ¨æÅBÛ©…	£F´0¬8‚"òﬁÀ‰1Y~¢Xü…X≈‰‡l<Êáf·õH®#ËO¢ê$nNòÍïW8ƒRëªµh/(·Á#ëà]0ûÂÉøò
-î »òÂ˛˘◊∑Úæ$∂ç8-áOYdAohú`ÏQ∫ü«WqZëîË÷QI9∑jøﬂb-§ê”>ÁÉÚLÚ:#√U·ãÇ{†@
-W,í
-aï>}[¸>‚‰ÒÍ˘>≠	¯∏˚çÃ˙CÕbôL0¶ãÑ’ïlEsh
-ÄÎÁB,ô•Æç≥:®Y÷~»π·ÑÍV‰±]ugÅÒ»∫vy0l≠÷¬O√„B›ôu~êáó±è~àÚ1nóõ≥Ñ«JpÒ,y6éΩU¬wëV∫W…	µI ˜î„4SÁµr‡ÔÒ,’ﬂ∆hë
-$¸Œå≠L<¸Æ…¢Z•ÊÒ´«S$ˆkX≠“^ìH¿€ÈìÜ›ÌzpSuˇ˝
-\hπ≤B∂p∂\éÅ†‘“ãpR\{_ä∫ˆ/~Ñ˛,k„≥œÍ+ w£æÃV∂÷kÃ8ñÅ`›w£A»:RêaÌv†»VJ”Û˙ºûê˙Îãu„h°q?’~RqñQ‚#Œ-=T∑ÖB›VŒõLÒZúØïXz∑PI@R€\+ÒÂì4 7W∑›é3Yg]πçà>k-≠«]q[>n"nMóûYÌK˙ º'ß›
-Àf+oÊÏÓ7Í[g¸e>®v⁄´3ÔØÛ∂ß!∞7∫$Â5s:∆Á9„$1ç	œ˝ƒõ”4Ro\√‚dÿDöäxG$….h"N•:˛ƒ…Üz˛ı6≥k+Œ€“Ü⁄®7ÃÆˆúÓ‹ß÷´Ä)jπiöJÑ|™ó:î”gVˇü§ú⁄–‰éSÛä¶Ï±ôËRü⁄°7õÿÍ»≠Å‡“:JõKkÊùuÁ%˘ Ö(Pj¡D·rupù.Ø ˙´∂–ÿå"$o≠\ïQb+Á™◊◊T™›ø%uÑCr(èÂ„-#©wpúä’ÑÙﬂ‘˚I•Ö>ä°"ÎãvÒl…;ì·Y({ÇÑqn675"…¥J7÷] ¸Jw'´ßíπú9¥X…ìé<ÎsÜùSõiG÷≠Ü0.èì’+_‚ ÛæÍ ñ˜]Üí¸⁄~≤¶‹âF÷‘q"§u˝¯—wØ^0|Ô’	n-xuÇë˛˛Bïtù;W“,@Rﬁrz⁄1Ïæzz∑Ö´•ñºÑVWœ’6E˚ó-\ﬂg£EsˇQ†:ﬂŸí¬¥∂~t]ßˆ‰ó]∞	}ÁM\îòÛRDÑÖ…É˚¬6˚Ó‹`≈‘~˙¿¿œØì)Ã£hw'^„÷vÂA_}«∞èQeqaƒ3Ò,W˜M/X˘ö°E˝:„qçb%fß¸ªclÑòÌó?—á◊Ê^¥∫áç6ÃO˛`ﬂÜ>¥xáäák¯}Ÿnâﬂ‘£IíΩfx˜:Év4}Ün6,’FV^\|É∞3:æÊTÃA‡ê‚‘z)JxJQ&Iœ≥_≤"À˚k+\Ò9ò≈újzîÖÅ.√•7åEP<°òÂùˆßy<°ÌµyìÅ<p*Ó5≤êpC«È+pçË’Gâ]±h◊òä‹©†›¡ﬁ˛ˆŒŸŒﬁ‰s õv\ÁË&Ê˜üÈk
-?Heò‰Iv≠¥a¡‚JO‚(Jÿkö≥›,b
-D%‡Ètz,ÔL©º™~'M`%wqƒÅÈFX´\ÀÚ l`Ñ Sò?ø£f8~·u‰VÍx∞7ËÅ
-ó8wU?=´X‰›ŒÁÄÁ`∏L¨t Ã˚<N0g©_uÜ˜Å≥ﬂÆÀ	^—yÊ;≤8J¬eP˜`ˇÍØ¯ˇpDk$%˘íÏ™{.∞NÚY ˝5XÁÎ≤úWVíîÃ5>\˙È[ÏÓÓ\å‘„¥·√≥•ˇ  ˇˇ ÛQxî
+      const txTransport = generateId('tx');
+      const transferTransport: Transfer = {
+        id: txTransport,
+        senderId: seller.id,
+        senderName: seller.name,
+        senderAccount: seller.accountNumber || 'ES990001000988770000',
+        receiverId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+        receiverName: sellerHasTruck && sellerHasDriver ? 'Suministros de Gasolina y Combustible S.A.' : 'Agencia de Log√≠stica y Transportes Express S.A.',
+        receiverAccount: 'ES990001000988771122',
+        amount: transportExpense,
+        concept: transportConcept,
+        timestamp: new Date().toISOString()
+      };
+      db.transfers.unshift(transferTransport);
+
+      const transportInvoiceOrder: RawMaterialOrder = {
+        id: `rmord_trans_${txTransport}`,
+        studentId: seller.id,
+        studentName: seller.name,
+        buyerLevel: seller.level || 1,
+        sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+        sellerName: sellerHasTruck && sellerHasDriver ? 'Estaci√≥n de servicio - suministro de combustible' : 'Agencia de Log√≠stica y Transportes Express S.A.',
+        sellerLevel: 'official',
+        announcementId: `trans-inv-${txTransport}`,
+        materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
+        materialTitle: transportConcept,
+        quantity: 1,
+        unitWeightKg: order.quantity,
+        totalKg: order.quantity,
+        basePrice: baseTransportFee,
+        subtotalAmount: baseTransportFee,
+        unitPrice: baseTransportFee,
+        discountPercentage: 0,
+        discountAmount: 0,
+        insuranceFee: 0,
+        hasInsurance: false,
+        ivaAmount: ivaTransportFee,
+        vatAmount: ivaTransportFee,
+        vatRate: 21,
+        transportCost: 0,
+        transportMethod: 'vendedor_envio',
+        totalAmount: transportExpense,
+        needsTransport: false,
+        deliveryAddress: order.deliveryAddress || 'Direcci√≥n comercial registrada',
+        status: 'facturado',
+        invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        requestedAt: new Date().toISOString(),
+        approvedAt: new Date().toISOString(),
+        deliveredAt: new Date().toISOString(),
+        invoicedAt: new Date().toISOString(),
+        items: [{
+          announcementId: `trans-inv-${txTransport}`,
+          materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
+          materialTitle: transportConcept,
+          title: transportConcept,
+          quantity: 1,
+          unitPrice: baseTransportFee,
+          subtotal: baseTransportFee,
+          totalCost: baseTransportFee
+        }],
+        lastTurnUserId: seller.id,
+        negotiationHistory: [{
+          id: generateId('neg'),
+          authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+          authorName: sellerHasTruck && sellerHasDriver ? 'Estaci√≥n de servicio - suministro de combustible' : 'Agencia de Log√≠stica y Transportes Express S.A.',
+          timestamp: new Date().toISOString(),
+          action: 'propuesta_inicial',
+          quantity: 1,
+          pricePerUnit: baseTransportFee,
+          discountPercentage: 0,
+          insuranceFee: 0,
+          transportCost: 0,
+          transportMethod: 'vendedor_envio',
+          totalAmount: transportExpense,
+          note: `Factura por ${transportConcept}`
+        }]
+      };
+
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      db.rawMaterialOrders.unshift(transportInvoiceOrder);
+      syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+    }
+  }
+
+  const now = new Date();
+  const buyerLevel = buyer.level || 1;
+  const isRawMaterialOrder = ['hierro', 'metal', 'plastico', 'epoxi'].includes(order.materialType) ||
+    (order.items && order.items.some(i => ['hierro', 'metal', 'plastico', 'epoxi'].includes(i.materialType)));
+  const isL1Raw = buyerLevel === 1 && isRawMaterialOrder;
+
+  const deliveryDays = isL1Raw ? 0 : ((order.needsTransport && (order.quantity > 3 || (order.items && order.items.length > 1))) ? 2 : 1);
+  order.status = isL1Raw ? 'entregado' : 'aprobado';
+  order.approvedAt = now.toISOString();
+  if (isL1Raw) {
+    order.deliveredAt = now.toISOString();
+  }
+  order.estimatedDeliveryDays = deliveryDays;
+  order.estimatedDeliveryAt = isL1Raw ? now.toISOString() : new Date(now.getTime() + deliveryDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const inv = checkAndCalculateProduction(db, order.studentId);
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+  syncInventoryToSupabase(inv, buyer.name).catch(e => console.error(e));
+
+  if (!order.negotiationHistory) order.negotiationHistory = [];
+  order.negotiationHistory.push({
+    id: generateId('neg'),
+    authorId: userId || buyer.id,
+    authorName: userId ? (db.users.find(u => u.id === userId)?.name || buyerDisplayName) : buyerDisplayName,
+    timestamp: now.toISOString(),
+    action: 'aceptado',
+    quantity: order.quantity,
+    pricePerUnit: order.basePrice / order.quantity,
+    discountPercentage: order.discountPercentage || 0,
+    insuranceFee: order.insuranceFee || 0,
+    transportCost: order.transportCost,
+    transportMethod: order.transportMethod || 'vendedor_envio',
+    totalAmount: order.totalAmount,
+    note: 'Solicitud aceptada y operaci√≥n formalizada'
+  });
+
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+
+  const txId = generateId('tx');
+  const transfer: Transfer = {
+    id: txId,
+    senderId: buyer.id,
+    senderName: buyerDisplayName,
+    senderAccount: buyer.accountNumber,
+    receiverId: order.sellerId || 'proveedor-materia-prima',
+    receiverName: order.sellerName || 'Suministros Industriales S.A.',
+    receiverAccount: 'ES990001000988776655',
+    amount: order.totalAmount,
+    concept: `Compra Mercado: ${order.materialTitle}`,
+    timestamp: now.toISOString()
+  };
+  db.transfers.unshift(transfer);
+  syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+
+  addNotification(
+    db,
+    buyer.id,
+    isL1Raw ? 'Materia prima recibida' : 'Compra formalizada',
+    isL1Raw
+      ? `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} ‚Ç¨ ha sido aceptada por el profesor y entregada inmediatamente a tu almac√©n (Existencias).`
+      : `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} ‚Ç¨ ha sido aceptada y formalizada.`,
+    'order_approved',
+    order.id
+  );
+
+  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
+    addNotification(
+      db,
+      order.sellerId,
+      'Venta aceptada',
+      `Se ha formalizado la venta de "${order.materialTitle}" a ${buyerDisplayName} por ${order.totalAmount.toFixed(2)} ‚Ç¨.`,
+      'order_approved',
+      order.id
+    );
+  }
+
+  db.systemLogs.unshift({
+    id: generateId('log'),
+    action: 'APROBAR_SOLICITUD_MERCADO',
+    details: `Operaci√≥n aceptada entre ${buyerDisplayName} y ${order.sellerName} por "${order.materialTitle}" (${order.totalAmount.toFixed(2)} ‚Ç¨).`,
+    timestamp: now.toISOString(),
+    studentId: buyer.id,
+    studentName: buyerDisplayName
+  });
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    message: isL1Raw
+      ? 'Solicitud aceptada. Las materias primas han sido entregadas inmediatamente al almac√©n del alumno.'
+      : `Operaci√≥n aceptada con √©xito. Env√≠o estimado en ${deliveryDays} d√≠a(s).`
+  });
+});
+
+app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
+  const { id } = req.params;
+  const { rejectionReason, userId } = req.body;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  order.status = 'rechazado';
+  if (rejectionReason) {
+    order.rejectionReason = rejectionReason;
+  }
+
+  const now = new Date();
+  if (!order.negotiationHistory) order.negotiationHistory = [];
+  order.negotiationHistory.push({
+    id: generateId('neg'),
+    authorId: userId || 'profesor-1',
+    authorName: userId ? (db.users.find(u => u.id === userId)?.name || 'Profesor') : 'Profesor',
+    timestamp: now.toISOString(),
+    action: 'rechazado',
+    quantity: order.quantity,
+    pricePerUnit: order.basePrice / order.quantity,
+    discountPercentage: order.discountPercentage || 0,
+    insuranceFee: order.insuranceFee || 0,
+    transportCost: order.transportCost,
+    transportMethod: order.transportMethod || 'vendedor_envio',
+    totalAmount: order.totalAmount,
+    note: `Operaci√≥n rechazada: ${rejectionReason || 'No especificado'}`
+  });
+
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+
+  addNotification(
+    db,
+    order.studentId,
+    'Solicitud rechazada',
+    `La solicitud de compra para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
+    'order_rejected',
+    order.id
+  );
+
+  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
+    addNotification(
+      db,
+      order.sellerId,
+      'Solicitud rechazada',
+      `La solicitud para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
+      'order_rejected',
+      order.id
+    );
+  }
+
+  writeDb(db);
+
+  res.json({ success: true, order, message: 'Solicitud rechazada.' });
+});
+
+// Helper to check trade permission between two users/roles
+function canTradeUsers(
+  buyer: { id: string; role?: string; level?: number },
+  seller: { id: string; role?: string; level?: number | string }
+): { allowed: boolean; reason?: string } {
+  const isBuyerTeacher = buyer.id === 'profesor-1' || buyer.role === 'teacher';
+  const isSellerTeacher = seller.id === 'profesor-1' || seller.role === 'teacher' || seller.id === 'proveedor-materia-prima' || seller.level === 'official';
+
+  const buyerLevel = isBuyerTeacher ? 'teacher' : (buyer.level || 1);
+  const sellerLevel = isSellerTeacher ? 'teacher' : Number(seller.level || 1);
+
+  if (isBuyerTeacher) {
+    if (isSellerTeacher) return { allowed: false, reason: 'El profesor no realiza compras a s√≠ mismo.' };
+    return { allowed: true };
+  }
+
+  if (isSellerTeacher) {
+    if (buyerLevel === 1) return { allowed: true };
+    return { allowed: false, reason: 'Solo las empresas de Nivel 1 pueden comprar materias primas al Profesor.' };
+  }
+
+  if (buyerLevel === 1) {
+    if (sellerLevel === 1) return { allowed: true };
+    return { allowed: false, reason: 'Los alumnos de Nivel 1 solo pueden comprar al Profesor (materias primas) o a otros alumnos de Nivel 1 (subcontrataci√≥n).' };
+  }
+
+  if (buyerLevel === 2) {
+    if (sellerLevel === 1) return { allowed: true };
+    return { allowed: false, reason: 'Los Distribuidores Mayoristas (Nivel 2) solo pueden comprar a fabricantes de Nivel 1.' };
+  }
+
+  if (buyerLevel === 3) {
+    if (sellerLevel === 2) return { allowed: true };
+    return { allowed: false, reason: 'Los Distribuidores Minoristas (Nivel 3) solo pueden comprar a distribuidores de Nivel 2.' };
+  }
+
+  return { allowed: false, reason: 'Operaci√≥n no permitida por las reglas de la cadena de suministro.' };
+}
+
+// Shipping endpoint (Vendedor env√≠a mercanc√≠a y se descuenta de su stock)
+app.post('/api/raw-materials/orders/:id/ship', (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  if (order.status !== 'aprobado') {
+    return res.status(400).json({ error: `No se puede enviar un pedido en estado "${order.status}". Debe estar previamente aprobado.` });
+  }
+
+  const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+
+  if (isStudentSeller) {
+    if (userId && userId !== order.sellerId && userId !== 'profesor-1') {
+      return res.status(403).json({ error: 'Solo el alumno vendedor puede autorizar el env√≠o de la mercanc√≠a.' });
+    }
+  }
+
+  // Ensure stock is deducted from seller inventory and announcement
+  processStockDeductionForOrder(db, order);
+
+  const now = new Date();
+  order.status = 'en_transito';
+  order.shippedAt = now.toISOString();
+
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+
+  addNotification(
+    db,
+    order.studentId,
+    'Mercanc√≠a enviada (en tr√°nsito)',
+    `El vendedor ${order.sellerName || 'Suministrador'} ha realizado la expedici√≥n de "${order.materialTitle}". La mercanc√≠a est√° en tr√°nsito hacia tu almac√©n.`,
+    'order_approved',
+    order.id
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    message: 'Mercanc√≠a expedida correctamente. Se ha descontado de tu stock y la orden ha pasado a "En tr√°nsito".'
+  });
+});
+
+// Confirm Receipt / Deliver endpoint (Comprador confirma recepci√≥n)
+app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:id/confirm-receipt'], (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  if (order.status === 'entregado' || order.status === 'finalizado' || order.status === 'facturado') {
+    return res.status(400).json({ error: 'El pedido ya ha sido entregado previamente.' });
+  }
+
+  const now = new Date();
+  order.status = 'entregado';
+  order.deliveredAt = now.toISOString();
+
+  // Deduct from seller stock/announcement if not already done
+  processStockDeductionForOrder(db, order);
+
+  const inv = checkAndCalculateProduction(db, order.studentId);
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+  syncInventoryToSupabase(inv, db.users.find(u => u.id === order.studentId)?.name).catch(e => console.error(e));
+
+  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
+    addNotification(
+      db,
+      order.sellerId,
+      'Recepci√≥n confirmada por el comprador',
+      `${order.studentName} ha recibido la mercanc√≠a de "${order.materialTitle}" y ha sido agregada a su inventario.`,
+      'order_approved',
+      order.id
+    );
+  }
+
+  writeDb(db);
+
+  res.json({ success: true, order, inventory: inv, message: 'Mercanc√≠a recibida y registrada en tu almac√©n.' });
+});
+
+// Manual Invoice Endpoint ("Enviar factura")
+app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body;
+  const db = readDb();
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  const order = db.rawMaterialOrders.find(o => o.id === id);
+  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+  const isStudentBuyer = order.studentId && order.studentId !== 'profesor-1' && order.studentId !== 'bricomaster';
+
+  // No invoice should be generated for student-to-student transactions
+  if (isStudentSeller && isStudentBuyer) {
+    return res.status(400).json({ error: 'En las transferencias o ventas entre alumnos no se debe generar factura al comprador.' });
+  }
+
+  if (order.status !== 'entregado' && order.status !== 'aprobado' && order.status !== 'en_transito' && order.status !== 'finalizado') {
+    return res.status(400).json({ error: `No se puede facturar un pedido en estado "${order.status}".` });
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const randomNum = Math.floor(1000 + Math.random() * 9000);
+  const invoiceNum = order.invoiceNumber || `FACT-${year}-${randomNum}`;
+
+  order.status = 'facturado';
+  order.invoiceNumber = invoiceNum;
+  if (!order.invoicedAt) {
+    order.invoicedAt = order.requestedAt || order.approvedAt || order.deliveredAt || now.toISOString();
+  }
+
+  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+
+  addNotification(
+    db,
+    order.studentId,
+    'Factura comercial recibida',
+    `El vendedor ${order.sellerName || 'Profesor'} ha emitido y enviado la factura oficial ${invoiceNum} por ${order.totalAmount.toFixed(2)} ‚Ç¨.`,
+    'order_approved',
+    order.id
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    order,
+    invoiceNumber: invoiceNum,
+    message: `Factura ${invoiceNum} emitida y notificada al comprador.`
+  });
+});
+
+// Company Profiles Endpoints
+app.get('/api/market/company-profiles', (req, res) => {
+  const viewerId = req.query.viewerId as string;
+  const db = readDb();
+  if (!db.companyProfiles) db.companyProfiles = [];
+
+  const viewer = viewerId ? db.users.find(u => u.id === viewerId) : null;
+
+  let profiles = db.companyProfiles;
+  if (viewer && viewer.role !== 'teacher') {
+    profiles = profiles.filter(p => {
+      // Authoring student always sees their own profile card
+      if (p.studentId === viewer.id) return true;
+      const seller = db.users.find(u => u.id === p.studentId);
+      if (!seller) return false;
+      // Level 1 profiles visible to L1 and L2; Level 2 profiles visible to L3; Level 3 to L4
+      return canTradeUsers(viewer, seller).allowed;
+    });
+  }
+
+  res.json({ success: true, companyProfiles: profiles });
+});
+
+app.post('/api/market/company-profile', (req, res) => {
+  const { studentId, description, logoUrl } = req.body;
+  const db = readDb();
+  const user = db.users.find(u => u.id === studentId);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  if (!db.companyProfiles) db.companyProfiles = [];
+
+  let profile = db.companyProfiles.find(p => p.studentId === studentId);
+  const now = new Date().toISOString();
+
+  if (profile) {
+    profile.companyName = user.name; // Mandatory account name given by teacher
+    profile.description = description !== undefined ? description : profile.description;
+    profile.logoUrl = logoUrl !== undefined ? logoUrl : profile.logoUrl;
+    profile.level = user.level || 1;
+    profile.updatedAt = now;
+  } else {
+    profile = {
+      id: `profile-${studentId}`,
+      studentId: user.id,
+      companyName: user.name, // Mandatory account name given by teacher
+      description: description || '',
+      logoUrl: logoUrl || '',
+      level: user.level || 1,
+      updatedAt: now
+    };
+    db.companyProfiles.push(profile);
+  }
+
+  syncCompanyProfileToSupabase(profile).catch(e => console.error(e));
+  writeDb(db);
+
+  res.json({ success: true, profile, message: 'Perfil de empresa guardado correctamente.' });
+});
+
+// Contact Partner Endpoint (When clicking "Contactar" in Company Profile)
+app.post('/api/market/contact-partner', (req, res) => {
+  const { userId, partnerId } = req.body;
+  if (!userId || !partnerId) return res.status(400).json({ error: 'userId y partnerId son requeridos' });
+
+  const db = readDb();
+  if (!db.marketContacts) db.marketContacts = [];
+
+  let contact = db.marketContacts.find(c => c.userId === userId && c.contactId === partnerId);
+  if (!contact) {
+    contact = {
+      id: generateId('contact'),
+      userId,
+      contactId: partnerId,
+      createdAt: new Date().toISOString()
+    };
+    db.marketContacts.push(contact);
+    syncMarketContactToSupabase(contact).catch(e => console.error(e));
+  }
+
+  writeDb(db);
+  res.json({ success: true, contact, message: 'Empresa a√±adida a tus contactos de mensajer√≠a.' });
+});
+
+// Students List Endpoint (For selecting recipient when transferring inventory)
+app.get('/api/students-list', (req, res) => {
+  const db = readDb();
+  const students = db.users
+    .filter(u => u.role === 'student')
+    .map(u => {
+      const acquisitions = (db.acquisitions || []).filter(a =>
+        String(a.studentId) === String(u.id) &&
+        (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almac√©n') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+      );
+      const warehouses = acquisitions.map(a => {
+        const wIdStr = String(a.id);
+        const hasForklift = (db.purchasedVehicles || []).some(v =>
+          String(v.studentId) === String(u.id) &&
+          v.vehicleType === 'carretilla_elevadora' &&
+          (
+            String(v.assignedPropertyId) === wIdStr ||
+            (acquisitions.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+          )
+        );
+        return {
+          id: String(a.id),
+          title: a.propertyTitle || a.title || 'Inmueble con almac√©n',
+          type: a.propertyType || a.type || 'almacen',
+          address: a.location || a.direccion || 'Pol√≠gono Industrial',
+          hasForklift
+        };
+      });
+      return {
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        level: u.level || 1,
+        warehouses
+      };
+    });
+  res.json({ success: true, students });
+});
+
+// Inventory Stock Transfer Endpoint
+app.post('/api/inventory/transfer-stock', (req, res) => {
+  const { senderId, recipientId, itemKey, quantity, transportMethod, destinationNaveId, fromNaveId } = req.body;
+  const qty = Number(quantity);
+
+  if (!senderId || !recipientId || !itemKey || isNaN(qty) || qty <= 0) {
+    return res.status(400).json({ error: 'Datos de env√≠o incompletos o cantidad inv√°lida.' });
+  }
+
+  if (senderId === recipientId) {
+    return res.status(400).json({ error: 'No puedes enviarte existencias a ti mismo.' });
+  }
+
+  const db = readDb();
+  const sender = db.users.find(u => u.id === senderId);
+  const recipient = db.users.find(u => u.id === recipientId);
+
+  if (!sender || !recipient) {
+    return res.status(404).json({ error: 'Remitente o destinatario no encontrado.' });
+  }
+
+  // Find sender warehouses
+  const senderNaves = (db.acquisitions || []).filter(a =>
+    String(a.studentId) === String(senderId) &&
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almac√©n') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+  );
+
+  if (senderNaves.length > 1 && !fromNaveId) {
+    return res.status(400).json({
+      error: 'Dispones de m√°s de un inmueble con almac√©n. Debes seleccionar el almac√©n desde el que env√≠as las existencias.'
+    });
+  }
+
+  const selectedSenderNave = senderNaves.find(n => String(n.id) === String(fromNaveId)) || senderNaves[0];
+  const targetSenderNaveId = selectedSenderNave ? selectedSenderNave.id : (fromNaveId || 'default_nave');
+
+  // Verify forklift in sender warehouse
+  if (selectedSenderNave) {
+    const senderTargetNaveIdStr = String(selectedSenderNave.id || selectedSenderNave.propertyId);
+    const senderNaveForklift = (db.purchasedVehicles || []).find(v =>
+      String(v.studentId) === String(senderId) &&
+      v.vehicleType === 'carretilla_elevadora' &&
+      (
+        String(v.assignedPropertyId) === senderTargetNaveIdStr ||
+        (senderNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+      )
+    );
+
+    if (!senderNaveForklift) {
+      const naveName = selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almac√©n de origen';
+      return res.status(400).json({
+        error: `Operaci√≥n rechazada: No tienes asignada ninguna carretilla elevadora contrapesada a tu almac√©n de origen "${naveName}". Para poder expedir y cargar existencias desde esta ubicaci√≥n, debes disponer de una carretilla elevadora asignada.`
+      });
+    }
+  }
+
+  // Recipient warehouses
+  const recipientNaves = (db.acquisitions || []).filter(a =>
+    String(a.studentId) === String(recipientId) &&
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almac√©n') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+  );
+
+  if (recipientNaves.length > 1 && !destinationNaveId) {
+    return res.status(400).json({
+      error: 'El alumno destinatario dispone de m√°s de un inmueble con almac√©n. Debes especificar a qu√© inmueble deben enviarse las existencias.'
+    });
+  }
+
+  const selectedRecipientNave = recipientNaves.find(n => String(n.id) === String(destinationNaveId)) || recipientNaves[0];
+  const targetRecipientNaveId = selectedRecipientNave ? selectedRecipientNave.id : (destinationNaveId || 'default_nave');
+
+  if (selectedRecipientNave) {
+    const recipientTargetNaveIdStr = String(selectedRecipientNave.id || selectedRecipientNave.propertyId);
+    const recipientNaveForklift = (db.purchasedVehicles || []).find(v =>
+      String(v.studentId) === String(recipientId) &&
+      v.vehicleType === 'carretilla_elevadora' &&
+      (
+        String(v.assignedPropertyId) === recipientTargetNaveIdStr ||
+        (recipientNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+      )
+    );
+
+    if (!recipientNaveForklift) {
+      const naveName = selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almac√©n';
+      const recipientUser = (db.users || []).find((u: any) => String(u.id) === String(recipientId));
+      return res.status(400).json({
+        error: `Operaci√≥n rechazada: El alumno destinatario (${recipientUser?.name || 'Destinatario'}) no tiene asignada ninguna carretilla elevadora contrapesada al inmueble de destino "${naveName}". Para poder recibir existencias en esa ubicaci√≥n, debe disponer de una carretilla elevadora asignada a ese inmueble.`
+      });
+    }
+  }
+
+  // Validate transport method
+  let transportFee = 0;
+  let fuelExpense = 0;
+  let distanceKm = 0;
+  let fuelMovId = '';
+  let transMovId = '';
+
+  if (transportMethod === 'propio') {
+    const hasTruck = (db.purchasedVehicles || []).some(
+      v => v.studentId === senderId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+    );
+    const hasTruckDriver = (db.hiredEmployees || []).some(
+      e => e.studentId === senderId && (e.role === 'camionero' || (e.role as string) === 'conductor')
+    );
+    if (!hasTruck || !hasTruckDriver) {
+      return res.status(400).json({
+        error: 'Para realizar el env√≠o con transporte propio necesitas disponer de un cami√≥n en tu flota y tener contratado un camionero / conductor en tu plantilla.'
+      });
+    }
+
+    // Real road distance calculation between sender and recipient warehouses/locations in Spain
+    const senderLoc = selectedSenderNave || sender;
+    const recipientLoc = selectedRecipientNave || recipient;
+    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
+
+    // No transport service fee, but supply expense for fuel based on distance
+    fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+
+    if (sender.balance < fuelExpense) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} ‚Ç¨). Saldo disponible: ${sender.balance.toFixed(2)} ‚Ç¨.`
+      });
+    }
+
+    // Deduct fuel supply expense from sender bank account
+    sender.balance = Math.round((sender.balance - fuelExpense) * 100) / 100;
+    syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level).catch(e => console.error(e));
+
+    fuelMovId = generateId('mov');
+    const nowIso = new Date().toISOString();
+    db.transfers.unshift({
+      id: fuelMovId,
+      senderId: sender.id,
+      senderName: sender.name,
+      senderAccount: sender.accountNumber,
+      receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+      receiverName: 'Estaci√≥n de servicio - suministro de combustible',
+      receiverAccount: 'ES00-0000-0000-0000-GASO',
+      amount: fuelExpense,
+      concept: `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km a ${recipient.name})`,
+      timestamp: nowIso
+    });
+    syncMovimientoToSupabase(fuelMovId, sender.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km a ${recipient.name})`).catch(e => console.error(e));
+  } else if (transportMethod === 'exterior') {
+    // Unified Logistics Fee: 0.38 ‚Ç¨ / pallet / km (range 0.35 - 0.40 ‚Ç¨/palet/km)
+    // Incomplete pallets charged as full pallets (Math.ceil)
+    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+
+    const senderLoc = selectedSenderNave || sender;
+    const recipientLoc = selectedRecipientNave || recipient;
+    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
+
+    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+    if (sender.balance < transportFee) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} ‚Ç¨ por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${sender.balance.toFixed(2)} ‚Ç¨.`
+      });
+    }
+    // Deduct fee from sender bank account
+    sender.balance = Math.round((sender.balance - transportFee) * 100) / 100;
+    syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level).catch(e => console.error(e));
+
+    transMovId = generateId('mov');
+    const nowIso = new Date().toISOString();
+    db.transfers.unshift({
+      id: transMovId,
+      senderId: sender.id,
+      senderName: sender.name,
+      senderAccount: sender.accountNumber,
+      receiverId: 'LOGISTICA_EXTERIOR',
+      receiverName: 'Servicio exterior de transporte',
+      receiverAccount: 'ES00-0000-0000-0000-LOGI',
+      amount: transportFee,
+      concept: `Servicio exterior de transporte - Env√≠o de existencias a ${recipient.name} (${chargedPallets} pal. √ó ${distanceKm} km a 0,38 ‚Ç¨/pal-km)`,
+      timestamp: nowIso
+    });
+    syncMovimientoToSupabase(transMovId, sender.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - Env√≠o de existencias a ${recipient.name} (${chargedPallets} pal. √ó ${distanceKm} km a 0,38 ‚Ç¨/pal-km)`).catch(e => console.error(e));
+  }
+
+  // Deduct stock from sender and add to recipient
+  const senderInv = checkAndCalculateProduction(db, senderId);
+  const recipientInv = checkAndCalculateProduction(db, recipientId);
+
+  if (!senderInv.naveInventories) senderInv.naveInventories = {};
+  if (!recipientInv.naveInventories) recipientInv.naveInventories = {};
+
+  if (!senderInv.naveInventories[targetSenderNaveId]) {
+    senderInv.naveInventories[targetSenderNaveId] = {
+      ironKg: senderNaves.length <= 1 ? (senderInv.ironKg || 0) : 0,
+      metalKg: senderNaves.length <= 1 ? (senderInv.metalKg || 0) : 0,
+      plasticKg: senderNaves.length <= 1 ? (senderInv.plasticKg || 0) : 0,
+      epoxiKg: senderNaves.length <= 1 ? (senderInv.epoxiKg || 0) : 0,
+      producedRodsUnits: senderNaves.length <= 1 ? (senderInv.producedRodsUnits || 0) : 0,
+      producedStarRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedStarRodsUnits || (senderInv as any).producedIronRodsUnits || 0) : 0,
+      producedFlatRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedFlatRodsUnits || (senderInv as any).producedMetalRodsUnits || 0) : 0,
+      producedScrewdriversUnits: senderNaves.length <= 1 ? (senderInv.producedScrewdriversUnits || 0) : 0,
+      starScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
+      flatScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0,
+      ironScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
+      metalScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0
+    };
+  }
+
+  const senderNaveInv = senderInv.naveInventories[targetSenderNaveId];
+
+  const getRecipientNaveInv = () => {
+    if (!recipientInv.naveInventories[targetRecipientNaveId]) {
+      recipientInv.naveInventories[targetRecipientNaveId] = {
+        ironKg: 0,
+        metalKg: 0,
+        plasticKg: 0,
+        epoxiKg: 0,
+        producedRodsUnits: 0,
+        producedStarRodsUnits: 0,
+        producedFlatRodsUnits: 0,
+        producedScrewdriversUnits: 0,
+        starScrewdriversUnits: 0,
+        flatScrewdriversUnits: 0,
+        ironScrewdriversUnits: 0,
+        metalScrewdriversUnits: 0
+      };
+    }
+    return recipientInv.naveInventories[targetRecipientNaveId];
+  };
+
+  const recipientNaveInv = getRecipientNaveInv();
+  const originNaveName = selectedSenderNave ? (selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almac√©n de origen') : 'Almac√©n de origen';
+
+  let itemLabel = itemKey;
+
+  if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
+    itemLabel = 'Varillas con punta estrella';
+    const currentStock = (senderNaveInv as any).producedStarRodsUnits ?? (senderNaveInv as any).producedIronRodsUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de varillas con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
+    }
+    (senderNaveInv as any).producedStarRodsUnits = Math.max(0, currentStock - qty);
+    (senderNaveInv as any).producedIronRodsUnits = Math.max(0, currentStock - qty);
+    senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
+
+    (recipientNaveInv as any).producedStarRodsUnits = ((recipientNaveInv as any).producedStarRodsUnits || 0) + qty;
+    (recipientNaveInv as any).producedIronRodsUnits = ((recipientNaveInv as any).producedIronRodsUnits || 0) + qty;
+    recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
+  } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
+    itemLabel = 'Varillas con punta plana';
+    const currentStock = (senderNaveInv as any).producedFlatRodsUnits ?? (senderNaveInv as any).producedMetalRodsUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de varillas con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
+    }
+    (senderNaveInv as any).producedFlatRodsUnits = Math.max(0, currentStock - qty);
+    (senderNaveInv as any).producedMetalRodsUnits = Math.max(0, currentStock - qty);
+    senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
+
+    (recipientNaveInv as any).producedFlatRodsUnits = ((recipientNaveInv as any).producedFlatRodsUnits || 0) + qty;
+    (recipientNaveInv as any).producedMetalRodsUnits = ((recipientNaveInv as any).producedMetalRodsUnits || 0) + qty;
+    recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
+  } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro' || itemKey === 'ironScrewdriversUnits') {
+    itemLabel = 'Destornilladores con punta estrella';
+    const currentStock = (senderNaveInv as any).starScrewdriversUnits ?? (senderNaveInv as any).ironScrewdriversUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
+    }
+    (senderNaveInv as any).starScrewdriversUnits = Math.max(0, currentStock - qty);
+    (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, currentStock - qty);
+    senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
+
+    (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
+    (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
+    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+  } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal' || itemKey === 'metalScrewdriversUnits') {
+    itemLabel = 'Destornilladores con punta plana';
+    const currentStock = (senderNaveInv as any).flatScrewdriversUnits ?? (senderNaveInv as any).metalScrewdriversUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
+    }
+    (senderNaveInv as any).flatScrewdriversUnits = Math.max(0, currentStock - qty);
+    (senderNaveInv as any).metalScrewdriversUnits = Math.max(0, currentStock - qty);
+    senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
+
+    (recipientNaveInv as any).flatScrewdriversUnits = ((recipientNaveInv as any).flatScrewdriversUnits || 0) + qty;
+    (recipientNaveInv as any).metalScrewdriversUnits = ((recipientNaveInv as any).metalScrewdriversUnits || 0) + qty;
+    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+  } else if (itemKey === 'productos_ensamblados' || itemKey === 'producedScrewdriversUnits') {
+    itemLabel = 'Productos ensamblados (destornilladores)';
+    const currentStock = (senderNaveInv as any).producedScrewdriversUnits || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de productos ensamblados en ${originNaveName} (${currentStock} u. disponibles).` });
+    }
+    senderNaveInv.producedScrewdriversUnits = Math.max(0, currentStock - qty);
+    (senderNaveInv as any).starScrewdriversUnits = Math.max(0, ((senderNaveInv as any).starScrewdriversUnits || 0) - qty);
+    (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, ((senderNaveInv as any).ironScrewdriversUnits || 0) - qty);
+
+    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+    (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
+    (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
+  } else if (itemKey === 'ironKg') {
+    itemLabel = 'Fragmentos de hierro (kg)';
+    const currentStock = (senderNaveInv as any).ironKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de fragmentos de hierro en ${originNaveName} (${currentStock} kg disponibles).` });
+    }
+    senderNaveInv.ironKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+    recipientNaveInv.ironKg = Math.round(((recipientNaveInv.ironKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'metalKg') {
+    itemLabel = 'Fragmentos de metal (kg)';
+    const currentStock = (senderNaveInv as any).metalKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de fragmentos de metal en ${originNaveName} (${currentStock} kg disponibles).` });
+    }
+    senderNaveInv.metalKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+    recipientNaveInv.metalKg = Math.round(((recipientNaveInv.metalKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'plasticKg') {
+    itemLabel = 'Pellets de pl√°stico (kg)';
+    const currentStock = (senderNaveInv as any).plasticKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de pellets de pl√°stico en ${originNaveName} (${currentStock} kg disponibles).` });
+    }
+    senderNaveInv.plasticKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+    recipientNaveInv.plasticKg = Math.round(((recipientNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'epoxiKg') {
+    itemLabel = 'Pegamento epoxi (kg)';
+    const currentStock = (senderNaveInv as any).epoxiKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de pegamento epoxi en ${originNaveName} (${currentStock} kg disponibles).` });
+    }
+    senderNaveInv.epoxiKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+    recipientNaveInv.epoxiKg = Math.round(((recipientNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
+  } else {
+    return res.status(400).json({ error: 'Tipo de existencia no reconocido.' });
+  }
+
+  recalculateTotalInventory(senderInv);
+  recalculateTotalInventory(recipientInv);
+
+  senderInv.updatedAt = new Date().toISOString();
+  recipientInv.updatedAt = new Date().toISOString();
+
+  syncInventoryToSupabase(senderInv, sender.name).catch(e => console.error(e));
+  syncInventoryToSupabase(recipientInv, recipient.name).catch(e => console.error(e));
+
+  // Record transfer in rawMaterialOrders so it reflects in Market Operations History
+  const orderId = generateId('rmord');
+  const nowIso = new Date().toISOString();
+
+  let materialType: 'hierro' | 'metal' | 'plastico' | 'epoxi' | 'producto_final' = 'producto_final';
+  if (itemKey === 'ironKg') materialType = 'hierro';
+  else if (itemKey === 'metalKg') materialType = 'metal';
+  else if (itemKey === 'plasticKg') materialType = 'plastico';
+  else if (itemKey === 'epoxiKg') materialType = 'epoxi';
+
+  const transferOrder: RawMaterialOrder = {
+    id: orderId,
+    studentId: recipient.id,
+    studentName: recipient.name,
+    buyerLevel: recipient.level || 1,
+    sellerId: sender.id,
+    sellerName: sender.name,
+    sellerLevel: sender.level || 1,
+    announcementId: `tr-${Date.now()}`,
+    materialType,
+    materialTitle: itemLabel,
+    quantity: qty,
+    unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
+    totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+    basePrice: 0,
+    discountPercentage: 0,
+    discountAmount: 0,
+    insuranceFee: 0,
+    hasInsurance: false,
+    ivaAmount: 0,
+    transportCost: 0,
+    transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
+    totalAmount: 0,
+    needsTransport: transportMethod === 'exterior',
+    deliveryAddress: selectedRecipientNave ? `${selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almac√©n'}, ${selectedRecipientNave.location || selectedRecipientNave.direccion || 'Pol√≠gono Industrial'}` : 'Almac√©n del destinatario',
+    destinationNaveId: targetRecipientNaveId,
+    status: 'entregado',
+    isDirectTransfer: true,
+    noInvoice: true,
+    requestedAt: nowIso,
+    approvedAt: nowIso,
+    deliveredAt: nowIso,
+    inventoryCredited: true,
+    items: [{
+      announcementId: `tr-${Date.now()}`,
+      materialType,
+      materialTitle: itemLabel,
+      quantity: qty,
+      unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
+      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+      basePrice: 0
+    }],
+    lastTurnUserId: sender.id,
+    negotiationHistory: [{
+      id: generateId('neg'),
+      authorId: sender.id,
+      authorName: sender.name,
+      timestamp: nowIso,
+      action: 'propuesta_inicial',
+      quantity: qty,
+      pricePerUnit: 0,
+      discountPercentage: 0,
+      insuranceFee: 0,
+      transportCost: 0,
+      transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
+      totalAmount: 0,
+      note: `Env√≠o directo de existencias entre alumnos (${transportMethod === 'propio' ? 'Transporte propio' : 'Servicio exterior'})`
+    }]
+  };
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  db.rawMaterialOrders.unshift(transferOrder);
+  syncRawMaterialOrderToSupabase(transferOrder).catch(e => console.error(e));
+
+  if (transportMethod === 'exterior' && transportFee > 0 && transMovId) {
+    const recipientAcqs = (db.acquisitions || []).filter(a => String(a.studentId) === String(recipient.id));
+    const recipientProp = recipientAcqs[0];
+    const recipientAddress = recipientProp 
+      ? (recipientProp.location || recipientProp.propertyTitle || 'Almac√©n principal del destinatario')
+      : 'Pol√≠gono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
+
+    const basePrice = Math.round((transportFee / 1.21) * 100) / 100;
+    const ivaAmount = Math.round((transportFee - basePrice) * 100) / 100;
+    const transportInvoiceOrder: RawMaterialOrder = {
+      id: `rmord_trans_${transMovId}`,
+      studentId: sender.id,
+      studentName: sender.name,
+      buyerLevel: sender.level || 1,
+      sellerId: 'LOGISTICA_EXTERIOR',
+      sellerName: 'Servicio exterior de transporte',
+      sellerLevel: 'official',
+      announcementId: `trans-inv-${transMovId}`,
+      materialType,
+      materialTitle: `Servicio exterior de transporte - Env√≠o de existencias a ${recipient.name} ‚Äî Direcci√≥n del inmueble de destino: ${recipientAddress}`,
+      quantity: 1,
+      unitWeightKg: 0,
+      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+      basePrice,
+      discountPercentage: 0,
+      discountAmount: 0,
+      insuranceFee: 0,
+      hasInsurance: false,
+      ivaAmount,
+      transportCost: 0,
+      transportMethod: 'vendedor_envio',
+      totalAmount: transportFee,
+      needsTransport: false,
+      deliveryAddress: recipientAddress,
+      status: 'facturado',
+      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      requestedAt: nowIso,
+      approvedAt: nowIso,
+      deliveredAt: nowIso,
+      invoicedAt: nowIso,
+      inventoryCredited: true,
+      items: [{
+        announcementId: `trans-inv-${transMovId}`,
+        materialType,
+        materialTitle: `Servicio exterior de transporte - Env√≠o de existencias a ${recipient.name} ‚Äî Direcci√≥n del inmueble de destino: ${recipientAddress}`,
+        quantity: 1,
+        unitWeightKg: 0,
+        totalKg: 0,
+        basePrice,
+        subtotal: basePrice
+      }],
+      lastTurnUserId: sender.id,
+      negotiationHistory: [{
+        id: `neg_${transMovId}`,
+        authorId: 'LOGISTICA_EXTERIOR',
+        authorName: 'Servicio exterior de transporte',
+        timestamp: nowIso,
+        action: 'propuesta_inicial',
+        quantity: 1,
+        pricePerUnit: basePrice,
+        discountPercentage: 0,
+        insuranceFee: 0,
+        transportCost: 0,
+        transportMethod: 'vendedor_envio',
+        totalAmount: transportFee,
+        note: `Factura del Servicio exterior de transporte por env√≠o de existencias a ${recipient.name}`
+      }]
+    };
+    db.rawMaterialOrders.unshift(transportInvoiceOrder);
+    syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+  } else if (transportMethod === 'propio' && fuelExpense > 0 && fuelMovId) {
+    const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
+    const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+    const fuelInvoiceOrder: RawMaterialOrder = {
+      id: `rmord_trans_${fuelMovId}`,
+      studentId: sender.id,
+      studentName: sender.name,
+      buyerLevel: sender.level || 1,
+      sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+      sellerName: 'Estaci√≥n de servicio - suministro de combustible',
+      sellerLevel: 'official',
+      announcementId: `gaso-inv-${fuelMovId}`,
+      materialType: 'combustible',
+      materialTitle: `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km a ${recipient.name})`,
+      quantity: 1,
+      unitWeightKg: 0,
+      totalKg: 0,
+      basePrice: basePricePropio,
+      discountPercentage: 0,
+      discountAmount: 0,
+      insuranceFee: 0,
+      hasInsurance: false,
+      ivaAmount: ivaAmountPropio,
+      transportCost: 0,
+      transportMethod: 'vendedor_envio',
+      totalAmount: fuelExpense,
+      needsTransport: false,
+      deliveryAddress: 'Inmueble de destino del alumno',
+      status: 'facturado',
+      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      requestedAt: nowIso,
+      approvedAt: nowIso,
+      deliveredAt: nowIso,
+      invoicedAt: nowIso,
+      inventoryCredited: true,
+      items: [{
+        announcementId: `gaso-inv-${fuelMovId}`,
+        materialType: 'combustible',
+        materialTitle: `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km a ${recipient.name})`,
+        quantity: 1,
+        unitWeightKg: 0,
+        totalKg: 0,
+        basePrice: basePricePropio,
+        subtotal: basePricePropio
+      }],
+      lastTurnUserId: sender.id,
+      negotiationHistory: [{
+        id: `neg_${fuelMovId}`,
+        authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+        authorName: 'Estaci√≥n de servicio - suministro de combustible',
+        timestamp: nowIso,
+        action: 'propuesta_inicial',
+        quantity: 1,
+        pricePerUnit: basePricePropio,
+        discountPercentage: 0,
+        insuranceFee: 0,
+        transportCost: 0,
+        transportMethod: 'vendedor_envio',
+        totalAmount: fuelExpense,
+        note: `Factura de suministro de combustible cami√≥n (${distanceKm} km a ${recipient.name})`
+      }]
+    };
+    db.rawMaterialOrders.unshift(fuelInvoiceOrder);
+    syncRawMaterialOrderToSupabase(fuelInvoiceOrder).catch(e => console.error(e));
+  }
+
+  addNotification(
+    db,
+    recipientId,
+    'Env√≠o de existencias recibido',
+    `Has recibido ${qty} unidades de "${itemLabel}" enviadas por ${sender.name} (${transportMethod === 'propio' ? 'Transporte propio del remitente' : 'Servicio exterior de transporte'}).`,
+    'order_approved'
+  );
+
+  addNotification(
+    db,
+    senderId,
+    'Env√≠o de existencias realizado',
+    `Has enviado ${qty} unidades de "${itemLabel}" a ${recipient.name} correctamente.`,
+    'order_approved'
+  );
+
+  writeDb(db);
+
+  const transferSuccessMessage = transportMethod === 'propio'
+    ? `Env√≠o de ${qty} unidades de ${itemLabel} a ${recipient.name} realizado con √©xito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} ‚Ç¨ por el trayecto de ${distanceKm} km.`
+    : `Env√≠o de ${qty} unidades de ${itemLabel} a ${recipient.name} realizado con √©xito. Se han adeudado ${transportFee.toFixed(2)} ‚Ç¨ por el servicio exterior de transporte.`;
+
+  res.json({
+    success: true,
+    message: transferSuccessMessage,
+    updatedInventory: senderInv,
+    newBalance: sender.balance,
+    order: transferOrder
+  });
+});
+
+// Inter-warehouse / Inter-nave stock transfer endpoint
+app.post('/api/inventory/transfer-nave-stock', (req, res) => {
+  const { studentId, fromNaveId, toNaveId, itemKey, quantity, transportMethod } = req.body;
+  const qty = Number(quantity);
+
+  if (!studentId || !fromNaveId || !toNaveId || !itemKey || isNaN(qty) || qty <= 0) {
+    return res.status(400).json({ error: 'Datos de traslado incompletos o cantidad inv√°lida.' });
+  }
+
+  if (fromNaveId === toNaveId) {
+    return res.status(400).json({ error: 'La nave de origen y la nave de destino deben ser diferentes.' });
+  }
+
+  const db = readDb();
+  const student = db.users.find(u => u.id === studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Usuario no encontrado.' });
+  }
+
+  const studentNaves = (db.acquisitions || []).filter(a =>
+    String(a.studentId) === String(studentId) &&
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almac√©n') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+  );
+  const toNave = studentNaves.find(a => String(a.id) === String(toNaveId)) || (db.acquisitions || []).find(a => String(a.id) === String(toNaveId));
+  const toNaveTargetIdStr = String(toNaveId);
+
+  const toNaveForklift = (db.purchasedVehicles || []).find(v =>
+    String(v.studentId) === String(studentId) &&
+    v.vehicleType === 'carretilla_elevadora' &&
+    (
+      String(v.assignedPropertyId) === toNaveTargetIdStr ||
+      (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+    )
+  );
+
+  if (!toNaveForklift) {
+    const naveName = toNave ? (toNave.propertyTitle || toNave.title || 'Almac√©n de destino') : 'Almac√©n de destino';
+    return res.status(400).json({
+      error: `Operaci√≥n rechazada: El almac√©n de destino "${naveName}" no tiene asignada ninguna carretilla elevadora contrapesada. Para poder recibir existencias en un traslado entre almacenes propios, la nave de destino debe disponer de una carretilla elevadora asignada.`
+    });
+  }
+
+  // Validate transport method
+  let transportFee = 0;
+  let fuelExpense = 0;
+  let distanceKm = 0;
+
+  if (transportMethod === 'propio') {
+    const hasTruck = (db.purchasedVehicles || []).some(
+      v => v.studentId === studentId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+    );
+    const hasTruckDriver = (db.hiredEmployees || []).some(
+      e => e.studentId === studentId && (e.role === 'camionero' || (e.role as string) === 'conductor')
+    );
+    if (!hasTruck || !hasTruckDriver) {
+      return res.status(400).json({
+        error: 'Para realizar el traslado con transporte propio necesitas disponer de un cami√≥n en tu flota y tener contratado un camionero / conductor en tu plantilla.'
+      });
+    }
+
+    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
+    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
+    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
+
+    // No transport service fee, but supply expense for fuel based on distance
+    fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+
+    if (student.balance < fuelExpense) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} ‚Ç¨). Saldo disponible: ${student.balance.toFixed(2)} ‚Ç¨.`
+      });
+    }
+
+    // Deduct fuel supply expense from student bank account
+    student.balance = Math.round((student.balance - fuelExpense) * 100) / 100;
+    syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+
+    const movId = generateId('mov');
+    const nowIso = new Date().toISOString();
+    db.transfers.unshift({
+      id: movId,
+      senderId: student.id,
+      senderName: student.name,
+      senderAccount: student.accountNumber,
+      receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+      receiverName: 'Estaci√≥n de servicio - suministro de combustible',
+      receiverAccount: 'ES00-0000-0000-0000-GASO',
+      amount: fuelExpense,
+      concept: `Gasto de suministro - Combustible/gasolina cami√≥n (${distanceKm} km entre almacenes)`,
+      timestamp: nowIso
+    });
+    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de suministro - Combustible/gasolina cami√≥n (${distanceKm} km entre almacenes)`).catch(e => console.error(e));
+
+    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almac√©n de origen') : 'Almac√©n de origen';
+    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almac√©n de destino') : 'Almac√©n de destino';
+    const toNaveAddress = toNave
+      ? (toNave.location || toNave.propertyTitle || 'Almac√©n de destino del alumno')
+      : 'Pol√≠gono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
+
+    const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
+    const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+    const fuelInvoiceOrder: RawMaterialOrder = {
+      id: `rmord_trans_${movId}`,
+      studentId: student.id,
+      studentName: student.name,
+      buyerLevel: student.level || 1,
+      sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+      sellerName: 'Estaci√≥n de servicio - suministro de combustible',
+      sellerLevel: 'official',
+      announcementId: `gaso-inv-${movId}`,
+      materialType: 'combustible',
+      materialTitle: `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+      quantity: 1,
+      unitWeightKg: 0,
+      totalKg: 0,
+      basePrice: basePricePropio,
+      discountPercentage: 0,
+      discountAmount: 0,
+      insuranceFee: 0,
+      hasInsurance: false,
+      ivaAmount: ivaAmountPropio,
+      transportCost: 0,
+      transportMethod: 'vendedor_envio',
+      totalAmount: fuelExpense,
+      needsTransport: false,
+      deliveryAddress: toNaveAddress,
+      status: 'facturado',
+      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      requestedAt: nowIso,
+      approvedAt: nowIso,
+      deliveredAt: nowIso,
+      invoicedAt: nowIso,
+      inventoryCredited: true,
+      items: [{
+        announcementId: `gaso-inv-${movId}`,
+        materialType: 'combustible',
+        materialTitle: `Gasto de Suministro - Combustible/Gasolina Cami√≥n (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+        quantity: 1,
+        unitWeightKg: 0,
+        totalKg: 0,
+        basePrice: basePricePropio,
+        subtotal: basePricePropio
+      }],
+      lastTurnUserId: student.id,
+      negotiationHistory: [{
+        id: `neg_${movId}`,
+        authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+        authorName: 'Estaci√≥n de servicio - suministro de combustible',
+        timestamp: nowIso,
+        action: 'propuesta_inicial',
+        quantity: 1,
+        pricePerUnit: basePricePropio,
+        discountPercentage: 0,
+        insuranceFee: 0,
+        transportCost: 0,
+        transportMethod: 'vendedor_envio',
+        totalAmount: fuelExpense,
+        note: `Factura de Suministro de Combustible Cami√≥n (${distanceKm} km entre almacenes)`
+      }]
+    };
+
+    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+    db.rawMaterialOrders.unshift(fuelInvoiceOrder);
+    syncRawMaterialOrderToSupabase(fuelInvoiceOrder).catch(e => console.error(e));
+  } else if (transportMethod === 'exterior') {
+    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
+    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
+    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
+
+    // Unified Logistics Fee: 0.38 ‚Ç¨ / pallet / km (range 0.35 - 0.40 ‚Ç¨/palet/km)
+    // Incomplete pallets charged as full pallets (Math.ceil)
+    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+
+    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+    if (student.balance < transportFee) {
+      return res.status(400).json({
+        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} ‚Ç¨ por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${student.balance.toFixed(2)} ‚Ç¨.`
+      });
+    }
+    // Deduct fee from student bank account
+    student.balance = Math.round((student.balance - transportFee) * 100) / 100;
+    syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+
+    const movId = generateId('mov');
+    const nowIso = new Date().toISOString();
+    db.transfers.unshift({
+      id: movId,
+      senderId: student.id,
+      senderName: student.name,
+      senderAccount: student.accountNumber,
+      receiverId: 'LOGISTICA_EXTERIOR',
+      receiverName: 'Servicio exterior de transporte',
+      receiverAccount: 'ES00-0000-0000-0000-LOGI',
+      amount: transportFee,
+      concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. √ó ${distanceKm} km a 0,38 ‚Ç¨/pal-km)`,
+      timestamp: nowIso
+    });
+    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. √ó ${distanceKm} km a 0,38 ‚Ç¨/pal-km)`).catch(e => console.error(e));
+
+    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almac√©n de origen') : 'Almac√©n de origen';
+    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almac√©n de destino') : 'Almac√©n de destino';
+    const toNaveAddress = toNave
+      ? (toNave.location || toNave.propertyTitle || 'Almac√©n de destino del alumno')
+      : 'Pol√≠gono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
+
+    const basePriceExterior = Math.round((transportFee / 1.21) * 100) / 100;
+    const ivaAmountExterior = Math.round((transportFee - basePriceExterior) * 100) / 100;
+    const transportInvoiceOrder: RawMaterialOrder = {
+      id: `rmord_trans_${movId}`,
+      studentId: student.id,
+      studentName: student.name,
+      buyerLevel: student.level || 1,
+      sellerId: 'LOGISTICA_EXTERIOR',
+      sellerName: 'Servicio exterior de transporte',
+      sellerLevel: 'official',
+      announcementId: `trans-inv-${movId}`,
+      materialType: (itemKey as any) || 'transporte',
+      materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) ‚Äî Direcci√≥n del inmueble de destino: ${toNaveAddress}`,
+      quantity: 1,
+      unitWeightKg: 0,
+      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+      basePrice: basePriceExterior,
+      discountPercentage: 0,
+      discountAmount: 0,
+      insuranceFee: 0,
+      hasInsurance: false,
+      ivaAmount: ivaAmountExterior,
+      transportCost: 0,
+      transportMethod: 'vendedor_envio',
+      totalAmount: transportFee,
+      needsTransport: false,
+      deliveryAddress: toNaveAddress,
+      status: 'facturado',
+      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      requestedAt: nowIso,
+      approvedAt: nowIso,
+      deliveredAt: nowIso,
+      invoicedAt: nowIso,
+      inventoryCredited: true,
+      items: [{
+        announcementId: `trans-inv-${movId}`,
+        materialType: (itemKey as any) || 'transporte',
+        materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) ‚Äî Direcci√≥n del inmueble de destino: ${toNaveAddress}`,
+        quantity: 1,
+        unitWeightKg: 0,
+        totalKg: 0,
+        basePrice: basePriceExterior,
+        subtotal: basePriceExterior
+      }],
+      lastTurnUserId: student.id,
+      negotiationHistory: [{
+        id: `neg_${movId}`,
+        authorId: 'LOGISTICA_EXTERIOR',
+        authorName: 'Servicio exterior de transporte',
+        timestamp: nowIso,
+        action: 'propuesta_inicial',
+        quantity: 1,
+        pricePerUnit: basePriceExterior,
+        discountPercentage: 0,
+        insuranceFee: 0,
+        transportCost: 0,
+        transportMethod: 'vendedor_envio',
+        totalAmount: transportFee,
+        note: `Factura del Servicio exterior de transporte por traslado entre almacenes (${fromNaveTitle} -> ${toNaveTitle})`
+      }]
+    };
+
+    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+    db.rawMaterialOrders.unshift(transportInvoiceOrder);
+    syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+  }
+
+  // Load and calculate production / inventory
+  const inv = checkAndCalculateProduction(db, studentId);
+  if (!inv.naveInventories) inv.naveInventories = {};
+
+  const fromNaveInv = inv.naveInventories[fromNaveId];
+  const toNaveInv = inv.naveInventories[toNaveId];
+
+  if (!fromNaveInv || !toNaveInv) {
+    return res.status(404).json({ error: 'No se encontraron los datos de inventario para una o ambas naves.' });
+  }
+
+  let itemLabel = itemKey;
+
+  if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
+    itemLabel = 'Varillas con Punta Estrella';
+    const currentStock = (fromNaveInv as any).producedStarRodsUnits ?? (fromNaveInv as any).producedIronRodsUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
+    }
+    (fromNaveInv as any).producedStarRodsUnits = currentStock - qty;
+    (fromNaveInv as any).producedIronRodsUnits = currentStock - qty;
+    fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
+
+    (toNaveInv as any).producedStarRodsUnits = ((toNaveInv as any).producedStarRodsUnits || 0) + qty;
+    (toNaveInv as any).producedIronRodsUnits = ((toNaveInv as any).producedIronRodsUnits || 0) + qty;
+    toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
+  } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
+    itemLabel = 'Varillas con Punta Plana';
+    const currentStock = (fromNaveInv as any).producedFlatRodsUnits ?? (fromNaveInv as any).producedMetalRodsUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
+    }
+    (fromNaveInv as any).producedFlatRodsUnits = currentStock - qty;
+    (fromNaveInv as any).producedMetalRodsUnits = currentStock - qty;
+    fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
+
+    (toNaveInv as any).producedFlatRodsUnits = ((toNaveInv as any).producedFlatRodsUnits || 0) + qty;
+    (toNaveInv as any).producedMetalRodsUnits = ((toNaveInv as any).producedMetalRodsUnits || 0) + qty;
+    toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
+  } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro') {
+    itemLabel = 'Destornilladores con Punta Estrella';
+    const currentStock = (fromNaveInv as any).starScrewdriversUnits ?? (fromNaveInv as any).ironScrewdriversUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
+    }
+    (fromNaveInv as any).starScrewdriversUnits = currentStock - qty;
+    (fromNaveInv as any).ironScrewdriversUnits = currentStock - qty;
+    fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
+
+    (toNaveInv as any).starScrewdriversUnits = ((toNaveInv as any).starScrewdriversUnits || 0) + qty;
+    (toNaveInv as any).ironScrewdriversUnits = ((toNaveInv as any).ironScrewdriversUnits || 0) + qty;
+    toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
+  } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal') {
+    itemLabel = 'Destornilladores con Punta Plana';
+    const currentStock = (fromNaveInv as any).flatScrewdriversUnits ?? (fromNaveInv as any).metalScrewdriversUnits ?? 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
+    }
+    (fromNaveInv as any).flatScrewdriversUnits = currentStock - qty;
+    (fromNaveInv as any).metalScrewdriversUnits = currentStock - qty;
+    fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
+
+    (toNaveInv as any).flatScrewdriversUnits = ((toNaveInv as any).flatScrewdriversUnits || 0) + qty;
+    (toNaveInv as any).metalScrewdriversUnits = ((toNaveInv as any).metalScrewdriversUnits || 0) + qty;
+    toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
+  } else if (itemKey === 'ironKg') {
+    itemLabel = 'Fragmentos de Hierro (Kg)';
+    const currentStock = fromNaveInv.ironKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Hierro en la nave de origen (${currentStock} kg disponibles).` });
+    }
+    fromNaveInv.ironKg = Math.round((currentStock - qty) * 1000) / 1000;
+    toNaveInv.ironKg = Math.round(((toNaveInv.ironKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'metalKg') {
+    itemLabel = 'Fragmentos de Metal (Kg)';
+    const currentStock = fromNaveInv.metalKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Metal en la nave de origen (${currentStock} kg disponibles).` });
+    }
+    fromNaveInv.metalKg = Math.round((currentStock - qty) * 1000) / 1000;
+    toNaveInv.metalKg = Math.round(((toNaveInv.metalKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'plasticKg') {
+    itemLabel = 'Pellets de Pl√°stico (Kg)';
+    const currentStock = fromNaveInv.plasticKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de Pellets de Pl√°stico en la nave de origen (${currentStock} kg disponibles).` });
+    }
+    fromNaveInv.plasticKg = Math.round((currentStock - qty) * 1000) / 1000;
+    toNaveInv.plasticKg = Math.round(((toNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
+  } else if (itemKey === 'epoxiKg') {
+    itemLabel = 'Pegamento Epoxi (Kg)';
+    const currentStock = fromNaveInv.epoxiKg || 0;
+    if (currentStock < qty) {
+      return res.status(400).json({ error: `Stock insuficiente de Pegamento Epoxi en la nave de origen (${currentStock} kg disponibles).` });
+    }
+    fromNaveInv.epoxiKg = Math.round((currentStock - qty) * 1000) / 1000;
+    toNaveInv.epoxiKg = Math.round(((toNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
+  } else {
+    return res.status(400).json({ error: 'Tipo de existencia no reconocido.' });
+  }
+
+  recalculateTotalInventory(inv);
+  inv.updatedAt = new Date().toISOString();
+
+  syncInventoryToSupabase(inv, student.name).catch(e => console.error(e));
+  writeDb(db);
+
+  const transferSuccessMessage = transportMethod === 'propio'
+    ? `Traslado de ${qty} de ${itemLabel} entre naves completado con √©xito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} ‚Ç¨ por el trayecto de ${distanceKm} km.`
+    : `Traslado de ${qty} de ${itemLabel} entre naves completado con √©xito. Se han adeudado ${transportFee.toFixed(2)} ‚Ç¨ por el servicio exterior de transporte.`;
+
+  res.json({
+    success: true,
+    message: transferSuccessMessage,
+    updatedInventory: inv,
+    newBalance: student.balance
+  });
+});
+
+// Trading Partners list endpoint (Filtered to contacted partners in Direct Messaging)
+app.get('/api/market/trading-partners', (req, res) => {
+  const userId = req.query.userId as string;
+  const db = readDb();
+  const currentUser = db.users.find(u => u.id === userId);
+
+  if (!currentUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  if (!db.marketContacts) db.marketContacts = [];
+
+  // Filter partners: for teachers, return all tradeable partners. For students, return only those where "Contactar" was clicked or messages exist.
+  const contactedPartnerIds = new Set<string>();
+  db.marketContacts.forEach(c => {
+    if (c.userId === currentUser.id) contactedPartnerIds.add(c.contactId);
+    if (c.contactId === currentUser.id) contactedPartnerIds.add(c.userId);
+  });
+
+  if (db.marketMessages) {
+    db.marketMessages.forEach(m => {
+      if (m.senderId === currentUser.id) contactedPartnerIds.add(m.recipientId);
+      if (m.recipientId === currentUser.id) contactedPartnerIds.add(m.senderId);
+    });
+  }
+
+  const partners = db.users
+    .filter(u => u.id !== currentUser.id)
+    .filter(u => {
+      if (currentUser.role === 'teacher') return true;
+      return contactedPartnerIds.has(u.id);
+    })
+    .map(u => {
+      const buyCheck = canTradeUsers(currentUser, u);
+      const sellCheck = canTradeUsers(u, currentUser);
+      const levelNames: Record<number | string, string> = {
+        1: 'Nivel 1 (Fabricante)',
+        2: 'Nivel 2 (Distribuidor Mayorista)',
+        3: 'Nivel 3 (Distribuidor Minorista)',
+        teacher: 'Profesor (Evaluador/Suministrador)'
+      };
+      const userLevelKey = (u.role === 'teacher' || u.id === 'profesor-1') ? 'teacher' : (u.level || 1);
+
+      // Unread messages from this specific partner to current user
+      const unreadCount = (db.marketMessages || []).filter(
+        m => m.recipientId === currentUser.id && m.senderId === u.id && !m.read
+      ).length;
+
+      // Find all messages between currentUser and this partner to determine the most recent interaction
+      const conversationMsgs = (db.marketMessages || []).filter(
+        m => (m.senderId === currentUser.id && m.recipientId === u.id) ||
+             (m.senderId === u.id && m.recipientId === currentUser.id)
+      );
+
+      let lastMessageTimestamp: string | null = null;
+      let lastMessageContent: string | null = null;
+      if (conversationMsgs.length > 0) {
+        conversationMsgs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        lastMessageTimestamp = conversationMsgs[0].timestamp;
+        lastMessageContent = conversationMsgs[0].content || (conversationMsgs[0].type === 'invoice' ? 'Factura emitida' : '');
+      }
+
+      const contactRecord = (db.marketContacts || []).find(
+        c => (c.userId === currentUser.id && c.contactId === u.id) ||
+             (c.contactId === currentUser.id && c.userId === u.id)
+      );
+      const contactTimestamp = contactRecord?.createdAt || null;
+
+      return {
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        role: u.role,
+        level: u.level || 1,
+        levelName: levelNames[userLevelKey] || `Nivel ${u.level}`,
+        canBuyFromMe: sellCheck.allowed,
+        canSellToMe: buyCheck.allowed,
+        canTrade: buyCheck.allowed || sellCheck.allowed,
+        unreadCount,
+        lastMessageTimestamp,
+        lastMessageContent,
+        contactTimestamp
+      };
+    });
+
+  // Sort partners from most recent to least recent
+  partners.sort((a, b) => {
+    const timeA = a.lastMessageTimestamp
+      ? new Date(a.lastMessageTimestamp).getTime()
+      : (a.contactTimestamp ? new Date(a.contactTimestamp).getTime() : 0);
+    const timeB = b.lastMessageTimestamp
+      ? new Date(b.lastMessageTimestamp).getTime()
+      : (b.contactTimestamp ? new Date(b.contactTimestamp).getTime() : 0);
+
+    if (timeB !== timeA) {
+      return timeB - timeA; // Descending (most recent first)
+    }
+    return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+  });
+
+  res.json({ partners });
+});
+
+// Market Chat Messages Endpoints
+app.get('/api/market/messages/unread-count', (req, res) => {
+  const { userId } = req.query as { userId: string };
+  if (!userId) return res.status(400).json({ unreadCount: 0 });
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+  const unreadCount = db.marketMessages.filter(
+    m => m.recipientId === userId && !m.read && m.senderId !== 'system_court'
+  ).length;
+  res.json({ success: true, unreadCount });
+});
+
+// Court / Legal Portal Badges & Notifications Endpoints
+app.get('/api/court/unread-count', (req, res) => {
+  const { userId, role } = req.query as { userId: string; role?: string };
+  if (!userId) return res.status(400).json({ unreadCount: 0 });
+
+  const db = readDb();
+  if (!db.notifications) db.notifications = [];
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const uid = String(userId);
+  const isTeacher = role === 'teacher' || uid === 'profesor-1';
+
+  let unreadCount = 0;
+
+  // Unread court notifications
+  const courtNotifs = db.notifications.filter(n => {
+    if (n.read) return false;
+    const isForUser = n.userId === uid || (isTeacher && (n.userId === 'teacher' || n.userId === 'profesor-1'));
+    if (!isForUser) return false;
+    const t = (n.title || '').toLowerCase();
+    return (
+      t.includes('‚öñÔ∏è') ||
+      t.includes('demanda') ||
+      t.includes('judicial') ||
+      t.includes('sentencia') ||
+      t.includes('auto') ||
+      t.includes('embargo') ||
+      t.includes('autos') ||
+      t.includes('juzgado')
+    );
+  });
+
+  unreadCount = courtNotifs.length;
+
+  res.json({ success: true, unreadCount });
+});
+
+app.post('/api/court/notifications/mark-read', (req, res) => {
+  const { userId, role } = req.body;
+  if (!userId) return res.status(400).json({ success: false });
+
+  const db = readDb();
+  if (!db.notifications) db.notifications = [];
+  const uid = String(userId);
+  const isTeacher = role === 'teacher' || uid === 'profesor-1';
+
+  let modified = false;
+  db.notifications.forEach(n => {
+    const isForUser = n.userId === uid || (isTeacher && (n.userId === 'teacher' || n.userId === 'profesor-1'));
+    if (isForUser && !n.read) {
+      const t = (n.title || '').toLowerCase();
+      if (
+        t.includes('‚öñÔ∏è') ||
+        t.includes('demanda') ||
+        t.includes('judicial') ||
+        t.includes('sentencia') ||
+        t.includes('auto') ||
+        t.includes('embargo') ||
+        t.includes('autos') ||
+        t.includes('juzgado')
+      ) {
+        n.read = true;
+        modified = true;
+        syncNotificationToSupabase(n).catch(e => console.error(e));
+      }
+    }
+  });
+
+  if (modified) writeDb(db);
+  res.json({ success: true });
+});
+
+app.get('/api/market/messages', (req, res) => {
+  const { userId, partnerId } = req.query as { userId: string; partnerId: string };
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+
+  // Check and process any discounted promissory notes whose due date has arrived
+  let modified = false;
+  if (processDiscountedPromissoryNotesMaturity(db)) {
+    modified = true;
+  }
+
+  // Mark messages sent by partnerId to userId as read
+  db.marketMessages.forEach(m => {
+    if (m.recipientId === userId && m.senderId === partnerId && !m.read) {
+      m.read = true;
+      modified = true;
+      syncMarketMessageToSupabase(m).catch(e => console.error(e));
+    }
+  });
+  if (modified) writeDb(db);
+
+  const msgs = db.marketMessages.filter(
+    m => (m.senderId === userId && m.recipientId === partnerId) ||
+         (m.senderId === partnerId && m.recipientId === userId)
+  );
+
+  msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  res.json({ messages: msgs });
+});
+
+app.post('/api/market/messages', (req, res) => {
+  const { senderId, recipientId, content } = req.body;
+  if (!senderId || !recipientId || !content || !content.trim()) {
+    return res.status(400).json({ error: 'Remitente, destinatario y contenido requeridos.' });
+  }
+
+  const db = readDb();
+  const sender = db.users.find(u => u.id === senderId);
+  const recipient = db.users.find(u => u.id === recipientId);
+
+  if (!sender || !recipient) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+  const check1 = canTradeUsers(sender, recipient);
+  const check2 = canTradeUsers(recipient, sender);
+  if (!check1.allowed && !check2.allowed) {
+    return res.status(400).json({ error: 'No est√° permitido comerciar ni mensajear con este usuario seg√∫n las reglas de la cadena de suministro.' });
+  }
+
+  const chatId = [senderId, recipientId].sort().join('_');
+  const now = new Date();
+  const msg: MarketMessage = {
+    id: generateId('msg'),
+    chatId,
+    senderId,
+    senderName: sender.name,
+    recipientId,
+    recipientName: recipient.name,
+    content: content.trim(),
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'text'
+  };
+
+  if (!db.marketMessages) db.marketMessages = [];
+  db.marketMessages.push(msg);
+
+  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+
+  writeDb(db);
+
+  res.json({ success: true, message: msg });
+});
+
+app.post('/api/market/messages/send-manual-invoice', (req, res) => {
+  const {
+    senderId,
+    recipientId,
+    concept,
+    items: rawItems,
+    discountAmount: rawDiscount,
+    transportCost: rawTransport,
+    insuranceFee: rawInsurance,
+    orderId
+  } = req.body;
+
+  if (!senderId || !recipientId) {
+    return res.status(400).json({ error: 'Emisor y receptor requeridos.' });
+  }
+
+  const db = readDb();
+  const sender = db.users.find(u => u.id === senderId);
+  const recipient = db.users.find(u => u.id === recipientId);
+
+  if (!sender || !recipient) {
+    return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
+  }
+
+  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+  if (!db.marketMessages) db.marketMessages = [];
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const randomNum = Math.floor(1000 + Math.random() * 9000);
+  const invoiceNum = `FACT-${year}-${randomNum}`;
+
+  let items: Array<{ title: string; quantity: number; unitPrice: number; subtotal: number }> = [];
+  if (Array.isArray(rawItems) && rawItems.length > 0) {
+    items = rawItems.map(i => {
+      const q = Math.max(1, Number(i.quantity) || 1);
+      const p = Math.max(0, Number(i.unitPrice) || 0);
+      return {
+        title: String(i.title || 'Concepto comercial').trim(),
+        quantity: q,
+        unitPrice: p,
+        subtotal: q * p
+      };
+    });
+  } else {
+    items = [{
+      title: String(concept || 'Servicios / productos comerciales').trim(),
+      quantity: 1,
+      unitPrice: 100,
+      subtotal: 100
+    }];
+  }
+
+  const itemsSubtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const discountAmount = Math.max(0, Number(rawDiscount) || 0);
+  const transportCost = Math.max(0, Number(rawTransport) || 0);
+  const insuranceFee = Math.max(0, Number(rawInsurance) || 0);
+
+  // Insurance is not subject to VAT (exempt). Taxable base only includes goods/services + accessory transport minus discounts.
+  const taxableBase = Math.max(0, itemsSubtotal - discountAmount + transportCost);
+  const vatRate = 21;
+  const vatAmount = Math.round((taxableBase * 0.21) * 100) / 100;
+  const totalAmount = Math.round((taxableBase + vatAmount + insuranceFee) * 100) / 100;
+
+  let linkedOrder: any = null;
+
+  if (orderId) {
+    linkedOrder = db.rawMaterialOrders.find(o => o.id === orderId);
+    if (linkedOrder) {
+      linkedOrder.status = 'facturado';
+      linkedOrder.invoiceNumber = linkedOrder.invoiceNumber || invoiceNum;
+      if (!linkedOrder.invoicedAt) {
+        linkedOrder.invoicedAt = linkedOrder.requestedAt || linkedOrder.approvedAt || linkedOrder.deliveredAt || now.toISOString();
+      }
+      linkedOrder.sellerLevel = sender.level || linkedOrder.sellerLevel || 1;
+      linkedOrder.buyerLevel = recipient.level || linkedOrder.buyerLevel || 1;
+      linkedOrder.deliveryAddress = linkedOrder.deliveryAddress || 'Direcci√≥n comercial registrada';
+      linkedOrder.subtotalAmount = itemsSubtotal;
+      linkedOrder.discountAmount = discountAmount;
+      linkedOrder.transportCost = transportCost;
+      linkedOrder.insuranceFee = insuranceFee;
+      linkedOrder.basePrice = taxableBase;
+      linkedOrder.ivaAmount = vatAmount;
+      linkedOrder.vatAmount = vatAmount;
+      linkedOrder.vatRate = vatRate;
+      linkedOrder.totalAmount = totalAmount;
+      linkedOrder.needsTransport = Boolean(transportCost > 0);
+      linkedOrder.isDirectMessageInvoice = true;
+      linkedOrder.isChatInvoice = true;
+      linkedOrder.source = 'chat';
+      linkedOrder.items = items.map(i => ({
+        announcementId: 'manual_item',
+        materialTitle: i.title,
+        title: i.title,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+        totalCost: i.subtotal
+      }));
+      syncRawMaterialOrderToSupabase(linkedOrder).catch(e => console.error(e));
+    }
+  }
+
+  if (!linkedOrder) {
+    // Create new order record for custom manual invoice
+    const totalQuantity = items.reduce((acc, i) => acc + i.quantity, 0);
+    linkedOrder = {
+      id: generateId('ord'),
+      studentId: recipientId,
+      studentName: recipient.name,
+      sellerId: senderId,
+      sellerName: sender.name,
+      sellerLevel: sender.level || 1,
+      buyerLevel: recipient.level || 1,
+      announcementId: 'manual_invoice',
+      materialType: 'hierro',
+      materialTitle: concept || items[0]?.title || 'Factura comercial',
+      quantity: totalQuantity,
+      unitWeightKg: 1,
+      totalKg: totalQuantity,
+      basePrice: taxableBase,
+      ivaAmount: vatAmount,
+      needsTransport: Boolean(transportCost > 0),
+      unitPrice: items[0]?.unitPrice || 0,
+      items: items.map(i => ({
+        announcementId: 'manual_item',
+        materialTitle: i.title,
+        title: i.title,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+        totalCost: i.subtotal
+      })),
+      subtotalAmount: itemsSubtotal,
+      discountPercentage: 0,
+      discountAmount,
+      transportCost,
+      insuranceFee,
+      vatRate,
+      vatAmount,
+      totalAmount,
+      status: 'facturado',
+      invoiceNumber: invoiceNum,
+      invoicedAt: now.toISOString(),
+      requestedAt: now.toISOString(),
+      deliveryAddress: 'Direcci√≥n comercial registrada',
+      note: concept || 'Factura emitida manualmente por chat de mensajer√≠a',
+      isDirectMessageInvoice: true,
+      isChatInvoice: true,
+      source: 'chat'
+    };
+    db.rawMaterialOrders.unshift(linkedOrder);
+    syncRawMaterialOrderToSupabase(linkedOrder).catch(e => console.error(e));
+  }
+
+  const msgContent = `üìÑ FACTURA EMITIDA: ${invoiceNum} - ${items[0]?.title || 'Productos/Servicios'} (${totalAmount.toFixed(2)} ‚Ç¨ IVA incl.)`;
+
+  const msg: MarketMessage = {
+    id: generateId('msg'),
+    chatId: [senderId, recipientId].sort().join('_'),
+    senderId,
+    senderName: sender.name,
+    recipientId,
+    recipientName: recipient.name,
+    content: msgContent,
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'invoice',
+    invoiceData: {
+      id: linkedOrder.id,
+      orderId: linkedOrder.id,
+      invoiceNumber: invoiceNum,
+      concept: concept || items[0]?.title || 'Factura comercial',
+      items: items.map(i => ({
+        announcementId: 'manual_item',
+        materialTitle: i.title,
+        title: i.title,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+        totalCost: i.subtotal
+      })),
+      itemsSubtotal,
+      taxableBase,
+      discountAmount,
+      transportCost,
+      insuranceFee,
+      vatRate,
+      vatAmount,
+      totalAmount,
+      issuedAt: now.toISOString(),
+      sellerId: senderId,
+      sellerName: sender.name,
+      sellerLevel: sender.level || 1,
+      buyerId: recipientId,
+      buyerName: recipient.name,
+      buyerLevel: recipient.level || 1,
+      deliveryAddress: 'Direcci√≥n comercial registrada',
+      paymentMethod: 'Transferencia bancaria directa',
+      status: 'facturado'
+    }
+  };
+
+  db.marketMessages.push(msg);
+  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+
+  addNotification(
+    db,
+    recipientId,
+    'Nueva factura recibida en chat',
+    `${sender.name} te ha enviado la factura oficial ${invoiceNum} por un importe total de ${totalAmount.toFixed(2)} ‚Ç¨ en mensajer√≠a directa.`,
+    'order_approved',
+    linkedOrder.id
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    message: msg,
+    order: linkedOrder,
+    invoiceNumber: invoiceNum
+  });
+});
+
+app.post('/api/market/messages/sign-promissory-note', (req, res) => {
+  const {
+    senderId,
+    recipientId,
+    amount: rawAmount,
+    dueDate: rawDueDate,
+    issuePlace: rawIssuePlace,
+    issueDate: rawIssueDate,
+    concept: rawConcept,
+    orderType: rawOrderType,
+    bankIban: rawBankIban,
+    bankName: rawBankName,
+    linkedInvoiceNumber
+  } = req.body;
+
+  if (!senderId || !recipientId) {
+    return res.status(400).json({ error: 'Emisor (firmante/comprador) y receptor (tomador/vendedor) requeridos.' });
+  }
+
+  const amount = Number(rawAmount);
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'El importe del pagar√© debe ser superior a 0,00 ‚Ç¨.' });
+  }
+
+  if (!rawDueDate) {
+    return res.status(400).json({ error: 'La fecha de vencimiento es un requisito indispensable por la Ley Cambiaria.' });
+  }
+
+  const db = readDb();
+  const sender = db.users.find(u => u.id === senderId);
+  const recipient = db.users.find(u => u.id === recipientId);
+
+  if (!sender || !recipient) {
+    return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
+  }
+
+  if (!db.paymentObligations) db.paymentObligations = [];
+  if (!db.marketMessages) db.marketMessages = [];
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const randomNum = Math.floor(10000 + Math.random() * 90000);
+  const promissoryNum = `PAG-${year}-${randomNum}`;
+  const amountWords = numberToSpanishWords(amount);
+  const formattedDueDate = new Date(rawDueDate).toISOString();
+  const formattedIssueDate = rawIssueDate ? new Date(rawIssueDate).toISOString() : now.toISOString();
+  const issuePlace = String(rawIssuePlace || 'Madrid').trim();
+  const orderType = rawOrderType === 'a_la_orden' ? 'a_la_orden' : 'no_a_la_orden';
+  const concept = String(rawConcept || (linkedInvoiceNumber ? `Pago aplazado Factura ${linkedInvoiceNumber}` : 'Compromiso cambiario de pago comercial')).trim();
+
+  const senderIban = String(rawBankIban || sender.accountNumber || `ES21 0049 1500 05 1234567890`).trim();
+  const bankName = String(rawBankName || 'Banco Central Mercantil S.A.').trim();
+
+  const senderNif = String(req.body.issuerNif || (sender.id?.startsWith('user-') ? sender.id : `user-${sender.id}`)).trim();
+  const recipientNif = String(req.body.beneficiaryNif || (recipient.id?.startsWith('user-') ? recipient.id : `user-${recipient.id}`)).trim();
+  const senderAddress = (sender as any).address || 'Domicilio social registrado, Madrid';
+
+  // 1. Generate unique Promissory Note ID
+  const promissoryId = generateId('pn');
+
+  // 2. Create MarketMessage
+  const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+
+  const msgContent = `üìë PAGAR√â FIRMADO: ${promissoryNum} por ${formatNumber(amount)} ‚Ç¨ con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} en favor de ${recipient.name} (Librador: ${sender.name}). Pago manual por transferencia.`;
+
+  const promissoryData = {
+    id: promissoryId,
+    promissoryNoteNumber: promissoryNum,
+    concept,
+    amount,
+    amountInWords: amountWords,
+    issueDate: formattedIssueDate,
+    issuePlace,
+    dueDate: formattedDueDate,
+    orderType: orderType as 'no_a_la_orden' | 'a_la_orden',
+    beneficiaryId: recipient.id,
+    beneficiaryName: recipient.name,
+    beneficiaryNifCif: recipientNif,
+    beneficiaryLevel: recipient.level || 1,
+    issuerId: sender.id,
+    issuerName: sender.name,
+    issuerNifCif: senderNif,
+    issuerAddress: senderAddress,
+    issuerLevel: sender.level || 1,
+    bankName,
+    bankIban: senderIban,
+    signatureTimestamp: now.toISOString(),
+    signatureHash,
+    status: 'pendiente' as const
+  };
+
+  const msg: MarketMessage = {
+    id: generateId('msg'),
+    chatId: [senderId, recipientId].sort().join('_'),
+    senderId,
+    senderName: sender.name,
+    recipientId,
+    recipientName: recipient.name,
+    content: msgContent,
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'promissory_note',
+    promissoryNoteData: promissoryData
+  };
+
+  db.marketMessages.push(msg);
+  syncMarketMessageToSupabase(msg).catch(e => console.error('[Supabase DB] Error syncing promissory message:', e));
+
+  // 3. Notification to the seller (recipient)
+  addNotification(
+    db,
+    recipientId,
+    'Nuevo pagar√© cambiario recibido',
+    `${sender.name} ha firmado y emitido a tu favor el pagar√© cambiario oficial ${promissoryNum} por ${formatNumber(amount)} ‚Ç¨ con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} (pago directo por transferencia al vencimiento).`,
+    'transfer_received',
+    promissoryId
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    message: msg,
+    promissoryNoteNumber: promissoryNum
+  });
+});
+
+// Endpoint for beneficiary/vendor to discount a promissory note early at bank
+app.post('/api/market/messages/discount-promissory-note', (req, res) => {
+  const { messageId, beneficiaryId, noteNumber } = req.body;
+  if (!messageId && !noteNumber) {
+    return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
+  }
+
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+
+  let msg = db.marketMessages.find(m => 
+    m.id === messageId || 
+    m.promissoryNoteData?.id === messageId || 
+    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+  );
+
+  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+    return res.status(404).json({ error: 'Pagar√© cambiario no encontrado en el sistema de mensajer√≠a.' });
+  }
+
+  const pn = msg.promissoryNoteData;
+  if (pn.status === 'pagado') {
+    return res.status(400).json({ error: 'Este pagar√© ya ha sido cobrado previamente.' });
+  }
+  if (pn.status === 'descontado') {
+    return res.status(400).json({ error: 'Este pagar√© ya ha sido descontado previamente en el banco.' });
+  }
+  if (pn.status === 'impagado') {
+    return res.status(400).json({ error: 'Este pagar√© figura como impagado y no puede ser descontado.' });
+  }
+
+  const beneficiary = db.users.find(u => 
+    u.id === beneficiaryId || 
+    u.username === beneficiaryId || 
+    u.name === beneficiaryId ||
+    u.id === pn.beneficiaryId
+  );
+  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+  const isAuthorized = isTeacher || 
+                       pn.beneficiaryId === beneficiaryId || 
+                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagar√© (acreedor vendedor) puede solicitar el descuento bancario.' });
+  }
+
+  let payer = db.users.find(u => u.id === pn.issuerId);
+  if (!payer) {
+    payer = db.users.find(u => 
+      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+      u.username === pn.issuerId
+    );
+  }
+
+  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria (acreedor vendedor) no encontrada.' });
+  if (!payer) return res.status(404).json({ error: 'Empresa libradora (comprador deudor) no encontrada.' });
+
+  const amount = Number(pn.amount);
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Importe del pagar√© no v√°lido.' });
+  }
+
+  // Calculate days remaining until due date
+  const now = new Date();
+  const dueDate = new Date(pn.dueDate);
+  const diffTime = dueDate.getTime() - now.getTime();
+  const daysRemaining = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+
+  // Financial discount calculation:
+  // 6% nominal annual discount applied proportionally to days remaining (base 360 commercial days)
+  const discountRate = 0.06;
+  const discountInterest = Number(((amount * discountRate * daysRemaining) / 360).toFixed(2));
+
+  // Commission: 0.5% over nominal amount
+  const commissionRate = 0.005;
+  const discountCommission = Number((amount * commissionRate).toFixed(2));
+
+  // Net advance amount credited to creditor seller
+  const netAmount = Number((amount - discountInterest - discountCommission).toFixed(2));
+
+  // Credit beneficiary balance
+  beneficiary.balance = Number((beneficiary.balance + netAmount).toFixed(2));
+
+  const txId = generateId('tx');
+  const transferConcept = `Anticipo de descuento de pagar√© ${pn.promissoryNoteNumber} (nominal: ${formatNumber(amount)} ‚Ç¨, dto. 6% [${daysRemaining} d.]: -${formatNumber(discountInterest)} ‚Ç¨, com. 0,5%: -${formatNumber(discountCommission)} ‚Ç¨, l√≠quido: ${formatNumber(netAmount)} ‚Ç¨)`;
+
+  const newTransfer: Transfer = {
+    id: txId,
+    senderId: 'corp-banco-central',
+    senderName: 'Banco Central Mercantil (Descuento comercial de efectos)',
+    senderAccount: 'ES210001000299887700',
+    receiverId: beneficiary.id,
+    receiverName: beneficiary.name,
+    receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+    amount: netAmount,
+    concept: transferConcept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(newTransfer);
+
+  // Update promissory note data
+  pn.status = 'descontado';
+  pn.isDiscounted = true;
+  pn.discountedAt = now.toISOString();
+  pn.discountDays = daysRemaining;
+  pn.discountRate = 6;
+  pn.discountInterest = discountInterest;
+  pn.discountCommissionRate = 0.5;
+  pn.discountCommission = discountCommission;
+  pn.discountNetReceived = netAmount;
+  pn.discountTransferId = txId;
+
+  // Direct message notification in chat thread
+  const discountMsg: MarketMessage = {
+    id: generateId('msg'),
+    chatId: msg.chatId,
+    senderId: beneficiary.id,
+    senderName: beneficiary.name,
+    recipientId: payer.id,
+    recipientName: payer.name,
+    content: `üè¶ Pagar√© descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagar√© oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n‚Ä¢ Importe nominal: ${formatNumber(amount)} ‚Ç¨\n‚Ä¢ Descuento financiero (6,00% nominal anual, ${daysRemaining} d√≠as hasta vencimiento): -${formatNumber(discountInterest)} ‚Ç¨\n‚Ä¢ Comisi√≥n de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} ‚Ç¨\n‚Ä¢ L√≠quido ingresado en cuenta: ${formatNumber(netAmount)} ‚Ç¨.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargar√° el importe √≠ntegro (${formatNumber(amount)} ‚Ç¨) en la cuenta del comprador deudor (${payer.name}).`,
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'text'
+  };
+  db.marketMessages.push(discountMsg);
+
+  // Add system notifications
+  addNotification(
+    db,
+    beneficiary.id,
+    'Pagar√© descontado con √©xito',
+    `Has anticipado el cobro del pagar√© ${pn.promissoryNoteNumber}. Se han abonado ${formatNumber(netAmount)} ‚Ç¨ netos en tu cuenta bancaria (nominal: ${formatNumber(amount)} ‚Ç¨, dto. 6%: -${formatNumber(discountInterest)} ‚Ç¨, com. 0,5%: -${formatNumber(discountCommission)} ‚Ç¨).`,
+    'transfer_received',
+    txId
+  );
+
+  addNotification(
+    db,
+    payer.id,
+    'Pagar√© descontado por el proveedor',
+    `El acreedor ${beneficiary.name} ha descontado el pagar√© oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨). El banco cargar√° el importe nominal en tu cuenta en la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+    'transfer_received',
+    txId
+  );
+
+  writeDb(db);
+
+  // Sync to PostgreSQL Supabase
+  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-in', beneficiary.id, 'TRANSFER_IN', netAmount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
+  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+  syncMarketMessageToSupabase(discountMsg).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Pagar√© ${pn.promissoryNoteNumber} descontado con √©xito. Se han ingresado +${formatNumber(netAmount)} ‚Ç¨ l√≠quidos en tu cuenta.`,
+    transfer: newTransfer,
+    updatedMessage: msg,
+    newBalance: beneficiary.balance,
+    calculation: {
+      nominalAmount: amount,
+      daysRemaining,
+      discountRate: 6,
+      discountInterest,
+      commissionRate: 0.5,
+      discountCommission,
+      netAmount
+    }
+  });
+});
+
+// Endpoint for beneficiary/vendor to place a promissory note in bank collection management (gesti√≥n de cobro)
+app.post('/api/market/messages/collection-management-promissory-note', (req, res) => {
+  const { messageId, beneficiaryId, noteNumber } = req.body;
+  if (!messageId && !noteNumber) {
+    return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
+  }
+
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+
+  let msg = db.marketMessages.find(m => 
+    m.id === messageId || 
+    m.promissoryNoteData?.id === messageId || 
+    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+  );
+
+  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+    return res.status(404).json({ error: 'Pagar√© cambiario no encontrado en el sistema de mensajer√≠a.' });
+  }
+
+  const pn = msg.promissoryNoteData;
+  if (pn.status === 'pagado') {
+    return res.status(400).json({ error: 'Este pagar√© ya ha sido cobrado previamente.' });
+  }
+  if (pn.status === 'descontado') {
+    return res.status(400).json({ error: 'Este pagar√© ya ha sido descontado previamente en el banco.' });
+  }
+  if (pn.status === 'gestion_cobro') {
+    return res.status(400).json({ error: 'Este pagar√© ya se encuentra entregado en gesti√≥n de cobro bancario.' });
+  }
+  if (pn.status === 'impagado') {
+    return res.status(400).json({ error: 'Este pagar√© figura como impagado y no puede ser gestionado.' });
+  }
+
+  const beneficiary = db.users.find(u => 
+    u.id === beneficiaryId || 
+    u.username === beneficiaryId || 
+    u.name === beneficiaryId ||
+    u.id === pn.beneficiaryId
+  );
+  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+  const isAuthorized = isTeacher || 
+                       pn.beneficiaryId === beneficiaryId || 
+                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagar√© (acreedor vendedor) puede solicitar la gesti√≥n de cobro bancario.' });
+  }
+
+  let payer = db.users.find(u => u.id === pn.issuerId);
+  if (!payer) {
+    payer = db.users.find(u => 
+      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+      u.username === pn.issuerId
+    );
+  }
+
+  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria (acreedor vendedor) no encontrada.' });
+  if (!payer) return res.status(404).json({ error: 'Empresa libradora (comprador deudor) no encontrada.' });
+
+  const amount = Number(pn.amount);
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Importe del pagar√© no v√°lido.' });
+  }
+
+  // Commission: 0.5% over nominal amount with minimum of 20.00 ‚Ç¨
+  const commission = Math.max(20, Number((amount * 0.005).toFixed(2)));
+
+  if (beneficiary.balance < commission) {
+    return res.status(400).json({ 
+      error: `Saldo insuficiente para abonar la comisi√≥n de gesti√≥n de cobro (${formatNumber(commission)} ‚Ç¨). Saldo actual en cuenta: ${formatNumber(beneficiary.balance)} ‚Ç¨.` 
+    });
+  }
+
+  const now = new Date();
+
+  // Debit commission from beneficiary account
+  beneficiary.balance = Number((beneficiary.balance - commission).toFixed(2));
+
+  const txId = generateId('tx');
+  const transferConcept = `Comisi√≥n de servicio de gesti√≥n de cobro de pagar√© ${pn.promissoryNoteNumber} (0,5% sobre ${formatNumber(amount)} ‚Ç¨, m√≠nimo 20,00 ‚Ç¨)`;
+
+  const collectionCommissionTransfer: Transfer = {
+    id: txId,
+    senderId: beneficiary.id,
+    senderName: beneficiary.name,
+    senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+    receiverId: 'corp-banco-central',
+    receiverName: 'Banco Central Mercantil (Servicio de gesti√≥n de cobro)',
+    receiverAccount: 'ES210001000299887700',
+    amount: commission,
+    concept: transferConcept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(collectionCommissionTransfer);
+
+  // Update Promissory Note status to 'gestion_cobro'
+  pn.status = 'gestion_cobro';
+  pn.isCollectionManagement = true;
+  pn.collectionManagementAt = now.toISOString();
+  pn.collectionCommissionRate = 0.005;
+  pn.collectionCommission = commission;
+  pn.collectionTransferId = txId;
+
+  // Insert informative message in DM thread
+  const collectionMsg: MarketMessage = {
+    id: generateId('msg'),
+    chatId: msg.chatId,
+    senderId: beneficiary.id,
+    senderName: beneficiary.name,
+    recipientId: payer.id,
+    recipientName: payer.name,
+    content: `üèõÔ∏è Pagar√© en gesti√≥n de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagar√© oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨ a su banco en gesti√≥n de cobro (comisi√≥n abonada: ${formatNumber(commission)} ‚Ç¨). El banco tramitar√° e ingresar√° autom√°ticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'text'
+  };
+  db.marketMessages.push(collectionMsg);
+
+  // Add system notifications
+  addNotification(
+    db,
+    beneficiary.id,
+    'Pagar√© entregado en gesti√≥n de cobro',
+    `Has cedido el pagar√© ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨) en gesti√≥n de cobro bancaria. Se ha cargado la comisi√≥n de ${formatNumber(commission)} ‚Ç¨ (0,5%, m√≠n. 20 ‚Ç¨). El banco ingresar√° autom√°ticamente los ${formatNumber(amount)} ‚Ç¨ al vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+    'transfer_received',
+    txId
+  );
+
+  addNotification(
+    db,
+    payer.id,
+    'Pagar√© entregado en gesti√≥n de cobro por el proveedor',
+    `El acreedor ${beneficiary.name} ha entregado el pagar√© oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} ‚Ç¨) en gesti√≥n de cobro bancaria. El banco cargar√° el importe nominal en tu cuenta a la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+    'transfer_received',
+    txId
+  );
+
+  writeDb(db);
+
+  // Sync to PostgreSQL Supabase
+  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-out', beneficiary.id, 'TRANSFER_OUT', commission, now.toISOString(), transferConcept, collectionCommissionTransfer).catch(e => console.error(e));
+  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+  syncMarketMessageToSupabase(collectionMsg).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Pagar√© ${pn.promissoryNoteNumber} entregado en gesti√≥n de cobro con √©xito. Comisi√≥n abonada: ${formatNumber(commission)} ‚Ç¨. El banco liquidar√° el cobro autom√°ticamente a su vencimiento.`,
+    transfer: collectionCommissionTransfer,
+    updatedMessage: msg,
+    newBalance: beneficiary.balance,
+    commission
+  });
+});
+
+// Endpoint for beneficiary/vendor to collect/cash a promissory note at bank on or after due date
+app.post('/api/market/messages/collect-promissory-note', (req, res) => {
+  const { messageId, beneficiaryId, noteNumber } = req.body;
+  if (!messageId && !noteNumber) {
+    return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
+  }
+
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+
+  let msg = db.marketMessages.find(m => 
+    m.id === messageId || 
+    m.promissoryNoteData?.id === messageId || 
+    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+  );
+
+  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+    return res.status(404).json({ error: 'Pagar√© cambiario no encontrado en el sistema de mensajer√≠a.' });
+  }
+
+  const pn = msg.promissoryNoteData;
+  if (pn.status === 'pagado') {
+    return res.status(400).json({ error: 'Este pagar√© ya ha sido cobrado y liquidado previamente en el banco.' });
+  }
+  if (pn.status === 'descontado') {
+    return res.status(400).json({ error: 'Este pagar√© ya fue descontado por anticipado en el banco. La liquidaci√≥n con el deudor se efectuar√° autom√°ticamente al vencimiento.' });
+  }
+
+  const beneficiary = db.users.find(u => 
+    u.id === beneficiaryId || 
+    u.username === beneficiaryId || 
+    u.name === beneficiaryId ||
+    u.id === pn.beneficiaryId
+  );
+  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+  const isAuthorized = isTeacher || 
+                       pn.beneficiaryId === beneficiaryId || 
+                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagar√© puede presentar el pagar√© al cobro.' });
+  }
+
+  // Check due date: must be today or past
+  const now = new Date();
+  const todayUtc = now.toISOString().slice(0, 10);
+  const todayLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const dueStr = (pn.dueDate || '').slice(0, 10);
+  const isPastOrToday = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime() || isTeacher;
+
+  if (!isPastOrToday) {
+    return res.status(400).json({
+      error: `No es posible cobrar el pagar√© antes de su fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`
+    });
+  }
+
+  let payer = db.users.find(u => u.id === pn.issuerId);
+  if (!payer) {
+    payer = db.users.find(u => 
+      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() || 
+      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() || 
+      u.username === pn.issuerId
+    );
+  }
+
+  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria no encontrada.' });
+  if (!payer) return res.status(404).json({ error: 'Empresa libradora/compradora no encontrada.' });
+
+  const amount = Number(pn.amount);
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Importe del pagar√© no v√°lido.' });
+  }
+
+  // Case 1: Insufficient funds in buyer's bank account -> Mark as "impagado"
+  if (payer.balance < amount) {
+    pn.status = 'impagado';
+    pn.collectRequested = true;
+    pn.collectRequestedAt = now.toISOString();
+
+    const protestMsg: MarketMessage = {
+      id: generateId('msg'),
+      chatId: msg.chatId,
+      senderId: beneficiary.id,
+      senderName: beneficiary.name,
+      recipientId: payer.id,
+      recipientName: payer.name,
+      content: `‚ùå Pagar√© impagado por falta de fondos: El tomador ${beneficiary.name} ha presentado al cobro bancario el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨, pero la cuenta del librador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(payer.balance)} disponibles). El efecto queda en estado de impago con fuerza ejecutiva.`,
+      timestamp: now.toISOString(),
+      read: false,
+      type: 'text'
+    };
+    db.marketMessages.push(protestMsg);
+
+    addNotification(
+      db,
+      beneficiary.id,
+      'Pagar√© impagado por falta de fondos',
+      `El pagar√© ${pn.promissoryNoteNumber} de ${formatNumber(amount)} ‚Ç¨ emitido por ${payer.name} ha resultado impagado por saldo insuficiente.`,
+      'transfer_received',
+      pn.id || messageId
+    );
+
+    addNotification(
+      db,
+      payer.id,
+      'Aviso de pagar√© impagado',
+      `El proveedor ${beneficiary.name} ha presentado al cobro el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨, pero tu cuenta no dispone de saldo suficiente. Efecto impagado.`,
+      'transfer_received',
+      pn.id || messageId
+    );
+
+    writeDb(db);
+    syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+    syncMarketMessageToSupabase(protestMsg).catch(e => console.error(e));
+
+    return res.json({
+      success: false,
+      isImpagado: true,
+      error: `Pagar√© impagado: El comprador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(payer.balance)}) en su cuenta bancaria.`,
+      updatedMessage: msg
+    });
+  }
+
+  // Case 2: Sufficient funds -> Direct bank clearing: debit buyer, credit vendor
+  payer.balance = Number((payer.balance - amount).toFixed(2));
+  beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
+
+  const txId = generateId('tx');
+  const transferConcept = `Cobro de pagar√© bancario ${pn.promissoryNoteNumber} - ${pn.concept || 'Compensaci√≥n cambiaria'}`;
+
+  const newTransfer: Transfer = {
+    id: txId,
+    senderId: payer.id,
+    senderName: payer.name,
+    senderAccount: payer.accountNumber || pn.bankIban,
+    receiverId: beneficiary.id,
+    receiverName: beneficiary.name,
+    receiverAccount: beneficiary.accountNumber || `ES00 0000 0000 0000 0000`,
+    amount: amount,
+    concept: transferConcept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(newTransfer);
+
+  pn.status = 'pagado';
+  pn.paidAt = now.toISOString();
+  pn.paidTransferId = txId;
+  pn.collectRequested = true;
+  pn.collectRequestedAt = now.toISOString();
+
+  // Chat message confirmation
+  const successMsg: MarketMessage = {
+    id: generateId('msg'),
+    chatId: msg.chatId,
+    senderId: beneficiary.id,
+    senderName: beneficiary.name,
+    recipientId: payer.id,
+    recipientName: payer.name,
+    content: `üè¶ Pagar√© cobrado en banco: El beneficiario ${beneficiary.name} ha presentado al cobro el pagar√© oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨. Se ha cargado en la cuenta del librador y abonado en la cuenta del tomador (Ref. bancaria: ${txId}).`,
+    timestamp: now.toISOString(),
+    read: false,
+    type: 'text'
+  };
+  db.marketMessages.push(successMsg);
+
+  addNotification(
+    db,
+    beneficiary.id,
+    'Pagar√© cobrado exitosamente',
+    `Has cobrado en el banco el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨ de ${payer.name}. Saldo abonado en tu cuenta.`,
+    'transfer_received',
+    txId
+  );
+
+  addNotification(
+    db,
+    payer.id,
+    'Cargo de pagar√© al vencimiento',
+    `El banco ha liquidado el pagar√© ${pn.promissoryNoteNumber} por ${formatNumber(amount)} ‚Ç¨ presentado al cobro por ${beneficiary.name}.`,
+    'transfer_received',
+    txId
+  );
+
+  writeDb(db);
+
+  // Sync to PostgreSQL Supabase
+  if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
+  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-in', beneficiary.id, 'TRANSFER_IN', amount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
+  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+  syncMarketMessageToSupabase(successMsg).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Pagar√© cobrado con √©xito por ${formatNumber(amount)} ‚Ç¨. Saldo actualizado.`,
+    transfer: newTransfer,
+    updatedMessage: msg,
+    newBalance: beneficiary.balance
+  });
+});
+
+app.get(['/api/teacher/students-inventory', '/api/raw-materials/inventories'], (req, res) => {
+  const db = readDb();
+  const students = (db.users || []).filter(u => u.role === 'student');
+  const inventories: { [studentId: string]: any } = {};
+
+  for (const student of students) {
+    const inv = checkAndCalculateProduction(db, student.id);
+    const starRods = (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0;
+    const flatRods = (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0;
+    const totalRods = inv.producedRodsUnits || (starRods + flatRods) || 0;
+
+    const starScrewdrivers = (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0;
+    const flatScrewdrivers = (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0;
+    const totalScrewdrivers = inv.producedScrewdriversUnits || (starScrewdrivers + flatScrewdrivers) || 0;
+
+    inventories[student.id] = {
+      studentId: student.id,
+      studentName: student.name,
+      studentLevel: student.level || 1,
+      ironKg: inv.ironKg || 0,
+      plasticKg: inv.plasticKg || 0,
+      epoxiKg: inv.epoxiKg || 0,
+      metalKg: inv.metalKg || 0,
+      producedRodsUnits: totalRods,
+      starRodsUnits: starRods,
+      flatRodsUnits: flatRods,
+      producedScrewdriversUnits: totalScrewdrivers,
+      starScrewdriversUnits: starScrewdrivers,
+      flatScrewdriversUnits: flatScrewdrivers,
+      rawMaterials: {
+        fragmentos_hierro_kg: inv.ironKg || 0,
+        fragmentos_metal_kg: inv.metalKg || 0,
+        pellets_plastico_kg: inv.plasticKg || 0,
+        pegamento_epoxi_kg: inv.epoxiKg || 0
+      },
+      producedGoods: {
+        varillas_punta: totalRods,
+        varillas_punta_estrella: starRods,
+        varillas_punta_plana: flatRods,
+        productos_ensamblados: totalScrewdrivers,
+        destornilladores_punta_estrella: starScrewdrivers,
+        destornilladores_punta_plana: flatScrewdrivers
+      }
+    };
+  }
+
+  writeDb(db);
+  res.json({ success: true, inventories });
+});
+
+app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {
+  const studentId = req.params.studentId || (req.query.studentId as string);
+  if (!studentId) {
+    return res.status(400).json({ error: 'studentId es requerido' });
+  }
+  const db = readDb();
+
+  const inv = checkAndCalculateProduction(db, studentId);
+  const student = db.users.find(u => u.id === studentId);
+  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
+  writeDb(db);
+
+  const rawMaterials = {
+    fragmentos_hierro_kg: inv.ironKg || 0,
+    fragmentos_metal_kg: inv.metalKg || 0,
+    pellets_plastico_kg: inv.plasticKg || 0,
+    pegamento_epoxi_kg: inv.epoxiKg || 0
+  };
+
+  const producedGoods = {
+    rodProductionMode: (inv as any).rodProductionMode || null,
+    varillas_punta: inv.producedRodsUnits || 0,
+    varillas_punta_estrella: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+    varillas_punta_plana: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+    varillas_hierro_punta: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+    varillas_metal_punta: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+    productos_ensamblados: inv.producedScrewdriversUnits || 0,
+    destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+    destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+    destornilladores_hierro: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+    destornilladores_metal: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+    producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
+  };
+
+  res.json({
+    success: true,
+    inventory: inv,
+    rawMaterials,
+    producedGoods
+  });
+});
+
+app.post('/api/raw-materials/rod-production-mode', (req, res) => {
+  const { studentId, mode } = req.body;
+  if (!studentId || !mode) {
+    return res.status(400).json({ error: 'studentId y mode son requeridos' });
+  }
+  if (mode !== 'estrella' && mode !== 'plana') {
+    return res.status(400).json({ error: 'mode debe ser estrella o plana' });
+  }
+  const db = readDb();
+  const inv = checkAndCalculateProduction(db, studentId);
+  (inv as any).rodProductionMode = mode;
+  inv.updatedAt = new Date().toISOString();
+
+  const student = db.users.find(u => u.id === studentId);
+  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
+  writeDb(db);
+
+  const rawMaterials = {
+    fragmentos_hierro_kg: inv.ironKg || 0,
+    pellets_plastico_kg: inv.plasticKg || 0,
+    pegamento_epoxi_kg: inv.epoxiKg || 0
+  };
+
+  const producedGoods = {
+    rodProductionMode: (inv as any).rodProductionMode || null,
+    varillas_punta: inv.producedRodsUnits || 0,
+    varillas_punta_estrella: (inv as any).producedStarRodsUnits || 0,
+    varillas_punta_plana: (inv as any).producedFlatRodsUnits || 0,
+    productos_ensamblados: inv.producedScrewdriversUnits || 0,
+    destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || 0,
+    destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || 0,
+  };
+
+  res.json({
+    success: true,
+    inventory: inv,
+    rawMaterials,
+    producedGoods
+  });
+});
+
+// -------------------------------------------------------------
+// COURT & LAWSUITS API ENDPOINTS (JUZGADO DE 1¬™ INSTANCIA)
+// -------------------------------------------------------------
+
+// Helper to get judicial case number
+function generateCaseNumber(type: 'ordinaria' | 'cambiaria'): string {
+  const year = new Date().getFullYear();
+  const month = String(new Date().getMonth() + 1).padStart(2, '0');
+  const rand = String(Math.floor(1000 + Math.random() * 9000));
+  return type === 'cambiaria' ? `CAMB-${year}/${month}-${rand}` : `ORD-${year}/${month}-${rand}`;
+}
+
+// Helper to calculate business days (d√≠as h√°biles - excluyendo s√°bados y domingos)
+function addBusinessDays(startDate: Date, days: number): Date {
+  let count = 0;
+  const curDate = new Date(startDate);
+  while (count < days) {
+    curDate.setDate(curDate.getDate() + 1);
+    const dayOfWeek = curDate.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 0: Sunday, 6: Saturday
+      count++;
+    }
+  }
+  return curDate;
+}
+
+// Get all lawsuits for a user (or all if teacher/judge)
+app.get('/api/court/lawsuits', (req, res) => {
+  const { userId } = req.query;
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  if (!userId) {
+    return res.json({ success: true, lawsuits: db.courtLawsuits });
+  }
+
+  const user = db.users.find(u => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+
+  const isJudge = user.role === 'teacher' || 
+                  user.username?.toLowerCase() === 'pupdaniel' || 
+                  user.id === 'pupdaniel' || 
+                  user.id.toLowerCase().includes('pupdaniel');
+
+  if (isJudge) {
+    return res.json({ success: true, lawsuits: db.courtLawsuits });
+  }
+
+  const userLawsuits = db.courtLawsuits.filter(
+    l => l.plaintiffId === userId || l.defendantId === userId
+  );
+
+  res.json({ success: true, lawsuits: userLawsuits });
+});
+
+// Get unpaid/overdue promissory notes for a user to make cambiario claim easy
+app.get('/api/court/unpaid-notes', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ error: 'userId es requerido' });
+  }
+
+  const db = readDb();
+  if (!db.marketMessages) db.marketMessages = [];
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const eligibleNotes: PromissoryNoteData[] = [];
+
+  db.marketMessages.forEach(msg => {
+    if (msg.type === 'promissory_note' && msg.promissoryNoteData) {
+      const pn = msg.promissoryNoteData;
+      if (pn.beneficiaryId === userId) {
+        const isOverdue = (pn.dueDate || '').slice(0, 10) <= todayStr;
+        if (pn.status === 'impagado' || (pn.status === 'pendiente' && isOverdue)) {
+          eligibleNotes.push(pn);
+        }
+      }
+    }
+  });
+
+  res.json({ success: true, notes: eligibleNotes });
+});
+
+// File a new lawsuit (Demanda ordinaria o Cambiaria)
+app.post('/api/court/lawsuits', (req, res) => {
+  const {
+    type,
+    subtype,
+    plaintiffId,
+    defendantId,
+    claimedAmount,
+    goodsDescription,
+    facts,
+    legalBasis,
+    petitum,
+    evidenceSummary,
+    attachments,
+    contractDate,
+    relatedOrderId,
+    promissoryNoteNumber,
+    promissoryNoteId
+  } = req.body;
+
+  if (!type || !subtype || !plaintiffId || !defendantId || !claimedAmount || !facts || !goodsDescription) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios para formalizar el escrito de demanda.' });
+  }
+
+  const numAmount = Number(claimedAmount);
+  if (isNaN(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'La cuant√≠a reclamada debe ser un importe num√©rico v√°lido y positivo.' });
+  }
+
+  // Validate attachments: strictly PDF files only
+  const validAttachments: CourtAttachment[] = [];
+  if (Array.isArray(attachments)) {
+    for (const att of attachments) {
+      if (!att || !att.name) continue;
+      const isPdfName = att.name.toLowerCase().endsWith('.pdf');
+      const isPdfData = !att.dataUrl || att.dataUrl.startsWith('data:application/pdf') || att.dataUrl.startsWith('blob:') || isPdfName;
+      if (!isPdfName && !isPdfData) {
+        return res.status(400).json({ error: `El archivo "${att.name}" no es v√°lido. Solo se admiten documentos en formato PDF (.pdf).` });
+      }
+      validAttachments.push({
+        id: att.id || generateId('doc'),
+        name: att.name,
+        size: Number(att.size) || 0,
+        uploadedAt: att.uploadedAt || new Date().toISOString(),
+        dataUrl: att.dataUrl || '',
+        docType: att.docType || 'documento_probatorio'
+      });
+    }
+  }
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const plaintiff = db.users.find(u => u.id === plaintiffId);
+  const defendant = db.users.find(u => u.id === defendantId);
+
+  if (!plaintiff) return res.status(404).json({ error: 'Demandante no encontrado en el sistema.' });
+  if (!defendant) return res.status(404).json({ error: 'Demandado no encontrado en el sistema.' });
+
+  // Calculate interest and costs (30% in juicio cambiario per Art. 821 LEC, or standard legal interest 5% in ordinaria)
+  const interestAndCostsAmount = type === 'cambiaria' 
+    ? Number((numAmount * 0.30).toFixed(2)) 
+    : Number((numAmount * 0.05).toFixed(2));
+  
+  const totalClaimAmount = Number((numAmount + interestAndCostsAmount).toFixed(2));
+  const caseNumber = generateCaseNumber(type);
+  const now = new Date();
+
+  // Automatic billing of Lawyer fee: 15% of claimed amount + 21% IVA
+  const lawyerFeeBase = Number((numAmount * 0.15).toFixed(2));
+  const lawyerFeeIva = Number((lawyerFeeBase * 0.21).toFixed(2));
+  const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
+  const lawyerFeeInvoiceNum = `FRA-ABOG-${caseNumber.replace(/[^0-9]/g, '').slice(0, 8)}`;
+
+  // Deduct lawyer fee from plaintiff balance
+  plaintiff.balance = Number((plaintiff.balance - lawyerFeeTotal).toFixed(2));
+
+  const feeTxId = generateId('tx');
+  const feeConcept = `Minuta Letrado (15% s/ ${formatNumber(numAmount)} ‚Ç¨) + IVA 21% - Demanda ${caseNumber} [Factura ${lawyerFeeInvoiceNum}]`;
+  const lawyerTransfer: Transfer = {
+    id: feeTxId,
+    senderId: plaintiff.id,
+    senderName: plaintiff.name,
+    senderAccount: plaintiff.accountNumber,
+    receiverId: 'corp-despacho-abogados',
+    receiverName: 'Despacho Jur√≠dico & Letrados Procesales S.L.P.',
+    receiverAccount: 'ES980001004455667788',
+    amount: lawyerFeeTotal,
+    concept: feeConcept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(lawyerTransfer);
+
+  let promissoryNoteData: PromissoryNoteData | undefined;
+  if (type === 'cambiaria' && promissoryNoteNumber) {
+    const noteMsg = db.marketMessages?.find(
+      m => m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === promissoryNoteNumber
+    );
+    if (noteMsg && noteMsg.promissoryNoteData) {
+      promissoryNoteData = noteMsg.promissoryNoteData;
+    }
+  }
+
+  const lawsuit: CourtLawsuit = {
+    id: generateId('dem'),
+    caseNumber,
+    courtName: 'Juzgado de 1¬™ Instancia e Instrucci√≥n N¬∫ 1 (Sede Electr√≥nica)',
+    type,
+    subtype,
+    plaintiffId,
+    plaintiffName: plaintiff.name,
+    plaintiffNif: plaintiff.username?.toUpperCase() + '-ES',
+    plaintiffIban: plaintiff.accountNumber,
+    defendantId,
+    defendantName: defendant.name,
+    defendantNif: defendant.username?.toUpperCase() + '-ES',
+    defendantIban: defendant.accountNumber,
+    claimedAmount: numAmount,
+    interestAndCostsAmount,
+    totalClaimAmount,
+    contractDate: contractDate || now.toISOString().slice(0, 10),
+    goodsDescription,
+    facts,
+    legalBasis: legalBasis || (type === 'cambiaria' 
+      ? 'Arts. 819 a 827 de la Ley de Enjuiciamiento Civil (LEC) y Arts. 49, 94 y concordantes de la Ley Cambiaria y del Cheque (LCCh).'
+      : 'Arts. 399 y concordantes de la LEC; Arts. 325, 336 y 345 del C√≥digo de Comercio; Art. 1124 del C√≥digo Civil.'),
+    petitum: petitum || (type === 'cambiaria'
+      ? `Requerimiento judicial de pago inmediato por ${formatNumber(numAmount)} ‚Ç¨ de principal m√°s ${formatNumber(interestAndCostsAmount)} ‚Ç¨ para intereses de demora procesal y costas, con decreto de embargo preventivo cautelar sobre las cuentas y bienes del demandado.`
+      : `Sentencia condenatoria que declare el incumplimiento contractual y condene al demandado al pago de ${formatNumber(numAmount)} ‚Ç¨, m√°s los intereses legales devengados y las costas procesales.`),
+    evidenceSummary: evidenceSummary || 'Mensajer√≠a contractual, extractos bancarios, pagar√© oficial y registros del simulador.',
+    attachments: validAttachments,
+    relatedOrderId,
+    promissoryNoteNumber,
+    promissoryNoteId,
+    promissoryNoteDueDate: promissoryNoteData?.dueDate,
+    promissoryNoteData,
+    status: 'pendiente_admision',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    lawyerFeeAmount: lawyerFeeBase,
+    lawyerFeeIva: lawyerFeeIva,
+    lawyerFeeTotal: lawyerFeeTotal,
+    lawyerFeeInvoiceNumber: lawyerFeeInvoiceNum
+  };
+
+  db.courtLawsuits.unshift(lawsuit);
+
+  // Send judicial & financial notifications
+  addNotification(
+    db,
+    plaintiff.id,
+    '‚öñÔ∏è Demanda presentada y minuta abonada',
+    `Has presentado la demanda con Autos n¬∫ ${caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} ‚Ç¨ (${formatNumber(lawyerFeeBase)} ‚Ç¨ + ${formatNumber(lawyerFeeIva)} ‚Ç¨ IVA - Fra: ${lawyerFeeInvoiceNum}). El procedimiento queda pendiente de Auto de admisi√≥n a tr√°mite por el Juez.`,
+    'transfer_received',
+    feeTxId
+  );
+
+  // Notify the teacher/judge (pupdaniel) for admission review
+  const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
+  if (judgeUser && judgeUser.id !== plaintiff.id && judgeUser.id !== defendant.id) {
+    addNotification(
+      db,
+      judgeUser.id,
+      '‚öñÔ∏è Nueva demanda pendiente de admisi√≥n a tr√°mite',
+      `El actor ${plaintiff.name} ha interpuesto la ${type === 'cambiaria' ? 'Demanda cambiaria' : 'Demanda ordinaria'} (${caseNumber}) contra ${defendant.name} por ${formatNumber(numAmount)} ‚Ç¨. Pendiente de dictar Auto de admisi√≥n a tr√°mite o Inadmisi√≥n.`,
+      'transfer_received',
+      lawsuit.id
+    );
+  }
+
+  writeDb(db);
+
+  // Sync to Supabase
+  syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+  syncMovimientoToSupabase(feeTxId + '-out', plaintiff.id, 'TRANSFER_OUT', lawyerFeeTotal, now.toISOString(), feeConcept, lawyerTransfer).catch(e => console.error(e));
+  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Demanda ${caseNumber} presentada con √©xito. Minuta de abogado (${formatNumber(lawyerFeeTotal)} ‚Ç¨ con IVA) abonada. Pendiente de admisi√≥n a tr√°mite por el Magistrado-Juez.`,
+    lawsuit,
+    newBalance: plaintiff.balance,
+    lawyerFee: {
+      amount: lawyerFeeBase,
+      iva: lawyerFeeIva,
+      total: lawyerFeeTotal,
+      invoiceNumber: lawyerFeeInvoiceNum
+    }
+  });
+});
+
+// Teacher / Judge: Auto de admisi√≥n a tr√°mite o Inadmisi√≥n de Demanda
+app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
+  const { id } = req.params;
+  const { admission, notes, judgeId } = req.body;
+
+  if (!admission || (admission !== 'admitir' && admission !== 'rechazar')) {
+    return res.status(400).json({ error: 'admission debe ser "admitir" o "rechazar"' });
+  }
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado' });
+  }
+
+  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
+  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
+
+  const now = new Date();
+
+  if (admission === 'admitir') {
+    lawsuit.status = 'admitida';
+    lawsuit.admissionDate = now.toISOString();
+    lawsuit.defendantDeadlineDate = addBusinessDays(now, 20).toISOString();
+    lawsuit.admissionNotes = notes || 'Auto de admisi√≥n a tr√°mite dictado por el Magistrado-Juez del Juzgado de 1¬™ Instancia al concurrir los presupuestos procesales y aportaci√≥n de principios de prueba (LEC). Plazo legal de 20 d√≠as h√°biles conferido para contestaci√≥n.';
+    lawsuit.updatedAt = now.toISOString();
+
+    if (plaintiff) {
+      addNotification(
+        db,
+        plaintiff.id,
+        '‚öñÔ∏è Auto de admisi√≥n a tr√°mite',
+        `El Magistrado-Juez ha dictado Auto admitiendo a tr√°mite tu demanda en los Autos ${lawsuit.caseNumber}. Se ha conferido traslado y emplazado al demandado ${defendant?.name || 'demandado'} (Plazo: 20 d√≠as h√°biles).`,
+        'transfer_received',
+        lawsuit.id
+      );
+    }
+
+    if (defendant) {
+      addNotification(
+        db,
+        defendant.id,
+        '‚öñÔ∏è Emplazamiento de demanda judicial',
+        `Se ha admitido a tr√°mite la ${lawsuit.type === 'cambiaria' ? 'Demanda de juicio cambiario' : 'Demanda ordinaria'} (${lawsuit.caseNumber}) promovida por ${lawsuit.plaintiffName} por ${formatNumber(lawsuit.claimedAmount)} ‚Ç¨ (+costas). Dispones de 20 d√≠as h√°biles para contestar a la demanda o personarte en los autos.`,
+        'transfer_received',
+        lawsuit.id
+      );
+    }
+  } else {
+    lawsuit.status = 'inadmitida';
+    lawsuit.resolutionDate = now.toISOString();
+    lawsuit.resolutionNotes = notes || 'Auto de Inadmisi√≥n dictado por el Magistrado-Juez del Juzgado de 1¬™ Instancia por falta de acreditaci√≥n documental o defecto procesal insubsanable.';
+    lawsuit.updatedAt = now.toISOString();
+
+    if (plaintiff) {
+      addNotification(
+        db,
+        plaintiff.id,
+        '‚öñÔ∏è Auto de inadmisi√≥n de demanda',
+        `El Magistrado-Juez ha rechazado la admisi√≥n a tr√°mite de la demanda ${lawsuit.caseNumber}. Motivo: ${lawsuit.resolutionNotes}.`,
+        'transfer_received',
+        lawsuit.id
+      );
+    }
+  }
+
+  writeDb(db);
+  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: admission === 'admitir' 
+      ? `Auto de admisi√≥n a tr√°mite dictado con √©xito en los Autos ${lawsuit.caseNumber}. Demandado emplazado.`
+      : `Auto de Inadmisi√≥n dictado en los Autos ${lawsuit.caseNumber}. Procedimiento archivado.`,
+    lawsuit
+  });
+});
+
+// Teacher / Judge: Embargo Preventivo Cautelar (Juicio Cambiario - Art. 821 LEC)
+app.post('/api/court/lawsuits/:id/preventative-embargo', (req, res) => {
+  const { id } = req.params;
+  const { notes, judgeId } = req.body;
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado' });
+  }
+
+  if (lawsuit.type !== 'cambiaria') {
+    return res.status(400).json({ error: 'El embargo preventivo cautelar inmediato del Art. 821 LEC solo procede en Juicios Cambiarios.' });
+  }
+
+  if (lawsuit.status === 'ejecutada' || lawsuit.status === 'allanada_pagada' || lawsuit.status === 'desestimada' || lawsuit.status === 'inadmitida') {
+    return res.status(400).json({ error: 'El procedimiento ya est√° resuelto o archivado.' });
+  }
+
+  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
+  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
+
+  if (!defendant || !plaintiff) {
+    return res.status(404).json({ error: 'Partes procesales no encontradas' });
+  }
+
+  const now = new Date();
+  const totalToEmbargo = lawsuit.totalClaimAmount || Number((lawsuit.claimedAmount * 1.30).toFixed(2));
+
+  // Retain / Debit funds from defendant to Judicial Consignation Escrow Account
+  defendant.balance = Number((defendant.balance - totalToEmbargo).toFixed(2));
+
+  const embargoTxId = generateId('tx');
+  const embargoConcept = `Traba de Embargo Preventivo Cautelar (Art. 821 LEC) - Autos Cambiarios ${lawsuit.caseNumber}`;
+
+  const escrowTransfer: Transfer = {
+    id: embargoTxId,
+    senderId: defendant.id,
+    senderName: defendant.name,
+    senderAccount: defendant.accountNumber,
+    receiverId: 'corp-deposito-judicial',
+    receiverName: 'Cuenta General de Consignaciones y Dep√≥sitos Judiciales (Juzgado)',
+    receiverAccount: 'ES990001009988776655',
+    amount: totalToEmbargo,
+    concept: embargoConcept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(escrowTransfer);
+
+  lawsuit.status = 'embargo_preventivo';
+  lawsuit.embargoDate = now.toISOString();
+  lawsuit.embargoAmount = totalToEmbargo;
+  lawsuit.embargoTransferId = embargoTxId;
+  lawsuit.embargoNotes = notes || `Auto Judicial de Embargo Preventivo Cautelar decretado y trabado sobre las cuentas y saldos bancarios del demandado (${defendant.name}) por importe de ${formatNumber(totalToEmbargo)} ‚Ç¨ (Principal + Intereses de demora procesal y costas) conforme al Art. 821 de la LEC.`;
+  lawsuit.updatedAt = now.toISOString();
+
+  addNotification(
+    db,
+    defendant.id,
+    '‚öñÔ∏è Auto de embargo preventivo cautelar',
+    `El Magistrado-Juez ha decretado el embargo preventivo inmediato de ${formatNumber(totalToEmbargo)} ‚Ç¨ en tus cuentas bancarias en los Autos Cambiarios ${lawsuit.caseNumber} (Art. 821 LEC).`,
+    'transfer_received',
+    embargoTxId
+  );
+
+  addNotification(
+    db,
+    plaintiff.id,
+    '‚öñÔ∏è Embargo preventivo trabado con √©xito',
+    `Se ha ejecutado la traba de embargo preventivo cautelar por ${formatNumber(totalToEmbargo)} ‚Ç¨ sobre los saldos del demandado ${defendant.name} en el Juicio Cambiario ${lawsuit.caseNumber} (Art. 821 LEC).`,
+    'transfer_received',
+    embargoTxId
+  );
+
+  writeDb(db);
+
+  syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+  syncMovimientoToSupabase(embargoTxId + '-out', defendant.id, 'TRANSFER_OUT', totalToEmbargo, now.toISOString(), embargoConcept, escrowTransfer).catch(e => console.error(e));
+  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Embargo preventivo de ${formatNumber(totalToEmbargo)} ‚Ç¨ trabado sobre las cuentas de ${defendant.name} con √©xito (Art. 821 LEC).`,
+    lawsuit,
+    transfer: escrowTransfer
+  });
+});
+
+// Settle / Pay lawsuit voluntarily in court (Allanamiento procesal y consignaci√≥n)
+app.post('/api/court/lawsuits/:id/pay-settle', (req, res) => {
+  const { id } = req.params;
+  const { payerId } = req.body;
+
+  if (!payerId) {
+    return res.status(400).json({ error: 'payerId es requerido' });
+  }
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado.' });
+  }
+
+  if (lawsuit.defendantId !== payerId) {
+    return res.status(403).json({ error: 'Solo la parte demandada puede allanarse y liquidar la deuda procesal.' });
+  }
+
+  if (lawsuit.status === 'allanada_pagada' || lawsuit.status === 'ejecutada') {
+    return res.status(400).json({ error: 'Este procedimiento judicial ya ha sido satisfecho y cerrado previamente.' });
+  }
+
+  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
+  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
+
+  if (!defendant || !plaintiff) {
+    return res.status(404).json({ error: 'Partes procesales no encontradas en el sistema.' });
+  }
+
+  const amountToPay = lawsuit.claimedAmount;
+  if (defendant.balance < amountToPay) {
+    return res.status(400).json({
+      error: `Saldo bancario insuficiente (${formatCurrency(defendant.balance)} disponibles). Se requieren ${formatCurrency(amountToPay)} para consignar y liquidar la demanda judicial.`
+    });
+  }
+
+  // Execute bank transfer
+  defendant.balance = Number((defendant.balance - amountToPay).toFixed(2));
+  plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
+
+  const now = new Date();
+  const txId = generateId('tx');
+  const concept = `Consignaci√≥n y Pago Judicial - Autos ${lawsuit.caseNumber}`;
+
+  const newTransfer: Transfer = {
+    id: txId,
+    senderId: defendant.id,
+    senderName: defendant.name,
+    senderAccount: defendant.accountNumber,
+    receiverId: plaintiff.id,
+    receiverName: plaintiff.name,
+    receiverAccount: plaintiff.accountNumber,
+    amount: amountToPay,
+    concept,
+    timestamp: now.toISOString()
+  };
+
+  if (!db.transfers) db.transfers = [];
+  db.transfers.unshift(newTransfer);
+
+  lawsuit.status = 'allanada_pagada';
+  lawsuit.updatedAt = now.toISOString();
+  lawsuit.resolutionDate = now.toISOString();
+  lawsuit.resolutionNotes = `Allanamiento procesal √≠ntegro del demandado (${defendant.name}) mediante consignaci√≥n y abono bancario de ${formatNumber(amountToPay)} ‚Ç¨ en autos.`;
+  lawsuit.executionTransferId = txId;
+
+  // If tied to promissory note, update promissory note status too
+  if (lawsuit.promissoryNoteNumber && db.marketMessages) {
+    db.marketMessages.forEach(m => {
+      if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
+        m.promissoryNoteData.status = 'pagado';
+        m.promissoryNoteData.paidAt = now.toISOString();
+        m.promissoryNoteData.paidTransferId = txId;
+      }
+    });
+  }
+
+  addNotification(
+    db,
+    plaintiff.id,
+    '‚öñÔ∏è Cobro de demanda judicial',
+    `El demandado ${defendant.name} ha satisfecho √≠ntegramente la deuda de ${formatNumber(amountToPay)} ‚Ç¨ en los Autos ${lawsuit.caseNumber}. Saldo abonado en tu cuenta.`,
+    'transfer_received',
+    txId
+  );
+
+  addNotification(
+    db,
+    defendant.id,
+    '‚öñÔ∏è Demanda judicial liquidada',
+    `Has satisfecho la cantidad de ${formatNumber(amountToPay)} ‚Ç¨ en los Autos ${lawsuit.caseNumber}. El procedimiento ha quedado archivado por allanamiento.`,
+    'transfer_received',
+    txId
+  );
+
+  writeDb(db);
+  syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+  syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-out', defendant.id, 'TRANSFER_OUT', amountToPay, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
+  syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
+  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Deuda judicial satisfecha con √©xito por ${formatNumber(amountToPay)} ‚Ç¨. Autos archivados por allanamiento.`,
+    lawsuit,
+    transfer: newTransfer,
+    newBalance: defendant.balance
+  });
+});
+
+// Defendant response / contestaci√≥n a la demanda (LEC)
+app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
+  const { id } = req.params;
+  const { defendantId, answerType, facts, attachments } = req.body;
+
+  if (!defendantId) {
+    return res.status(400).json({ error: 'defendantId es requerido' });
+  }
+
+  if (!answerType || (answerType !== 'ordinaria_contestacion' && answerType !== 'cambiaria_ya_pagado' && answerType !== 'cambiaria_paga_ahora')) {
+    return res.status(400).json({ error: 'Tipo de contestaci√≥n no v√°lido.' });
+  }
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado.' });
+  }
+
+  if (lawsuit.defendantId !== defendantId) {
+    return res.status(403).json({ error: 'Solo la parte demandada de estos autos puede formular contestaci√≥n o alegaciones.' });
+  }
+
+  if (lawsuit.status !== 'admitida' && lawsuit.status !== 'embargo_preventivo') {
+    return res.status(400).json({ error: 'El procedimiento debe estar admitido a tr√°mite para contestar a la demanda.' });
+  }
+
+  if (lawsuit.defendantAnswered) {
+    return res.status(400).json({ error: 'Ya se ha formulado contestaci√≥n o alegaciones en este procedimiento judicial.' });
+  }
+
+  // Type-specific validation
+  if (lawsuit.type === 'ordinaria' && answerType !== 'ordinaria_contestacion') {
+    return res.status(400).json({ error: 'En demanda ordinaria, debe presentarse el escrito de contestaci√≥n a la demanda.' });
+  }
+
+  if (lawsuit.type === 'cambiaria' && answerType !== 'cambiaria_ya_pagado' && answerType !== 'cambiaria_paga_ahora') {
+    return res.status(400).json({ error: 'En demanda cambiaria, el demandado solo puede alegar: que ya ha pagado o que no ha pagado pero que lo hace en ese momento.' });
+  }
+
+  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
+  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
+
+  if (!defendant || !plaintiff) {
+    return res.status(404).json({ error: 'Partes procesales no encontradas.' });
+  }
+
+  // Validate attachments: strictly PDF files only
+  const validAttachments: CourtAttachment[] = [];
+  if (Array.isArray(attachments)) {
+    for (const att of attachments) {
+      const isPdf = (att.name && att.name.toLowerCase().endsWith('.pdf')) || (att.dataUrl && att.dataUrl.startsWith('data:application/pdf'));
+      if (!isPdf) {
+        return res.status(400).json({ error: 'Solo se admiten documentos adjuntos en formato PDF (.pdf).' });
+      }
+      validAttachments.push(att);
+    }
+  }
+
+  const now = new Date();
+
+  // Case 1: ordinaria_contestacion OR cambiaria_ya_pagado (Requires Lawyer fee charge: 15% of claimed amount + 21% IVA)
+  if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
+    const lawyerFeeBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
+    const lawyerFeeIva = Number((lawyerFeeBase * 0.21).toFixed(2));
+    const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
+    const invNum = `FRA-ABOG-DEF-${lawsuit.caseNumber.replace(/[^0-9]/g, '').slice(0, 8)}`;
+
+    if (defendant.balance < lawyerFeeTotal) {
+      return res.status(400).json({
+        error: `Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant.balance)} disponibles) para abonar la minuta del letrado de la defensa (${formatCurrency(lawyerFeeTotal)} con IVA 21%).`
+      });
+    }
+
+    // Deduct lawyer fee from defendant
+    defendant.balance = Number((defendant.balance - lawyerFeeTotal).toFixed(2));
+
+    const feeTxId = generateId('tx');
+    const feeConcept = answerType === 'ordinaria_contestacion'
+      ? `Minuta Letrado Defensa (15% s/ ${formatNumber(lawsuit.claimedAmount)} ‚Ç¨) + IVA 21% - Contestaci√≥n Demanda ordinaria ${lawsuit.caseNumber} [Factura ${invNum}]`
+      : `Minuta Letrado Oposici√≥n Cambiaria (15% s/ ${formatNumber(lawsuit.claimedAmount)} ‚Ç¨) + IVA 21% - Oposici√≥n Juicio Cambiario ${lawsuit.caseNumber} [Factura ${invNum}]`;
+
+    const lawyerTransfer: Transfer = {
+      id: feeTxId,
+      senderId: defendant.id,
+      senderName: defendant.name,
+      senderAccount: defendant.accountNumber,
+      receiverId: 'corp-despacho-abogados',
+      receiverName: 'Despacho Jur√≠dico & Letrados Procesales S.L.P.',
+      receiverAccount: 'ES980001004455667788',
+      amount: lawyerFeeTotal,
+      concept: feeConcept,
+      timestamp: now.toISOString()
+    };
+
+    if (!db.transfers) db.transfers = [];
+    db.transfers.unshift(lawyerTransfer);
+
+    lawsuit.defendantAnswered = true;
+    lawsuit.defendantAnswerDate = now.toISOString();
+    lawsuit.defendantAnswerType = answerType;
+    lawsuit.defendantAnswerFacts = facts || (answerType === 'ordinaria_contestacion' ? 'Contestaci√≥n a la demanda presentada por la representaci√≥n procesal de la parte demandada.' : 'Oposici√≥n al juicio cambiario: El demandado alega que ya ha satisfecho el pagar√© reclamado.');
+    lawsuit.defendantAnswerAttachments = validAttachments;
+    lawsuit.defendantLawyerFeeAmount = lawyerFeeBase;
+    lawsuit.defendantLawyerFeeIva = lawyerFeeIva;
+    lawsuit.defendantLawyerFeeTotal = lawyerFeeTotal;
+    lawsuit.defendantLawyerFeeInvoiceNumber = invNum;
+    lawsuit.updatedAt = now.toISOString();
+
+    addNotification(
+      db,
+      defendant.id,
+      answerType === 'ordinaria_contestacion' ? '‚öñÔ∏è Contestaci√≥n a la demanda presentada' : '‚öñÔ∏è Oposici√≥n cambiaria presentada',
+      `Has presentado la contestaci√≥n en los Autos ${lawsuit.caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} ‚Ç¨ (${formatNumber(lawyerFeeBase)} ‚Ç¨ + ${formatNumber(lawyerFeeIva)} ‚Ç¨ IVA - Fra: ${invNum}).`,
+      'transfer_received',
+      feeTxId
+    );
+
+    addNotification(
+      db,
+      plaintiff.id,
+      '‚öñÔ∏è Traslado de contestaci√≥n de demanda',
+      `El demandado ${defendant.name} ha formalizado su contestaci√≥n en los Autos ${lawsuit.caseNumber} con alegaciones y ${validAttachments.length} documento(s) PDF.`,
+      'transfer_received',
+      lawsuit.id
+    );
+
+    const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
+    if (judgeUser && judgeUser.id !== plaintiff.id && judgeUser.id !== defendant.id) {
+      addNotification(
+        db,
+        judgeUser.id,
+        '‚öñÔ∏è Contestaci√≥n a la Demanda en Autos',
+        `El demandado ${defendant.name} ha formulado contestaci√≥n en los Autos ${lawsuit.caseNumber}. Procedimiento listo para dictar Resoluci√≥n / Sentencia.`,
+        'transfer_received',
+        lawsuit.id
+      );
+    }
+
+    writeDb(db);
+    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+    syncMovimientoToSupabase(feeTxId + '-out', defendant.id, 'TRANSFER_OUT', lawyerFeeTotal, now.toISOString(), feeConcept, lawyerTransfer).catch(e => console.error(e));
+    syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+    return res.json({
+      success: true,
+      message: `Contestaci√≥n formalizada con √©xito en los Autos ${lawsuit.caseNumber}. Minuta de abogado (${formatNumber(lawyerFeeTotal)} ‚Ç¨) abonada.`,
+      lawsuit,
+      newBalance: defendant.balance,
+      lawyerFee: {
+        amount: lawyerFeeBase,
+        iva: lawyerFeeIva,
+        total: lawyerFeeTotal,
+        invoiceNumber: invNum
+      }
+    });
+  }
+
+  // Case 2: cambiaria_paga_ahora (Defendant pays the full promissory note amount immediately)
+  if (answerType === 'cambiaria_paga_ahora') {
+    const amountToPay = lawsuit.claimedAmount;
+    const payTxId = generateId('tx');
+    const payConcept = `Abono y Liquidaci√≥n Inmediata de Pagar√© Reclamado - Autos Cambiarios ${lawsuit.caseNumber}`;
+    let paymentTransfer: Transfer;
+
+    // If preventatively embargoed, transfer from judicial escrow
+    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
+      plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
+      // Refund any excess interest escrow to defendant
+      const excess = Number((lawsuit.embargoAmount - amountToPay).toFixed(2));
+      if (excess > 0) {
+        defendant.balance = Number((defendant.balance + excess).toFixed(2));
+      }
+
+      paymentTransfer = {
+        id: payTxId,
+        senderId: 'corp-deposito-judicial',
+        senderName: 'Cuenta General de Dep√≥sitos Judiciales (Juzgado)',
+        senderAccount: 'ES990001009988776655',
+        receiverId: plaintiff.id,
+        receiverName: plaintiff.name,
+        receiverAccount: plaintiff.accountNumber,
+        amount: amountToPay,
+        concept: payConcept,
+        timestamp: now.toISOString()
+      };
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(paymentTransfer);
+      syncMovimientoToSupabase(payTxId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
+    } else {
+      if (defendant.balance < amountToPay) {
+        return res.status(400).json({
+          error: `Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant.balance)} disponibles) para abonar el importe del pagar√© (${formatCurrency(amountToPay)}).`
+        });
+      }
+
+      defendant.balance = Number((defendant.balance - amountToPay).toFixed(2));
+      plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
+
+      paymentTransfer = {
+        id: payTxId,
+        senderId: defendant.id,
+        senderName: defendant.name,
+        senderAccount: defendant.accountNumber,
+        receiverId: plaintiff.id,
+        receiverName: plaintiff.name,
+        receiverAccount: plaintiff.accountNumber,
+        amount: amountToPay,
+        concept: payConcept,
+        timestamp: now.toISOString()
+      };
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(paymentTransfer);
+      syncMovimientoToSupabase(payTxId + '-out', defendant.id, 'TRANSFER_OUT', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
+      syncMovimientoToSupabase(payTxId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
+    }
+
+    lawsuit.defendantAnswered = true;
+    lawsuit.defendantAnswerDate = now.toISOString();
+    lawsuit.defendantAnswerType = 'cambiaria_paga_ahora';
+    lawsuit.defendantAnswerFacts = facts || 'El demandado comparece manifestando que no hab√≠a pagado el pagar√© y procediendo en este acto a su abono voluntario e √≠ntegro en autos.';
+    lawsuit.defendantAnswerAttachments = validAttachments;
+    lawsuit.status = 'allanada_pagada';
+    lawsuit.resolutionDate = now.toISOString();
+    lawsuit.resolutionNotes = `Allanamiento y pago voluntario del demandado (${defendant.name}) abonando ${formatNumber(amountToPay)} ‚Ç¨ en autos.`;
+    lawsuit.executionTransferId = payTxId;
+    lawsuit.updatedAt = now.toISOString();
+
+    if (lawsuit.promissoryNoteNumber && db.marketMessages) {
+      db.marketMessages.forEach(m => {
+        if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
+          m.promissoryNoteData.status = 'pagado';
+          m.promissoryNoteData.paidAt = now.toISOString();
+          m.promissoryNoteData.paidTransferId = payTxId;
+        }
+      });
+    }
+
+    addNotification(
+      db,
+      plaintiff.id,
+      '‚öñÔ∏è Pago judicial de pagar√© recibido',
+      `El demandado ${defendant.name} ha comparecido abonando √≠ntegramente los ${formatNumber(amountToPay)} ‚Ç¨ del pagar√© en los Autos ${lawsuit.caseNumber}. Saldo ingresado en tu cuenta.`,
+      'transfer_received',
+      payTxId
+    );
+
+    addNotification(
+      db,
+      defendant.id,
+      '‚öñÔ∏è Pagar√© judicial abonado y autos archivados',
+      `Has abonado ${formatNumber(amountToPay)} ‚Ç¨ en los Autos Cambiarios ${lawsuit.caseNumber}. Procedimiento archivado por allanamiento y pago.`,
+      'transfer_received',
+      payTxId
+    );
+
+    writeDb(db);
+    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+    syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+    return res.json({
+      success: true,
+      message: `Pagar√© abonado con √©xito en los Autos ${lawsuit.caseNumber}. Procedimiento archivado por allanamiento.`,
+      lawsuit,
+      transfer: paymentTransfer,
+      newBalance: defendant.balance
+    });
+  }
+});
+
+// Judge / Teacher ruling (Sentencia judicial o decreto de ejecuci√≥n forzosa)
+app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
+  const { id } = req.params;
+  const { ruling, comments, judgeId } = req.body;
+
+  if (!ruling || (ruling !== 'estimatoria' && ruling !== 'desestimatoria')) {
+    return res.status(400).json({ error: 'ruling debe ser "estimatoria" o "desestimatoria"' });
+  }
+
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
+
+  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado' });
+  }
+
+  const now = new Date();
+  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
+  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
+
+  if (!defendant || !plaintiff) {
+    return res.status(404).json({ error: 'Partes procesales no encontradas' });
+  }
+
+  if (ruling === 'estimatoria') {
+    const totalToDebit = lawsuit.totalClaimAmount || lawsuit.claimedAmount;
+    let txId = generateId('tx');
+    let concept = `Ejecuci√≥n Judicial Forzosa - Sentencia Estimatoria Autos ${lawsuit.caseNumber}`;
+    let newTransfer: Transfer;
+
+    // Check if embargo was previously executed
+    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
+      // Funds are already in Escrow account; transfer from Escrow to plaintiff
+      const embargoAmt = lawsuit.embargoAmount;
+      plaintiff.balance = Number((plaintiff.balance + embargoAmt).toFixed(2));
+      concept = `Entrega de Fondos Embargados - Sentencia Estimatoria Firme Autos ${lawsuit.caseNumber}`;
+      newTransfer = {
+        id: txId,
+        senderId: 'corp-deposito-judicial',
+        senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
+        senderAccount: 'ES990001009988776655',
+        receiverId: plaintiff.id,
+        receiverName: plaintiff.name,
+        receiverAccount: plaintiff.accountNumber,
+        amount: embargoAmt,
+        concept,
+        timestamp: now.toISOString()
+      };
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(newTransfer);
+      syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', embargoAmt, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
+    } else {
+      // Direct execution: debit defendant, credit plaintiff
+      defendant.balance = Number((defendant.balance - totalToDebit).toFixed(2));
+      plaintiff.balance = Number((plaintiff.balance + totalToDebit).toFixed(2));
+
+      newTransfer = {
+        id: txId,
+        senderId: defendant.id,
+        senderName: defendant.name,
+        senderAccount: defendant.accountNumber,
+        receiverId: plaintiff.id,
+        receiverName: plaintiff.name,
+        receiverAccount: plaintiff.accountNumber,
+        amount: totalToDebit,
+        concept,
+        timestamp: now.toISOString()
+      };
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(newTransfer);
+
+      syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+      syncMovimientoToSupabase(txId + '-out', defendant.id, 'TRANSFER_OUT', totalToDebit, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
+      syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', totalToDebit, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
+    }
+
+    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+
+    lawsuit.status = 'ejecutada';
+    lawsuit.updatedAt = now.toISOString();
+    lawsuit.resolutionDate = now.toISOString();
+    lawsuit.resolutionNotes = `Sentencia estimatoria firme dictada por el Magistrado-Juez del Juzgado de 1¬™ Instancia con ejecuci√≥n forzosa por ${formatNumber(totalToDebit)} ‚Ç¨ (Principal + Intereses y Costas).`;
+    lawsuit.judgeComments = comments || 'Estimada √≠ntegramente la demanda con imposici√≥n de costas procesales.';
+    lawsuit.executionTransferId = txId;
+
+    if (lawsuit.promissoryNoteNumber && db.marketMessages) {
+      db.marketMessages.forEach(m => {
+        if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
+          m.promissoryNoteData.status = 'pagado';
+          m.promissoryNoteData.paidAt = now.toISOString();
+          m.promissoryNoteData.paidTransferId = txId;
+        }
+      });
+    }
+
+    addNotification(
+      db,
+      plaintiff.id,
+      '‚öñÔ∏è Sentencia judicial estimatoria',
+      `El Magistrado-Juez ha dictado sentencia estimatoria en los Autos ${lawsuit.caseNumber}. Se han transferido ${formatNumber(totalToDebit)} ‚Ç¨ a tu cuenta.`,
+      'transfer_received',
+      txId
+    );
+
+    addNotification(
+      db,
+      defendant.id,
+      '‚öñÔ∏è Notificaci√≥n de sentencia y ejecuci√≥n',
+      `El Magistrado-Juez ha dictado sentencia y ejecutado el cargo en los Autos ${lawsuit.caseNumber} por ${formatNumber(totalToDebit)} ‚Ç¨.`,
+      'transfer_received',
+      txId
+    );
+  } else {
+    // Desestimatoria: el demandante debe pagar al demandado las costas procesales (minuta 15% + IVA)
+    const costsBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
+    const costsIva = Number((costsBase * 0.21).toFixed(2));
+    const costsTotal = lawsuit.defendantLawyerFeeTotal || Number((costsBase + costsIva).toFixed(2));
+
+    // Plaintiff pays costs to Defendant
+    plaintiff.balance = Number((plaintiff.balance - costsTotal).toFixed(2));
+    defendant.balance = Number((defendant.balance + costsTotal).toFixed(2));
+
+    const costsTxId = generateId('tx');
+    const costsConcept = `Condena en Costas Procesales (Minuta Letrado 15% + IVA) - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
+
+    const costsTransfer: Transfer = {
+      id: costsTxId,
+      senderId: plaintiff.id,
+      senderName: plaintiff.name,
+      senderAccount: plaintiff.accountNumber,
+      receiverId: defendant.id,
+      receiverName: defendant.name,
+      receiverAccount: defendant.accountNumber,
+      amount: costsTotal,
+      concept: costsConcept,
+      timestamp: now.toISOString()
+    };
+
+    if (!db.transfers) db.transfers = [];
+    db.transfers.unshift(costsTransfer);
+
+    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+    syncMovimientoToSupabase(costsTxId + '-out', plaintiff.id, 'TRANSFER_OUT', costsTotal, now.toISOString(), costsConcept, costsTransfer).catch(e => console.error(e));
+    syncMovimientoToSupabase(costsTxId + '-in', defendant.id, 'TRANSFER_IN', costsTotal, now.toISOString(), costsConcept, costsTransfer).catch(e => console.error(e));
+
+    // If funds were previously embargoed, return them from Escrow to defendant
+    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
+      const refundAmt = lawsuit.embargoAmount;
+      defendant.balance = Number((defendant.balance + refundAmt).toFixed(2));
+      const refundTxId = generateId('tx');
+      const refundConcept = `Levantamiento y Devoluci√≥n de Embargo Preventivo - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
+
+      const refundTransfer: Transfer = {
+        id: refundTxId,
+        senderId: 'corp-deposito-judicial',
+        senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
+        senderAccount: 'ES990001009988776655',
+        receiverId: defendant.id,
+        receiverName: defendant.name,
+        receiverAccount: defendant.accountNumber,
+        amount: refundAmt,
+        concept: refundConcept,
+        timestamp: now.toISOString()
+      };
+
+      db.transfers.unshift(refundTransfer);
+
+      syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
+      syncMovimientoToSupabase(refundTxId + '-in', defendant.id, 'TRANSFER_IN', refundAmt, now.toISOString(), refundConcept, refundTransfer).catch(e => console.error(e));
+    }
+
+    lawsuit.status = 'desestimada';
+    lawsuit.updatedAt = now.toISOString();
+    lawsuit.resolutionDate = now.toISOString();
+    lawsuit.costsPaid = costsTotal;
+    lawsuit.costsTransferId = costsTxId;
+    lawsuit.resolutionNotes = `Sentencia desestimatoria dictada por el Magistrado-Juez del Juzgado de 1¬™ Instancia con expresa imposici√≥n de costas al demandante por ${formatNumber(costsTotal)} ‚Ç¨ (minuta letrada del 15% + IVA).`;
+    lawsuit.judgeComments = comments || 'Desestimada √≠ntegramente la demanda con expresa condena en costas a la parte actora.';
+    lawsuit.executionTransferId = costsTxId;
+
+    addNotification(
+      db,
+      plaintiff.id,
+      '‚öñÔ∏è Sentencia desestimatoria - condena en costas',
+      `El Magistrado-Juez ha desestimado tu demanda en los Autos ${lawsuit.caseNumber} con expresa condena en costas. Se han transferido ${formatNumber(costsTotal)} ‚Ç¨ de tu cuenta a favor de ${defendant.name} en concepto de costas procesales.`,
+      'transfer_received',
+      costsTxId
+    );
+
+    addNotification(
+      db,
+      defendant.id,
+      '‚öñÔ∏è Demanda desestimada - abono de costas',
+      `La demanda deducida contra tu empresa en los Autos ${lawsuit.caseNumber} ha sido desestimada con condena en costas al actor. Se han abonado ${formatNumber(costsTotal)} ‚Ç¨ en tu cuenta bancaria en concepto de costas procesales (minuta letrada 15% + IVA). ${lawsuit.embargoAmount ? 'Asimismo, se han devuelto los fondos embargados cautelarmente a tu cuenta.' : ''}`,
+      'transfer_received',
+      costsTxId
+    );
+  }
+
+  writeDb(db);
+  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+
+  res.json({
+    success: true,
+    message: `Resoluci√≥n judicial dictada con √©xito en los Autos ${lawsuit.caseNumber}.`,
+    lawsuit
+  });
+});
+
+// API 404 handler - ensure any unmatched /api request returns JSON, not HTML
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ error: `Ruta API no encontrada: ${req.originalUrl}` });
+});
+
+// Global API error handler - ensure any server exception in /api returns JSON, not HTML
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[API Error]', err);
+  if (req.originalUrl.startsWith('/api')) {
+    return res.status(500).json({ error: err.message || 'Error interno del servidor' });
+  }
+  next(err);
+});
+
+// ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
+
+async function startServer() {
+  // Create Supabase tables "cuentas" and "movimientos" if they do not exist
+  await initSupabaseTables();
+  await restoreFromSupabase().catch(e => console.error('[Supabase Startup Restore Error]', e));
+
+  // Serve static assets from public/ folder directly via Express
+  const publicPath = path.join(process.cwd(), 'public');
+  app.use('/images', express.static(path.join(publicPath, 'images')));
+  app.use(express.static(publicPath));
+
+  // Vite integration for development
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Banco Escolar] Servidor corriendo en http://localhost:${PORT}`);
+  });
+}
+
+startServer();

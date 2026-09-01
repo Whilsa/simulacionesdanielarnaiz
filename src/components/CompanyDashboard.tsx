@@ -244,17 +244,11 @@ export default function CompanyDashboard({
   const fetchStudentsList = async () => {
     try {
       const res = await fetch("/api/students-list");
-      if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
-      }
-      const contentType = res.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        const data = await res.json();
-        if (data.students) {
-          setStudentsList(
-            data.students.filter((s: any) => s.id !== currentUser.id),
-          );
-        }
+      const data = await res.json();
+      if (data.students) {
+        setStudentsList(
+          data.students.filter((s: any) => s.id !== currentUser.id),
+        );
       }
     } catch (e) {
       console.error("Error cargando lista de alumnos:", e);
@@ -319,7 +313,7 @@ export default function CompanyDashboard({
     }
 
     if (currentUser.level === 1) {
-      setTransferItemKey("destornilladores_punta_estrella");
+      setTransferItemKey("ironKg");
     } else {
       setTransferItemKey("destornilladores_punta_estrella");
     }
@@ -6869,30 +6863,6 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       varillasPlanaStock = (fromNaveInv as any).producedFlatRodsUnits ?? (fromNaveInv as any).producedMetalRodsUnits ?? 0;
                       destEstrellaStock = (fromNaveInv as any).starScrewdriversUnits ?? (fromNaveInv as any).ironScrewdriversUnits ?? 0;
                       destPlanaStock = (fromNaveInv as any).flatScrewdriversUnits ?? (fromNaveInv as any).metalScrewdriversUnits ?? 0;
-
-                      if (destEstrellaStock === 0 && destPlanaStock === 0 && (fromNaveInv as any).producedScrewdriversUnits > 0) {
-                        destEstrellaStock = (fromNaveInv as any).producedScrewdriversUnits;
-                      }
-                      if (varillasEstrellaStock === 0 && varillasPlanaStock === 0 && (fromNaveInv as any).producedRodsUnits > 0) {
-                        varillasEstrellaStock = (fromNaveInv as any).producedRodsUnits;
-                      }
-
-                      // Fallback to global stock if specific nave has 0 but global total has stock
-                      if (destEstrellaStock === 0 && destPlanaStock === 0) {
-                        const globalDestEstrella = inventoryData?.producedGoods?.destornilladores_punta_estrella ??
-                          inventoryData?.producedGoods?.destornilladores_hierro ??
-                          (inventoryData?.inventory as any)?.starScrewdriversUnits ??
-                          (inventoryData?.inventory as any)?.ironScrewdriversUnits ??
-                          inventoryData?.producedGoods?.producedScrewdriversUnits ?? 0;
-                        const globalDestPlana = inventoryData?.producedGoods?.destornilladores_punta_plana ??
-                          inventoryData?.producedGoods?.destornilladores_metal ??
-                          (inventoryData?.inventory as any)?.flatScrewdriversUnits ??
-                          (inventoryData?.inventory as any)?.metalScrewdriversUnits ?? 0;
-                        if (globalDestEstrella > 0 || globalDestPlana > 0) {
-                          destEstrellaStock = globalDestEstrella;
-                          destPlanaStock = globalDestPlana;
-                        }
-                      }
                     } else {
                       varillasEstrellaStock =
                         inventoryData?.producedGoods?.varillas_punta_estrella ??
@@ -6928,6 +6898,48 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           destEstrellaStock =
                             inventoryData.producedGoods.producedScrewdriversUnits;
                         }
+                      } else {
+                        const deliveredBoughtOrders = (userOrders || []).filter(
+                          (o) =>
+                            o.studentId === currentUser.id &&
+                            ["entregado", "finalizado", "facturado"].includes(
+                              o.status,
+                            ),
+                        );
+
+                        deliveredBoughtOrders.forEach((ord) => {
+                          if (ord.items && ord.items.length > 0) {
+                            ord.items.forEach((it) => {
+                              const titleLower = (
+                                it.materialTitle ||
+                                it.title ||
+                                ""
+                              ).toLowerCase();
+                              if (
+                                titleLower.includes("plana") ||
+                                titleLower.includes("metal") ||
+                                it.materialType === "metal"
+                              ) {
+                                destPlanaStock += it.quantity || 0;
+                              } else {
+                                destEstrellaStock += it.quantity || 0;
+                              }
+                            });
+                          } else {
+                            const titleLower = (
+                              ord.materialTitle || ""
+                            ).toLowerCase();
+                            if (
+                              titleLower.includes("plana") ||
+                              titleLower.includes("metal") ||
+                              ord.materialType === "metal"
+                            ) {
+                              destPlanaStock += ord.quantity || 0;
+                            } else {
+                              destEstrellaStock += ord.quantity || 0;
+                            }
+                          }
+                        });
                       }
 
                       ironKgStock =
@@ -6948,6 +6960,43 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         0;
                     }
 
+                    const isLevel1 = currentUser.level === 1;
+
+                    if (isLevel1) {
+                      return (
+                        <>
+                          <option value="ironKg">
+                            Fragmentos de hierro (Stock:{" "}
+                            {formatNumber(ironKgStock)} kg)
+                          </option>
+                          <option value="plasticKg">
+                            Pellets de plástico (Stock:{" "}
+                            {formatNumber(plasticKgStock)} kg)
+                          </option>
+                          <option value="epoxiKg">
+                            Pegamento epoxi (Stock: {formatNumber(epoxiKgStock)}{" "}
+                            kg)
+                          </option>
+                          <option value="varillas_punta_estrella">
+                            Varillas con punta estrella (Stock:{" "}
+                            {formatNumber(varillasEstrellaStock, 0)} u.)
+                          </option>
+                          <option value="varillas_punta_plana">
+                            Varillas con punta plana (Stock:{" "}
+                            {formatNumber(varillasPlanaStock, 0)} u.)
+                          </option>
+                          <option value="destornilladores_punta_estrella">
+                            Destornilladores con punta estrella (Stock:{" "}
+                            {formatNumber(destEstrellaStock, 0)} u.)
+                          </option>
+                          <option value="destornilladores_punta_plana">
+                            Destornilladores con punta plana (Stock:{" "}
+                            {formatNumber(destPlanaStock, 0)} u.)
+                          </option>
+                        </>
+                      );
+                    }
+
                     return (
                       <>
                         <option value="destornilladores_punta_estrella">
@@ -6957,26 +7006,6 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         <option value="destornilladores_punta_plana">
                           Destornilladores con punta plana (Stock:{" "}
                           {formatNumber(destPlanaStock, 0)} u.)
-                        </option>
-                        <option value="varillas_punta_estrella">
-                          Varillas con punta estrella (Stock:{" "}
-                          {formatNumber(varillasEstrellaStock, 0)} u.)
-                        </option>
-                        <option value="varillas_punta_plana">
-                          Varillas con punta plana (Stock:{" "}
-                          {formatNumber(varillasPlanaStock, 0)} u.)
-                        </option>
-                        <option value="ironKg">
-                          Fragmentos de hierro (Stock:{" "}
-                          {formatNumber(ironKgStock)} kg)
-                        </option>
-                        <option value="plasticKg">
-                          Pellets de plástico (Stock:{" "}
-                          {formatNumber(plasticKgStock)} kg)
-                        </option>
-                        <option value="epoxiKg">
-                          Pegamento epoxi (Stock: {formatNumber(epoxiKgStock)}{" "}
-                          kg)
                         </option>
                       </>
                     );

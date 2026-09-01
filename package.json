@@ -8,11 +8,6 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist db.json",
-    "db:init": "node cleanup_supabase.cjs",
-    "db:clean": "node cleanup_supabase.cjs",
-    "db:maintenance": "node cleanup_supabase.cjs",
-    "db:seed": "node cleanup_supabase.cjs",
-    "db:dedupe": "node cleanup_supabase.cjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

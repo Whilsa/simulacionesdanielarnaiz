@@ -13,42 +13,7 @@ export interface User {
   balance: number;
   initialBalance?: number;
   nifCif?: string;
-  companyName?: string;
   level?: 1 | 2 | 3;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface DeduplicationSummary {
-  table: string;
-  deletedCount: number;
-  distinctCount?: number;
-  details?: string;
-}
-
-export interface DatabaseMaintenanceReport {
-  success: boolean;
-  timestamp: string;
-  executionTimeMs: number;
-  deduplication: DeduplicationSummary[];
-  seededUsersCount: number;
-  restoredAccountsCount: number;
-  indexesCreated?: string[];
-  message?: string;
-  error?: string;
-}
-
-export interface InitialUserSeedConfig {
-  id: string;
-  username: string;
-  password?: string;
-  name: string;
-  role: 'teacher' | 'student';
-  accountNumber: string;
-  balance: number;
-  level?: 1 | 2 | 3;
-  companyName?: string;
-  nifCif?: string;
 }
 
 export interface Transfer {
