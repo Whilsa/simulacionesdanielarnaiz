@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -8661,6 +8661,761 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     insufficientProjectedBalance
   };
 }
+
+// ---------------------------------------------------------------------------
+// SISTEMA DE VERIFICACIÓN Y AUDITORÍA INTEGRAL DE PAGOS APLAZADOS
+// ---------------------------------------------------------------------------
+function buildDeferredPaymentsAuditReport(db: DatabaseSchema, studentId: string): DeferredPaymentsAuditReport {
+  const student = db.users.find(u => u.id === studentId);
+  const studentName = student ? student.name : 'Empresa';
+  const companyName = (student as any)?.companyName || studentName;
+  const currentBalance = student ? student.balance : 0;
+  const now = new Date();
+  const thirtyDaysLater = new Date(now.getTime() + 30 * 86400 * 1000);
+
+  const records: DeferredPaymentVerificationRecord[] = [];
+
+  const getDaysUntil = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return Math.ceil((d.getTime() - now.getTime()) / (1000 * 3600 * 24));
+  };
+
+  const isDueTodayOrPast = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+    return now.getTime() > endOfDay.getTime();
+  };
+
+  // 1. PAGARÉS COMERCIALES (Emitidos, Descontados, en Gestión de Cobro, en Cartera)
+  if (db.marketMessages) {
+    for (const msg of db.marketMessages) {
+      if (msg.type === 'promissory_note' && msg.promissoryNoteData) {
+        const pn = msg.promissoryNoteData;
+        const isIssuer = pn.issuerId === studentId || msg.senderId === studentId;
+        const isBeneficiary = pn.beneficiaryId === studentId || msg.recipientId === studentId;
+
+        if (isIssuer) {
+          const dDate = new Date(pn.dueDate);
+          const daysRem = getDaysUntil(pn.dueDate);
+          const isPast = isDueTodayOrPast(pn.dueDate);
+          const principal = Number(pn.amount) || 0;
+          let penalty = 0;
+          if (pn.status === 'impagado' || (!pn.maturityProcessed && isPast && currentBalance < principal)) {
+            penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
+          }
+          const totalAmt = Number((principal + penalty).toFixed(2));
+
+          let recStatus: DeferredPaymentVerificationRecord['status'] = 'verified_scheduled';
+          let statusLabel = 'En Cartera / Pendiente de vencimiento';
+          let vStatus: DeferredPaymentVerificationRecord['verificationStatus'] = 'ok';
+          let vMsg = 'Pagaré formalizado correctamente. Cargo programado para la fecha de vencimiento.';
+
+          if (pn.status === 'pagado') {
+            recStatus = 'verified_paid';
+            statusLabel = 'Liquidado al vencimiento';
+            vStatus = 'reconciled';
+            vMsg = 'Adeudado y conciliado con éxito en la cuenta bancaria sin recargos.';
+          } else if (pn.status === 'impagado') {
+            recStatus = 'unpaid_returned';
+            statusLabel = 'Devuelto por impago (falta de fondos)';
+            vStatus = 'error';
+            vMsg = `Efecto impagado al vencimiento. Se aplica un 5% de interés moratorio (+${penalty} €) y queda abierto a demanda ejecutiva.`;
+          } else if (pn.status === 'descontado') {
+            recStatus = 'discounted';
+            statusLabel = 'Descontado en Banco por el tenedor';
+            vStatus = 'ok';
+            vMsg = 'El tenedor ha descontado el pagaré. El banco adeudará el importe nominal en tu cuenta en la fecha de vencimiento fijada.';
+          } else if (pn.status === 'gestion_cobro') {
+            recStatus = 'in_collection';
+            statusLabel = 'En Gestión de Cobro Bancaria';
+            vStatus = 'ok';
+            vMsg = 'Presentado al banco por el acreedor. Se tramitará el adeudo directo automático a su vencimiento.';
+          } else if (isPast && currentBalance < principal) {
+            recStatus = 'verified_overdue';
+            statusLabel = 'Vencido con descubierto / Mora';
+            vStatus = 'error';
+            vMsg = 'Vencimiento sobrepasado sin saldo disponible para atender el efecto.';
+          }
+
+          records.push({
+            id: `pn-${pn.promissoryNoteNumber || msg.id}`,
+            category: 'promissory_note',
+            categoryLabel: 'Pagaré comercial',
+            title: `Pagaré Nº ${pn.promissoryNoteNumber}`,
+            concept: `Librado a favor de ${pn.beneficiaryName} - ${pn.concept || 'Factura comercial'}`,
+            creditor: pn.beneficiaryName || 'Tenedor del pagaré',
+            debtor: studentName,
+            dueDate: pn.dueDate,
+            principalAmount: principal,
+            regularInterestOrTax: 0,
+            penaltyInterest: penalty,
+            totalAmount: totalAmt,
+            status: recStatus,
+            statusLabel,
+            verificationCode: `VER-PAG-${pn.promissoryNoteNumber || msg.id.slice(0, 6)}`,
+            verificationStatus: vStatus,
+            verificationMessage: vMsg,
+            contractOrRefId: msg.id,
+            paymentMethod: pn.status === 'descontado' ? 'Compensación bancaria de descuento' : 'Adeudo bancario directo',
+            daysUntilDue: daysRem,
+            paidAt: pn.paidAt,
+            isCoveredByBalance: currentBalance >= totalAmt,
+            notes: `Lugar de emisión: ${pn.issuePlace || 'Madrid'}. Fecha emisión: ${pn.issueDate}`
+          });
+        }
+      }
+    }
+  }
+
+  // 2. SEGURIDAD SOCIAL (TGSS - Aportación Empresa 75% y Trabajador 6,48%)
+  const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  if (studentEmps.length > 0) {
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth();
+
+    for (let mOffset = -2; mOffset <= 2; mOffset++) {
+      const refDate = new Date(curYear, curMonth + mOffset, 1);
+      const targetYear = refDate.getFullYear();
+      const targetMonth = refDate.getMonth() + 1;
+
+      let monthGross = 0;
+      for (const emp of studentEmps) {
+        if (!emp.hireDate) {
+          monthGross += emp.grossSalaryMonthly;
+        } else {
+          const parts = emp.hireDate.split('T')[0].split('-');
+          const hireYear = parseInt(parts[0], 10);
+          const hireMonth = parseInt(parts[1], 10);
+          const hireDay = parseInt(parts[2], 10);
+
+          if (targetYear > hireYear || (targetYear === hireYear && targetMonth >= hireMonth)) {
+            if (hireYear === targetYear && hireMonth === targetMonth) {
+              const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
+              monthGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
+            } else {
+              monthGross += emp.grossSalaryMonthly;
+            }
+          }
+        }
+      }
+
+      monthGross = Math.round(monthGross * 100) / 100;
+      if (monthGross <= 0) continue;
+
+      const employeeSS = Math.round(monthGross * 0.0648 * 100) / 100;
+      const companySS = Math.round(monthGross * 0.75 * 100) / 100;
+
+      // Due on 20th of following month
+      const ssDueDate = new Date(targetYear, targetMonth, 20, 23, 59, 59);
+      const ssDueISO = ssDueDate.toISOString();
+      const daysRem = getDaysUntil(ssDueISO);
+      const isPast = isDueTodayOrPast(ssDueISO);
+
+      // Check if paid in taxObligations
+      const ssEmpPaid = (db.taxObligations || []).some(t =>
+        t.studentId === studentId &&
+        ((t.type as string) === 'ss_employee' || (t.type as string) === 'ss') &&
+        new Date(t.dueDate).getFullYear() === ssDueDate.getFullYear() &&
+        new Date(t.dueDate).getMonth() === ssDueDate.getMonth() &&
+        t.status === 'pagado'
+      ) || (db.transfers || []).some(t =>
+        t.senderId === studentId &&
+        t.concept.includes(`Seguridad Social Trabajador`) &&
+        t.concept.includes(`${targetMonth}/${targetYear}`)
+      );
+
+      const ssCompPaid = (db.taxObligations || []).some(t =>
+        t.studentId === studentId &&
+        (t.type as string) === 'ss_company' &&
+        new Date(t.dueDate).getFullYear() === ssDueDate.getFullYear() &&
+        new Date(t.dueDate).getMonth() === ssDueDate.getMonth() &&
+        t.status === 'pagado'
+      ) || (db.transfers || []).some(t =>
+        t.senderId === studentId &&
+        t.concept.includes(`Seguridad Social (75%)`) &&
+        t.concept.includes(`${targetMonth}/${targetYear}`)
+      );
+
+      // Employee SS
+      const empPenalty = !ssEmpPaid && isPast ? calculateMonthlyPenaltyInterest(employeeSS, ssDueDate, now) : 0;
+      records.push({
+        id: `audit-ss-emp-${targetYear}-${targetMonth}`,
+        category: 'social_security',
+        categoryLabel: 'Seguridad Social (TGSS)',
+        title: `Seg. Social Trabajador (6,48%) - Mes ${targetMonth}/${targetYear}`,
+        concept: `Cuota de cotización obrera retenida en nóminas (Base: ${formatNumber(monthGross)} €)`,
+        creditor: 'Tesorería General de la Seguridad Social (TGSS)',
+        debtor: studentName,
+        dueDate: ssDueISO,
+        principalAmount: employeeSS,
+        regularInterestOrTax: 0,
+        penaltyInterest: empPenalty,
+        totalAmount: Number((employeeSS + empPenalty).toFixed(2)),
+        status: ssEmpPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+        statusLabel: ssEmpPaid ? 'Liquidado y conciliado' : isPast ? 'Pendiente vencido (Mora)' : 'Programado a término',
+        verificationCode: `VER-TGSS-EMP-${targetYear}-${String(targetMonth).padStart(2, '0')}`,
+        verificationStatus: ssEmpPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+        verificationMessage: ssEmpPaid
+          ? 'Liquidación obrera ingresada puntualmente en la TGSS sin recargo.'
+          : 'Verificado conforme a bases salariales del personal. Vence el día 20 del mes siguiente.',
+        paymentMethod: 'Domiciliación bancaria obligatoria TGSS',
+        daysUntilDue: daysRem,
+        isCoveredByBalance: currentBalance >= (employeeSS + empPenalty),
+        notes: `Base de cotización agregada: ${formatNumber(monthGross)} € para ${studentEmps.length} empleado(s).`
+      });
+
+      // Company SS
+      const compPenalty = !ssCompPaid && isPast ? calculateMonthlyPenaltyInterest(companySS, ssDueDate, now) : 0;
+      records.push({
+        id: `audit-ss-comp-${targetYear}-${targetMonth}`,
+        category: 'social_security',
+        categoryLabel: 'Seguridad Social (TGSS)',
+        title: `Seg. Social Empresa (75%) - Mes ${targetMonth}/${targetYear}`,
+        concept: `Aportación patronal empresarial Seguridad Social (Base: ${formatNumber(monthGross)} €)`,
+        creditor: 'Tesorería General de la Seguridad Social (TGSS)',
+        debtor: studentName,
+        dueDate: ssDueISO,
+        principalAmount: companySS,
+        regularInterestOrTax: 0,
+        penaltyInterest: compPenalty,
+        totalAmount: Number((companySS + compPenalty).toFixed(2)),
+        status: ssCompPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+        statusLabel: ssCompPaid ? 'Liquidado y conciliado' : isPast ? 'Pendiente vencido (Mora)' : 'Programado a término',
+        verificationCode: `VER-TGSS-PAT-${targetYear}-${String(targetMonth).padStart(2, '0')}`,
+        verificationStatus: ssCompPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+        verificationMessage: ssCompPaid
+          ? 'Aportación patronal abonada y conciliada con la TGSS.'
+          : 'Verificado según cotización oficial 75%. Cargo domiciliado para el día 20.',
+        paymentMethod: 'Domiciliación bancaria obligatoria TGSS',
+        daysUntilDue: daysRem,
+        isCoveredByBalance: currentBalance >= (companySS + compPenalty),
+        notes: `Cuota patronal empresa: ${formatNumber(companySS)} € calculada sobre salario devengado.`
+      });
+    }
+  }
+
+  // 3. HACIENDA PÚBLICA (AEAT - Retenciones IRPF 17% a empleados)
+  if (studentEmps.length > 0) {
+    const curYear = now.getFullYear();
+    for (let q = 1; q <= 4; q++) {
+      const qMonths = [(q - 1) * 3 + 1, (q - 1) * 3 + 2, (q - 1) * 3 + 3];
+      const qGross = qMonths.reduce((sum, m) => sum + calcGrossForStudentMonth(studentId, m, curYear, db), 0);
+      if (qGross <= 0) continue;
+
+      const fullQuarterIRPF = Math.round(qGross * 0.17 * 100) / 100;
+      let irpfDueDate: Date;
+      if (q === 4) {
+        irpfDueDate = new Date(curYear + 1, 0, 15, 23, 59, 59);
+      } else if (q === 3) {
+        irpfDueDate = new Date(curYear, 9, 15, 23, 59, 59);
+      } else if (q === 2) {
+        irpfDueDate = new Date(curYear, 6, 15, 23, 59, 59);
+      } else {
+        irpfDueDate = new Date(curYear, 3, 15, 23, 59, 59);
+      }
+
+      const irpfDueISO = irpfDueDate.toISOString();
+      const daysRem = getDaysUntil(irpfDueISO);
+      const isPast = isDueTodayOrPast(irpfDueISO);
+
+      const irpfPaid = (db.taxObligations || []).some(t =>
+        t.studentId === studentId &&
+        t.type === 'irpf' &&
+        new Date(t.dueDate).getFullYear() === irpfDueDate.getFullYear() &&
+        new Date(t.dueDate).getMonth() === irpfDueDate.getMonth() &&
+        t.status === 'pagado'
+      ) || (db.transfers || []).some(t =>
+        t.senderId === studentId &&
+        t.concept.includes(`Retenciones IRPF`) &&
+        t.concept.includes(`Q${q}`) &&
+        t.concept.includes(`${curYear}`)
+      );
+
+      const irpfPenalty = !irpfPaid && isPast ? calculateMonthlyPenaltyInterest(fullQuarterIRPF, irpfDueDate, now) : 0;
+      records.push({
+        id: `audit-irpf-${curYear}-q${q}`,
+        category: 'tax_irpf',
+        categoryLabel: 'Hacienda Pública (AEAT)',
+        title: `Retención IRPF Nóminas Mod. 111 (Q${q} ${curYear})`,
+        concept: `Liquidación trimestral retenciones 17% sobre sueldos y salarios (Base trimestral: ${formatNumber(qGross)} €)`,
+        creditor: 'Agencia Estatal de Administración Tributaria (AEAT)',
+        debtor: studentName,
+        dueDate: irpfDueISO,
+        principalAmount: fullQuarterIRPF,
+        regularInterestOrTax: 0,
+        penaltyInterest: irpfPenalty,
+        totalAmount: Number((fullQuarterIRPF + irpfPenalty).toFixed(2)),
+        status: irpfPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+        statusLabel: irpfPaid ? 'Liquidado y presentado' : isPast ? 'Pendiente vencido (Mora AEAT)' : 'Programado a término',
+        verificationCode: `VER-AEAT-111-Q${q}-${curYear}`,
+        verificationStatus: irpfPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+        verificationMessage: irpfPaid
+          ? 'Modelo 111 presentado y liquidado correctamente en la AEAT.'
+          : 'Verificado según nóminas del trimestre. Plazo fiscal: día 15 del mes posterior al trimestre.',
+        paymentMethod: 'Adeudo domiciliación tributaria AEAT',
+        daysUntilDue: daysRem,
+        isCoveredByBalance: currentBalance >= (fullQuarterIRPF + irpfPenalty),
+        notes: `Retenciones acumuladas del 17% sobre ${formatNumber(qGross)} € devengados.`
+      });
+    }
+  }
+
+  // 4. ELECTRICIDAD (IberLuz Comercializadora)
+  if (db.electricityBills) {
+    const studentBills = db.electricityBills.filter(b => b.studentId === studentId);
+    for (const bill of studentBills) {
+      const dDate = new Date(bill.dueDate);
+      const daysRem = getDaysUntil(bill.dueDate);
+      const isPast = isDueTodayOrPast(bill.dueDate);
+      const isPaid = bill.status === 'pagado';
+      const penalty = !isPaid && isPast ? calculateMonthlyPenaltyInterest(bill.totalAmount, dDate, now) : 0;
+
+      records.push({
+        id: `audit-elec-bill-${bill.id}`,
+        category: 'electricity',
+        categoryLabel: 'Electricidad (IberLuz)',
+        title: `Factura Electricidad IberLuz (${bill.billNumber || `Mes ${bill.periodMonth}/${bill.periodYear}`})`,
+        concept: `Consumo eléctrico y potencia: ${bill.cupsCode || 'CUPS'} - ${bill.propertyBreakdown?.length || 1} nave(s) y maquinaria`,
+        creditor: 'IberLuz Comercializadora de Energía S.A.',
+        debtor: studentName,
+        dueDate: bill.dueDate,
+        principalAmount: bill.taxableBase || bill.totalAmount,
+        regularInterestOrTax: bill.ivaAmount || 0,
+        penaltyInterest: penalty,
+        totalAmount: Number((bill.totalAmount + penalty).toFixed(2)),
+        status: isPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+        statusLabel: isPaid ? 'Factura abonada' : isPast ? 'Factura impagada (Mora)' : 'Programada a término',
+        verificationCode: `VER-ELEC-IBERLUZ-${bill.billNumber || bill.id.slice(0, 8)}`,
+        verificationStatus: isPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+        verificationMessage: isPaid
+          ? 'Factura verificada y cargada en cuenta correctamente.'
+          : 'Cálculo de potencia, consumo kWh, impuesto eléctrico e IVA verificado y conforme.',
+        contractOrRefId: bill.cupsCode,
+        paymentMethod: 'Adeudo domiciliado IberLuz',
+        daysUntilDue: daysRem,
+        paidAt: bill.paidDate,
+        isCoveredByBalance: currentBalance >= (bill.totalAmount + penalty),
+        notes: `Base: ${formatNumber(bill.taxableBase || 0)} € + Impuesto elec. (${formatNumber(bill.electricityTax || 0)} €) + IVA 21% (${formatNumber(bill.ivaAmount || 0)} €)`
+      });
+    }
+  }
+
+  // 5. TELÉFONO E INTERNET (Telecomunicaciones)
+  if (db.telecomContracts) {
+    const contracts = db.telecomContracts.filter(c => c.studentId === studentId && c.status === 'active');
+    for (const contract of contracts) {
+      const cDate = new Date(contract.contractDate);
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth() + 1;
+
+      for (let mOffset = -1; mOffset <= 1; mOffset++) {
+        const refD = new Date(curYear, (curMonth - 1) + mOffset, 1);
+        const targetYear = refD.getFullYear();
+        const targetMonth = refD.getMonth() + 1;
+
+        if (targetYear < cDate.getFullYear() || (targetYear === cDate.getFullYear() && targetMonth < cDate.getMonth() + 1)) {
+          continue;
+        }
+
+        const inv = (db.telecomInvoices || []).find(
+          i => i.contractId === contract.id && i.periodMonth === targetMonth && i.periodYear === targetYear
+        );
+
+        const dueDate = new Date(targetYear, targetMonth, 1, 23, 59, 59);
+        const dueISO = dueDate.toISOString();
+        const isPast = isDueTodayOrPast(dueISO);
+        const isPaid = inv ? inv.status === 'pagado' : false;
+        const base = (inv as any)?.baseAmount || contract.monthlyPrice;
+        const total = inv ? inv.totalAmount : Math.round(base * 1.21 * 100) / 100;
+        const penalty = !isPaid && isPast ? calculateMonthlyPenaltyInterest(total, dueDate, now) : 0;
+
+        records.push({
+          id: `audit-telco-${contract.id}-${targetYear}-${targetMonth}`,
+          category: 'telecom',
+          categoryLabel: 'Teléfono e Internet',
+          title: `Fibra y Telefonía (${contract.planName}) - Mes ${targetMonth}/${targetYear}`,
+          concept: `Cuota mensual conexión de fibra óptica y centralita de comunicaciones`,
+          creditor: 'Operador Central de Telecomunicaciones S.A.',
+          debtor: studentName,
+          dueDate: dueISO,
+          principalAmount: base,
+          regularInterestOrTax: Math.round(base * 0.21 * 100) / 100,
+          penaltyInterest: penalty,
+          totalAmount: Number((total + penalty).toFixed(2)),
+          status: isPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+          statusLabel: isPaid ? 'Cuota abonada' : isPast ? 'Cuota impagada (Mora)' : 'Programada a término',
+          verificationCode: `VER-TELCO-${contract.id.slice(0, 6)}-${targetYear}-${String(targetMonth).padStart(2, '0')}`,
+          verificationStatus: isPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+          verificationMessage: isPaid
+            ? 'Cuota de telecomunicaciones abonada en fecha.'
+            : 'Contrato verificado con tarifa fija y 21% IVA. Cargo programado para el día 1 del mes.',
+          contractOrRefId: contract.id,
+          paymentMethod: 'Adeudo domiciliado de servicios',
+          daysUntilDue: getDaysUntil(dueISO),
+          isCoveredByBalance: currentBalance >= (total + penalty),
+          notes: `Plan: ${contract.planName} (${formatNumber(contract.monthlyPrice)} €/mes + IVA).`
+        });
+      }
+    }
+  }
+
+  // 6. PAGOS APLAZADOS DE MAQUINARIA, ALQUILERES E INMUEBLES (Payment Obligations)
+  if (db.paymentObligations) {
+    for (const ob of db.paymentObligations) {
+      if (ob.studentId === studentId) {
+        const dDate = new Date(ob.dueDate);
+        const daysRem = getDaysUntil(ob.dueDate);
+        const isPast = isDueTodayOrPast(ob.dueDate);
+        const isPaid = ob.status === 'pagado';
+        const principal = ob.amount;
+        const penalty = !isPaid && isPast ? calculateMonthlyPenaltyInterest(principal, dDate, now) : 0;
+        const total = Number((principal + penalty).toFixed(2));
+
+        let category: DeferredPaymentCategory = 'other';
+        let categoryLabel = 'Obligación de pago';
+        let creditor = 'Acreedor comercial';
+
+        const isMachinery = ob.propertyTitle?.toLowerCase().includes('línea') ||
+                            ob.propertyTitle?.toLowerCase().includes('torno') ||
+                            ob.propertyTitle?.toLowerCase().includes('prensa') ||
+                            ob.propertyTitle?.toLowerCase().includes('inyectora') ||
+                            ob.propertyTitle?.toLowerCase().includes('máquina') ||
+                            (ob as any).concept?.toLowerCase().includes('maquinaria') ||
+                            (ob as any).concept?.toLowerCase().includes('maquina');
+
+        const isRent = ob.type === 'alquiler' || ob.type === 'cuota_alquiler' || (ob as any).concept?.toLowerCase().includes('alquiler');
+        const isPropertyPurchase = ob.type === 'letra_cambio' || ob.type === 'cuota_compra' || ob.type === 'compra_inmueble';
+
+        if (isMachinery) {
+          category = 'machinery';
+          categoryLabel = 'Maquinaria industrial';
+          creditor = 'Maquinaria y Bienes de Equipo S.A.';
+        } else if (isRent) {
+          category = 'property_rent';
+          categoryLabel = 'Alquiler de inmuebles';
+          creditor = 'Patrimonio Inmobiliario Industrial S.L.';
+        } else if (isPropertyPurchase) {
+          category = 'property_purchase';
+          categoryLabel = 'Compraventa de inmuebles';
+          creditor = 'Tenedor de Efectos Inmobiliarios S.A.';
+        }
+
+        records.push({
+          id: `audit-ob-${ob.id}`,
+          category,
+          categoryLabel,
+          title: `${categoryLabel}: ${ob.propertyTitle}`,
+          concept: (ob as any).concept || `Plazo aplazado acordado (${ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : 'Vencimiento pactado'})`,
+          creditor,
+          debtor: studentName,
+          dueDate: ob.dueDate,
+          principalAmount: principal,
+          regularInterestOrTax: 0,
+          penaltyInterest: penalty,
+          totalAmount: total,
+          status: isPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+          statusLabel: isPaid ? 'Abonado y liquidado' : isPast ? 'Vencido impagado (Mora)' : 'Programado a término',
+          verificationCode: `VER-OBL-${ob.id.slice(0, 8)}`,
+          verificationStatus: isPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+          verificationMessage: isPaid
+            ? 'Pago aplazado liquidado y registrado contablemente con éxito.'
+            : 'Obligación contractual verificada. Se cargará automáticamente al vencimiento.',
+          contractOrRefId: ob.acquisitionId || ob.id,
+          installmentPeriod: ob.installmentNumber,
+          totalInstallments: ob.totalInstallments,
+          paymentMethod: 'Adeudo directo pactado en contrato',
+          daysUntilDue: daysRem,
+          paidAt: ob.paidDate,
+          isCoveredByBalance: currentBalance >= total,
+          notes: `Instrumento: ${ob.type}. Referencia inmueble/activo: ${ob.propertyTitle}`
+        });
+      }
+    }
+  }
+
+  // 7. PRÉSTAMOS BANCARIOS E HIPOTECARIOS RECIBIDOS (Cuadros de amortización)
+  if (db.loans) {
+    for (const loan of db.loans) {
+      if (loan.studentId === studentId && (loan.status === 'active' || loan.status === 'paid_off')) {
+        for (const row of loan.schedule || []) {
+          const dDate = new Date(row.dueDate);
+          const daysRem = getDaysUntil(row.dueDate);
+          const isPast = isDueTodayOrPast(row.dueDate);
+          const isPaid = row.paid;
+          const principalInstallment = row.payment;
+          const penalty = !isPaid && (row.isOverdue || isPast) ? calculateMonthlyPenaltyInterest(principalInstallment, dDate, now) : 0;
+          const total = Number((principalInstallment + penalty).toFixed(2));
+
+          records.push({
+            id: `audit-loan-${loan.id}-row-${row.period}`,
+            category: 'loan',
+            categoryLabel: 'Préstamo bancario',
+            title: `Cuota Préstamo ${row.period}/${loan.termMonths} (${loan.collateral?.propertyTitle || 'Garantía Inmobiliaria'})`,
+            concept: `Amortización francés: Capital ${formatNumber(row.principal)} € + Intereses ${formatNumber(row.interest)} € (Capital vivo: ${formatNumber(row.pendingBalance)} €)`,
+            creditor: 'Banco Central Hipotecario S.A.',
+            debtor: studentName,
+            dueDate: row.dueDate,
+            principalAmount: row.payment,
+            regularInterestOrTax: row.interest,
+            penaltyInterest: penalty,
+            totalAmount: total,
+            status: isPaid ? 'verified_paid' : (row.isOverdue || isPast) ? 'verified_overdue' : 'verified_scheduled',
+            statusLabel: isPaid ? 'Cuota pagada' : (row.isOverdue || isPast) ? 'Cuota en mora (5% int.)' : 'Programada a término',
+            verificationCode: `VER-PREST-${loan.id.slice(0, 6)}-C${row.period}`,
+            verificationStatus: isPaid ? 'reconciled' : (row.isOverdue || isPast) ? 'error' : 'ok',
+            verificationMessage: isPaid
+              ? `Cuota Nº ${row.period} abonada exactamente por el importe del cuadro de amortización.`
+              : 'Verificado con el cuadro oficial de amortización (método francés). Cero intereses de mora si se atiende al vencimiento.',
+            contractOrRefId: loan.id,
+            installmentPeriod: row.period,
+            totalInstallments: loan.termMonths,
+            paymentMethod: 'Adeudo automático de cuota de amortización',
+            daysUntilDue: daysRem,
+            paidAt: row.paidDate,
+            isCoveredByBalance: currentBalance >= total,
+            notes: `Tipo de interés: ${loan.annualInterestRate}% anual (${loan.euriborRate}% Euribor + ${loan.spread}% diferencial).`
+          });
+        }
+      }
+    }
+  }
+
+  // 8. COMPRAS Y PEDIDOS A PROVEEDORES APLAZADOS
+  if (db.rawMaterialOrders) {
+    for (const order of db.rawMaterialOrders) {
+      if (order.studentId === studentId && ((order as any).paymentMethod === 'deferred' || (order as any).paymentMethod === 'aplazado')) {
+        const dDate = new Date(order.requestedAt || new Date().toISOString());
+        const dueDate = new Date(dDate.getTime() + 30 * 86400 * 1000);
+        const dueISO = dueDate.toISOString();
+        const daysRem = getDaysUntil(dueISO);
+        const isPast = isDueTodayOrPast(dueISO);
+        const isPaid = order.status === 'finalizado' || order.status === 'entregado' || order.status === 'facturado';
+        const total = order.totalAmount || 0;
+        const penalty = !isPaid && isPast ? calculateMonthlyPenaltyInterest(total, dueDate, now) : 0;
+
+        records.push({
+          id: `audit-order-${order.id}`,
+          category: 'commercial_order',
+          categoryLabel: 'Compras a proveedores',
+          title: `Pedido comercial aplazado #${order.id.slice(0, 8)}`,
+          concept: `Suministro de materias primas aplazadas (${(order as any).materialType || 'Suministro industrial'})`,
+          creditor: 'Proveedor Mayorista Central S.A.',
+          debtor: studentName,
+          dueDate: dueISO,
+          principalAmount: total,
+          regularInterestOrTax: 0,
+          penaltyInterest: penalty,
+          totalAmount: Number((total + penalty).toFixed(2)),
+          status: isPaid ? 'verified_paid' : isPast ? 'verified_overdue' : 'verified_scheduled',
+          statusLabel: isPaid ? 'Pedido abonado' : isPast ? 'Vencido impagado' : 'Programado a término',
+          verificationCode: `VER-ORD-${order.id.slice(0, 8)}`,
+          verificationStatus: isPaid ? 'reconciled' : isPast ? 'error' : 'ok',
+          verificationMessage: isPaid
+            ? 'Pago comercial completado y conciliado.'
+            : 'Factura comercial aplazada verificada. Vencimiento a 30 días.',
+          contractOrRefId: order.id,
+          paymentMethod: 'Transferencia comercial aplazada',
+          daysUntilDue: daysRem,
+          paidAt: order.deliveredAt,
+          isCoveredByBalance: currentBalance >= (total + penalty)
+        });
+      }
+    }
+  }
+
+  // Sort records: Overdue first, then upcoming by due date, then paid
+  records.sort((a, b) => {
+    const isOverdueA = a.status === 'verified_overdue' || a.status === 'unpaid_returned';
+    const isOverdueB = b.status === 'verified_overdue' || b.status === 'unpaid_returned';
+    if (isOverdueA && !isOverdueB) return -1;
+    if (!isOverdueA && isOverdueB) return 1;
+
+    const isPaidA = a.status === 'verified_paid';
+    const isPaidB = b.status === 'verified_paid';
+    if (!isPaidA && isPaidB) return -1;
+    if (isPaidA && !isPaidB) return 1;
+
+    return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+  });
+
+  // Calculate Aggregates
+  let totalPendingAmount = 0;
+  let totalScheduled30Days = 0;
+  let totalOverdueAmount = 0;
+  let totalPaidHistorical = 0;
+
+  const catMap: Record<DeferredPaymentCategory, { count: number; pendingAmount: number; paidAmount: number; overdueAmount: number }> = {
+    promissory_note: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    social_security: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    tax_irpf: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    electricity: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    telecom: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    machinery: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    property_rent: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    property_purchase: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    loan: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    commercial_order: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 },
+    other: { count: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0 }
+  };
+
+  const catLabels: Record<DeferredPaymentCategory, string> = {
+    promissory_note: 'Pagarés comerciales',
+    social_security: 'Seguridad Social (TGSS)',
+    tax_irpf: 'Hacienda Pública (IRPF nóminas)',
+    electricity: 'Electricidad (IberLuz)',
+    telecom: 'Teléfono e Internet',
+    machinery: 'Maquinaria industrial',
+    property_rent: 'Alquiler de inmuebles',
+    property_purchase: 'Compraventa de inmuebles',
+    loan: 'Préstamos bancarios',
+    commercial_order: 'Compras a proveedores',
+    other: 'Otros pagos aplazados'
+  };
+
+  for (const r of records) {
+    const isOverdue = r.status === 'verified_overdue' || r.status === 'unpaid_returned';
+    const isPaid = r.status === 'verified_paid';
+    const is30Days = r.daysUntilDue >= 0 && r.daysUntilDue <= 30 && !isPaid;
+
+    if (catMap[r.category]) {
+      catMap[r.category].count++;
+      if (isPaid) {
+        catMap[r.category].paidAmount += r.totalAmount;
+      } else if (isOverdue) {
+        catMap[r.category].overdueAmount += r.totalAmount;
+        catMap[r.category].pendingAmount += r.totalAmount;
+      } else {
+        catMap[r.category].pendingAmount += r.totalAmount;
+      }
+    }
+
+    if (isPaid) {
+      totalPaidHistorical += r.totalAmount;
+    } else if (isOverdue) {
+      totalOverdueAmount += r.totalAmount;
+      totalPendingAmount += r.totalAmount;
+    } else {
+      totalPendingAmount += r.totalAmount;
+      if (is30Days) {
+        totalScheduled30Days += r.totalAmount;
+      }
+    }
+  }
+
+  const categoriesSummary = (Object.keys(catMap) as DeferredPaymentCategory[])
+    .filter(cat => catMap[cat].count > 0)
+    .map(cat => ({
+      category: cat,
+      label: catLabels[cat],
+      count: catMap[cat].count,
+      pendingAmount: Number(catMap[cat].pendingAmount.toFixed(2)),
+      paidAmount: Number(catMap[cat].paidAmount.toFixed(2)),
+      overdueAmount: Number(catMap[cat].overdueAmount.toFixed(2)),
+      status: (catMap[cat].overdueAmount > 0 ? 'alert' : catMap[cat].pendingAmount > currentBalance ? 'warning' : 'ok') as 'ok' | 'warning' | 'alert'
+    }));
+
+  let systemIntegrityStatus: DeferredPaymentsAuditReport['systemIntegrityStatus'] = 'optimal';
+  let systemIntegrityMessage = 'Todos los compromisos aplazados están debidamente verificados y conciliados. Saldo suficiente para cubrir vencimientos previstos.';
+
+  if (totalOverdueAmount > 0) {
+    systemIntegrityStatus = 'critical';
+    systemIntegrityMessage = `Atención: Existen ${formatNumber(totalOverdueAmount)} € en pagos vencidos con mora aplicada. Se requiere regularización de saldo urgente.`;
+  } else if (currentBalance < totalScheduled30Days) {
+    systemIntegrityStatus = 'attention_required';
+    systemIntegrityMessage = `Aviso de tesorería: El saldo disponible (${formatNumber(currentBalance)} €) es inferior a los vencimientos de los próximos 30 días (${formatNumber(totalScheduled30Days)} €).`;
+  }
+
+  return {
+    studentId,
+    studentName,
+    companyName,
+    currentBalance,
+    verifiedAt: now.toISOString(),
+    totalPendingAmount: Number(totalPendingAmount.toFixed(2)),
+    totalScheduled30Days: Number(totalScheduled30Days.toFixed(2)),
+    totalOverdueAmount: Number(totalOverdueAmount.toFixed(2)),
+    totalPaidHistorical: Number(totalPaidHistorical.toFixed(2)),
+    recordsCount: records.length,
+    systemIntegrityStatus,
+    systemIntegrityMessage,
+    categoriesSummary,
+    records
+  };
+}
+
+// GET deferred payments audit for a student
+app.get('/api/student/deferred-payments-audit', (req, res) => {
+  const { studentId } = req.query;
+  if (!studentId || typeof studentId !== 'string') {
+    return res.status(400).json({ error: 'studentId es requerido' });
+  }
+
+  const db = readDb();
+  processStudentAutomaticPayments(db, studentId);
+  const audit = buildDeferredPaymentsAuditReport(db, studentId);
+
+  res.json({
+    success: true,
+    audit
+  });
+});
+
+// POST verify and reconcile payments live
+app.post('/api/student/verify-payments', (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId) {
+    return res.status(400).json({ error: 'studentId es requerido' });
+  }
+
+  const db = readDb();
+  processStudentAutomaticPayments(db, String(studentId));
+  const audit = buildDeferredPaymentsAuditReport(db, String(studentId));
+
+  res.json({
+    success: true,
+    message: 'Verificación y conciliación integral de pagos aplazados completada con éxito.',
+    audit
+  });
+});
+
+// GET global audit for teacher across all students
+app.get('/api/teacher/deferred-payments-audit', (req, res) => {
+  const db = readDb();
+  processStudentAutomaticPayments(db);
+
+  const students = (db.users || []).filter(u => u.role === 'student');
+  const studentReports: DeferredPaymentsAuditReport[] = [];
+
+  let globalPending = 0;
+  let globalScheduled30Days = 0;
+  let globalOverdue = 0;
+  let globalPaid = 0;
+  let totalRecords = 0;
+
+  for (const s of students) {
+    const rep = buildDeferredPaymentsAuditReport(db, s.id);
+    studentReports.push(rep);
+    globalPending += rep.totalPendingAmount;
+    globalScheduled30Days += rep.totalScheduled30Days;
+    globalOverdue += rep.totalOverdueAmount;
+    globalPaid += rep.totalPaidHistorical;
+    totalRecords += rep.recordsCount;
+  }
+
+  res.json({
+    success: true,
+    totalStudents: students.length,
+    globalSummary: {
+      globalPending: Number(globalPending.toFixed(2)),
+      globalScheduled30Days: Number(globalScheduled30Days.toFixed(2)),
+      globalOverdue: Number(globalOverdue.toFixed(2)),
+      globalPaid: Number(globalPaid.toFixed(2)),
+      totalRecords
+    },
+    studentReports
+  });
+});
 
 // GET upcoming payments for student
 app.get('/api/student/upcoming-payments', (req, res) => {

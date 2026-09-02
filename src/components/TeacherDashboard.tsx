@@ -9,11 +9,12 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle
+  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle, ShieldCheck
 } from 'lucide-react';
 import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, RawMaterialAnnouncement, RawMaterialOrder } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
+import TeacherDeferredPaymentsVerification from './TeacherDeferredPaymentsVerification.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
 
@@ -54,7 +55,7 @@ const TEACHER_PRODUCT_PRESETS = {
 };
 
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials' | 'verification'>('students');
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
@@ -963,6 +964,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             <span>Auditoría de ajustes</span>
           </button>
           <button 
+            onClick={() => setActiveTab('verification')}
+            className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
+              activeTab === 'verification' 
+                ? 'border-amber-600 text-amber-600 bg-amber-50/20' 
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Verificación de pagos</span>
+          </button>
+          <button 
             onClick={() => setActiveTab('reset')}
             className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
               activeTab === 'reset' 
@@ -1779,6 +1791,19 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     <span>Ejecutar reinicio del simulador</span>
                   </button>
                 </form>
+              </motion.div>
+            )}
+
+            {/* VERIFICATION TAB */}
+            {activeTab === 'verification' && (
+              <motion.div
+                key="verification-panel"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+              >
+                <TeacherDeferredPaymentsVerification />
               </motion.div>
             )}
 

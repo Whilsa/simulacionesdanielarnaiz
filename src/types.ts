@@ -263,6 +263,72 @@ export interface UpcomingPaymentItem {
   loanId?: string;
 }
 
+export type DeferredPaymentCategory = 
+  | 'promissory_note'
+  | 'social_security'
+  | 'tax_irpf'
+  | 'electricity'
+  | 'telecom'
+  | 'machinery'
+  | 'property_rent'
+  | 'property_purchase'
+  | 'loan'
+  | 'commercial_order'
+  | 'other';
+
+export interface DeferredPaymentVerificationRecord {
+  id: string;
+  category: DeferredPaymentCategory;
+  categoryLabel: string;
+  title: string;
+  concept: string;
+  creditor: string;
+  debtor: string;
+  dueDate: string;
+  principalAmount: number;
+  regularInterestOrTax: number;
+  penaltyInterest: number;
+  totalAmount: number;
+  status: 'verified_scheduled' | 'verified_paid' | 'verified_overdue' | 'in_collection' | 'discounted' | 'unpaid_returned';
+  statusLabel: string;
+  verificationCode: string;
+  verificationStatus: 'ok' | 'warning' | 'error' | 'reconciled';
+  verificationMessage: string;
+  contractOrRefId?: string;
+  installmentPeriod?: number;
+  totalInstallments?: number;
+  paymentMethod?: string;
+  daysUntilDue: number;
+  paidAt?: string;
+  isCoveredByBalance: boolean;
+  notes?: string;
+}
+
+export interface DeferredPaymentsAuditReport {
+  studentId: string;
+  studentName: string;
+  companyName: string;
+  currentBalance: number;
+  verifiedAt: string;
+  totalPendingAmount: number;
+  totalScheduled30Days: number;
+  totalOverdueAmount: number;
+  totalPaidHistorical: number;
+  recordsCount: number;
+  systemIntegrityStatus: 'optimal' | 'attention_required' | 'critical';
+  systemIntegrityMessage: string;
+  categoriesSummary: {
+    category: DeferredPaymentCategory;
+    label: string;
+    count: number;
+    pendingAmount: number;
+    paidAmount: number;
+    overdueAmount: number;
+    status: 'ok' | 'warning' | 'alert';
+  }[];
+  records: DeferredPaymentVerificationRecord[];
+}
+
 export type LoanStatus = 
   | 'offered'          
   | 'pending_teacher'  
