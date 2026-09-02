@@ -6033,9 +6033,40 @@ app.post('/api/restore', (req, res) => {
 
 // ================= REAL ESTATE & COMPANY PORTAL API ENDPOINTS =================
 
-// Get all property listings
-app.get('/api/properties', (req, res) => {
+// Get all property listings (with live Supabase sync)
+app.get('/api/properties', async (req, res) => {
   const db = readDb();
+  if (dbPool) {
+    try {
+      const resInm = await safeDbQuery('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC');
+      if (resInm && resInm.rows) {
+        db.properties = resInm.rows.map(row => ({
+          id: String(row.id),
+          title: String(row.titulo),
+          type: String(row.tipo) as PropertyType,
+          operation: String(row.operacion) as OperationType,
+          surfaceM2: Number(row.superficie_m2),
+          price: Number(row.precio),
+          pricePerM2: Number(row.precio_m2),
+          ivaRate: 0.21,
+          landPercentage: Number(row.porcentaje_suelo),
+          locationScope: 'municipio',
+          community: row.comunidad || 'Comunidad de Madrid',
+          municipality: row.municipio || 'Madrid',
+          address: row.direccion || 'Calle Principal, Nº 1',
+          imageUrl: row.imagen_url || PROPERTY_IMAGES.local_comercial[0],
+          status: row.estado as ('available' | 'sold' | 'rented'),
+          ownerId: row.propietario_id || 'corp-1',
+          ownerName: row.propietario_nombre || 'Inmobiliaria Polígonos de España S.A.',
+          deferredPaymentConfig: row.config_pago_aplazado ? (typeof row.config_pago_aplazado === 'string' ? JSON.parse(row.config_pago_aplazado) : row.config_pago_aplazado) : undefined,
+          createdTimestamp: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+        }));
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Properties]:', e);
+    }
+  }
   res.json({ properties: db.properties || [] });
 });
 
