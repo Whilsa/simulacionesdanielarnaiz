@@ -445,11 +445,6 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_id VARCHAR(255);
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_titulo TEXT;
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS almacen_asignado_nombre TEXT;
-      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS is_des_tornillo BOOLEAN DEFAULT FALSE;
-      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS price_alert JSONB;
-      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_location TEXT;
-      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_municipality TEXT;
-      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_province TEXT;
 
       CREATE TABLE IF NOT EXISTS notificaciones (
         id VARCHAR(255) PRIMARY KEY,
@@ -613,6 +608,11 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         is_des_tornillo BOOLEAN DEFAULT FALSE,
         price_alert JSONB
       );
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS is_des_tornillo BOOLEAN DEFAULT FALSE;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS price_alert JSONB;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_location TEXT;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_municipality TEXT;
+      ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_province TEXT;
 
       CREATE TABLE IF NOT EXISTS perfiles_empresa (
         id VARCHAR(255) PRIMARY KEY,
@@ -1979,6 +1979,11 @@ async function syncAllToSupabase(db: DatabaseSchema) {
         await syncCourtLawsuitToSupabase(lawsuit);
       }
     }
+    if (db.notifications) {
+      for (const notif of db.notifications) {
+        await syncNotificationToSupabase(notif);
+      }
+    }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
   }
@@ -2138,6 +2143,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         console.warn('[Supabase Restore] Demandas judiciales table select warning:', e);
       }
 
+      let resNotif: any = { rows: [] };
+      try {
+        resNotif = await client.query('SELECT * FROM notificaciones ORDER BY created_at DESC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Notificaciones table select warning:', e);
+      }
+
       const db = readDb();
 
       // Synchronize students and balances from Supabase "cuentas" (Supabase is source of truth)
@@ -2212,6 +2224,16 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             role: 'student',
             name: 'Beatriz Gómez',
             accountNumber: 'ES910001000244556677',
+            balance: 1000,
+            level: 1
+          },
+          {
+            id: 'alumno-cliente01',
+            username: 'cliente01',
+            password: '123',
+            role: 'student',
+            name: 'Cliente 01',
+            accountNumber: 'ES910001000299000001',
             balance: 1000,
             level: 1
           }
@@ -2938,6 +2960,25 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       } else if (db.courtLawsuits && db.courtLawsuits.length > 0) {
         for (const lawsuit of db.courtLawsuits) {
           await syncCourtLawsuitToSupabase(lawsuit);
+        }
+      }
+
+      // Reconstruct db.notifications from Supabase "notificaciones"
+      if (resNotif.rows.length > 0) {
+        db.notifications = resNotif.rows.map((row: any) => ({
+          id: String(row.id),
+          userId: String(row.user_id),
+          title: String(row.title),
+          message: String(row.message),
+          type: String(row.type) as any,
+          read: Boolean(row.read),
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+          relatedOrderId: row.related_order_id ? String(row.related_order_id) : undefined,
+          relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
+        }));
+      } else if (db.notifications && db.notifications.length > 0) {
+        for (const notif of db.notifications) {
+          await syncNotificationToSupabase(notif);
         }
       }
 
@@ -5140,6 +5181,16 @@ function readDb(): DatabaseSchema {
           accountNumber: 'ES910001000244556677',
           balance: 1000,
           level: 1
+        },
+        {
+          id: 'alumno-cliente01',
+          username: 'cliente01',
+          password: '123',
+          role: 'student',
+          name: 'Cliente 01',
+          accountNumber: 'ES910001000299000001',
+          balance: 1000,
+          level: 1
         }
       ];
       db.users.push(...defaultStudents);
@@ -5187,6 +5238,16 @@ function readDb(): DatabaseSchema {
           role: 'student',
           name: 'Beatriz Gómez',
           accountNumber: 'ES910001000244556677',
+          balance: 1000,
+          level: 1
+        },
+        {
+          id: 'alumno-cliente01',
+          username: 'cliente01',
+          password: '123',
+          role: 'student',
+          name: 'Cliente 01',
+          accountNumber: 'ES910001000299000001',
           balance: 1000,
           level: 1
         }
@@ -5316,6 +5377,9 @@ app.post('/api/supabase-sync', async (req, res) => {
       return res.status(500).json({ success: false, error: tableInit.error });
     }
 
+    const currentDb = readDb();
+    await syncAllToSupabase(currentDb);
+
     const restoreRes = await restoreFromSupabase();
 
     let cuentasCount = 0;
@@ -5343,13 +5407,14 @@ app.post('/api/supabase-sync', async (req, res) => {
 });
 
 // Authenticate / Login
-const loginHandler = (req: express.Request, res: express.Response) => {
+const loginHandler = async (req: express.Request, res: express.Response) => {
   const { username, password } = req.body;
   
   console.log('[LOGIN] Request received. Username:', username, 'Password:', password ? '****' : 'empty');
 
   const cleanUsername = String(username || '').trim().toLowerCase();
   const cleanPassword = String(password || '').trim();
+  const strippedUsername = cleanUsername.replace(/[^a-z0-9]/gi, '');
 
   // Log to database systemLogs for diagnostic tracking
   try {
@@ -5372,13 +5437,91 @@ const loginHandler = (req: express.Request, res: express.Response) => {
   }
 
   const db = readDb();
-  const user = db.users.find(u => {
+  let user = db.users.find(u => {
     const uName = (u.username || '').trim().toLowerCase();
     const uPass = (u.password || '').trim();
     const nameMatch = (u.name || '').trim().toLowerCase() === cleanUsername;
     const accountMatch = (u.accountNumber || '').trim().toLowerCase() === cleanUsername;
-    return (uName === cleanUsername || nameMatch || accountMatch) && uPass === cleanPassword;
+    const idMatch = (u.id || '').trim().toLowerCase() === cleanUsername;
+    const strippedMatch = uName.replace(/[^a-z0-9]/gi, '') === strippedUsername;
+    const isPasswordValid = uPass === cleanPassword || (!uPass && cleanPassword === '123');
+    return (uName === cleanUsername || nameMatch || accountMatch || idMatch || strippedMatch) && isPasswordValid;
   });
+
+  // If not found in local db, query Supabase directly if connected
+  if (!user && dbPool) {
+    try {
+      const client = await dbPool.connect();
+      try {
+        const queryRes = await client.query(
+          `SELECT * FROM cuentas WHERE LOWER(usuario) = $1 OR LOWER(alumno) = $1 OR LOWER(account_number) = $1 OR LOWER(id) = $1 LIMIT 1`,
+          [cleanUsername]
+        );
+        if (queryRes.rows.length > 0) {
+          const row = queryRes.rows[0];
+          const dbPass = (row.password || '123').trim();
+          if (dbPass === cleanPassword || (!row.password && cleanPassword === '123')) {
+            const newUser: User = {
+              id: String(row.id),
+              name: String(row.alumno),
+              username: row.usuario ? String(row.usuario) : cleanUsername,
+              password: dbPass,
+              role: (row.role as any) || 'student',
+              accountNumber: row.account_number || generateIBAN(),
+              balance: Number(row.saldo) || 0,
+              level: row.level ? (Number(row.level) as 1 | 2 | 3) : 1
+            };
+            const existingIdx = db.users.findIndex(u => u.id === newUser.id);
+            if (existingIdx >= 0) {
+              db.users[existingIdx] = newUser;
+            } else {
+              db.users.push(newUser);
+            }
+            writeDb(db);
+            user = newUser;
+          }
+        }
+      } finally {
+        client.release();
+      }
+    } catch (sbErr) {
+      console.error('[Supabase Login Query Error]', sbErr);
+    }
+  }
+
+  // Auto-provision standard student/client identifiers (e.g., cliente01, cliente02, alumno01, cliente1)
+  if (!user) {
+    const studentPattern = /^(cliente|alumno|student|estudiante|user)[-_ ]*0?(\d+)$/i;
+    const match = cleanUsername.match(studentPattern);
+    if (match && (cleanPassword === '123' || !cleanPassword)) {
+      const prefix = match[1].toLowerCase().startsWith('c') ? 'Cliente' : 'Alumno';
+      const numStr = match[2].padStart(2, '0');
+      const newStudentName = `${prefix} ${numStr}`;
+      const newStudentUser: User = {
+        id: `alumno-${cleanUsername.replace(/[^a-z0-9]/gi, '')}`,
+        username: cleanUsername,
+        password: cleanPassword || '123',
+        role: 'student',
+        name: newStudentName,
+        accountNumber: `ES910001000299${numStr.padStart(6, '0')}`,
+        balance: db.defaultInitialBalance || 1000,
+        level: 1
+      };
+      db.users.push(newStudentUser);
+      writeDb(db);
+      syncAccountToSupabase(
+        newStudentUser.id,
+        newStudentUser.name,
+        newStudentUser.balance,
+        newStudentUser.username,
+        newStudentUser.password,
+        newStudentUser.accountNumber,
+        newStudentUser.role,
+        newStudentUser.level
+      ).catch(() => {});
+      user = newStudentUser;
+    }
+  }
 
   if (!user) {
     console.log('[LOGIN] Failed: Credentials do not match any active user. Username tried:', cleanUsername);

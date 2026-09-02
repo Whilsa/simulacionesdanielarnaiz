@@ -112,7 +112,11 @@ export default function App() {
   const handleDismissPriceAlert = () => {
     if (pendingPriceAlertAnn && pendingPriceAlertAnn.priceAlert && currentUser) {
       const dismissedKey = `seen_price_alert_${currentUser.id}_${pendingPriceAlertAnn.id}_${pendingPriceAlertAnn.priceAlert.timestamp}`;
-      localStorage.setItem(dismissedKey, 'true');
+      try {
+        localStorage.setItem(dismissedKey, 'true');
+      } catch (e) {
+        console.warn('Storage unavailable', e);
+      }
     }
     setShowPriceAlertModal(false);
   };
@@ -120,7 +124,11 @@ export default function App() {
   const handleGoToMarketPriceAlert = () => {
     if (pendingPriceAlertAnn && pendingPriceAlertAnn.priceAlert && currentUser) {
       const dismissedKey = `seen_price_alert_${currentUser.id}_${pendingPriceAlertAnn.id}_${pendingPriceAlertAnn.priceAlert.timestamp}`;
-      localStorage.setItem(dismissedKey, 'true');
+      try {
+        localStorage.setItem(dismissedKey, 'true');
+      } catch (e) {
+        console.warn('Storage unavailable', e);
+      }
     }
     setShowPriceAlertModal(false);
     setRawMaterialsTab('catalogo');
@@ -148,20 +156,32 @@ export default function App() {
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
     setActiveModule('hub');
-    localStorage.setItem('bes_sim_user', JSON.stringify(user));
+    try {
+      localStorage.setItem('bes_sim_user', JSON.stringify(user));
+    } catch (e) {
+      console.warn('Storage unavailable', e);
+    }
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     setActiveModule('hub');
-    localStorage.removeItem('bes_sim_user');
+    try {
+      localStorage.removeItem('bes_sim_user');
+    } catch (e) {
+      console.warn('Storage unavailable', e);
+    }
   };
 
   const handleUserBalanceUpdated = (newBalance: number) => {
     if (currentUser) {
       const updatedUser = { ...currentUser, balance: newBalance };
       setCurrentUser(updatedUser);
-      localStorage.setItem('bes_sim_user', JSON.stringify(updatedUser));
+      try {
+        localStorage.setItem('bes_sim_user', JSON.stringify(updatedUser));
+      } catch (e) {
+        console.warn('Storage unavailable', e);
+      }
     }
   };
 
@@ -326,7 +346,11 @@ export default function App() {
                       const u = d.users.find((x: User) => x.id === currentUser.id);
                       if (u) {
                         setCurrentUser(u);
-                        localStorage.setItem('bes_sim_user', JSON.stringify(u));
+                        try {
+                          localStorage.setItem('bes_sim_user', JSON.stringify(u));
+                        } catch (e) {
+                          console.warn('Storage unavailable', e);
+                        }
                       }
                     }
                   })

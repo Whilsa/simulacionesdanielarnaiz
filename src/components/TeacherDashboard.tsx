@@ -246,29 +246,44 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       // Save a browser-side copy of the database to local storage as a safety fallback
       if (usersList.length > 0) {
         const hasStudents = usersList.some(u => u.role === 'student');
-        
-        const backupObj = {
-          users: usersList,
-          transfers: transfersList,
-          systemLogs: logsList,
-          defaultInitialBalance: 1000
-        };
-        const dbStr = JSON.stringify(backupObj);
 
         if (hasStudents) {
-          localStorage.setItem('egobey_db_backup', dbStr);
-          setShowRestoreSuggestion(false);
-        } else {
-          const savedBackupStr = localStorage.getItem('egobey_db_backup');
-          if (savedBackupStr) {
+          try {
+            // Store compact backup (users, latest 50 transfers, latest 50 logs)
+            const backupObj = {
+              users: usersList,
+              transfers: transfersList.slice(0, 50),
+              systemLogs: logsList.slice(0, 50),
+              defaultInitialBalance: 1000
+            };
+            localStorage.setItem('egobey_db_backup', JSON.stringify(backupObj));
+            setShowRestoreSuggestion(false);
+          } catch (storageErr) {
+            // Quota exceeded or storage unavailable: try storing minimal users only
             try {
+              const minimalBackup = {
+                users: usersList,
+                transfers: [],
+                systemLogs: [],
+                defaultInitialBalance: 1000
+              };
+              localStorage.setItem('egobey_db_backup', JSON.stringify(minimalBackup));
+              setShowRestoreSuggestion(false);
+            } catch (e) {
+              console.warn('[TeacherDashboard] LocalStorage backup quota exceeded or unavailable:', e);
+            }
+          }
+        } else {
+          try {
+            const savedBackupStr = localStorage.getItem('egobey_db_backup');
+            if (savedBackupStr) {
               const savedBackup = JSON.parse(savedBackupStr);
               if (savedBackup.users && savedBackup.users.some((u: any) => u.role === 'student')) {
                 setShowRestoreSuggestion(true);
               }
-            } catch (e) {
-              console.error('Error parsing local db backup:', e);
             }
+          } catch (e) {
+            console.error('Error reading local db backup:', e);
           }
         }
       }
