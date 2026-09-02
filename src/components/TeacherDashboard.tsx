@@ -1731,7 +1731,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                         />
                         <div>
                           <span className="text-sm font-semibold text-slate-800 block">Eliminar todo (cero absoluto)</span>
-                          <span className="text-xs text-slate-400 block mt-0.5">Elimina todas las cuentas de alumnos, claves, transferencias y registros del sistema para empezar de cero.</span>
+                          <span className="text-xs text-slate-400 block mt-0.5">Elimina todas las cuentas de alumnos, claves, movimientos y registros guardados en la app y en Supabase para empezar de cero sin cuentas predeterminadas.</span>
                         </div>
                       </label>
                     </div>

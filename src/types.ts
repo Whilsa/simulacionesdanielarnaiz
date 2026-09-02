@@ -851,6 +851,21 @@ export interface UnifiedMonthlyInvoice {
   status: 'pagado';
 }
 
+export interface EmployeePayrollBreakdown {
+  employeeId: string;
+  employeeName: string;
+  grossSalary: number;
+  employeeSS: number;
+  employeeIRPF: number;
+  netSalary: number;
+  companySS: number;
+  isProportional?: boolean;
+  workedDays?: number;
+  totalMonthDays?: number;
+  transferId?: string;
+  paidAt?: string;
+}
+
 export interface PayrollRecord {
   id: string;
   studentId: string;
@@ -867,6 +882,8 @@ export interface PayrollRecord {
   isProportional: boolean;
   status: 'paid';
   createdAt: string;
+  paidEmployeeIds?: string[];
+  employeeBreakdown?: EmployeePayrollBreakdown[];
 }
 
 export interface TaxObligation {

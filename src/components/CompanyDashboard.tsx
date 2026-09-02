@@ -878,7 +878,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         const targetYear = refDate.getFullYear();
         const targetMonth = refDate.getMonth() + 1; // 1-based
 
-        const pDate = new Date(targetYear, targetMonth, 1, 9, 0, 0); // 1st of month following targetMonth
+        const pDate = new Date(targetYear, targetMonth - 1, 26, 9, 0, 0); // 26th of corresponding targetMonth
         const ssDueDate = new Date(targetYear, targetMonth, 20, 9, 0, 0); // 20th of month following targetMonth
 
         let monthGross = 0;
@@ -922,11 +922,26 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           const eSSEmp = Math.round(eGross * 0.0648 * 100) / 100;
           const eNet = Math.round((eGross - eIRPF - eSSEmp) * 100) / 100;
 
-          // 4a. Individual Net Payroll per employee on Day 1 of following month
-          if (pDate >= now && pDate <= maxDate && eNet > 0) {
+          const empName = e.employeeName || e.name || "Empleado";
+          const isAlreadyPaid = (data.payrollRecords || []).some(pr => 
+            pr.studentId === currentUser.id && 
+            pr.periodMonth === targetMonth && 
+            pr.periodYear === targetYear &&
+            ((pr.paidEmployeeIds && pr.paidEmployeeIds.includes(e.id)) || 
+             (pr.employeeBreakdown && pr.employeeBreakdown.some((b: any) => b.employeeId === e.id || b.employeeName?.toLowerCase().trim() === empName.toLowerCase().trim())) ||
+             (!pr.paidEmployeeIds && !pr.employeeBreakdown && pr.status === 'paid'))
+          ) || (data.transfers || []).some(t =>
+            (t.senderId === currentUser.id || t.senderAccount === currentUser.accountNumber) &&
+            (t.receiverId === `empleado-${e.id}` || t.receiverId === e.id || t.receiverName?.toLowerCase().trim() === empName.toLowerCase().trim() || t.concept?.toLowerCase().includes(empName.toLowerCase().trim())) &&
+            (t.concept?.includes(`Mes ${targetMonth}/${targetYear}`) || t.concept?.includes(`${targetMonth}/${targetYear}`)) &&
+            (t.concept?.toLowerCase().includes('nómina') || t.concept?.toLowerCase().includes('nomina'))
+          );
+
+          // 4a. Individual Net Payroll per employee on Day 26 of corresponding month
+          if (!isAlreadyPaid && pDate >= now && pDate <= maxDate && eNet > 0) {
             items.push({
               id: `payroll-net-${e.id || empIndex}-${targetYear}-${targetMonth}`,
-              concept: `Nómina neta - ${e.employeeName || e.name || "Empleado"} (Mes ${targetMonth}/${targetYear})`,
+              concept: `Nómina neta - ${empName} (Mes ${targetMonth}/${targetYear})`,
               origin: "Nóminas de personal",
               amount: eNet,
               dueDate: pDate.toISOString(),
@@ -3680,7 +3695,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <strong>
                                 {hiredList.length} empleados contratados
                               </strong>{" "}
-                              • Pago de salarios el día 1 del mes siguiente
+                              • Pago individual de salarios el día 26 del mes correspondiente
                             </p>
                           </div>
                           <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">

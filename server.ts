@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -613,6 +613,8 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_location TEXT;
       ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_municipality TEXT;
       ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_province TEXT;
+      ALTER TABLE registros_nomina ADD COLUMN IF NOT EXISTS detalles_empleados JSONB;
+      ALTER TABLE registros_nomina ADD COLUMN IF NOT EXISTS paid_employee_ids JSONB;
 
       CREATE TABLE IF NOT EXISTS perfiles_empresa (
         id VARCHAR(255) PRIMARY KEY,
@@ -1376,11 +1378,21 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
 async function syncPayrollRecordToSupabase(pr: PayrollRecord) {
   if (!dbPool) return;
   try {
+    const detailsJson = pr.employeeBreakdown ? JSON.stringify(pr.employeeBreakdown) : null;
+    const paidIdsJson = pr.paidEmployeeIds ? JSON.stringify(pr.paidEmployeeIds) : null;
     await safeDbQuery(
-      `INSERT INTO registros_nomina (id, alumno_id, alumno_nombre, fecha_nomina, mes, anio, num_empleados, total_bruto, total_ss_empleado, total_irpf, total_liquido, total_ss_empresa, es_proporcional)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       ON CONFLICT (id) DO NOTHING`,
-      [pr.id, pr.studentId, pr.studentName, pr.payrollDate, pr.periodMonth, pr.periodYear, pr.employeeCount, pr.totalGrossSalary, pr.totalEmployeeSS, pr.totalEmployeeIRPF, pr.totalNetSalaryPaid, pr.totalCompanySS, pr.isProportional]
+      `INSERT INTO registros_nomina (id, alumno_id, alumno_nombre, fecha_nomina, mes, anio, num_empleados, total_bruto, total_ss_empleado, total_irpf, total_liquido, total_ss_empresa, es_proporcional, detalles_empleados, paid_employee_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (id) DO UPDATE SET
+         detalles_empleados = EXCLUDED.detalles_empleados,
+         paid_employee_ids = EXCLUDED.paid_employee_ids,
+         num_empleados = EXCLUDED.num_empleados,
+         total_bruto = EXCLUDED.total_bruto,
+         total_ss_empleado = EXCLUDED.total_ss_empleado,
+         total_irpf = EXCLUDED.total_irpf,
+         total_liquido = EXCLUDED.total_liquido,
+         total_ss_empresa = EXCLUDED.total_ss_empresa`,
+      [pr.id, pr.studentId, pr.studentName, pr.payrollDate, pr.periodMonth, pr.periodYear, pr.employeeCount, pr.totalGrossSalary, pr.totalEmployeeSS, pr.totalEmployeeIRPF, pr.totalNetSalaryPaid, pr.totalCompanySS, pr.isProportional, detailsJson, paidIdsJson]
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing payroll record:', e);
@@ -2194,56 +2206,6 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }
       }
 
-      // If no student accounts were retrieved from Supabase, preserve default students
-      if (restoredUsers.filter(u => u.role === 'student').length === 0) {
-        const defaultStudents: User[] = [
-          {
-            id: 'alumno-1',
-            username: 'ana',
-            password: '123',
-            role: 'student',
-            name: 'Ana López',
-            accountNumber: 'ES910001000212345678',
-            balance: 1000,
-            level: 1
-          },
-          {
-            id: 'alumno-2',
-            username: 'carlos',
-            password: '123',
-            role: 'student',
-            name: 'Carlos Ruiz',
-            accountNumber: 'ES910001000287654321',
-            balance: 1000,
-            level: 1
-          },
-          {
-            id: 'alumno-3',
-            username: 'beatriz',
-            password: '123',
-            role: 'student',
-            name: 'Beatriz Gómez',
-            accountNumber: 'ES910001000244556677',
-            balance: 1000,
-            level: 1
-          },
-          {
-            id: 'alumno-cliente01',
-            username: 'cliente01',
-            password: '123',
-            role: 'student',
-            name: 'Cliente 01',
-            accountNumber: 'ES910001000299000001',
-            balance: 1000,
-            level: 1
-          }
-        ];
-        restoredUsers.push(...defaultStudents);
-        for (const st of defaultStudents) {
-          syncAccountToSupabase(st.id, st.name, st.balance, st.username, st.password, st.accountNumber, st.role, st.level).catch(() => {});
-        }
-      }
-
       db.users = restoredUsers;
 
       // Reconstruct db.transfers from "movimientos"
@@ -2520,23 +2482,39 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       // Reconstruct db.payrollRecords from Supabase "registros_nomina"
       if (resPayrolls.rows.length > 0) {
-        db.payrollRecords = resPayrolls.rows.map((row: any) => ({
-          id: String(row.id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          payrollDate: new Date(row.fecha_nomina).toISOString(),
-          periodMonth: Number(row.mes),
-          periodYear: Number(row.anio),
-          employeeCount: Number(row.num_empleados),
-          totalGrossSalary: Number(row.total_bruto),
-          totalEmployeeSS: Number(row.total_ss_empleado),
-          totalEmployeeIRPF: Number(row.total_irpf),
-          totalNetSalaryPaid: Number(row.total_liquido),
-          totalCompanySS: Number(row.total_ss_empresa),
-          isProportional: Boolean(row.es_proporcional),
-          status: 'paid',
-          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
-        }));
+        db.payrollRecords = resPayrolls.rows.map((row: any) => {
+          let paidEmployeeIds: string[] | undefined = undefined;
+          if (row.paid_employee_ids) {
+            try {
+              paidEmployeeIds = Array.isArray(row.paid_employee_ids) ? row.paid_employee_ids : JSON.parse(row.paid_employee_ids);
+            } catch (e) {}
+          }
+          let employeeBreakdown: EmployeePayrollBreakdown[] | undefined = undefined;
+          if (row.detalles_empleados) {
+            try {
+              employeeBreakdown = Array.isArray(row.detalles_empleados) ? row.detalles_empleados : JSON.parse(row.detalles_empleados);
+            } catch (e) {}
+          }
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            payrollDate: new Date(row.fecha_nomina).toISOString(),
+            periodMonth: Number(row.mes),
+            periodYear: Number(row.anio),
+            employeeCount: Number(row.num_empleados),
+            totalGrossSalary: Number(row.total_bruto),
+            totalEmployeeSS: Number(row.total_ss_empleado),
+            totalEmployeeIRPF: Number(row.total_irpf),
+            totalNetSalaryPaid: Number(row.total_liquido),
+            totalCompanySS: Number(row.total_ss_empresa),
+            isProportional: Boolean(row.es_proporcional),
+            status: 'paid' as const,
+            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+            paidEmployeeIds,
+            employeeBreakdown
+          };
+        });
       }
 
       // Reconstruct db.taxObligations from Supabase "obligaciones_fiscales"
@@ -4278,6 +4256,68 @@ function normalizeAndFixTaxObligations(db: DatabaseSchema) {
   }
 }
 
+function isEmployeePayrollPaid(
+  db: DatabaseSchema,
+  studentId: string,
+  employeeId: string,
+  employeeName: string,
+  periodMonth: number,
+  periodYear: number
+): boolean {
+  const cleanEmpName = (employeeName || '').toLowerCase().trim();
+  const student = (db.users || []).find(u => u.id === studentId);
+  const studentAccount = student?.accountNumber;
+
+  // 1. Check in db.payrollRecords
+  const inPayrollRecords = (db.payrollRecords || []).some(pr => {
+    if (pr.studentId !== studentId || pr.periodMonth !== periodMonth || pr.periodYear !== periodYear) {
+      return false;
+    }
+    if (pr.paidEmployeeIds && Array.isArray(pr.paidEmployeeIds)) {
+      if (pr.paidEmployeeIds.includes(employeeId)) return true;
+    }
+    if (pr.employeeBreakdown && Array.isArray(pr.employeeBreakdown)) {
+      if (pr.employeeBreakdown.some(b => b.employeeId === employeeId || (b.employeeName && b.employeeName.toLowerCase().trim() === cleanEmpName))) {
+        return true;
+      }
+    }
+    // Legacy check: if record was created before breakdown tracking and had status 'paid'
+    if (!pr.paidEmployeeIds && !pr.employeeBreakdown && pr.status === 'paid') {
+      return true;
+    }
+    return false;
+  });
+
+  if (inPayrollRecords) return true;
+
+  // 2. Check in db.transfers
+  const inTransfers = (db.transfers || []).some(t => {
+    const isSender = t.senderId === studentId || (studentAccount && t.senderAccount === studentAccount);
+    if (!isSender) return false;
+
+    const matchesReceiver = t.receiverId === `empleado-${employeeId}` || 
+      t.receiverId === employeeId || 
+      (t.receiverName && t.receiverName.toLowerCase().trim() === cleanEmpName);
+
+    const matchesNameInConcept = cleanEmpName && t.concept && t.concept.toLowerCase().includes(cleanEmpName);
+
+    const matchesPeriod = t.concept && (
+      t.concept.includes(`Mes ${periodMonth}/${periodYear}`) ||
+      t.concept.includes(`${periodMonth}/${periodYear}`) ||
+      t.concept.includes(`mes ${periodMonth}/${periodYear}`)
+    );
+
+    const isPayrollTransfer = t.concept && (
+      t.concept.toLowerCase().includes('nómina') || 
+      t.concept.toLowerCase().includes('nomina')
+    );
+
+    return (matchesReceiver || matchesNameInConcept) && matchesPeriod && isPayrollTransfer;
+  });
+
+  return inTransfers;
+}
+
 function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
@@ -4291,7 +4331,7 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   const currentMonth = now.getMonth() + 1; // 1 - 12
   const currentYear = now.getFullYear();
 
-  // 1. Process Payroll on day 26 or later
+  // 1. Process Payroll on day 26 or later of the corresponding month
   if (currentDay >= 26) {
     const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
 
@@ -4299,174 +4339,237 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       const student = db.users.find(u => u.id === studentId && u.role === 'student');
       if (!student) continue;
 
-      const alreadyProcessed = db.payrollRecords.some(
-        pr => pr.studentId === studentId && pr.periodMonth === currentMonth && pr.periodYear === currentYear
-      );
+      const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+      if (myEmployees.length === 0) continue;
 
-      if (!alreadyProcessed) {
-        const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
-        if (myEmployees.length === 0) continue;
+      // Verification system: filter out employees who have ALREADY been paid for currentMonth/currentYear
+      const unpaidEmployees: typeof myEmployees = [];
 
-        let totalGross = 0;
-        let isProportionalPayroll = false;
+      for (const emp of myEmployees) {
+        const empName = emp.employeeName || (emp as any).name || 'Empleado';
+        if (!isEmployeePayrollPaid(db, studentId, emp.id, empName, currentMonth, currentYear)) {
+          unpaidEmployees.push(emp);
+        }
+      }
 
-        for (const emp of myEmployees) {
-          if (emp.hireDate) {
-            const parts = emp.hireDate.split('T')[0].split('-');
-            const hireYear = parseInt(parts[0], 10);
-            const hireMonth = parseInt(parts[1], 10);
-            const hireDay = parseInt(parts[2], 10);
+      if (unpaidEmployees.length === 0) {
+        continue; // All employees have already been paid for this period!
+      }
 
-            if (hireMonth === currentMonth && hireYear === currentYear) {
-              isProportionalPayroll = true;
-              const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
-              const daysWorked = Math.max(1, daysInMonth - hireDay + 1);
-              totalGross += (emp.grossSalaryMonthly / daysInMonth) * daysWorked;
-            } else if (hireYear < currentYear || (hireYear === currentYear && hireMonth < currentMonth)) {
-              totalGross += emp.grossSalaryMonthly;
-            }
-          } else {
-            totalGross += emp.grossSalaryMonthly;
+      let totalGross = 0;
+      let totalEmployeeIRPF = 0;
+      let totalEmployeeSS = 0;
+      let totalNetPaid = 0;
+      let totalCompanySS = 0;
+      let isProportionalPayroll = false;
+      const employeeBreakdown: EmployeePayrollBreakdown[] = [];
+      const newlyPaidEmployeeIds: string[] = [];
+
+      const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+
+      for (const emp of unpaidEmployees) {
+        const empName = emp.employeeName || (emp as any).name || 'Empleado';
+        let empGross = 0;
+        let isProportional = false;
+        let workedDays = daysInMonth;
+
+        if (emp.hireDate) {
+          const parts = emp.hireDate.split('T')[0].split('-');
+          const hireYear = parseInt(parts[0], 10);
+          const hireMonth = parseInt(parts[1], 10);
+          const hireDay = parseInt(parts[2], 10);
+
+          if (hireYear > currentYear || (hireYear === currentYear && hireMonth > currentMonth)) {
+            continue; // Not hired yet in this period
           }
+
+          if (hireMonth === currentMonth && hireYear === currentYear) {
+            isProportional = true;
+            isProportionalPayroll = true;
+            workedDays = Math.max(1, daysInMonth - hireDay + 1);
+            empGross = (emp.grossSalaryMonthly / daysInMonth) * workedDays;
+          } else {
+            workedDays = daysInMonth;
+            empGross = emp.grossSalaryMonthly;
+          }
+        } else {
+          workedDays = daysInMonth;
+          empGross = emp.grossSalaryMonthly;
         }
 
-        totalGross = Math.round(totalGross * 100) / 100;
-        const totalEmployeeIRPF = Math.round(totalGross * 0.17 * 100) / 100;
-        const totalEmployeeSS = Math.round(totalGross * 0.0648 * 100) / 100;
-        const totalNetPaid = Math.round((totalGross - totalEmployeeIRPF - totalEmployeeSS) * 100) / 100;
-        const totalCompanySS = Math.round(totalGross * 0.75 * 100) / 100;
+        empGross = Math.round(empGross * 100) / 100;
+        const empIRPF = Math.round(empGross * 0.17 * 100) / 100;
+        const empSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
+        const empNet = Math.round((empGross - empIRPF - empSSEmp) * 100) / 100;
+        const empSSComp = Math.round(empGross * 0.75 * 100) / 100;
 
-        student.balance = Math.round((student.balance - totalNetPaid) * 100) / 100;
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+        totalGross += empGross;
+        totalEmployeeIRPF += empIRPF;
+        totalEmployeeSS += empSSEmp;
+        totalNetPaid += empNet;
+        totalCompanySS += empSSComp;
 
+        // Individual Bank Transfer per Employee
         const txId = generateId('tx');
         const transfer: Transfer = {
           id: txId,
           senderId: student.id,
           senderName: student.name,
           senderAccount: student.accountNumber,
-          receiverId: 'empleados-nomina',
-          receiverName: 'Personal empleado / nóminas',
-          receiverAccount: 'ES000000000000000000',
-          amount: totalNetPaid,
-          concept: `Pago automático de nóminas del mes ${currentMonth}/${currentYear} (${myEmployees.length} empleados)`,
+          receiverId: `empleado-${emp.id}`,
+          receiverName: empName,
+          receiverAccount: (emp as any).bankAccount || `ES910001000299${String(emp.id).replace(/\D/g, '').padStart(6, '0')}`,
+          amount: empNet,
+          concept: `Pago de nómina - ${empName} (Mes ${currentMonth}/${currentYear})`,
           timestamp: now.toISOString()
         };
+
         db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalNetPaid, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', empNet, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
-        const prId = generateId('payroll');
-        const newPR: PayrollRecord = {
-          id: prId,
-          studentId: student.id,
-          studentName: student.name,
-          payrollDate: now.toISOString(),
-          periodMonth: currentMonth,
-          periodYear: currentYear,
-          employeeCount: myEmployees.length,
-          totalGrossSalary: totalGross,
-          totalEmployeeSS: totalEmployeeSS,
-          totalEmployeeIRPF: totalEmployeeIRPF,
-          totalNetSalaryPaid: totalNetPaid,
-          totalCompanySS: totalCompanySS,
-          isProportional: isProportionalPayroll,
-          status: 'paid',
-          createdAt: now.toISOString()
-        };
-        db.payrollRecords.push(newPR);
-        syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
-
-        // TGSS SS due date: 20th of following month
-        let nextMonth = currentMonth + 1;
-        let nextYear = currentYear;
-        if (nextMonth > 12) {
-          nextMonth = 1;
-          nextYear += 1;
-        }
-        const ssDueDateObj = new Date(nextYear, nextMonth - 1, 20, 9, 0, 0);
-
-        // AEAT IRPF due date: 15th of first month of following quarter
-        let qNum = 1;
-        let irpfDueDateObj: Date;
-        if (currentMonth >= 10) {
-          qNum = 4;
-          irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
-        } else if (currentMonth >= 7) {
-          qNum = 3;
-          irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0); // Oct 15
-        } else if (currentMonth >= 4) {
-          qNum = 2;
-          irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0); // Jul 15
-        } else {
-          qNum = 1;
-          irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0); // Apr 15
-        }
-
-        const ssEmpObl: TaxObligation = {
-          id: generateId('tax'),
-          studentId: student.id,
-          studentName: student.name,
-          type: 'ss_employee',
-          concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${currentMonth}/${currentYear}`,
-          amount: totalEmployeeSS,
-          dueDate: ssDueDateObj.toISOString(),
-          status: 'pendiente',
-          payrollRecordId: prId
-        };
-
-        const ssCompObl: TaxObligation = {
-          id: generateId('tax'),
-          studentId: student.id,
-          studentName: student.name,
-          type: 'ss_company',
-          concept: `Aportación patronal Seguridad Social (75%) Mes ${currentMonth}/${currentYear}`,
-          amount: totalCompanySS,
-          dueDate: ssDueDateObj.toISOString(),
-          status: 'pendiente',
-          payrollRecordId: prId
-        };
-
-        db.taxObligations.push(ssEmpObl, ssCompObl);
-        syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
-        syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
-
-        const existingIrpf = db.taxObligations.find(t => 
-          t.studentId === student.id && 
-          t.type === 'irpf' && 
-          t.status === 'pendiente' && 
-          new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
-          new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
-        );
-
-        if (existingIrpf) {
-          existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
-          existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
-          syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
-        } else {
-          const irpfObl: TaxObligation = {
-            id: generateId('tax'),
-            studentId: student.id,
-            studentName: student.name,
-            type: 'irpf',
-            concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`,
-            amount: totalEmployeeIRPF,
-            dueDate: irpfDueDateObj.toISOString(),
-            status: 'pendiente',
-            payrollRecordId: prId
-          };
-          db.taxObligations.push(irpfObl);
-          syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
-        }
-
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'PAYROLL_AUTOMATED',
-          details: `Nóminas pagadas automáticamente para ${student.name}: Líquido ${totalNetPaid}€ (${myEmployees.length} empleados). Generadas deudas con Hacienda (IRPF: ${totalEmployeeIRPF}€) y Seguridad Social (Empleado: ${totalEmployeeSS}€, Empresa: ${totalCompanySS}€).`,
-          timestamp: now.toISOString(),
-          studentId: student.id,
-          studentName: student.name
+        newlyPaidEmployeeIds.push(emp.id);
+        employeeBreakdown.push({
+          employeeId: emp.id,
+          employeeName: empName,
+          grossSalary: empGross,
+          employeeSS: empSSEmp,
+          employeeIRPF: empIRPF,
+          netSalary: empNet,
+          companySS: empSSComp,
+          isProportional,
+          workedDays,
+          totalMonthDays: daysInMonth,
+          transferId: txId,
+          paidAt: now.toISOString()
         });
+
+        // Deduct employee net salary individually from student balance
+        student.balance = Math.round((student.balance - empNet) * 100) / 100;
       }
+
+      totalGross = Math.round(totalGross * 100) / 100;
+      totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
+      totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
+      totalNetPaid = Math.round(totalNetPaid * 100) / 100;
+      totalCompanySS = Math.round(totalCompanySS * 100) / 100;
+
+      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
+
+      // Register / update PayrollRecord
+      const prId = generateId('payroll');
+      const newPR: PayrollRecord = {
+        id: prId,
+        studentId: student.id,
+        studentName: student.name,
+        payrollDate: now.toISOString(),
+        periodMonth: currentMonth,
+        periodYear: currentYear,
+        employeeCount: unpaidEmployees.length,
+        totalGrossSalary: totalGross,
+        totalEmployeeSS: totalEmployeeSS,
+        totalEmployeeIRPF: totalEmployeeIRPF,
+        totalNetSalaryPaid: totalNetPaid,
+        totalCompanySS: totalCompanySS,
+        isProportional: isProportionalPayroll,
+        status: 'paid',
+        createdAt: now.toISOString(),
+        paidEmployeeIds: newlyPaidEmployeeIds,
+        employeeBreakdown: employeeBreakdown
+      };
+      db.payrollRecords.push(newPR);
+      syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
+
+      // TGSS SS due date: 20th of following month
+      let nextMonth = currentMonth + 1;
+      let nextYear = currentYear;
+      if (nextMonth > 12) {
+        nextMonth = 1;
+        nextYear += 1;
+      }
+      const ssDueDateObj = new Date(nextYear, nextMonth - 1, 20, 9, 0, 0);
+
+      // AEAT IRPF due date: 15th of first month of following quarter
+      let qNum = 1;
+      let irpfDueDateObj: Date;
+      if (currentMonth >= 10) {
+        qNum = 4;
+        irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+      } else if (currentMonth >= 7) {
+        qNum = 3;
+        irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0); // Oct 15
+      } else if (currentMonth >= 4) {
+        qNum = 2;
+        irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0); // Jul 15
+      } else {
+        qNum = 1;
+        irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0); // Apr 15
+      }
+
+      const ssEmpObl: TaxObligation = {
+        id: generateId('tax'),
+        studentId: student.id,
+        studentName: student.name,
+        type: 'ss_employee',
+        concept: `Cuotas Seguridad Social Trabajador (6,48%) Mes ${currentMonth}/${currentYear}`,
+        amount: totalEmployeeSS,
+        dueDate: ssDueDateObj.toISOString(),
+        status: 'pendiente',
+        payrollRecordId: prId
+      };
+
+      const ssCompObl: TaxObligation = {
+        id: generateId('tax'),
+        studentId: student.id,
+        studentName: student.name,
+        type: 'ss_company',
+        concept: `Aportación patronal Seguridad Social (75%) Mes ${currentMonth}/${currentYear}`,
+        amount: totalCompanySS,
+        dueDate: ssDueDateObj.toISOString(),
+        status: 'pendiente',
+        payrollRecordId: prId
+      };
+
+      db.taxObligations.push(ssEmpObl, ssCompObl);
+      syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
+      syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
+
+      const existingIrpf = db.taxObligations.find(t => 
+        t.studentId === student.id && 
+        t.type === 'irpf' && 
+        t.status === 'pendiente' && 
+        new Date(t.dueDate).getFullYear() === irpfDueDateObj.getFullYear() && 
+        new Date(t.dueDate).getMonth() === irpfDueDateObj.getMonth()
+      );
+
+      if (existingIrpf) {
+        existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
+        existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
+        syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
+      } else {
+        const irpfObl: TaxObligation = {
+          id: generateId('tax'),
+          studentId: student.id,
+          studentName: student.name,
+          type: 'irpf',
+          concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`,
+          amount: totalEmployeeIRPF,
+          dueDate: irpfDueDateObj.toISOString(),
+          status: 'pendiente',
+          payrollRecordId: prId
+        };
+        db.taxObligations.push(irpfObl);
+        syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
+      }
+
+      const namesList = unpaidEmployees.map(e => e.employeeName || (e as any).name).join(', ');
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        action: 'PAYROLL_AUTOMATED',
+        details: `Nóminas pagadas individualmente el día 26 para ${student.name}: ${unpaidEmployees.length} transferencias por importe neto total de ${totalNetPaid}€ (${namesList}). Generadas obligaciones tributarias (IRPF: ${totalEmployeeIRPF}€) y Seguridad Social (Empleado: ${totalEmployeeSS}€, Empresa: ${totalCompanySS}€).`,
+        timestamp: now.toISOString(),
+        studentId: student.id,
+        studentName: student.name
+      });
     }
   }
 
@@ -5047,33 +5150,6 @@ function readDb(): DatabaseSchema {
           name: 'Profesor de Contabilidad',
           accountNumber: 'ES000000000000000000',
           balance: 0
-        },
-        {
-          id: 'alumno-1',
-          username: 'ana',
-          password: '123',
-          role: 'student',
-          name: 'Ana López',
-          accountNumber: 'ES910001000212345678',
-          balance: 1000
-        },
-        {
-          id: 'alumno-2',
-          username: 'carlos',
-          password: '123',
-          role: 'student',
-          name: 'Carlos Ruiz',
-          accountNumber: 'ES910001000287654321',
-          balance: 1000
-        },
-        {
-          id: 'alumno-3',
-          username: 'beatriz',
-          password: '123',
-          role: 'student',
-          name: 'Beatriz Gómez',
-          accountNumber: 'ES910001000244556677',
-          balance: 1000
         }
       ],
       transfers: [],
@@ -5148,55 +5224,6 @@ function readDb(): DatabaseSchema {
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
     }
 
-    // Ensure default students exist if no students exist in DB
-    const studentUsers = db.users.filter(u => u.role === 'student');
-    if (studentUsers.length === 0) {
-      const defaultStudents: User[] = [
-        {
-          id: 'alumno-1',
-          username: 'ana',
-          password: '123',
-          role: 'student',
-          name: 'Ana López',
-          accountNumber: 'ES910001000212345678',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-2',
-          username: 'carlos',
-          password: '123',
-          role: 'student',
-          name: 'Carlos Ruiz',
-          accountNumber: 'ES910001000287654321',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-3',
-          username: 'beatriz',
-          password: '123',
-          role: 'student',
-          name: 'Beatriz Gómez',
-          accountNumber: 'ES910001000244556677',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-cliente01',
-          username: 'cliente01',
-          password: '123',
-          role: 'student',
-          name: 'Cliente 01',
-          accountNumber: 'ES910001000299000001',
-          balance: 1000,
-          level: 1
-        }
-      ];
-      db.users.push(...defaultStudents);
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    }
-
     return db;
   } catch (error) {
     console.error("Error reading database, recreating default:", error);
@@ -5210,46 +5237,6 @@ function readDb(): DatabaseSchema {
           name: 'Profesor de Contabilidad',
           accountNumber: 'ES000000000000000000',
           balance: 0
-        },
-        {
-          id: 'alumno-1',
-          username: 'ana',
-          password: '123',
-          role: 'student',
-          name: 'Ana López',
-          accountNumber: 'ES910001000212345678',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-2',
-          username: 'carlos',
-          password: '123',
-          role: 'student',
-          name: 'Carlos Ruiz',
-          accountNumber: 'ES910001000287654321',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-3',
-          username: 'beatriz',
-          password: '123',
-          role: 'student',
-          name: 'Beatriz Gómez',
-          accountNumber: 'ES910001000244556677',
-          balance: 1000,
-          level: 1
-        },
-        {
-          id: 'alumno-cliente01',
-          username: 'cliente01',
-          password: '123',
-          role: 'student',
-          name: 'Cliente 01',
-          accountNumber: 'ES910001000299000001',
-          balance: 1000,
-          level: 1
         }
       ],
       transfers: [],
@@ -5486,40 +5473,6 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
       }
     } catch (sbErr) {
       console.error('[Supabase Login Query Error]', sbErr);
-    }
-  }
-
-  // Auto-provision standard student/client identifiers (e.g., cliente01, cliente02, alumno01, cliente1)
-  if (!user) {
-    const studentPattern = /^(cliente|alumno|student|estudiante|user)[-_ ]*0?(\d+)$/i;
-    const match = cleanUsername.match(studentPattern);
-    if (match && (cleanPassword === '123' || !cleanPassword)) {
-      const prefix = match[1].toLowerCase().startsWith('c') ? 'Cliente' : 'Alumno';
-      const numStr = match[2].padStart(2, '0');
-      const newStudentName = `${prefix} ${numStr}`;
-      const newStudentUser: User = {
-        id: `alumno-${cleanUsername.replace(/[^a-z0-9]/gi, '')}`,
-        username: cleanUsername,
-        password: cleanPassword || '123',
-        role: 'student',
-        name: newStudentName,
-        accountNumber: `ES910001000299${numStr.padStart(6, '0')}`,
-        balance: db.defaultInitialBalance || 1000,
-        level: 1
-      };
-      db.users.push(newStudentUser);
-      writeDb(db);
-      syncAccountToSupabase(
-        newStudentUser.id,
-        newStudentUser.name,
-        newStudentUser.balance,
-        newStudentUser.username,
-        newStudentUser.password,
-        newStudentUser.accountNumber,
-        newStudentUser.role,
-        newStudentUser.level
-      ).catch(() => {});
-      user = newStudentUser;
     }
   }
 
@@ -5897,10 +5850,20 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
       return u;
     });
   } else {
-    db.users = db.users.filter(u => u.role === 'teacher');
+    // Absolute zero: Remove all student accounts, only keep the teacher
+    const teacherUser = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1') || {
+      id: 'profesor-1',
+      username: 'pupdaniel',
+      password: '1987',
+      role: 'teacher' as const,
+      name: 'Profesor de Contabilidad',
+      accountNumber: 'ES000000000000000000',
+      balance: 0
+    };
+    db.users = [teacherUser];
   }
 
-  // Clear all activity, acquisitions, contracts, messages, and records
+  // Clear all movements, transfers, acquisitions, contracts, messages, and records
   db.transfers = [];
   db.properties = keepUsers ? getDefaultSeedProperties() : [];
   db.acquisitions = [];
@@ -5920,18 +5883,19 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
   db.relocationInvoices = [];
   db.purchasedVehicles = [];
   db.unifiedMonthlyInvoices = [];
-  db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+  db.rawMaterialAnnouncements = keepUsers ? getDefaultSeedRawMaterialAnnouncements() : [];
   db.rawMaterialOrders = [];
   db.rawMaterialInventories = [];
   db.marketMessages = [];
   db.companyProfiles = [];
   db.marketContacts = [];
   db.notifications = [];
+  db.courtLawsuits = [];
 
   const newLog: SystemLog = {
     id: generateId('log'),
     action: 'RESET_SIMULATION',
-    details: `Simulación reiniciada por el profesor. ¿Se mantuvieron usuarios?: ${keepUsers ? 'Sí (saldos restablecidos a ' + initialBalanceValue + ' €)' : 'No (todas las cuentas de alumnos eliminadas)'}`,
+    details: `Simulación reiniciada por el profesor. ¿Se mantuvieron usuarios?: ${keepUsers ? 'Sí (saldos restablecidos a ' + initialBalanceValue + ' €)' : 'No (cero absoluto: todos los movimientos y cuentas de alumnos eliminados)'}`,
     timestamp: new Date().toISOString()
   };
 
@@ -5948,13 +5912,15 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
           await safeDbQuery(`DELETE FROM cuentas WHERE id NOT IN (${placeholders})`, allowedIds);
         }
       } else {
-        await safeDbQuery(`DELETE FROM cuentas WHERE role = 'student' OR (role IS NULL AND id != 'profesor-1')`);
+        // Purge all student accounts from Supabase cuentas table
+        await safeDbQuery(`DELETE FROM cuentas WHERE id != 'profesor-1'`);
       }
 
       for (const u of db.users) {
         await syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level);
       }
 
+      // Purge all movements / transfers
       await safeDbQuery(`DELETE FROM movimientos`);
       await safeDbQuery(`DELETE FROM adquisiciones`);
       await safeDbQuery(`DELETE FROM obligaciones_pago`);
@@ -5976,6 +5942,7 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
       await safeDbQuery(`DELETE FROM contactos_mercado`);
       await safeDbQuery(`DELETE FROM market_messages`);
       await safeDbQuery(`DELETE FROM notificaciones`);
+      await safeDbQuery(`DELETE FROM demandas_judiciales`);
 
       await safeDbQuery(`DELETE FROM inmuebles`);
       for (const prop of db.properties) {
@@ -8275,7 +8242,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
     }
   }
 
-  // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas el día 1 del mes siguiente y tributos el 20 TGSS / 15 AEAT)
+  // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas el día 26 del mes correspondiente y tributos el 20 TGSS / 15 AEAT)
   const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
   if (studentEmps.length > 0) {
     const curYear = now.getFullYear();
@@ -8287,14 +8254,17 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
       const targetYear = refDate.getFullYear();
       const targetMonth = refDate.getMonth() + 1; // 1-indexed
 
-      // Net payroll due date is 1st of following month
-      const netPayDate = new Date(targetYear, targetMonth, 1, 9, 0, 0);
+      // Net payroll due date is 26th of corresponding month
+      const netPayDate = new Date(targetYear, targetMonth - 1, 26, 9, 0, 0);
 
       let monthGross = 0;
       let empIdx = 0;
 
       for (const emp of studentEmps) {
         empIdx++;
+        const empName = emp.employeeName || (emp as any).name || 'Empleado';
+        const alreadyPaid = isEmployeePayrollPaid(db, studentId, emp.id, empName, targetMonth, targetYear);
+
         let empGross = 0;
 
         if (!emp.hireDate) {
@@ -8323,22 +8293,22 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         const eSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
         const eNet = Math.round((empGross - eIRPF - eSSEmp) * 100) / 100;
 
-        // 4a. Individual Net Payroll payment per employee on Day 1 of following month
-        if (netPayDate >= now && netPayDate <= thirtyFiveDaysLater && eNet > 0) {
+        // 4a. Individual Net Payroll payment per employee on Day 26 of corresponding month
+        if (!alreadyPaid && netPayDate >= now && netPayDate <= thirtyFiveDaysLater && eNet > 0) {
           const daysRem = Math.ceil((netPayDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
           upcoming30DaysItems.push({
             id: `payroll-${studentId}-${emp.id || empIdx}-${targetYear}-${targetMonth}`,
             sourceType: 'payroll',
             type: 'cuota_nomina',
-            title: `Nómina neta (${emp.employeeName || (emp as any).name || 'Empleado'})`,
-            concept: `Nómina neta - ${emp.employeeName || (emp as any).name || 'Empleado'} (Mes ${targetMonth}/${targetYear})`,
+            title: `Nómina neta (${empName})`,
+            concept: `Nómina neta - ${empName} (Mes ${targetMonth}/${targetYear})`,
             dueDate: netPayDate.toISOString(),
             principalAmount: eNet,
             penaltyInterest: 0,
             totalAmount: eNet,
             isOverdue: false,
             daysRemaining: daysRem,
-            installmentInfo: `Día 1 del mes siguiente`
+            installmentInfo: `Día 26 del mes correspondiente`
           });
         }
       }
