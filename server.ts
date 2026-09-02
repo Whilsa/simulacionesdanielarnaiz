@@ -7522,7 +7522,7 @@ function calculateFrenchAmortization(
   const baseDate = new Date(startDateISO);
 
   for (let k = 1; k <= termMonths; k++) {
-    const dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0);
+    const dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0, 23, 59, 59, 999);
     const interest = Number((pendingBalance * r).toFixed(2));
     let principalPart = Number((monthlyPayment - interest).toFixed(2));
 
@@ -7549,9 +7549,20 @@ function calculateFrenchAmortization(
   return { monthlyPayment, schedule };
 }
 
-function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date, now: Date): number {
-  if (dueDate > now) return 0;
-  const daysElapsed = Math.max(0, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 3600 * 24)));
+function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date | string, now: Date = new Date()): number {
+  const dDate = typeof dueDate === 'string' ? new Date(dueDate) : dueDate;
+  // Due date covers up to the full calendar day 23:59:59.999
+  const endOfDueDay = new Date(dDate.getFullYear(), dDate.getMonth(), dDate.getDate(), 23, 59, 59, 999);
+
+  // If on or before the due date, never charge default/moratory interest
+  if (now.getTime() <= endOfDueDay.getTime()) {
+    return 0;
+  }
+
+  const msElapsed = now.getTime() - endOfDueDay.getTime();
+  const daysElapsed = Math.floor(msElapsed / (1000 * 3600 * 24));
+  if (daysElapsed < 1) return 0;
+
   const monthsElapsed = Math.max(1, Math.ceil(daysElapsed / 30));
   return Number((principal * 0.05 * monthsElapsed).toFixed(2));
 }
@@ -7941,11 +7952,12 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
       dueDate: Date;
       principal: number;
       penaltyInterest: number;
-      totalRequired: number;
       concept: string;
+      instrumentName?: string;
       obligationRef?: PaymentObligation;
       loanRef?: BankLoan;
       loanRowIndex?: number;
+      periodNum?: number;
     }
 
     const pendingItems: PendingItem[] = [];
@@ -7961,7 +7973,6 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
           if (dDate <= now) {
             const principal = ob.amount;
             const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-            const totalRequired = Number((principal + penalty).toFixed(2));
             const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
             let concept = `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`;
             if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
@@ -7978,8 +7989,8 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
               dueDate: dDate,
               principal,
               penaltyInterest: penalty,
-              totalRequired,
               concept,
+              instrumentName,
               obligationRef: ob
             });
           }
@@ -7997,7 +8008,6 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
               if (dDate <= now) {
                 const principal = row.payment;
                 const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-                const totalRequired = Number((principal + penalty).toFixed(2));
                 const periodNum = row.period || (row as any).installmentNumber || 1;
 
                 pendingItems.push({
@@ -8006,10 +8016,10 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
                   dueDate: dDate,
                   principal,
                   penaltyInterest: penalty,
-                  totalRequired,
                   concept: `Cuota ${periodNum}/${loan.termMonths} de préstamo hipotecario (${loan.collateral?.propertyTitle || 'Garantía inmobiliaria'})`,
                   loanRef: loan,
-                  loanRowIndex: idx
+                  loanRowIndex: idx,
+                  periodNum
                 });
               }
             }
@@ -8022,8 +8032,9 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
     pendingItems.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
 
     for (const item of pendingItems) {
-      if (student.balance >= item.totalRequired) {
-        student.balance = Number((student.balance - item.totalRequired).toFixed(2));
+      if (student.balance >= item.principal) {
+        // 1. Pay the principal amount (exact amortization row or obligation amount)
+        student.balance = Number((student.balance - item.principal).toFixed(2));
         modified = true;
 
         if (item.sourceType === 'obligation' && item.obligationRef) {
@@ -8053,16 +8064,35 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             receiverId: 'corp-tenedor-efectos',
             receiverName: 'Tenedor de Efectos Comerciales S.A.',
             receiverAccount: 'ES210001000299887755',
-            amount: item.totalRequired,
-            concept: item.penaltyInterest > 0
-              ? `${item.concept} (inc. 5% interés demora: +${item.penaltyInterest} €)`
-              : item.concept,
+            amount: item.principal,
+            concept: item.concept,
             timestamp: new Date().toISOString()
           };
           db.transfers.unshift(newTransfer);
 
           syncObligationToSupabase(ob).catch(e => console.error(e));
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.principal, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+
+          // 2. If there were overdue penalty interest, process in a SEPARATE movement
+          if (item.penaltyInterest > 0) {
+            if (student.balance >= item.penaltyInterest) {
+              student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+              const penaltyTx: Transfer = {
+                id: generateId('tx'),
+                senderId: student.id,
+                senderName: student.name,
+                senderAccount: student.accountNumber,
+                receiverId: 'corp-tenedor-efectos',
+                receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                receiverAccount: 'ES210001000299887755',
+                amount: item.penaltyInterest,
+                concept: `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`,
+                timestamp: new Date(Date.now() + 100).toISOString()
+              };
+              db.transfers.unshift(penaltyTx);
+              syncMovimientoToSupabase(penaltyTx.id + '-out', student.id, 'TRANSFER_OUT', item.penaltyInterest, penaltyTx.timestamp, penaltyTx.concept, penaltyTx).catch(e => console.error(e));
+            }
+          }
         } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
           const loan = item.loanRef;
           const row = loan.schedule[item.loanRowIndex];
@@ -8071,6 +8101,7 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
           row.isOverdue = false;
           row.penaltyInterest = 0;
 
+          // Main transfer for the loan installment (strictly the exact amount from amortization schedule)
           const newTransfer: Transfer = {
             id: generateId('tx'),
             senderId: student.id,
@@ -8079,10 +8110,8 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
             receiverId: 'corp-banco-central',
             receiverName: 'Banco Central Hipotecario S.A.',
             receiverAccount: 'ES210001000299887700',
-            amount: item.totalRequired,
-            concept: item.penaltyInterest > 0
-              ? `${item.concept} (inc. 5% interés demora: +${item.penaltyInterest} €)`
-              : item.concept,
+            amount: item.principal,
+            concept: item.concept,
             timestamp: new Date().toISOString()
           };
           db.transfers.unshift(newTransfer);
@@ -8092,20 +8121,41 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
           }
 
           syncLoanToSupabase(loan).catch(e => console.error(e));
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.totalRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.principal, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+
+          // 2. If there were overdue penalty interest, process in a SEPARATE movement
+          if (item.penaltyInterest > 0) {
+            if (student.balance >= item.penaltyInterest) {
+              student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+              const penaltyTx: Transfer = {
+                id: generateId('tx'),
+                senderId: student.id,
+                senderName: student.name,
+                senderAccount: student.accountNumber,
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Hipotecario S.A.',
+                receiverAccount: 'ES210001000299887700',
+                amount: item.penaltyInterest,
+                concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`,
+                timestamp: new Date(Date.now() + 100).toISOString()
+              };
+              db.transfers.unshift(penaltyTx);
+              syncMovimientoToSupabase(penaltyTx.id + '-out', student.id, 'TRANSFER_OUT', item.penaltyInterest, penaltyTx.timestamp, penaltyTx.concept, penaltyTx).catch(e => console.error(e));
+            }
+          }
         }
 
         syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
       } else {
-        // Insufficient balance -> mark overdue with 5% default interest
+        // Insufficient balance -> mark overdue with default interest
         if (item.sourceType === 'obligation' && item.obligationRef) {
           item.obligationRef.status = 'vencido';
-          item.obligationRef.penaltyInterest = item.penaltyInterest;
-          item.obligationRef.totalOverdueAmount = item.totalRequired;
+          item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+          item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
           modified = true;
         } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
           item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
-          item.loanRef.schedule[item.loanRowIndex].penaltyInterest = item.penaltyInterest;
+          item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
           modified = true;
         }
         break;
