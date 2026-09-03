@@ -91,7 +91,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
 
             <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
               <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Cobro de facturas</span>
-              <p className="text-xl font-bold text-emerald-400 mt-1">Día 5 de mes</p>
+              <p className="text-xl font-bold text-emerald-400 mt-1">Día 1 de cada mes</p>
               <span className="text-[10px] text-slate-500">Domiciliación bancaria automática</span>
             </div>
           </div>
@@ -246,7 +246,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
             <FileText className="w-5 h-5 text-amber-400" />
             <span>Histórico de facturas de electricidad (IberLuz Comercializadora)</span>
           </h4>
-          <span className="text-xs text-slate-400 font-mono">Pago automático el día 5 de cada mes</span>
+          <span className="text-xs text-slate-400 font-mono">Pago automático el día 1 de cada mes</span>
         </div>
 
         {bills.length === 0 ? (
@@ -254,7 +254,7 @@ export const ElectricityAssetTab: React.FC<Props> = ({
             <Zap className="w-8 h-8 text-amber-500/50 mx-auto" />
             <p className="text-sm font-medium text-slate-300">No hay facturas emitidas todavía.</p>
             <p className="text-xs text-slate-500">
-              Las facturas de electricidad se generan mensualmente y se cobran de forma automática el día 5 del mes siguiente al consumo.
+              Las facturas de electricidad se generan mensualmente y se cobran de forma automática el día 1 del mes siguiente al consumo.
             </p>
           </div>
         ) : (

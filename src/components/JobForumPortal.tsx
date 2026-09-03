@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, JobListing, HiredEmployee, MachineryAcquisition } from '../types.js';
-import { Users, UserPlus, Trash2, ArrowLeft, Briefcase, Filter, Sparkles, CheckCircle2, AlertCircle, Wrench, Clock, ShieldCheck } from 'lucide-react';
+import { Users, UserPlus, Trash2, ArrowLeft, Briefcase, Filter, Sparkles, CheckCircle2, AlertCircle, Wrench, Clock, ShieldCheck, Loader2 } from 'lucide-react';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
 
@@ -24,6 +24,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'available' | 'my_employees'>('available');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [hiringJobId, setHiringJobId] = useState<string | null>(null);
 
   // Teacher generator state
   const [batchCount, setBatchCount] = useState<number>(10);
@@ -81,7 +82,9 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
       setMessage({ type: 'error', text: 'El profesor no contrata empleados. Accede como alumno para contratar.' });
       return;
     }
+    if (hiringJobId) return;
 
+    setHiringJobId(job.id);
     try {
       const res = await fetch(`/api/jobs/${job.id}/hire`, {
         method: 'POST',
@@ -99,10 +102,11 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
         text: `¡Felicidades! Has contratado a ${job.employeeName} con un sueldo de ${formatNumber(job.grossSalaryMonthly)} €/mes.`
       });
 
-      fetchJobs();
-      fetchMyEmployeesAndMachinery();
+      await Promise.all([fetchJobs(), fetchMyEmployeesAndMachinery()]);
     } catch (e) {
       setMessage({ type: 'error', text: 'Error en la solicitud de contratación' });
+    } finally {
+      setHiringJobId(null);
     }
   };
 
@@ -477,10 +481,17 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                       {!isTeacher ? (
                         <button
                           onClick={() => handleHireEmployee(job)}
-                          className="w-full bg-violet-600 hover:bg-violet-700 text-white font-extrabold py-2.5 px-4 rounded-xl transition text-xs flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                          disabled={hiringJobId === job.id}
+                          className={`w-full bg-violet-600 hover:bg-violet-700 text-white font-extrabold py-2.5 px-4 rounded-xl transition text-xs flex items-center justify-center gap-2 shadow-xs cursor-pointer ${
+                            hiringJobId === job.id ? 'opacity-60 cursor-not-allowed' : ''
+                          }`}
                         >
-                          <UserPlus className="w-4 h-4" />
-                          <span>Contratar empleado</span>
+                          {hiringJobId === job.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <UserPlus className="w-4 h-4" />
+                          )}
+                          <span>{hiringJobId === job.id ? 'Contratando...' : 'Contratar empleado'}</span>
                         </button>
                       ) : (
                         <button

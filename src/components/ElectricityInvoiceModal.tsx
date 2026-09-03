@@ -136,7 +136,7 @@ export const ElectricityInvoiceModal: React.FC<Props> = ({ bill, studentName, on
               <p className="text-slate-700"><span className="font-semibold">Tarifa:</span> IberLuz 3.0TD Industrial</p>
               <p className="text-slate-700"><span className="font-semibold">Potencia contratada:</span> {bill.contractedPowerKw} kW</p>
               <p className="text-slate-700"><span className="font-semibold">Peaje de acceso:</span> 3.0TD Alta/Baja Tensión</p>
-              <p className="text-slate-700"><span className="font-semibold">Forma de pago:</span> Domiciliación bancaria (día 5 del mes)</p>
+              <p className="text-slate-700"><span className="font-semibold">Forma de pago:</span> Domiciliación bancaria (día 1 del mes)</p>
             </div>
           </div>
 

@@ -379,11 +379,15 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         destination_nave_id VARCHAR(255)
       );
 
+      ALTER TABLE empleados_contratados ALTER COLUMN fecha_contratacion DROP NOT NULL;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS maquinaria_asignada_titulo TEXT;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS vehiculo_asignado_id VARCHAR(255);
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS vehiculo_asignado_titulo TEXT;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS almacen_asignado_index INT;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS turno INT DEFAULT 1;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_empleados_contratados_oferta_id ON empleados_contratados (oferta_id);
       ALTER TABLE ofertas_empleo ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS items JSONB;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_id VARCHAR(255);
@@ -504,6 +508,40 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       );
       ALTER TABLE contratos_electricos ADD COLUMN IF NOT EXISTS inmueble_id VARCHAR(255);
       ALTER TABLE contratos_electricos ADD COLUMN IF NOT EXISTS titulo_inmueble TEXT;
+
+      CREATE TABLE IF NOT EXISTS facturas_electricidad (
+        id VARCHAR(255) PRIMARY KEY,
+        numero_factura TEXT NOT NULL,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT,
+        empresa_nombre TEXT,
+        cif_nif TEXT,
+        contrato_id VARCHAR(255) NOT NULL,
+        cups_code TEXT,
+        mes INT NOT NULL,
+        anio INT NOT NULL,
+        fecha_inicio DATE,
+        fecha_fin DATE,
+        dias_facturados INT NOT NULL DEFAULT 30,
+        potencia_contratada_kw NUMERIC(10, 2) NOT NULL,
+        precio_kw_dia NUMERIC(10, 4) NOT NULL,
+        importe_potencia NUMERIC(12, 2) NOT NULL,
+        total_kwh NUMERIC(12, 2) NOT NULL,
+        precio_kwh NUMERIC(10, 4) NOT NULL,
+        importe_energia NUMERIC(12, 2) NOT NULL,
+        alquiler_equipos NUMERIC(10, 2) NOT NULL DEFAULT 0.85,
+        base_imponible NUMERIC(12, 2) NOT NULL,
+        impuesto_electricidad NUMERIC(12, 2) NOT NULL,
+        tipo_iva NUMERIC(5, 2) NOT NULL DEFAULT 21,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        importe_total NUMERIC(12, 2) NOT NULL,
+        fecha_vencimiento TIMESTAMPTZ NOT NULL,
+        estado VARCHAR(50) NOT NULL DEFAULT 'pendiente',
+        fecha_pago TIMESTAMPTZ,
+        creado_en TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        desglose_inmuebles JSONB
+      );
+      ALTER TABLE facturas_electricidad ADD COLUMN IF NOT EXISTS desglose_inmuebles JSONB;
 
       CREATE TABLE IF NOT EXISTS planos_distribucion_naves (
         id VARCHAR(255) PRIMARY KEY,
@@ -818,6 +856,13 @@ async function deleteAccountFromSupabase(id: string, username?: string, name?: s
     await safeDbQuery('DELETE FROM anuncios_materia_prima WHERE seller_id = $1', [id]);
     await safeDbQuery('DELETE FROM perfiles_empresa WHERE student_id = $1', [id]);
     await safeDbQuery('DELETE FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1', [id]);
+    await safeDbQuery('DELETE FROM facturas_electricidad WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM vehiculos_comprados WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM materias_primas_inventario WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM materias_primas_pedidos WHERE alumno_id = $1', [id]);
+    await safeDbQuery('DELETE FROM market_messages WHERE sender_id = $1 OR recipient_id = $1', [id]);
+    await safeDbQuery('DELETE FROM notificaciones WHERE user_id = $1', [id]);
+    await safeDbQuery('DELETE FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1', [id]);
   } catch (e) {
     console.error('[Supabase DB] Error deleting account and related data from Supabase:', e);
   }
@@ -1183,6 +1228,78 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
   }
 }
 
+function mapHiredEmployeeRow(row: any): HiredEmployee {
+  return {
+    id: String(row.id),
+    jobListingId: String(row.oferta_id),
+    studentId: String(row.alumno_id),
+    studentName: String(row.alumno_nombre),
+    employeeName: String(row.nombre_empleado),
+    role: (row.puesto || row.rol || 'operario') as any,
+    gender: row.genero as 'hombre' | 'mujer',
+    grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+    age: Number(row.edad),
+    hireDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : new Date().toISOString(),
+    assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
+    assignedMachineryTitle: row.maquinaria_asignada_titulo ? String(row.maquinaria_asignada_titulo) : undefined,
+    assignedVehicleId: row.vehiculo_asignado_id ? String(row.vehiculo_asignado_id) : undefined,
+    assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
+    assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
+    shift: Number(row.turno || 1),
+    avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
+  };
+}
+
+async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmployee[]> {
+  const currentDb = db || readDb();
+  if (!dbPool) return currentDb.hiredEmployees || [];
+  try {
+    const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
+    if (resEmp && resEmp.rows) {
+      currentDb.hiredEmployees = resEmp.rows.map(mapHiredEmployeeRow);
+      writeDb(currentDb);
+    }
+  } catch (e) {
+    console.warn('[Supabase Real-Time Sync Warning for Hired Employees]:', e);
+  }
+  return currentDb.hiredEmployees || [];
+}
+
+function mapJobListingRow(row: any): JobListing {
+  const t = String(row.titulo || '').toLowerCase();
+  const roleVal = (row.puesto || row.rol || (t.includes('mozo') || t.includes('almacen') || t.includes('almacén') ? 'mozo_almacen' : t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario')) as any;
+  return {
+    id: String(row.id),
+    title: String(row.titulo),
+    role: roleVal,
+    employeeName: String(row.nombre_empleado),
+    gender: row.genero as 'hombre' | 'mujer',
+    grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+    age: Number(row.edad),
+    status: (row.estado || 'disponible') as 'disponible' | 'contratado',
+    hiredByStudentId: row.alumno_id ? String(row.alumno_id) : undefined,
+    hiredByStudentName: row.alumno_nombre ? String(row.alumno_nombre) : undefined,
+    hiredAtDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : undefined,
+    avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
+    createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+  };
+}
+
+async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobListing[]> {
+  const currentDb = db || readDb();
+  if (!dbPool) return currentDb.jobListings || [];
+  try {
+    const resJobs = await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
+    if (resJobs && resJobs.rows) {
+      currentDb.jobListings = resJobs.rows.map(mapJobListingRow);
+      writeDb(currentDb);
+    }
+  } catch (e) {
+    console.warn('[Supabase Real-Time Sync Warning for Job Listings]:', e);
+  }
+  return currentDb.jobListings || [];
+}
+
 async function syncVehicleToSupabase(veh: PurchasedVehicle) {
   if (!dbPool) return;
   try {
@@ -1462,6 +1579,61 @@ async function syncElectricityContractToSupabase(contract: ElectricityContract) 
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing electricity contract to Supabase:', e);
+  }
+}
+
+async function syncElectricityBillToSupabase(bill: ElectricityBill) {
+  if (!dbPool) return;
+  try {
+    const breakdownJson = bill.propertyBreakdown ? JSON.stringify(bill.propertyBreakdown) : null;
+    await safeDbQuery(
+      `INSERT INTO facturas_electricidad (
+        id, numero_factura, alumno_id, alumno_nombre, empresa_nombre, cif_nif,
+        contrato_id, cups_code, mes, anio, fecha_inicio, fecha_fin, dias_facturados,
+        potencia_contratada_kw, precio_kw_dia, importe_potencia, total_kwh, precio_kwh,
+        importe_energia, alquiler_equipos, base_imponible, impuesto_electricidad,
+        tipo_iva, importe_iva, importe_total, fecha_vencimiento, estado, fecha_pago,
+        desglose_inmuebles
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+      ON CONFLICT (id) DO UPDATE SET
+        estado = EXCLUDED.estado,
+        fecha_pago = EXCLUDED.fecha_pago,
+        importe_total = EXCLUDED.importe_total`,
+      [
+        bill.id,
+        bill.billNumber,
+        bill.studentId,
+        bill.studentName || '',
+        bill.companyName || '',
+        bill.cifNif || '',
+        bill.contractId,
+        bill.cupsCode || '',
+        bill.periodMonth,
+        bill.periodYear,
+        bill.startDate,
+        bill.endDate,
+        bill.daysCount,
+        bill.contractedPowerKw,
+        bill.pricePerKwDay,
+        bill.powerAmount,
+        bill.totalKwh,
+        bill.pricePerKwh,
+        bill.energyAmount,
+        bill.equipmentRental,
+        bill.taxableBase,
+        bill.electricityTax,
+        bill.ivaRate,
+        bill.ivaAmount,
+        bill.totalAmount,
+        parseSafeDate(bill.dueDate),
+        bill.status,
+        parseNullableSafeDate(bill.paidDate),
+        breakdownJson
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing electricity bill to Supabase:', e);
   }
 }
 
@@ -1945,6 +2117,11 @@ async function syncAllToSupabase(db: DatabaseSchema) {
         await syncElectricityContractToSupabase(c);
       }
     }
+    if (db.electricityBills) {
+      for (const b of db.electricityBills) {
+        await syncElectricityBillToSupabase(b);
+      }
+    }
     if (db.naveFloorPlans) {
       for (const fp of db.naveFloorPlans) {
         await syncFloorPlanToSupabase(fp);
@@ -2084,6 +2261,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         resContracts = await client.query('SELECT * FROM contratos_electricos ORDER BY fecha_contrato DESC');
       } catch (e) {
         console.warn('[Supabase Restore] Contratos electricos table select warning:', e);
+      }
+
+      let resElecBills: any = { rows: [] };
+      try {
+        resElecBills = await client.query('SELECT * FROM facturas_electricidad ORDER BY fecha_vencimiento ASC');
+      } catch (e) {
+        console.warn('[Supabase Restore] Facturas electricidad table select warning:', e);
       }
 
       let resFloorPlans: any = { rows: [] };
@@ -2371,10 +2555,10 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }));
       }
 
-      // Reconstruct db.paymentObligations from Supabase "obligaciones_pago" (excluding promissory notes/pagarés which are manual student transfers)
+      // Reconstruct db.paymentObligations from Supabase "obligaciones_pago" (excluding peer-to-peer promissory notes which are manual student transfers)
       if (resObl.rows.length > 0) {
         db.paymentObligations = resObl.rows
-          .filter(row => String(row.tipo) !== 'pagare' && !String(row.adquisicion_id || '').startsWith('promissory_'))
+          .filter(row => !String(row.adquisicion_id || '').startsWith('promissory_'))
           .map(row => ({
           id: String(row.id),
           acquisitionId: String(row.adquisicion_id),
@@ -2476,49 +2660,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       }
 
       // Reconstruct db.jobListings from Supabase "ofertas_empleo"
-      if (resJobs.rows.length > 0) {
-        db.jobListings = resJobs.rows.map((row: any) => {
-          const t = String(row.titulo || '').toLowerCase();
-          const roleVal = row.puesto || row.rol || (t.includes('mozo') || t.includes('almacen') || t.includes('almacén') ? 'mozo_almacen' : t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario');
-          return {
-            id: String(row.id),
-            title: String(row.titulo),
-            role: roleVal as any,
-            employeeName: String(row.nombre_empleado),
-            gender: row.genero as 'hombre' | 'mujer',
-            grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
-            age: Number(row.edad),
-            status: row.estado as 'disponible' | 'contratado',
-            hiredByStudentId: row.alumno_id ? String(row.alumno_id) : undefined,
-            hiredByStudentName: row.alumno_nombre ? String(row.alumno_nombre) : undefined,
-            hiredAtDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : undefined,
-            avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
-            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
-          };
-        });
+      if (resJobs && resJobs.rows) {
+        db.jobListings = resJobs.rows.map(mapJobListingRow);
       }
 
       // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
-      if (resEmployees.rows.length > 0) {
-        db.hiredEmployees = resEmployees.rows.map((row: any) => ({
-          id: String(row.id),
-          jobListingId: String(row.oferta_id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          employeeName: String(row.nombre_empleado),
-          role: (row.puesto || row.rol || 'operario') as any,
-          gender: row.genero as 'hombre' | 'mujer',
-          grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
-          age: Number(row.edad),
-          hireDate: new Date(row.fecha_contratacion).toISOString(),
-          assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
-          assignedMachineryTitle: row.maquinaria_asignada_titulo ? String(row.maquinaria_asignada_titulo) : undefined,
-          assignedVehicleId: row.vehiculo_asignado_id ? String(row.vehiculo_asignado_id) : undefined,
-          assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
-          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
-          shift: Number(row.turno || 1),
-          avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
-        }));
+      if (resEmployees && resEmployees.rows) {
+        db.hiredEmployees = resEmployees.rows.map(mapHiredEmployeeRow);
       }
 
       // Reconstruct db.payrollRecords from Supabase "registros_nomina"
@@ -2590,6 +2738,46 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
           cupsCode: String(row.cups_code || '')
         }));
+      }
+
+      // Reconstruct db.electricityBills from Supabase "facturas_electricidad"
+      if (resElecBills && resElecBills.rows.length > 0) {
+        db.electricityBills = resElecBills.rows.map((row: any) => {
+          const breakdown = row.desglose_inmuebles ? (typeof row.desglose_inmuebles === 'string' ? JSON.parse(row.desglose_inmuebles) : row.desglose_inmuebles) : [];
+          return {
+            id: String(row.id),
+            billNumber: String(row.numero_factura),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre || ''),
+            companyName: String(row.empresa_nombre || ''),
+            cifNif: String(row.cif_nif || ''),
+            contractId: String(row.contrato_id),
+            cupsCode: String(row.cups_code || ''),
+            periodMonth: Number(row.mes),
+            periodYear: Number(row.anio),
+            startDate: String(row.fecha_inicio || ''),
+            endDate: String(row.fecha_fin || ''),
+            daysCount: Number(row.dias_facturados || 30),
+            contractedPowerKw: Number(row.potencia_contratada_kw),
+            pricePerKwDay: Number(row.precio_kw_dia),
+            powerAmount: Number(row.importe_potencia),
+            totalKwh: Number(row.total_kwh),
+            pricePerKwh: Number(row.precio_kwh),
+            energyAmount: Number(row.importe_energia),
+            equipmentRental: Number(row.alquiler_equipos || 0.85),
+            taxableBase: Number(row.base_imponible),
+            electricityTax: Number(row.impuesto_electricidad),
+            subtotalWithTax: Number((Number(row.base_imponible) + Number(row.impuesto_electricidad)).toFixed(2)),
+            ivaRate: Number(row.tipo_iva || 21),
+            ivaAmount: Number(row.importe_iva),
+            totalAmount: Number(row.importe_total),
+            dueDate: new Date(row.fecha_vencimiento).toISOString(),
+            status: String(row.estado) as any,
+            paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+            createdAt: row.creado_en ? new Date(row.creado_en).toISOString() : new Date().toISOString(),
+            propertyBreakdown: breakdown
+          };
+        });
       }
 
       // Reconstruct db.naveFloorPlans from Supabase "planos_distribucion_naves"
@@ -4789,7 +4977,7 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
     nextMonth = 1;
     nextYear += 1;
   }
-  const dueDateObj = new Date(nextYear, nextMonth - 1, 5, 9, 0, 0);
+  const dueDateObj = new Date(nextYear, nextMonth - 1, 1, 9, 0, 0);
 
   const billNumber = `IBL-${year}-${month < 10 ? '0' + month : month}-${studentId.slice(-4).toUpperCase()}`;
 
@@ -4834,6 +5022,20 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   if (!db.electricityContracts) db.electricityContracts = [];
   if (!db.electricityBills) db.electricityBills = [];
 
+  let modified = false;
+
+  // Standardize existing electricity bills due date to day 1 of the month
+  for (const bill of db.electricityBills) {
+    if (bill.dueDate) {
+      const d = new Date(bill.dueDate);
+      if (d.getDate() !== 1) {
+        d.setDate(1);
+        bill.dueDate = d.toISOString();
+        modified = true;
+      }
+    }
+  }
+
   // Filter out any erroneous bills for period months prior to contract creation, and refund if paid
   const validBills: ElectricityBill[] = [];
   for (const bill of db.electricityBills) {
@@ -4852,6 +5054,7 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
           if (db.transfers) {
             db.transfers = db.transfers.filter(t => !t.concept.includes(`factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear}`));
           }
+          modified = true;
         }
         continue; // Skip invalid bill
       }
@@ -4872,7 +5075,7 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
     prevYear = currentYear - 1;
   }
 
-  // 1. Generate bill for previous month if not existing
+  // 1. Generate bill for previous completed month if not existing
   for (const contract of db.electricityContracts.filter(c => c.status === 'active')) {
     const existingBill = db.electricityBills.find(
       b => b.studentId === contract.studentId && b.periodMonth === prevMonth && b.periodYear === prevYear
@@ -4882,12 +5085,14 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const newBill = calculateElectricityForStudent(contract.studentId, prevMonth, prevYear, db);
       if (newBill) {
         db.electricityBills.push(newBill);
+        syncElectricityBillToSupabase(newBill).catch(e => console.error(e));
+        modified = true;
       }
     }
   }
 
-  // 2. On day 5 or later of month: Process payment for unpaid electricity bills automatically
-  if (currentDay >= 5) {
+  // 2. Automated electricity payment on the 1st of each month (or any time past due date):
+  if (currentDay >= 1) {
     const pendingBills = db.electricityBills.filter(
       b => b.status === 'pendiente' && new Date(b.dueDate) <= now
     );
@@ -4896,38 +5101,57 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const student = db.users.find(u => u.id === bill.studentId && u.role === 'student');
       if (!student) continue;
 
-      student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
-      bill.status = 'pagado';
-      bill.paidDate = now.toISOString();
+      if (student.balance >= bill.totalAmount) {
+        student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
+        bill.status = 'pagado';
+        bill.paidDate = now.toISOString();
+        modified = true;
 
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+        syncElectricityBillToSupabase(bill).catch(e => console.error(e));
 
-      const txId = generateId('tx');
-      const transfer: Transfer = {
-        id: txId,
-        senderId: student.id,
-        senderName: student.name,
-        senderAccount: student.accountNumber,
-        receiverId: 'iberluz-comercializadora',
-        receiverName: 'IberLuz Comercializadora S.A.',
-        receiverAccount: 'ES210001000299887722',
-        amount: bill.totalAmount,
-        concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (Nº ${bill.billNumber})`,
-        timestamp: now.toISOString()
-      };
-      db.transfers.unshift(transfer);
-      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+        const txId = generateId('tx');
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'iberluz-comercializadora',
+          receiverName: 'IberLuz Comercializadora S.A.',
+          receiverAccount: 'ES210001000299887722',
+          amount: bill.totalAmount,
+          concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (Nº ${bill.billNumber})`,
+          timestamp: now.toISOString()
+        };
+        db.transfers.unshift(transfer);
+        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
-      db.systemLogs.unshift({
-        id: generateId('log'),
-        action: 'ELECTRICITY_AUTOMATED_PAYMENT',
-        details: `Pago automático de electricidad IberLuz realizado para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
-        timestamp: now.toISOString(),
-        studentId: student.id,
-        studentName: student.name
-      });
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'ELECTRICITY_AUTOMATED_PAYMENT',
+          details: `Pago automático de electricidad IberLuz realizado el día 1 para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+      } else {
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'ELECTRICITY_PAYMENT_FAILED_NO_FUNDS',
+          details: `Intento de cargo automático de electricidad IberLuz el día 1 fallido por saldo insuficiente para ${student.name}: Factura ${bill.billNumber} (${bill.totalAmount}€). Saldo actual: ${student.balance}€`,
+          timestamp: now.toISOString(),
+          studentId: student.id,
+          studentName: student.name
+        });
+      }
     }
   }
+
+  if (modified) {
+    writeDb(db);
+  }
+
+  return modified;
 }
 
 function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
@@ -7375,12 +7599,21 @@ app.put('/api/student/machinery/:id/relocate', (req, res) => {
 });
 
 // Get Company Financial & Property Assets (Mi Empresa Dashboard)
-app.get('/api/company/:studentId', (req, res) => {
+app.get('/api/company/:studentId', async (req, res) => {
   let studentId = req.params.studentId;
   if (studentId === 'dashboard' && req.query.studentId) {
     studentId = String(req.query.studentId);
   }
   const db = readDb();
+
+  if (dbPool) {
+    try {
+      await syncEmployeesFromSupabase(db);
+      await syncJobListingsFromSupabase(db);
+    } catch (e) {
+      console.warn('[Supabase Real-Time Sync Warning for /api/company]:', e);
+    }
+  }
 
   const user = db.users.find(u => u.id === studentId);
   if (!user) {
@@ -7487,7 +7720,7 @@ app.get('/api/company/:studentId', (req, res) => {
   totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
 
   // 3. Total Combined Pending Debt (including pending tax/SS obligations)
-  const studentHiredEmployees = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  const studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
   const studentPayrollRecords = (db.payrollRecords || []).filter(p => p.studentId === studentId);
   const studentTaxObligations = (db.taxObligations || []).filter(t => t.studentId === studentId);
 
@@ -8140,6 +8373,11 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
     modified = true;
   }
 
+  // Check and process automated electricity payments on day 1
+  if (checkAndProcessAutomatedElectricity(db)) {
+    modified = true;
+  }
+
   const students = targetStudentId 
     ? db.users.filter(u => u.id === targetStudentId && u.role === 'student')
     : db.users.filter(u => u.role === 'student');
@@ -8161,25 +8399,41 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
 
     const pendingItems: PendingItem[] = [];
 
-    // 1. Obligations (Exclude promissory notes/pagarés which must be settled manually by student transfer)
+    // 1. Obligations (Include machinery deferred pagarés and property obligations; exclude peer-to-peer promissory notes)
     if (db.paymentObligations) {
       for (const ob of db.paymentObligations) {
-        if (ob.type === 'pagare' || (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_'))) {
-          continue; // Pagarés are manual student-initiated transfers, not automated direct debits
+        if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) {
+          continue; // Peer-to-peer marketplace promissory notes are transferred manually
         }
         if (ob.studentId === student.id && (ob.status === 'pendiente' || ob.status === 'vencido')) {
           const dDate = new Date(ob.dueDate);
           if (dDate <= now) {
             const principal = ob.amount;
             const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-            const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
+            const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
+                                ob.propertyTitle?.toLowerCase().includes('línea') ||
+                                ob.propertyTitle?.toLowerCase().includes('linea') ||
+                                ob.propertyTitle?.toLowerCase().includes('torno') ||
+                                ob.propertyTitle?.toLowerCase().includes('prensa') ||
+                                ob.propertyTitle?.toLowerCase().includes('inyectora') ||
+                                ob.propertyTitle?.toLowerCase().includes('máquina') ||
+                                ob.propertyTitle?.toLowerCase().includes('maquina');
+
+            const instrumentName = isMachinery
+              ? 'Pagaré de maquinaria'
+              : ob.type === 'pagare'
+                ? 'Pagaré comercial'
+                : ob.type === 'letra_cambio'
+                  ? 'Letra de cambio'
+                  : 'Cuota / Alquiler';
+
             let concept = `Atención a vencimiento de ${instrumentName}: ${ob.propertyTitle}`;
-            if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
+            if (isMachinery) {
+              concept = `Pago aplazado de maquinaria: ${ob.propertyTitle} (Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`;
+            } else if (ob.type === 'alquiler' || ob.type === 'cuota_alquiler') {
               concept = `Cuota de alquiler n.º ${ob.installmentNumber || 1} de ${ob.propertyTitle}`;
-            } else if (ob.type === 'compra' || ob.type === 'compra_inmueble') {
+            } else if (ob.type === 'compra' || ob.type === 'compra_inmueble' || ob.type === 'letra_cambio') {
               concept = `Pago aplazado de compra de ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 12})`;
-            } else if (ob.type === 'maquinaria' || (ob.propertyTitle && (ob.propertyTitle.toLowerCase().includes('línea') || ob.propertyTitle.toLowerCase().includes('maquina') || ob.propertyTitle.toLowerCase().includes('máquina')))) {
-              concept = `Pago aplazado de la máquina ${ob.propertyTitle} (Cuota ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`;
             }
 
             pendingItems.push({
@@ -8380,15 +8634,35 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   const overdueItems: UpcomingPaymentItem[] = [];
   const upcoming30DaysItems: UpcomingPaymentItem[] = [];
 
-  // 1. Obligations (Exclude promissory notes/pagarés which are manual student transfers)
+  // 1. Obligations (Include machinery deferred pagarés and property obligations; exclude peer-to-peer promissory notes)
   if (db.paymentObligations) {
     for (const ob of db.paymentObligations) {
-      if (ob.type === 'pagare' || (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_'))) {
-        continue; // Excluded from upcoming payments / direct debit
+      if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) {
+        continue; // Excluded from upcoming payments (P2P market notes)
       }
       if (ob.studentId === studentId && ob.status !== 'pagado') {
         const dDate = new Date(ob.dueDate);
-        const instrumentName = ob.type === 'pagare' ? 'Pagaré' : ob.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota / Alquiler';
+        const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
+                            ob.propertyTitle?.toLowerCase().includes('línea') ||
+                            ob.propertyTitle?.toLowerCase().includes('linea') ||
+                            ob.propertyTitle?.toLowerCase().includes('torno') ||
+                            ob.propertyTitle?.toLowerCase().includes('prensa') ||
+                            ob.propertyTitle?.toLowerCase().includes('inyectora') ||
+                            ob.propertyTitle?.toLowerCase().includes('máquina') ||
+                            ob.propertyTitle?.toLowerCase().includes('maquina');
+
+        const instrumentName = isMachinery 
+          ? 'Pagaré de maquinaria' 
+          : ob.type === 'pagare' 
+            ? 'Pagaré comercial' 
+            : ob.type === 'letra_cambio' 
+              ? 'Letra de cambio' 
+              : 'Cuota / Alquiler';
+
+        const concept = isMachinery
+          ? `Pago aplazado de maquinaria: ${ob.propertyTitle} (Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`
+          : `Domiciliación ${instrumentName}`;
+
         const principal = ob.amount;
         const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
         const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
@@ -8398,14 +8672,16 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
           sourceType: 'obligation',
           type: ob.type,
           title: ob.propertyTitle,
-          concept: `Domiciliación ${instrumentName}`,
+          concept,
           dueDate: ob.dueDate,
           principalAmount: principal,
           penaltyInterest: penalty,
           totalAmount: Number((principal + penalty).toFixed(2)),
           isOverdue: dDate <= now,
           daysRemaining: daysRem,
-          installmentInfo: ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : undefined
+          installmentInfo: isMachinery
+            ? `Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24}`
+            : ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : undefined
         };
 
         if (dDate <= now) {
@@ -8774,7 +9050,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         totalAmount: Number((principal + penalty).toFixed(2)),
         isOverdue: dDate <= now,
         daysRemaining: daysRem,
-        installmentInfo: 'Día 5 del mes siguiente'
+        installmentInfo: 'Día 1 de cada mes'
       };
 
       if (dDate <= now) {
@@ -8825,7 +9101,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
                 totalAmount: projectedBill.totalAmount,
                 isOverdue: dDate <= now,
                 daysRemaining: daysRem,
-                installmentInfo: 'Día 5 del mes siguiente'
+                installmentInfo: 'Día 1 de cada mes'
               };
 
               if (dDate <= now) {
@@ -9930,35 +10206,8 @@ app.put('/api/student/change-password', (req, res) => {
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
 app.get('/api/job-listings', async (req, res) => {
   const db = readDb();
-  if (dbPool) {
-    try {
-      const resJobs = await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
-      if (resJobs && resJobs.rows && resJobs.rows.length > 0) {
-        db.jobListings = resJobs.rows.map((row: any) => {
-          const t = String(row.titulo || '').toLowerCase();
-          const roleVal = row.puesto || row.rol || (t.includes('mozo') || t.includes('almacen') || t.includes('almacén') ? 'mozo_almacen' : t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario');
-          return {
-            id: String(row.id),
-            title: String(row.titulo),
-            role: roleVal as any,
-            employeeName: String(row.nombre_empleado),
-            gender: row.genero as 'hombre' | 'mujer',
-            grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
-            age: Number(row.edad),
-            status: row.estado as 'disponible' | 'contratado',
-            hiredByStudentId: row.alumno_id ? String(row.alumno_id) : undefined,
-            hiredByStudentName: row.alumno_nombre ? String(row.alumno_nombre) : undefined,
-            hiredAtDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : undefined,
-            avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
-            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
-          };
-        });
-        writeDb(db);
-      }
-    } catch (e) {
-      console.warn('[Supabase Real-Time Read Warning for Job Listings]:', e);
-    }
-  }
+  await syncJobListingsFromSupabase(db);
+  await syncEmployeesFromSupabase(db);
   res.json({ success: true, jobListings: db.jobListings || [] });
 });
 
@@ -10076,9 +10325,21 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
   if (!db.jobListings) db.jobListings = [];
   if (!db.hiredEmployees) db.hiredEmployees = [];
 
+  // Sync latest from Supabase so all instances have real-time state
+  await syncJobListingsFromSupabase(db);
+  await syncEmployeesFromSupabase(db);
+
   const job = db.jobListings.find(j => j.id === id);
   if (!job) return res.status(404).json({ error: 'Oferta de empleo no encontrada' });
   if (job.status !== 'disponible') return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
+
+  // Guard against duplicate hire
+  const alreadyHired = db.hiredEmployees.some(e => e.jobListingId === id);
+  if (alreadyHired) {
+    job.status = 'contratado';
+    writeDb(db);
+    return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
+  }
 
   const student = db.users.find(u => u.id === studentId && u.role === 'student');
   if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
@@ -10119,42 +10380,14 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
   });
 
   writeDb(db);
-  res.json({ success: true, employee: newHired, job });
+  res.json({ success: true, employee: newHired, hiredEmployee: newHired, jobListing: job, job });
 });
 
 app.get('/api/student/employees', async (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  if (dbPool) {
-    try {
-      const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
-      if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
-        db.hiredEmployees = resEmp.rows.map((row: any) => ({
-          id: String(row.id),
-          jobListingId: String(row.oferta_id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          employeeName: String(row.nombre_empleado),
-          role: (row.puesto || row.rol || 'operario') as any,
-          gender: row.genero as 'hombre' | 'mujer',
-          grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
-          age: Number(row.edad),
-          hireDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : new Date().toISOString(),
-          assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
-          assignedMachineryTitle: row.maquinaria_asignada_titulo ? String(row.maquinaria_asignada_titulo) : undefined,
-          assignedVehicleId: row.vehiculo_asignado_id ? String(row.vehiculo_asignado_id) : undefined,
-          assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
-          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
-          shift: Number(row.turno || 1),
-          avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
-        }));
-        writeDb(db);
-      }
-    } catch (e) {
-      console.warn('[Supabase Real-Time Read Warning for Hired Employees]:', e);
-    }
-  }
-  const list = (db.hiredEmployees || []).filter(e => !studentId || e.studentId === studentId);
+  await syncEmployeesFromSupabase(db);
+  const list = (db.hiredEmployees || []).filter(e => !studentId || String(e.studentId) === String(studentId));
   res.json({ success: true, employees: list });
 });
 
@@ -10165,7 +10398,11 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
   const db = readDb();
   if (!db.hiredEmployees) db.hiredEmployees = [];
 
-  const emp = db.hiredEmployees.find(e => e.id === id);
+  let emp = db.hiredEmployees.find(e => e.id === id);
+  if (!emp && dbPool) {
+    await syncEmployeesFromSupabase(db);
+    emp = db.hiredEmployees.find(e => e.id === id);
+  }
   if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
 
   if (machineryId) {
@@ -11050,7 +11287,11 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
   const db = readDb();
   if (!db.hiredEmployees) db.hiredEmployees = [];
 
-  const emp = db.hiredEmployees.find(e => e.id === id);
+  let emp = db.hiredEmployees.find(e => e.id === id);
+  if (!emp && dbPool) {
+    await syncEmployeesFromSupabase(db);
+    emp = db.hiredEmployees.find(e => e.id === id);
+  }
   if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
 
   if (vehicleId) {
@@ -16506,6 +16747,25 @@ async function startServer() {
   // Create Supabase tables "cuentas" and "movimientos" if they do not exist
   await initSupabaseTables();
   await restoreFromSupabase().catch(e => console.error('[Supabase Startup Restore Error]', e));
+
+  try {
+    const startupDb = readDb();
+    checkAndProcessAutomatedElectricity(startupDb);
+    processStudentAutomaticPayments(startupDb);
+  } catch (e) {
+    console.error('[Startup Automated Payments Error]', e);
+  }
+
+  // Periodic check every 15 minutes for automated bills and obligations
+  setInterval(() => {
+    try {
+      const periodicDb = readDb();
+      checkAndProcessAutomatedElectricity(periodicDb);
+      processStudentAutomaticPayments(periodicDb);
+    } catch (e) {
+      console.error('[Periodic Automated Processing Error]', e);
+    }
+  }, 15 * 60 * 1000);
 
   // Serve static assets from public/ folder directly via Express
   const publicPath = path.join(process.cwd(), 'public');

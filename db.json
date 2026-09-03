@@ -11,16 +11,6 @@
       "level": 1
     },
     {
-      "id": "user-fk014qcn4",
-      "username": "cliente02",
-      "password": "1987",
-      "role": "student",
-      "name": "Fabricante Varillas",
-      "accountNumber": "ES85000100023678794216",
-      "balance": 60000,
-      "level": 1
-    },
-    {
       "id": "user-qpn58rvxc",
       "username": "cliente03",
       "password": "1987",
@@ -57,11 +47,33 @@
       "role": "student",
       "name": "Fabricante Destornilladores completo",
       "accountNumber": "ES89000100025748867825",
-      "balance": 156323.99,
+      "balance": 133938.99,
+      "level": 1
+    },
+    {
+      "id": "user-fk014qcn4",
+      "username": "cliente02",
+      "password": "1987",
+      "role": "student",
+      "name": "Fabricante Varillas",
+      "accountNumber": "ES85000100023678794216",
+      "balance": 60000,
       "level": 1
     }
   ],
   "transfers": [
+    {
+      "id": "tx-jmedsilgo",
+      "senderId": "user-hgp3parur",
+      "senderName": "Fabricante Destornilladores completo",
+      "senderAccount": "ES89000100025748867825",
+      "receiverId": "concesionario-vehiculos",
+      "receiverName": "Concesionario Industrial AutoCorp S.L.",
+      "receiverAccount": "ES880004000998877661",
+      "amount": 22385,
+      "concept": "Adquisición de vehículo (Carretilla elevadora contrapesada 2.5T) - Pago al contado",
+      "timestamp": "2026-09-03T07:15:11.043Z"
+    },
     {
       "id": "tx-6fvkaj0gl",
       "senderId": "user-hgp3parur",
@@ -124,6 +136,116 @@
     }
   ],
   "systemLogs": [
+    {
+      "id": "log-iv8gbrnpm",
+      "action": "BUY_VEHICLE",
+      "details": "El alumno Fabricante Destornilladores completo ha comprado un vehículo \"Carretilla elevadora contrapesada 2.5T\" por 22385.00€ (IVA incl.)",
+      "timestamp": "2026-09-03T07:15:11.043Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-8xc7edlp8",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Daniel Fernández Martínez (Sueldo bruto: 1000€/mes, Edad: 26)",
+      "timestamp": "2026-09-03T07:00:09.062Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-rc3bsdq5j",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Daniel Fernández Martínez (Sueldo bruto: 1000€/mes, Edad: 26)",
+      "timestamp": "2026-09-03T07:00:08.135Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-amedp2lbs",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Elena Pérez Ruiz (Sueldo bruto: 1000€/mes, Edad: 27)",
+      "timestamp": "2026-09-03T07:00:07.351Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-iu3p60ag0",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Daniel García Rodríguez (Sueldo bruto: 1000€/mes, Edad: 55)",
+      "timestamp": "2026-09-03T07:00:06.496Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-vpmdxh4ke",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Marta Jiménez Fernández (Sueldo bruto: 1000€/mes, Edad: 20)",
+      "timestamp": "2026-09-03T07:00:05.653Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-vojtu2bxf",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Iván Hernández Fernández (Sueldo bruto: 1000€/mes, Edad: 34)",
+      "timestamp": "2026-09-03T07:00:04.821Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-aew5sq9l2",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Rocío Pérez Martín (Sueldo bruto: 1000€/mes, Edad: 20)",
+      "timestamp": "2026-09-03T07:00:02.066Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-udxysxs5a",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Andrea Sánchez Fernández (Sueldo bruto: 1000€/mes, Edad: 55)",
+      "timestamp": "2026-09-03T07:00:01.135Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-uhxhmkgzy",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Iván Muñoz Díaz (Sueldo bruto: 1000€/mes, Edad: 36)",
+      "timestamp": "2026-09-03T07:00:00.277Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-l1is6u75j",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Iván Muñoz Díaz (Sueldo bruto: 1000€/mes, Edad: 36)",
+      "timestamp": "2026-09-03T06:59:59.434Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-jitondgz2",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Sergio González López (Sueldo bruto: 1000€/mes, Edad: 35)",
+      "timestamp": "2026-09-03T06:59:58.573Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-7cfcn1pyd",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Destornilladores completo ha contratado a Alba Alonso Moreno (Sueldo bruto: 1000€/mes, Edad: 20)",
+      "timestamp": "2026-09-03T06:59:57.133Z",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo"
+    },
+    {
+      "id": "log-debug-bzhcgt7l5",
+      "action": "LOGIN_ATTEMPT",
+      "details": "Intento de acceso recibido: usuario \"cliente01\".",
+      "timestamp": "2026-09-03T06:43:38.388Z"
+    },
     {
       "id": "log-debug-xiggtt5dl",
       "action": "LOGIN_ATTEMPT",
@@ -302,6 +424,58 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-tcyo08ei5",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2026-10-02T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 1,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-r9zf8i2e4",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2026-10-02T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 1,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-qg85lhvje",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2026-11-01T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 2,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-8wcxwnrno",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2026-11-01T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 2,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-2564hn1qs",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -313,6 +487,32 @@
       "status": "pendiente",
       "installmentNumber": 3,
       "totalInstallments": 12
+    },
+    {
+      "id": "obl-nglmc1gmm",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2026-12-01T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 3,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-il00lc7bm",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2026-12-01T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 3,
+      "totalInstallments": 24
     },
     {
       "id": "obl-i9edyh46y",
@@ -328,6 +528,32 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-vb4vx40hm",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2026-12-31T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 4,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-v1qvitlxb",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2026-12-31T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 4,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-vji6hibqn",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -339,6 +565,32 @@
       "status": "pendiente",
       "installmentNumber": 5,
       "totalInstallments": 12
+    },
+    {
+      "id": "obl-drw0h41nn",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-01-30T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 5,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-k119xbiuq",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-01-30T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 5,
+      "totalInstallments": 24
     },
     {
       "id": "obl-gc7wfmhi7",
@@ -354,6 +606,32 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-qtkolxk7g",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-03-01T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 6,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-y1tzcynmo",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-03-01T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 6,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-mc1zx351l",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -365,6 +643,32 @@
       "status": "pendiente",
       "installmentNumber": 7,
       "totalInstallments": 12
+    },
+    {
+      "id": "obl-b8tr24xdb",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-03-31T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 7,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-1yek010pj",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-03-31T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 7,
+      "totalInstallments": 24
     },
     {
       "id": "obl-dadbsdsdi",
@@ -380,6 +684,32 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-1ztue6r2g",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-04-30T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 8,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-t8b7fie97",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-04-30T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 8,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-9u2r9nc3p",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -391,6 +721,32 @@
       "status": "pendiente",
       "installmentNumber": 9,
       "totalInstallments": 12
+    },
+    {
+      "id": "obl-1kmz1qf7l",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-05-30T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 9,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-jpa51djsv",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-05-30T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 9,
+      "totalInstallments": 24
     },
     {
       "id": "obl-z3yj53pge",
@@ -406,6 +762,32 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-i3zax8eiy",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-06-29T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 10,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-xe7f8h5lq",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-06-29T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 10,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-euzdke8zu",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -419,6 +801,32 @@
       "totalInstallments": 12
     },
     {
+      "id": "obl-ed70l172h",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-07-29T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 11,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-nq6ncdff6",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-07-29T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 11,
+      "totalInstallments": 24
+    },
+    {
       "id": "obl-uz9m2rx51",
       "acquisitionId": "acq-wl9a9gsw7",
       "studentId": "user-hgp3parur",
@@ -430,6 +838,344 @@
       "status": "pendiente",
       "installmentNumber": 12,
       "totalInstallments": 12
+    },
+    {
+      "id": "obl-wvv3hz0pw",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-08-28T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 12,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-j9wm9fu0b",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-08-28T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 12,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-au0nnie3c",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-09-27T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 13,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-qvhsjczpm",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-09-27T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 13,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-43c6wwvqj",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-10-27T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 14,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-3re6y04gn",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-10-27T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 14,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-8908trdbn",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-11-26T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 15,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-h9h245k95",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-11-26T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 15,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-hjft2aeb5",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2027-12-26T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 16,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-zndao7iqq",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2027-12-26T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 16,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-tfvck7mti",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-01-25T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 17,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-iaevtq76v",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-01-25T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 17,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-veoln3izw",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-02-24T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 18,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-16r5dzrp4",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-02-24T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 18,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-qa0vkl9w7",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-03-25T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 19,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-jpiyjg42k",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-03-25T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 19,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-lo7tgr137",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-04-24T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 20,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-707u0k0ng",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-04-24T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 20,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-x0sh1pc0u",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-05-24T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 21,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-mj89mcen1",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-05-24T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 21,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-v54vxjgnx",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-06-23T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 22,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-gkd8wmhmf",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-06-23T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 22,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-hrjboq6jn",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-07-23T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 23,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-gia1st0uo",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-07-23T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 23,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-kgx8f5rps",
+      "acquisitionId": "mac-acq-6cjhexx1n",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de fabricación de metal / hierro (varilla y punta) (Línea de alta capacidad (2 tornos CNC de 2 ejes))",
+      "type": "pagare",
+      "amount": 3025,
+      "dueDate": "2028-08-22T09:43:11.097Z",
+      "status": "pendiente",
+      "installmentNumber": 24,
+      "totalInstallments": 24
+    },
+    {
+      "id": "obl-8gb92ictn",
+      "acquisitionId": "mac-acq-unypz53oz",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "propertyTitle": "Línea de inyección de plástico y ensamblaje final (Línea inyectora y marcado láser)",
+      "type": "pagare",
+      "amount": 2805,
+      "dueDate": "2028-08-22T09:43:16.267Z",
+      "status": "pendiente",
+      "installmentNumber": 24,
+      "totalInstallments": 24
     }
   ],
   "loans": [
@@ -937,7 +1683,10 @@
       "gender": "mujer",
       "grossSalaryMonthly": 1000,
       "age": 20,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T06:59:57.133Z",
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.263Z"
     },
@@ -949,7 +1698,10 @@
       "gender": "hombre",
       "grossSalaryMonthly": 1000,
       "age": 35,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T06:59:58.573Z",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.250Z"
     },
@@ -961,7 +1713,10 @@
       "gender": "hombre",
       "grossSalaryMonthly": 1000,
       "age": 36,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:00.277Z",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.248Z"
     },
@@ -973,7 +1728,10 @@
       "gender": "mujer",
       "grossSalaryMonthly": 1000,
       "age": 55,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:01.135Z",
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.248Z"
     },
@@ -985,7 +1743,10 @@
       "gender": "mujer",
       "grossSalaryMonthly": 1000,
       "age": 20,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:02.066Z",
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.234Z"
     },
@@ -997,7 +1758,10 @@
       "gender": "hombre",
       "grossSalaryMonthly": 1000,
       "age": 34,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:04.821Z",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.233Z"
     },
@@ -1009,7 +1773,10 @@
       "gender": "mujer",
       "grossSalaryMonthly": 1000,
       "age": 20,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:05.653Z",
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.233Z"
     },
@@ -1021,21 +1788,12 @@
       "gender": "hombre",
       "grossSalaryMonthly": 1000,
       "age": 55,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:06.496Z",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.219Z"
-    },
-    {
-      "id": "job-pemf8fupm",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Daniel Fernández Martínez",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 26,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.218Z"
     },
     {
       "id": "job-n7gt48r0g",
@@ -1045,8 +1803,26 @@
       "gender": "mujer",
       "grossSalaryMonthly": 1000,
       "age": 27,
-      "status": "disponible",
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:07.351Z",
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
+      "createdAt": "2026-09-02T09:47:29.218Z"
+    },
+    {
+      "id": "job-pemf8fupm",
+      "title": "Operario industrial",
+      "role": "operario",
+      "employeeName": "Daniel Fernández Martínez",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 26,
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:09.062Z",
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.218Z"
     },
     {
@@ -1530,7 +2306,148 @@
       "createdAt": "2026-09-02T09:47:29.000Z"
     }
   ],
-  "hiredEmployees": [],
+  "hiredEmployees": [
+    {
+      "id": "emp-3n963m26f",
+      "jobListingId": "job-pemf8fupm",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Daniel Fernández Martínez",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 26,
+      "hireDate": "2026-09-03T07:00:08.135Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-ei50ahr9e",
+      "jobListingId": "job-n7gt48r0g",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Elena Pérez Ruiz",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 27,
+      "hireDate": "2026-09-03T07:00:07.351Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-po5q7q8al",
+      "jobListingId": "job-waqe6h3vy",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Daniel García Rodríguez",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 55,
+      "hireDate": "2026-09-03T07:00:06.496Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-xk1mxzy2v",
+      "jobListingId": "job-t9dj6k22l",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Marta Jiménez Fernández",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 20,
+      "hireDate": "2026-09-03T07:00:05.653Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-wi1hiykeo",
+      "jobListingId": "job-i3ksbds2u",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Iván Hernández Fernández",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 34,
+      "hireDate": "2026-09-03T07:00:04.821Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-l0pbei43i",
+      "jobListingId": "job-283v2cxd2",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Rocío Pérez Martín",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 20,
+      "hireDate": "2026-09-03T07:00:02.066Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-s3vjlpoi1",
+      "jobListingId": "job-xl72th2y2",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Andrea Sánchez Fernández",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 55,
+      "hireDate": "2026-09-03T07:00:01.135Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-drp1jhr85",
+      "jobListingId": "job-v0551m7mg",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Iván Muñoz Díaz",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 36,
+      "hireDate": "2026-09-03T06:59:59.434Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-77rapcru8",
+      "jobListingId": "job-abc935tzp",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Sergio González López",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 35,
+      "hireDate": "2026-09-03T06:59:58.573Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-1yhbtb46i",
+      "jobListingId": "job-315l4zfup",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Alba Alonso Moreno",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 20,
+      "hireDate": "2026-09-03T06:59:57.133Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    }
+  ],
   "payrollRecords": [],
   "taxObligations": [],
   "electricityContracts": [
@@ -1571,7 +2488,26 @@
   "telecomContracts": [],
   "telecomInvoices": [],
   "officeOrders": [],
-  "purchasedVehicles": [],
+  "purchasedVehicles": [
+    {
+      "id": "veh-btmwfsuih",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "vehicleType": "carretilla_elevadora",
+      "title": "Carretilla elevadora contrapesada 2.5T",
+      "basePrice": 18500,
+      "ivaAmount": 3885,
+      "totalPrice": 22385,
+      "paymentMethod": "contado",
+      "purchaseDate": "2026-09-03T07:15:11.043Z",
+      "assignedWarehouseIndex": 1,
+      "assignedPropertyId": "acq-wl9a9gsw7",
+      "assignedPropertyTitle": "Nave industrial 1 de 588 m² en Talavera de la Reina",
+      "assignedWarehouseName": "Nave industrial 1 de 588 m² en Talavera de la Reina (Inmueble nave industrial)",
+      "status": "activo",
+      "imageUrl": "/images/vehicles/carretilla_elevadora.jpg"
+    }
+  ],
   "rawMaterialAnnouncements": [
     {
       "id": "rm-epoxi",
@@ -1685,8 +2621,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-03T06:43:17.781Z",
-      "updatedAt": "2026-09-03T06:43:17.781Z"
+      "lastCalculatedAt": "2026-09-03T06:52:29.434Z",
+      "updatedAt": "2026-09-03T07:16:48.588Z"
     },
     {
       "studentId": "user-hgp3parur",
@@ -1725,8 +2661,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-02T09:49:24.531Z",
-      "updatedAt": "2026-09-03T06:35:58.009Z"
+      "lastCalculatedAt": "2026-09-03T07:14:51.750Z",
+      "updatedAt": "2026-09-03T07:16:48.603Z"
     },
     {
       "studentId": "profesor-1",
@@ -1734,36 +2670,39 @@
       "metalKg": 0,
       "plasticKg": 0,
       "epoxiKg": 0,
+      "rodProductionMode": null,
       "producedRodsUnits": 0,
-      "producedScrewdriversUnits": 0,
-      "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
-      "updatedAt": "2026-09-03T06:42:58.422Z",
-      "naveInventories": {
-        "default_nave": {
-          "ironKg": 0,
-          "metalKg": 0,
-          "plasticKg": 0,
-          "epoxiKg": 0,
-          "producedRodsUnits": 0,
-          "producedStarRodsUnits": 0,
-          "producedFlatRodsUnits": 0,
-          "producedScrewdriversUnits": 0,
-          "starScrewdriversUnits": 0,
-          "flatScrewdriversUnits": 0,
-          "ironScrewdriversUnits": 0,
-          "metalScrewdriversUnits": 0,
-          "line1PendingHours": 0,
-          "line2PendingHours": 0
-        }
-      },
       "producedStarRodsUnits": 0,
       "producedFlatRodsUnits": 0,
       "producedIronRodsUnits": 0,
       "producedMetalRodsUnits": 0,
+      "producedScrewdriversUnits": 0,
       "starScrewdriversUnits": 0,
       "flatScrewdriversUnits": 0,
       "ironScrewdriversUnits": 0,
-      "metalScrewdriversUnits": 0
+      "metalScrewdriversUnits": 0,
+      "line1PendingHours": 0,
+      "line2PendingHours": 0,
+      "naveInventories": {
+        "default_nave": {
+          "ironKg": 0,
+          "epoxiKg": 0,
+          "metalKg": 0,
+          "plasticKg": 0,
+          "line1PendingHours": 0,
+          "line2PendingHours": 0,
+          "producedRodsUnits": 0,
+          "flatScrewdriversUnits": 0,
+          "ironScrewdriversUnits": 0,
+          "producedFlatRodsUnits": 0,
+          "producedStarRodsUnits": 0,
+          "starScrewdriversUnits": 0,
+          "metalScrewdriversUnits": 0,
+          "producedScrewdriversUnits": 0
+        }
+      },
+      "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
+      "updatedAt": "2026-09-03T07:16:48.617Z"
     }
   ],
   "companyProfiles": [],
