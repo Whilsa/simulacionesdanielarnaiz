@@ -5499,9 +5499,42 @@ app.post('/login', loginHandler);
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).
 // If student, returns limited public info (name, username, accountNumber) for transfer targets.
-app.get('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => {
   const role = req.query.role as string;
   const db = readDb();
+
+  if (dbPool) {
+    try {
+      const resCuentas = await safeDbQuery('SELECT * FROM cuentas ORDER BY alumno ASC');
+      if (resCuentas && resCuentas.rows && resCuentas.rows.length > 0) {
+        for (const row of resCuentas.rows) {
+          const rowId = String(row.id);
+          const existing = db.users.find(u => u.id === rowId || (row.usuario && u.username.toLowerCase() === String(row.usuario).toLowerCase()));
+          if (existing) {
+            existing.balance = Number(row.saldo !== undefined ? row.saldo : existing.balance);
+            if (row.password) existing.password = String(row.password);
+            if (row.level) existing.level = Number(row.level) as 1 | 2 | 3;
+            if (row.alumno) existing.name = String(row.alumno);
+            if (row.account_number) existing.accountNumber = String(row.account_number);
+          } else if (row.rol !== 'teacher' && row.usuario) {
+            db.users.push({
+              id: rowId,
+              username: String(row.usuario).toLowerCase(),
+              password: String(row.password || '123'),
+              role: 'student',
+              name: String(row.alumno || row.usuario),
+              accountNumber: String(row.account_number || generateIBAN()),
+              balance: Number(row.saldo || 0),
+              level: Number(row.level || 1) as 1 | 2 | 3
+            });
+          }
+        }
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Users]:', e);
+    }
+  }
 
   if (role === 'teacher') {
     res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, supabaseConnected: !!dbPool });
@@ -9760,8 +9793,37 @@ app.put('/api/student/change-password', (req, res) => {
 });
 
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
-app.get('/api/job-listings', (req, res) => {
+app.get('/api/job-listings', async (req, res) => {
   const db = readDb();
+  if (dbPool) {
+    try {
+      const resJobs = await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
+      if (resJobs && resJobs.rows && resJobs.rows.length > 0) {
+        db.jobListings = resJobs.rows.map((row: any) => {
+          const t = String(row.titulo || '').toLowerCase();
+          const roleVal = row.puesto || row.rol || (t.includes('mozo') || t.includes('almacen') || t.includes('almacén') ? 'mozo_almacen' : t.includes('camionero') ? 'camionero' : t.includes('carretillero') ? 'carretillero' : 'operario');
+          return {
+            id: String(row.id),
+            title: String(row.titulo),
+            role: roleVal as any,
+            employeeName: String(row.nombre_empleado),
+            gender: row.genero as 'hombre' | 'mujer',
+            grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+            age: Number(row.edad),
+            status: row.estado as 'disponible' | 'contratado',
+            hiredByStudentId: row.alumno_id ? String(row.alumno_id) : undefined,
+            hiredByStudentName: row.alumno_nombre ? String(row.alumno_nombre) : undefined,
+            hiredAtDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : undefined,
+            avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
+            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+          };
+        });
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Job Listings]:', e);
+    }
+  }
   res.json({ success: true, jobListings: db.jobListings || [] });
 });
 
@@ -9925,10 +9987,39 @@ app.post('/api/jobs/:id/hire', (req, res) => {
   res.json({ success: true, employee: newHired, job });
 });
 
-app.get('/api/student/employees', (req, res) => {
+app.get('/api/student/employees', async (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  const list = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  if (dbPool) {
+    try {
+      const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
+      if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
+        db.hiredEmployees = resEmp.rows.map((row: any) => ({
+          id: String(row.id),
+          jobListingId: String(row.oferta_id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          employeeName: String(row.nombre_empleado),
+          role: (row.puesto || row.rol || 'operario') as any,
+          gender: row.genero as 'hombre' | 'mujer',
+          grossSalaryMonthly: Number(row.sueldo_bruto_mensual),
+          age: Number(row.edad),
+          hireDate: row.fecha_contratacion ? new Date(row.fecha_contratacion).toISOString() : new Date().toISOString(),
+          assignedMachineryId: row.maquinaria_asignada_id ? String(row.maquinaria_asignada_id) : undefined,
+          assignedMachineryTitle: row.maquinaria_asignada_titulo ? String(row.maquinaria_asignada_titulo) : undefined,
+          assignedVehicleId: row.vehiculo_asignado_id ? String(row.vehiculo_asignado_id) : undefined,
+          assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
+          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
+          shift: Number(row.turno || 1),
+          avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
+        }));
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Hired Employees]:', e);
+    }
+  }
+  const list = (db.hiredEmployees || []).filter(e => !studentId || e.studentId === studentId);
   res.json({ success: true, employees: list });
 });
 
@@ -10992,8 +11083,74 @@ function syncStudentAnnouncementsStockWithInventory(db: DatabaseSchema) {
   }
 }
 
-app.get('/api/raw-materials/announcements', (req, res) => {
+app.get('/api/raw-materials/announcements', async (req, res) => {
   const db = readDb();
+  if (dbPool) {
+    try {
+      const resRaw = await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
+      if (resRaw && resRaw.rows && resRaw.rows.length > 0) {
+        db.rawMaterialAnnouncements = resRaw.rows.map((row: any) => {
+          let parsedLevel: number | 'official' | undefined = undefined;
+          if (row.seller_level === 'official') {
+            parsedLevel = 'official';
+          } else if (row.seller_level) {
+            const numLevel = Number(row.seller_level);
+            if (!isNaN(numLevel)) parsedLevel = numLevel as any;
+          }
+
+          let parsedDuration: number | 'indefinido' = 'indefinido';
+          if (row.duration_days && row.duration_days !== 'indefinido') {
+            const numDur = Number(row.duration_days);
+            if (!isNaN(numDur)) parsedDuration = numDur;
+          }
+
+          let parsedStock: number | 'ilimitado' = 'ilimitado';
+          if (row.stock && row.stock !== 'ilimitado') {
+            const numStock = Number(row.stock);
+            if (!isNaN(numStock)) parsedStock = numStock;
+          }
+
+          let parsedPriceAlert: any = undefined;
+          if (row.price_alert) {
+            try {
+              parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
+            } catch (e) {
+              console.warn('[Supabase Parse] price_alert JSON parse error:', e);
+            }
+          }
+
+          return {
+            id: String(row.id),
+            materialType: String(row.material_type) as any,
+            title: String(row.title),
+            presentation: String(row.presentation || 'Pallet'),
+            unitWeightKg: Number(row.unit_weight_kg || 1000),
+            isPallet: Boolean(row.is_pallet),
+            pricePerUnit: Number(row.price_per_unit || 0),
+            description: String(row.description || ''),
+            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+            durationDays: parsedDuration,
+            expirationDate: row.expiration_date ? new Date(row.expiration_date).toISOString() : undefined,
+            stock: parsedStock,
+            active: Boolean(row.active),
+            sellerId: row.seller_id ? String(row.seller_id) : undefined,
+            sellerName: row.seller_name ? String(row.seller_name) : undefined,
+            sellerLevel: parsedLevel,
+            sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
+            sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
+            sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
+            isDesTornillo: Boolean(row.is_des_tornillo),
+            priceAlert: parsedPriceAlert
+          };
+        });
+        syncStudentAnnouncementsStockWithInventory(db);
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Raw Material Announcements]:', e);
+    }
+  }
+
   if (!db.rawMaterialAnnouncements || db.rawMaterialAnnouncements.length === 0) {
     db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
     for (const ann of db.rawMaterialAnnouncements) {
@@ -11470,9 +11627,58 @@ function ensureTransportInvoicesForTransfers(db: any) {
   return changed;
 }
 
-app.get('/api/raw-materials/orders', (req, res) => {
+app.get('/api/raw-materials/orders', async (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
+  if (dbPool) {
+    try {
+      const resRawOrders = await safeDbQuery('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC');
+      if (resRawOrders && resRawOrders.rows && resRawOrders.rows.length > 0) {
+        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          announcementId: String(row.announcement_id),
+          materialType: String(row.materia_tipo) as any,
+          materialTitle: String(row.materia_titulo),
+          quantity: Number(row.cantidad),
+          unitWeightKg: Number(row.peso_unitario_kg),
+          totalKg: Number(row.peso_total_kg),
+          basePrice: Number(row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          transportCost: Number(row.coste_transporte),
+          totalAmount: Number(row.importe_total),
+          needsTransport: Boolean(row.necesita_transporte),
+          deliveryAddress: String(row.direccion_entrega || ''),
+          pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+          status: String(row.estado) as any,
+          requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
+          approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+          shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+          estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+          deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+          invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
+          invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
+          items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
+          sellerId: row.seller_id ? String(row.seller_id) : undefined,
+          sellerName: row.seller_name ? String(row.seller_name) : undefined,
+          sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
+          buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
+          discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
+          insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
+          transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
+          lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
+          negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
+          inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
+          destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
+        }));
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Raw Material Orders]:', e);
+    }
+  }
+
   ensureTransportInvoicesForTransfers(db);
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
 
@@ -12733,9 +12939,28 @@ app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
 });
 
 // Company Profiles Endpoints
-app.get('/api/market/company-profiles', (req, res) => {
+app.get('/api/market/company-profiles', async (req, res) => {
   const viewerId = req.query.viewerId as string;
   const db = readDb();
+  if (dbPool) {
+    try {
+      const resProf = await safeDbQuery('SELECT * FROM perfiles_empresa ORDER BY updated_at DESC');
+      if (resProf && resProf.rows && resProf.rows.length > 0) {
+        db.companyProfiles = resProf.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.student_id),
+          companyName: String(row.company_name),
+          description: String(row.description || ''),
+          logoUrl: row.logo_url ? String(row.logo_url) : undefined,
+          level: Number(row.level || 1),
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
+        }));
+        writeDb(db);
+      }
+    } catch (e) {
+      console.warn('[Supabase Real-Time Read Warning for Company Profiles]:', e);
+    }
+  }
   if (!db.companyProfiles) db.companyProfiles = [];
 
   const viewer = viewerId ? db.users.find(u => u.id === viewerId) : null;
