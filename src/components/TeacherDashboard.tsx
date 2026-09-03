@@ -190,6 +190,26 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
   };
 
+  const handleReconcileBalances = async () => {
+    setIsConnectingSupabase(true);
+    setSupabaseMsg('');
+    setSupabaseErr('');
+    try {
+      const res = await fetch('/api/bank/reconcile', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseMsg(data.message || 'Conciliación completada.');
+        fetchData();
+      } else {
+        setSupabaseErr(data.error || 'Error en la conciliación.');
+      }
+    } catch (e: any) {
+      setSupabaseErr('Error de red: ' + (e.message || String(e)));
+    } finally {
+      setIsConnectingSupabase(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
     // Poll dashboard data every 4 seconds to maintain real-time sync with student activities
@@ -200,9 +220,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const fetchData = async () => {
     try {
       const [usersRes, transfersRes, logsRes, supabaseRes, annRes, ordRes] = await Promise.all([
-        fetch('/users?role=teacher'),
-        fetch('/transfers?role=teacher'),
-        fetch('/logs'),
+        fetch('/api/users?role=teacher'),
+        fetch('/api/transfers?role=teacher'),
+        fetch('/api/logs'),
         fetch('/api/supabase-status').catch(() => null),
         fetch('/api/raw-materials/announcements').catch(() => null),
         fetch('/api/raw-materials/orders?studentId=profesor-1').catch(() => null)
@@ -417,7 +437,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     }
 
     try {
-      const response = await fetch(`/users/${selectedUser.id}/adjust-balance`, {
+      const response = await fetch(`/api/users/${selectedUser.id}/adjust-balance`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1578,9 +1598,20 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                             disabled={isConnectingSupabase}
                             onClick={handleSyncSupabase}
                             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-1 cursor-pointer shadow-xs disabled:opacity-50"
+                            title="Sincronizar tablas locales y remotas"
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${isConnectingSupabase ? 'animate-spin' : ''}`} />
                             <span>Sincronizar tablas</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isConnectingSupabase}
+                            onClick={handleReconcileBalances}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-1 cursor-pointer shadow-xs disabled:opacity-50"
+                            title="Comprobar y cuadrar matemáticamente los saldos con todos los movimientos contables registrados"
+                          >
+                            <Coins className="w-3.5 h-3.5" />
+                            <span>Conciliar saldos</span>
                           </button>
                         </div>
                       ) : (

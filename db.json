@@ -57,7 +57,7 @@
       "role": "student",
       "name": "Fabricante Destornilladores completo",
       "accountNumber": "ES89000100025748867825",
-      "balance": 48825.99,
+      "balance": 156323.99,
       "level": 1
     }
   ],
@@ -87,18 +87,6 @@
       "timestamp": "2026-09-02T09:43:11.097Z"
     },
     {
-      "id": "tx-b76yr16c0",
-      "senderId": "user-hgp3parur",
-      "senderName": "Fabricante Destornilladores completo",
-      "senderAccount": "ES89000100025748867825",
-      "receiverId": "corp-banco-central",
-      "receiverName": "Banco Central Hipotecario S.A. - Comisión Apertura (1‰)",
-      "receiverAccount": "ES210001000299887700",
-      "amount": 250,
-      "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-egamp16nr",
-      "timestamp": "2026-09-02T09:42:58.926Z"
-    },
-    {
       "id": "tx-87hdqaxq8",
       "senderId": "corp-banco-central",
       "senderName": "Banco Central Hipotecario S.A.",
@@ -108,6 +96,18 @@
       "receiverAccount": "ES89000100025748867825",
       "amount": 250000,
       "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-egamp16nr",
+      "timestamp": "2026-09-02T09:42:58.926Z"
+    },
+    {
+      "id": "tx-b76yr16c0",
+      "senderId": "user-hgp3parur",
+      "senderName": "Fabricante Destornilladores completo",
+      "senderAccount": "ES89000100025748867825",
+      "receiverId": "corp-banco-central",
+      "receiverName": "Banco Central Hipotecario S.A. - Comisión Apertura (1‰)",
+      "receiverAccount": "ES210001000299887700",
+      "amount": 250,
+      "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-egamp16nr",
       "timestamp": "2026-09-02T09:42:58.926Z"
     },
     {
@@ -124,6 +124,18 @@
     }
   ],
   "systemLogs": [
+    {
+      "id": "log-debug-xiggtt5dl",
+      "action": "LOGIN_ATTEMPT",
+      "details": "Intento de acceso recibido: usuario \"pupdaniel\".",
+      "timestamp": "2026-09-03T06:43:15.651Z"
+    },
+    {
+      "id": "log-debug-g3uka9074",
+      "action": "LOGIN_ATTEMPT",
+      "details": "Intento de acceso recibido: usuario \"pupdaniel\".",
+      "timestamp": "2026-09-03T06:42:20.692Z"
+    },
     {
       "id": "log-2fk3ki3u7",
       "action": "RESET_SIMULATION",
@@ -1562,6 +1574,42 @@
   "purchasedVehicles": [],
   "rawMaterialAnnouncements": [
     {
+      "id": "rm-epoxi",
+      "materialType": "epoxi",
+      "title": "Pegamento epoxi",
+      "presentation": "Lata de 5 kg",
+      "unitWeightKg": 5,
+      "isPallet": false,
+      "pricePerUnit": 65,
+      "description": "Resina y pegamento epoxi bicomponente de grado industrial para ensamblaje final. Lata de 5 kg.",
+      "updatedAt": "2026-09-03T06:42:58.264Z",
+      "durationDays": "indefinido",
+      "stock": "ilimitado",
+      "active": true,
+      "sellerId": "profesor-1",
+      "sellerName": "BricoMaster Distribuciones, S.A.",
+      "sellerLevel": "official",
+      "isDesTornillo": false
+    },
+    {
+      "id": "rm-hierro",
+      "materialType": "hierro",
+      "title": "Fragmentos de hierro",
+      "presentation": "Pallet de 1.000 kg (Fragmentos)",
+      "unitWeightKg": 1000,
+      "isPallet": true,
+      "pricePerUnit": 475,
+      "description": "Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.",
+      "updatedAt": "2026-09-03T06:42:47.779Z",
+      "durationDays": "indefinido",
+      "stock": "ilimitado",
+      "active": true,
+      "sellerId": "profesor-1",
+      "sellerName": "BricoMaster Distribuciones, S.A.",
+      "sellerLevel": "official",
+      "isDesTornillo": false
+    },
+    {
       "id": "rm-des-tornillo-01",
       "materialType": "producto_final",
       "title": "Destornilladores M3 con Mango Ergonómico",
@@ -1580,24 +1628,6 @@
       "isDesTornillo": true
     },
     {
-      "id": "rm-hierro",
-      "materialType": "hierro",
-      "title": "Fragmentos de hierro",
-      "presentation": "Pallet de 1.000 kg (Fragmentos)",
-      "unitWeightKg": 1000,
-      "isPallet": true,
-      "pricePerUnit": 450,
-      "description": "Materia prima metálica de alta calidad para producción en línea de varilla y punta. Presentación en palet de 1.000 kg.",
-      "updatedAt": "2026-09-02T07:47:37.926Z",
-      "durationDays": "indefinido",
-      "stock": "ilimitado",
-      "active": true,
-      "sellerId": "proveedor-materia-prima",
-      "sellerName": "Suministros Industriales S.A.",
-      "sellerLevel": "official",
-      "isDesTornillo": false
-    },
-    {
       "id": "rm-plastico",
       "materialType": "plastico",
       "title": "Pellets de plástico",
@@ -1606,24 +1636,6 @@
       "isPallet": true,
       "pricePerUnit": 380,
       "description": "Polímero plástico en pellets para inyección de mangos. 40 sacos de 25 kg por palet (total 1.000 kg).",
-      "updatedAt": "2026-09-02T07:47:37.926Z",
-      "durationDays": "indefinido",
-      "stock": "ilimitado",
-      "active": true,
-      "sellerId": "proveedor-materia-prima",
-      "sellerName": "Suministros Industriales S.A.",
-      "sellerLevel": "official",
-      "isDesTornillo": false
-    },
-    {
-      "id": "rm-epoxi",
-      "materialType": "epoxi",
-      "title": "Pegamento epoxi",
-      "presentation": "Lata de 5 kg",
-      "unitWeightKg": 5,
-      "isPallet": false,
-      "pricePerUnit": 45,
-      "description": "Resina y pegamento epoxi bicomponente de grado industrial para ensamblaje final. Lata de 5 kg.",
       "updatedAt": "2026-09-02T07:47:37.926Z",
       "durationDays": "indefinido",
       "stock": "ilimitado",
@@ -1673,8 +1685,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-03T06:35:56.491Z",
-      "updatedAt": "2026-09-03T06:35:56.491Z"
+      "lastCalculatedAt": "2026-09-03T06:43:17.781Z",
+      "updatedAt": "2026-09-03T06:43:17.781Z"
     },
     {
       "studentId": "user-hgp3parur",
@@ -1714,7 +1726,44 @@
         }
       },
       "lastCalculatedAt": "2026-09-02T09:49:24.531Z",
-      "updatedAt": "2026-09-03T06:31:49.162Z"
+      "updatedAt": "2026-09-03T06:35:58.009Z"
+    },
+    {
+      "studentId": "profesor-1",
+      "ironKg": 0,
+      "metalKg": 0,
+      "plasticKg": 0,
+      "epoxiKg": 0,
+      "producedRodsUnits": 0,
+      "producedScrewdriversUnits": 0,
+      "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
+      "updatedAt": "2026-09-03T06:42:58.422Z",
+      "naveInventories": {
+        "default_nave": {
+          "ironKg": 0,
+          "metalKg": 0,
+          "plasticKg": 0,
+          "epoxiKg": 0,
+          "producedRodsUnits": 0,
+          "producedStarRodsUnits": 0,
+          "producedFlatRodsUnits": 0,
+          "producedScrewdriversUnits": 0,
+          "starScrewdriversUnits": 0,
+          "flatScrewdriversUnits": 0,
+          "ironScrewdriversUnits": 0,
+          "metalScrewdriversUnits": 0,
+          "line1PendingHours": 0,
+          "line2PendingHours": 0
+        }
+      },
+      "producedStarRodsUnits": 0,
+      "producedFlatRodsUnits": 0,
+      "producedIronRodsUnits": 0,
+      "producedMetalRodsUnits": 0,
+      "starScrewdriversUnits": 0,
+      "flatScrewdriversUnits": 0,
+      "ironScrewdriversUnits": 0,
+      "metalScrewdriversUnits": 0
     }
   ],
   "companyProfiles": [],

@@ -44,7 +44,7 @@ function initPgPool(url: string) {
     },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 5000,
-    max: 3
+    max: 10
   });
 
   process.env.DATABASE_URL = url;
@@ -719,19 +719,34 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
 async function syncAccountToSupabase(id: string, alumno: string, saldo: number, usuario?: string, password?: string, accountNumber?: string, role?: string, level?: number) {
   if (!dbPool) return;
   try {
-    await safeDbQuery(
-      `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET 
-         alumno = EXCLUDED.alumno, 
-         saldo = EXCLUDED.saldo,
-         usuario = COALESCE(EXCLUDED.usuario, cuentas.usuario),
-         password = COALESCE(EXCLUDED.password, cuentas.password),
-         account_number = COALESCE(EXCLUDED.account_number, cuentas.account_number),
-         role = COALESCE(EXCLUDED.role, cuentas.role),
-         level = COALESCE(EXCLUDED.level, cuentas.level)`,
-      [id, alumno, saldo, usuario || null, password || null, accountNumber || null, role || 'student', level || 1]
+    const numSaldo = Number(Number(saldo).toFixed(2));
+    // 1. Direct update if row already exists by id or username
+    const updateRes = await safeDbQuery(
+      `UPDATE cuentas 
+       SET saldo = $1, 
+           alumno = COALESCE($2, alumno),
+           role = COALESCE($3, role),
+           level = COALESCE($4, level)
+       WHERE id = $5 OR (usuario IS NOT NULL AND usuario = $6)`,
+      [numSaldo, alumno || null, role || null, level || null, id, usuario || null]
     );
+
+    // 2. If row does not exist yet, insert it cleanly
+    if (!updateRes || updateRes.rowCount === 0) {
+      await safeDbQuery(
+        `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET 
+           alumno = EXCLUDED.alumno, 
+           saldo = EXCLUDED.saldo,
+           usuario = COALESCE(EXCLUDED.usuario, cuentas.usuario),
+           password = COALESCE(EXCLUDED.password, cuentas.password),
+           account_number = COALESCE(EXCLUDED.account_number, cuentas.account_number),
+           role = COALESCE(EXCLUDED.role, cuentas.role),
+           level = COALESCE(EXCLUDED.level, cuentas.level)`,
+        [id, alumno, numSaldo, usuario || null, password || null, accountNumber || null, role || 'student', level || 1]
+      );
+    }
   } catch (e) {
     console.error('[Supabase DB] Error syncing account to Supabase:', e);
   }
@@ -2277,6 +2292,32 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           }
         }
         db.transfers = uniqueTransfers;
+      }
+
+      // Automatic Ledger Reconciliation (Conciliación Bancaria Automática)
+      // Ensures account balances in "cuentas" mathematically match the sum of "movimientos"
+      for (const student of db.users) {
+        if (student.role !== 'student') continue;
+        const studentMovs = resMov.rows.filter(m => m.cuenta_id === student.id);
+        if (studentMovs.length > 0) {
+          let netMovs = 0;
+          for (const m of studentMovs) {
+            const amt = Number(m.importe);
+            if (m.tipo === 'TRANSFER_IN') netMovs += amt;
+            else if (m.tipo === 'TRANSFER_OUT') netMovs -= amt;
+          }
+          const isRetailOrWholesale = (student.username && ['cliente04', 'cliente05'].includes(student.username)) || 
+                                     student.name.toLowerCase().includes('minorista') || 
+                                     student.name.toLowerCase().includes('mayorista');
+          const defaultInitial = isRetailOrWholesale ? 3000 : 60000;
+          const expectedBalance = Number((defaultInitial + netMovs).toFixed(2));
+          
+          if (Math.abs(student.balance - expectedBalance) > 0.01 && expectedBalance >= 0) {
+            console.log(`[Supabase Ledger Audit] Reconciling balance for ${student.name} (${student.id}): Stored=${student.balance} €, Expected=${expectedBalance} €. Updating...`);
+            student.balance = expectedBalance;
+            safeDbQuery('UPDATE cuentas SET saldo = $1 WHERE id = $2', [expectedBalance, student.id]).catch(e => console.error('[Ledger Reconcile DB Update Error]', e));
+          }
+        }
       }
 
       // Reconstruct db.properties from Supabase "inmuebles"
@@ -5499,7 +5540,7 @@ app.post('/login', loginHandler);
 // Get users list
 // Note: If teacher, returns full details (with passwords so they can hand them out!).
 // If student, returns limited public info (name, username, accountNumber) for transfer targets.
-app.get('/api/users', async (req, res) => {
+const handleGetUsersRoute = async (req: express.Request, res: express.Response) => {
   const role = req.query.role as string;
   const db = readDb();
 
@@ -5545,7 +5586,10 @@ app.get('/api/users', async (req, res) => {
       .map(({ password: _, ...u }) => u);
     res.json({ users: publicStudents });
   }
-});
+};
+
+app.get('/api/users', handleGetUsersRoute);
+app.get('/users', handleGetUsersRoute);
 
 // Create new bank user account (Teacher only)
 const handleCreateUserRoute = (req: express.Request, res: express.Response) => {
@@ -5640,7 +5684,7 @@ app.put('/api/users/:id', (req, res) => {
 });
 
 // Adjust balance of a user (Teacher only)
-app.put('/api/users/:id/adjust-balance', (req, res) => {
+const handleAdjustBalanceRoute = async (req: express.Request, res: express.Response) => {
   const { id } = req.params;
   const { amount, actionType, concept } = req.body; // actionType: 'add' | 'subtract' | 'set'
 
@@ -5686,9 +5730,10 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
     : (isAdd ? 'Abono forzado de fondos por Administración Docente' : 'Cobro forzado de fondos por Administración Docente');
 
   const teacherIBAN = 'ES99 0000 0000 0000 0000 0000';
+  let forcedTransfer: Transfer | null = null;
 
   if (transferAmount > 0) {
-    const forcedTransfer: Transfer = {
+    forcedTransfer = {
       id: generateId('tx'),
       senderId: isAdd ? 'teacher-admin' : user.id,
       senderName: isAdd ? 'Administración Docente / Profesor' : user.name,
@@ -5703,10 +5748,6 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
     db.transfers.unshift(forcedTransfer);
   }
 
-  if (user.role === 'student') {
-    syncAccountToSupabase(user.id, user.name, user.balance).catch(e => console.error(e));
-  }
-
   const newLog: SystemLog = {
     id: generateId('log'),
     action: 'BALANCE_ADJUSTMENT',
@@ -5716,8 +5757,27 @@ app.put('/api/users/:id/adjust-balance', (req, res) => {
   db.systemLogs.unshift(newLog);
 
   writeDb(db);
-  res.json({ user });
-});
+
+  if (user.role === 'student') {
+    await syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level);
+    if (forcedTransfer) {
+      await syncMovimientoToSupabase(
+        forcedTransfer.id + (isAdd ? '-in' : '-out'),
+        user.id,
+        isAdd ? 'TRANSFER_IN' : 'TRANSFER_OUT',
+        transferAmount,
+        forcedTransfer.timestamp,
+        defaultConcept,
+        forcedTransfer
+      );
+    }
+  }
+
+  res.json({ user, updatedBalance: user.balance });
+};
+
+app.put('/api/users/:id/adjust-balance', handleAdjustBalanceRoute);
+app.put('/users/:id/adjust-balance', handleAdjustBalanceRoute);
 
 // Delete user account (Teacher only)
 app.delete('/api/users/:id', async (req, res) => {
@@ -5773,7 +5833,7 @@ app.delete('/api/users/:id', async (req, res) => {
 });
 
 // Create transfer between students
-app.post('/api/transfers', (req, res) => {
+const handleTransferRoute = async (req: express.Request, res: express.Response) => {
   const { senderId, receiverId, amount, concept } = req.body;
 
   if (!senderId || !receiverId || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
@@ -5839,16 +5899,23 @@ app.post('/api/transfers', (req, res) => {
   writeDb(db);
 
   // Sync balances and transfer movements to Supabase PostgreSQL
-  if (sender.role === 'student') syncAccountToSupabase(sender.id, sender.name, sender.balance).catch(e => console.error(e));
-  if (receiver.role === 'student') syncAccountToSupabase(receiver.id, receiver.name, receiver.balance).catch(e => console.error(e));
-  syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
-  syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+  if (sender.role === 'student') {
+    await syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level);
+  }
+  if (receiver.role === 'student') {
+    await syncAccountToSupabase(receiver.id, receiver.name, receiver.balance, receiver.username, receiver.password, receiver.accountNumber, receiver.role, receiver.level);
+  }
+  await syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer);
+  await syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer);
 
   res.json({ success: true, transfer: newTransfer, senderBalance: sender.balance });
-});
+};
+
+app.post('/api/transfers', handleTransferRoute);
+app.post('/transfers', handleTransferRoute);
 
 // Get transfers
-app.get('/api/transfers', (req, res) => {
+const handleGetTransfersRoute = (req: express.Request, res: express.Response) => {
   const { userId, role } = req.query;
   const db = readDb();
 
@@ -5861,12 +5928,80 @@ app.get('/api/transfers', (req, res) => {
   } else {
     res.status(400).json({ error: 'Se requiere userId o rol para ver el historial' });
   }
-});
+};
+
+app.get('/api/transfers', handleGetTransfersRoute);
+app.get('/transfers', handleGetTransfersRoute);
 
 // Get system logs (Teacher only)
-app.get('/api/logs', (req, res) => {
+const handleGetLogsRoute = (req: express.Request, res: express.Response) => {
   const db = readDb();
   res.json({ logs: db.systemLogs });
+};
+
+app.get('/api/logs', handleGetLogsRoute);
+app.get('/logs', handleGetLogsRoute);
+
+// Manual Bank Reconciliation Endpoint (Teacher or system trigger)
+app.post('/api/bank/reconcile', async (req, res) => {
+  if (!dbPool) {
+    return res.status(400).json({ success: false, error: 'Supabase PostgreSQL no está configurado.' });
+  }
+  try {
+    const db = readDb();
+    const accountsRes = await safeDbQuery('SELECT * FROM cuentas ORDER BY alumno ASC');
+    const movsRes = await safeDbQuery('SELECT * FROM movimientos ORDER BY fecha ASC');
+
+    const reconciled: Array<{ studentName: string; studentId: string; previousBalance: number; reconciledBalance: number; movementsCount: number }> = [];
+
+    if (accountsRes && accountsRes.rows && movsRes && movsRes.rows) {
+      for (const student of db.users) {
+        if (student.role !== 'student') continue;
+        const studentMovs = movsRes.rows.filter((m: any) => m.cuenta_id === student.id);
+        if (studentMovs.length > 0) {
+          let netMovs = 0;
+          for (const m of studentMovs) {
+            const amt = Number(m.importe);
+            if (m.tipo === 'TRANSFER_IN') netMovs += amt;
+            else if (m.tipo === 'TRANSFER_OUT') netMovs -= amt;
+          }
+          const isRetailOrWholesale = (student.username && ['cliente04', 'cliente05'].includes(student.username)) || 
+                                     student.name.toLowerCase().includes('minorista') || 
+                                     student.name.toLowerCase().includes('mayorista');
+          const defaultInitial = isRetailOrWholesale ? 3000 : 60000;
+          const expectedBalance = Number((defaultInitial + netMovs).toFixed(2));
+          const oldBal = student.balance;
+
+          if (Math.abs(oldBal - expectedBalance) > 0.01 && expectedBalance >= 0) {
+            student.balance = expectedBalance;
+            await safeDbQuery('UPDATE cuentas SET saldo = $1 WHERE id = $2', [expectedBalance, student.id]);
+            reconciled.push({
+              studentName: student.name,
+              studentId: student.id,
+              previousBalance: oldBal,
+              reconciledBalance: expectedBalance,
+              movementsCount: studentMovs.length
+            });
+          }
+        }
+      }
+
+      if (reconciled.length > 0) {
+        writeDb(db);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: reconciled.length > 0 
+        ? `Se han conciliado ${reconciled.length} cuenta(s) con sus movimientos contables.`
+        : 'Todos los saldos bancarios cuadran exactamente con el historial de movimientos de Supabase.',
+      reconciled
+    });
+  } catch (err: any) {
+    console.error('[Bank Reconciliation Error]', err);
+    res.status(500).json({ success: false, error: err.message || String(err) });
+  }
 });
 
 // Execute full simulation reset
@@ -9933,7 +10068,7 @@ app.delete('/api/teacher/job-listings', (req, res) => {
   res.json({ success: true, message: 'Todas las ofertas disponibles han sido eliminadas' });
 });
 
-app.post('/api/jobs/:id/hire', (req, res) => {
+app.post('/api/jobs/:id/hire', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
 
@@ -9971,8 +10106,8 @@ app.post('/api/jobs/:id/hire', (req, res) => {
 
   db.hiredEmployees.push(newHired);
 
-  syncJobListingToSupabase(job).catch(e => console.error(e));
-  syncHiredEmployeeToSupabase(newHired).catch(e => console.error(e));
+  await syncJobListingToSupabase(job);
+  await syncHiredEmployeeToSupabase(newHired);
 
   db.systemLogs.unshift({
     id: generateId('log'),
@@ -10023,7 +10158,7 @@ app.get('/api/student/employees', async (req, res) => {
   res.json({ success: true, employees: list });
 });
 
-app.put('/api/student/employees/:id/assign-machinery', (req, res) => {
+app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
   const { id } = req.params;
   const { machineryId, shift } = req.body;
 
@@ -10046,7 +10181,7 @@ app.put('/api/student/employees/:id/assign-machinery', (req, res) => {
     emp.shift = Number(shift) || 1;
   }
 
-  syncHiredEmployeeToSupabase(emp).catch(e => console.error(e));
+  await syncHiredEmployeeToSupabase(emp);
   writeDb(db);
   res.json({ success: true, employee: emp });
 });
@@ -10908,7 +11043,7 @@ app.put('/api/student/vehicles/:id/assign-warehouse', (req, res) => {
   res.json({ success: true, vehicle: veh });
 });
 
-app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
+app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
   const { id } = req.params;
   const { vehicleId, warehouseIndex, shift } = req.body;
 
@@ -10935,7 +11070,7 @@ app.put('/api/student/employees/:id/assign-vehicle', (req, res) => {
     emp.shift = Number(shift) || 1;
   }
 
-  syncHiredEmployeeToSupabase(emp).catch(e => console.error(e));
+  await syncHiredEmployeeToSupabase(emp);
 
   writeDb(db);
   res.json({ success: true, employee: emp });
@@ -12980,7 +13115,7 @@ app.get('/api/market/company-profiles', async (req, res) => {
   res.json({ success: true, companyProfiles: profiles });
 });
 
-app.post('/api/market/company-profile', (req, res) => {
+app.post('/api/market/company-profile', async (req, res) => {
   const { studentId, description, logoUrl } = req.body;
   const db = readDb();
   const user = db.users.find(u => u.id === studentId);
@@ -13010,7 +13145,7 @@ app.post('/api/market/company-profile', (req, res) => {
     db.companyProfiles.push(profile);
   }
 
-  syncCompanyProfileToSupabase(profile).catch(e => console.error(e));
+  await syncCompanyProfileToSupabase(profile);
   writeDb(db);
 
   res.json({ success: true, profile, message: 'Perfil de empresa guardado correctamente.' });
