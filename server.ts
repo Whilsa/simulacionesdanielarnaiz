@@ -25,8 +25,19 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // Supabase PostgreSQL Pool Initialization
-const DEFAULT_SUPABASE_URL = 'postgresql://postgres.qgjcytrtambfgnalpztk:802.11ABGDRAF@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
+// Use port 6543 (transaction mode pooler) to prevent (EMAXCONNSESSION) max clients reached in session mode (port 5432)
+const DEFAULT_SUPABASE_URL = 'postgresql://postgres.qgjcytrtambfgnalpztk:802.11ABGDRAF@aws-0-eu-west-1.pooler.supabase.com:6543/postgres';
 let dbPool: pg.Pool | null = null;
+
+function normalizeSupabaseUrl(url: string): string {
+  if (!url) return url;
+  // Convert Supabase pooler from session mode (:5432) to transaction mode (:6543)
+  // to avoid hitting the 15-connection session limit across instances
+  if (url.includes('.pooler.supabase.com:5432')) {
+    return url.replace('.pooler.supabase.com:5432', '.pooler.supabase.com:6543');
+  }
+  return url;
+}
 
 function initPgPool(url: string) {
   if (dbPool) {
@@ -35,20 +46,22 @@ function initPgPool(url: string) {
     } catch (e) {}
   }
 
-  const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
+  const effectiveUrl = normalizeSupabaseUrl(url);
+  const isLocal = effectiveUrl.includes('localhost') || effectiveUrl.includes('127.0.0.1');
   dbPool = new Pool({
-    connectionString: url,
+    connectionString: effectiveUrl,
     ssl: isLocal ? false : {
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined
     },
     connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 5000,
-    max: 10
+    idleTimeoutMillis: 1500,
+    max: 5,
+    allowExitOnIdle: true
   });
 
-  process.env.DATABASE_URL = url;
-  console.log('[Supabase DB] PostgreSQL pool configured automatically with DATABASE_URL.');
+  process.env.DATABASE_URL = effectiveUrl;
+  console.log('[Supabase DB] PostgreSQL pool configured automatically with transaction pooler.');
 
   // Trigger table initialization & restore from Supabase asynchronously
   initSupabaseTables().then(res => {
@@ -58,18 +71,27 @@ function initPgPool(url: string) {
   }).catch(e => console.error('[Supabase Table Init Error]', e));
 }
 
-async function safeDbQuery(text: string, params?: any[], retries = 3): Promise<pg.QueryResult<any> | null> {
+async function safeDbQuery(text: string, params?: any[], retries = 5): Promise<pg.QueryResult<any> | null> {
   if (!dbPool) return null;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await dbPool.query(text, params);
     } catch (err: any) {
-      const isConnError = err?.message?.includes('EMAXCONNSESSION') || err?.message?.includes('max clients') || err?.code === '57P01';
+      const errMsg = err?.message || String(err);
+      const isConnError =
+        errMsg.includes('EMAXCONNSESSION') ||
+        errMsg.includes('max clients') ||
+        errMsg.includes('Connection terminated') ||
+        errMsg.includes('timeout') ||
+        err?.code === '57P01' ||
+        err?.code === 'ECONNRESET';
       if (isConnError && attempt < retries) {
-        await new Promise(r => setTimeout(r, 250 * attempt));
+        const jitter = Math.floor(Math.random() * 150);
+        await new Promise(r => setTimeout(r, 200 * Math.pow(2, attempt - 1) + jitter));
         continue;
       }
-      throw err;
+      console.warn(`[Supabase DB Query Attempt ${attempt}/${retries} Error]:`, errMsg);
+      return null;
     }
   }
   return null;
@@ -126,10 +148,8 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
   if (!dbPool) {
     return { success: false, error: 'DATABASE_URL no está configurada' };
   }
-  let client;
   try {
-    client = await dbPool.connect();
-    await client.query(`
+    await safeDbQuery(`
       CREATE TABLE IF NOT EXISTS cuentas (
         id VARCHAR(255) PRIMARY KEY,
         alumno VARCHAR(255) NOT NULL,
@@ -746,10 +766,6 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
     return { success: false, error: error.message || String(error) };
-  } finally {
-    if (client) {
-      client.release();
-    }
   }
 }
 
@@ -2197,169 +2213,45 @@ async function syncAllToSupabase(db: DatabaseSchema) {
 async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredMovements: number }> {
   if (!dbPool) return { restoredUsers: 0, restoredMovements: 0 };
   try {
-    const client = await dbPool.connect();
-    try {
-      const resCuentas = await client.query('SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas');
-      
-      // If Supabase has NO records, seed Supabase with current db.json state
-      if (resCuentas.rows.length === 0) {
-        console.log('[Supabase Sync] Supabase "cuentas" table is empty. Seeding Supabase with local data...');
-        const currentDb = readDb();
-        await syncAllToSupabase(currentDb);
-        return { restoredUsers: 0, restoredMovements: 0 };
-      }
+    const resCuentas = await safeDbQuery('SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas');
+    if (!resCuentas || !resCuentas.rows) {
+      return { restoredUsers: 0, restoredMovements: 0 };
+    }
+    
+    // If Supabase has NO records, seed Supabase with current db.json state
+    if (resCuentas.rows.length === 0) {
+      console.log('[Supabase Sync] Supabase "cuentas" table is empty. Seeding Supabase with local data...');
+      const currentDb = readDb();
+      await syncAllToSupabase(currentDb);
+      return { restoredUsers: 0, restoredMovements: 0 };
+    }
 
-      console.log(`[Supabase Restore] Found ${resCuentas.rows.length} accounts in Supabase. Restoring to application database...`);
-      const resMov = await client.query('SELECT * FROM movimientos ORDER BY fecha DESC');
-      const resInm = await client.query('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC');
-      const resAcq = await client.query('SELECT * FROM adquisiciones ORDER BY fecha_compra DESC');
-      const resObl = await client.query('SELECT * FROM obligaciones_pago ORDER BY fecha_vencimiento ASC');
-      let resLoans: any = { rows: [] };
-      try {
-        resLoans = await client.query('SELECT * FROM prestamos ORDER BY fecha_creacion DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Prestamos table select warning:', e);
-      }
-
-      let resMachinery: any = { rows: [] };
-      try {
-        resMachinery = await client.query('SELECT * FROM maquinaria_adquisiciones ORDER BY fecha_compra DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Maquinaria table select warning:', e);
-      }
-
-      let resJobs: any = { rows: [] };
-      try {
-        resJobs = await client.query('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Ofertas empleo table select warning:', e);
-      }
-
-      let resEmployees: any = { rows: [] };
-      try {
-        resEmployees = await client.query('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Empleados contratados table select warning:', e);
-      }
-
-      let resPayrolls: any = { rows: [] };
-      try {
-        resPayrolls = await client.query('SELECT * FROM registros_nomina ORDER BY fecha_nomina DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Registros nomina table select warning:', e);
-      }
-
-      let resTaxes: any = { rows: [] };
-      try {
-        resTaxes = await client.query('SELECT * FROM obligaciones_fiscales ORDER BY fecha_vencimiento ASC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Obligaciones fiscales table select warning:', e);
-      }
-
-      let resContracts: any = { rows: [] };
-      try {
-        resContracts = await client.query('SELECT * FROM contratos_electricos ORDER BY fecha_contrato DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Contratos electricos table select warning:', e);
-      }
-
-      let resElecBills: any = { rows: [] };
-      try {
-        resElecBills = await client.query('SELECT * FROM facturas_electricidad ORDER BY fecha_vencimiento ASC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Facturas electricidad table select warning:', e);
-      }
-
-      let resFloorPlans: any = { rows: [] };
-      try {
-        resFloorPlans = await client.query('SELECT * FROM planos_distribucion_naves ORDER BY fecha_actualizacion DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Planos distribucion naves table select warning:', e);
-      }
-
-      let resTelContracts: any = { rows: [] };
-      try {
-        resTelContracts = await client.query('SELECT * FROM contratos_telecom ORDER BY fecha_contrato DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Contratos telecom table select warning:', e);
-      }
-
-      let resTelInvoices: any = { rows: [] };
-      try {
-        resTelInvoices = await client.query('SELECT * FROM facturas_telecom ORDER BY fecha_emision DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Facturas telecom table select warning:', e);
-      }
-
-      let resOfficeOrders: any = { rows: [] };
-      try {
-        resOfficeOrders = await client.query('SELECT * FROM pedidos_oficina ORDER BY fecha_compra DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Pedidos oficina table select warning:', e);
-      }
-
-      let resVehicles: any = { rows: [] };
-      try {
-        resVehicles = await client.query('SELECT * FROM vehiculos_comprados ORDER BY fecha_compra DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Vehiculos comprados table select warning:', e);
-      }
-
-      let resRawInventories: any = { rows: [] };
-      try {
-        resRawInventories = await client.query('SELECT * FROM materias_primas_inventario');
-      } catch (e) {
-        console.warn('[Supabase Restore] Materias primas inventario table select warning:', e);
-      }
-
-      let resRawOrders: any = { rows: [] };
-      try {
-        resRawOrders = await client.query('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Materias primas pedidos table select warning:', e);
-      }
-
-      let resRawAnnouncements: any = { rows: [] };
-      try {
-        resRawAnnouncements = await client.query('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Anuncios materia prima table select warning:', e);
-      }
-
-      let resProfiles: any = { rows: [] };
-      try {
-        resProfiles = await client.query('SELECT * FROM perfiles_empresa ORDER BY updated_at DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Perfiles empresa table select warning:', e);
-      }
-
-      let resContacts: any = { rows: [] };
-      try {
-        resContacts = await client.query('SELECT * FROM contactos_mercado ORDER BY created_at DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Contactos mercado table select warning:', e);
-      }
-
-      let resMessages: any = { rows: [] };
-      try {
-        resMessages = await client.query('SELECT * FROM market_messages ORDER BY timestamp ASC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Market messages table select warning:', e);
-      }
-
-      let resLawsuits: any = { rows: [] };
-      try {
-        resLawsuits = await client.query('SELECT * FROM demandas_judiciales ORDER BY fecha_creacion DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Demandas judiciales table select warning:', e);
-      }
-
-      let resNotif: any = { rows: [] };
-      try {
-        resNotif = await client.query('SELECT * FROM notificaciones ORDER BY created_at DESC');
-      } catch (e) {
-        console.warn('[Supabase Restore] Notificaciones table select warning:', e);
-      }
+    console.log(`[Supabase Restore] Found ${resCuentas.rows.length} accounts in Supabase. Restoring to application database...`);
+    const resMov = (await safeDbQuery('SELECT * FROM movimientos ORDER BY fecha DESC')) || { rows: [] };
+    const resInm = (await safeDbQuery('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC')) || { rows: [] };
+    const resAcq = (await safeDbQuery('SELECT * FROM adquisiciones ORDER BY fecha_compra DESC')) || { rows: [] };
+    const resObl = (await safeDbQuery('SELECT * FROM obligaciones_pago ORDER BY fecha_vencimiento ASC')) || { rows: [] };
+    const resLoans = (await safeDbQuery('SELECT * FROM prestamos ORDER BY fecha_creacion DESC')) || { rows: [] };
+    const resMachinery = (await safeDbQuery('SELECT * FROM maquinaria_adquisiciones ORDER BY fecha_compra DESC')) || { rows: [] };
+    const resJobs = (await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC')) || { rows: [] };
+    const resEmployees = (await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC')) || { rows: [] };
+    const resPayrolls = (await safeDbQuery('SELECT * FROM registros_nomina ORDER BY fecha_nomina DESC')) || { rows: [] };
+    const resTaxes = (await safeDbQuery('SELECT * FROM obligaciones_fiscales ORDER BY fecha_vencimiento ASC')) || { rows: [] };
+    const resContracts = (await safeDbQuery('SELECT * FROM contratos_electricos ORDER BY fecha_contrato DESC')) || { rows: [] };
+    const resElecBills = (await safeDbQuery('SELECT * FROM facturas_electricidad ORDER BY fecha_vencimiento ASC')) || { rows: [] };
+    const resFloorPlans = (await safeDbQuery('SELECT * FROM planos_distribucion_naves ORDER BY fecha_actualizacion DESC')) || { rows: [] };
+    const resTelContracts = (await safeDbQuery('SELECT * FROM contratos_telecom ORDER BY fecha_contrato DESC')) || { rows: [] };
+    const resTelInvoices = (await safeDbQuery('SELECT * FROM facturas_telecom ORDER BY fecha_emision DESC')) || { rows: [] };
+    const resOfficeOrders = (await safeDbQuery('SELECT * FROM pedidos_oficina ORDER BY fecha_compra DESC')) || { rows: [] };
+    const resVehicles = (await safeDbQuery('SELECT * FROM vehiculos_comprados ORDER BY fecha_compra DESC')) || { rows: [] };
+    const resRawInventories = (await safeDbQuery('SELECT * FROM materias_primas_inventario')) || { rows: [] };
+    const resRawOrders = (await safeDbQuery('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC')) || { rows: [] };
+    const resRawAnnouncements = (await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC')) || { rows: [] };
+    const resProfiles = (await safeDbQuery('SELECT * FROM perfiles_empresa ORDER BY updated_at DESC')) || { rows: [] };
+    const resContacts = (await safeDbQuery('SELECT * FROM contactos_mercado ORDER BY created_at DESC')) || { rows: [] };
+    const resMessages = (await safeDbQuery('SELECT * FROM market_messages ORDER BY timestamp ASC')) || { rows: [] };
+    const resLawsuits = (await safeDbQuery('SELECT * FROM demandas_judiciales ORDER BY fecha_creacion DESC')) || { rows: [] };
+    const resNotif = (await safeDbQuery('SELECT * FROM notificaciones ORDER BY created_at DESC')) || { rows: [] };
 
       const db = readDb();
 
@@ -3193,9 +3085,6 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
       console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes, ${resContracts.rows.length} electricity contracts, ${resFloorPlans.rows.length} floor plans from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
-    } finally {
-      client.release();
-    }
   } catch (e) {
     console.error('[Supabase Restore Error]', e);
     return { restoredUsers: 0, restoredMovements: 0 };
@@ -5551,19 +5440,14 @@ app.get('/api/supabase-status', async (req, res) => {
     });
   }
   try {
-    const client = await dbPool.connect();
-    try {
-      const resCuentas = await client.query('SELECT COUNT(*) FROM cuentas');
-      const resMov = await client.query('SELECT COUNT(*) FROM movimientos');
-      res.json({
-        connected: true,
-        cuentasCount: Number(resCuentas.rows[0].count),
-        movimientosCount: Number(resMov.rows[0].count),
-        dbUrlMasked: maskDbUrl(process.env.DATABASE_URL)
-      });
-    } finally {
-      client.release();
-    }
+    const resCuentas = await safeDbQuery('SELECT COUNT(*) FROM cuentas');
+    const resMov = await safeDbQuery('SELECT COUNT(*) FROM movimientos');
+    res.json({
+      connected: Boolean(resCuentas),
+      cuentasCount: resCuentas?.rows?.[0]?.count ? Number(resCuentas.rows[0].count) : 0,
+      movimientosCount: resMov?.rows?.[0]?.count ? Number(resMov.rows[0].count) : 0,
+      dbUrlMasked: maskDbUrl(process.env.DATABASE_URL)
+    });
   } catch (e: any) {
     res.json({ 
       connected: false, 
@@ -5594,15 +5478,10 @@ app.post('/api/supabase-connect', async (req, res) => {
     let cuentasCount = 0;
     let movimientosCount = 0;
     if (dbPool) {
-      const client = await dbPool.connect();
-      try {
-        const cRes = await client.query('SELECT COUNT(*) FROM cuentas');
-        const mRes = await client.query('SELECT COUNT(*) FROM movimientos');
-        cuentasCount = Number(cRes.rows[0].count);
-        movimientosCount = Number(mRes.rows[0].count);
-      } finally {
-        client.release();
-      }
+      const cRes = await safeDbQuery('SELECT COUNT(*) FROM cuentas');
+      const mRes = await safeDbQuery('SELECT COUNT(*) FROM movimientos');
+      cuentasCount = cRes?.rows?.[0]?.count ? Number(cRes.rows[0].count) : 0;
+      movimientosCount = mRes?.rows?.[0]?.count ? Number(mRes.rows[0].count) : 0;
     }
 
     res.json({
@@ -5636,15 +5515,10 @@ app.post('/api/supabase-sync', async (req, res) => {
 
     let cuentasCount = 0;
     let movimientosCount = 0;
-    const client = await dbPool.connect();
-    try {
-      const cRes = await client.query('SELECT COUNT(*) FROM cuentas');
-      const mRes = await client.query('SELECT COUNT(*) FROM movimientos');
-      cuentasCount = Number(cRes.rows[0].count);
-      movimientosCount = Number(mRes.rows[0].count);
-    } finally {
-      client.release();
-    }
+    const cRes = await safeDbQuery('SELECT COUNT(*) FROM cuentas');
+    const mRes = await safeDbQuery('SELECT COUNT(*) FROM movimientos');
+    cuentasCount = cRes?.rows?.[0]?.count ? Number(cRes.rows[0].count) : 0;
+    movimientosCount = mRes?.rows?.[0]?.count ? Number(mRes.rows[0].count) : 0;
 
     res.json({
       success: true,
@@ -5703,38 +5577,33 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
   // If not found in local db, query Supabase directly if connected
   if (!user && dbPool) {
     try {
-      const client = await dbPool.connect();
-      try {
-        const queryRes = await client.query(
-          `SELECT * FROM cuentas WHERE LOWER(usuario) = $1 OR LOWER(alumno) = $1 OR LOWER(account_number) = $1 OR LOWER(id) = $1 LIMIT 1`,
-          [cleanUsername]
-        );
-        if (queryRes.rows.length > 0) {
-          const row = queryRes.rows[0];
-          const dbPass = (row.password || '123').trim();
-          if (dbPass === cleanPassword || (!row.password && cleanPassword === '123')) {
-            const newUser: User = {
-              id: String(row.id),
-              name: String(row.alumno),
-              username: row.usuario ? String(row.usuario) : cleanUsername,
-              password: dbPass,
-              role: (row.role as any) || 'student',
-              accountNumber: row.account_number || generateIBAN(),
-              balance: Number(row.saldo) || 0,
-              level: row.level ? (Number(row.level) as 1 | 2 | 3) : 1
-            };
-            const existingIdx = db.users.findIndex(u => u.id === newUser.id);
-            if (existingIdx >= 0) {
-              db.users[existingIdx] = newUser;
-            } else {
-              db.users.push(newUser);
-            }
-            writeDb(db);
-            user = newUser;
+      const queryRes = await safeDbQuery(
+        `SELECT * FROM cuentas WHERE LOWER(usuario) = $1 OR LOWER(alumno) = $1 OR LOWER(account_number) = $1 OR LOWER(id) = $1 LIMIT 1`,
+        [cleanUsername]
+      );
+      if (queryRes && queryRes.rows.length > 0) {
+        const row = queryRes.rows[0];
+        const dbPass = (row.password || '123').trim();
+        if (dbPass === cleanPassword || (!row.password && cleanPassword === '123')) {
+          const newUser: User = {
+            id: String(row.id),
+            name: String(row.alumno),
+            username: row.usuario ? String(row.usuario) : cleanUsername,
+            password: dbPass,
+            role: (row.role as any) || 'student',
+            accountNumber: row.account_number || generateIBAN(),
+            balance: Number(row.saldo) || 0,
+            level: row.level ? (Number(row.level) as 1 | 2 | 3) : 1
+          };
+          const existingIdx = db.users.findIndex(u => u.id === newUser.id);
+          if (existingIdx >= 0) {
+            db.users[existingIdx] = newUser;
+          } else {
+            db.users.push(newUser);
           }
+          writeDb(db);
+          user = newUser;
         }
-      } finally {
-        client.release();
       }
     } catch (sbErr) {
       console.error('[Supabase Login Query Error]', sbErr);
