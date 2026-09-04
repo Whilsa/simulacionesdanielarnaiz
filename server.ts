@@ -1171,6 +1171,20 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
 async function syncJobListingToSupabase(job: JobListing) {
   if (!dbPool) return;
   try {
+    if (job.status !== 'disponible') {
+      await safeDbQuery('DELETE FROM ofertas_empleo WHERE id = $1 OR nombre_empleado = $2', [job.id, job.employeeName]);
+      return;
+    }
+    // Check if already hired in empleados_contratados
+    const checkHired = await safeDbQuery(
+      'SELECT id FROM empleados_contratados WHERE oferta_id = $1 OR nombre_empleado = $2 LIMIT 1',
+      [job.id, job.employeeName]
+    );
+    if (checkHired && checkHired.rows && checkHired.rows.length > 0) {
+      await safeDbQuery('DELETE FROM ofertas_empleo WHERE id = $1 OR nombre_empleado = $2', [job.id, job.employeeName]);
+      return;
+    }
+
     const roleVal = job.role || (job.title && (job.title.toLowerCase().includes('mozo') || job.title.toLowerCase().includes('almacen') || job.title.toLowerCase().includes('almacén')) ? 'mozo_almacen' : job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario');
     await safeDbQuery(
       `INSERT INTO ofertas_empleo (id, titulo, puesto, nombre_empleado, genero, sueldo_bruto_mensual, edad, estado, alumno_id, alumno_nombre, fecha_contratacion, avatar_url)
@@ -1303,11 +1317,24 @@ function mapJobListingRow(row: any): JobListing {
 
 async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobListing[]> {
   const currentDb = db || readDb();
-  if (!dbPool) return currentDb.jobListings || [];
+  if (!dbPool) return (currentDb.jobListings || []).filter(j => j.status === 'disponible');
   try {
-    const resJobs = await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC');
+    // Purge any hired candidates from ofertas_empleo in Supabase so they disappear in all environments
+    await safeDbQuery(`
+      DELETE FROM ofertas_empleo 
+      WHERE estado = 'contratado' 
+         OR id IN (SELECT oferta_id FROM empleados_contratados) 
+         OR nombre_empleado IN (SELECT nombre_empleado FROM empleados_contratados)
+    `);
+
+    const resJobs = await safeDbQuery("SELECT * FROM ofertas_empleo WHERE estado = 'disponible' ORDER BY fecha_creacion DESC");
     if (resJobs && resJobs.rows) {
-      currentDb.jobListings = resJobs.rows.map(mapJobListingRow);
+      const hiredListingIds = new Set((currentDb.hiredEmployees || []).map(e => e.jobListingId));
+      const hiredNames = new Set((currentDb.hiredEmployees || []).map(e => (e.employeeName || '').toLowerCase().trim()));
+
+      currentDb.jobListings = resJobs.rows
+        .map(mapJobListingRow)
+        .filter(j => j.status === 'disponible' && !hiredListingIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
       writeDb(currentDb);
     }
   } catch (e) {
@@ -2551,14 +2578,18 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }
       }
 
-      // Reconstruct db.jobListings from Supabase "ofertas_empleo"
-      if (resJobs && resJobs.rows) {
-        db.jobListings = resJobs.rows.map(mapJobListingRow);
-      }
-
       // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
       if (resEmployees && resEmployees.rows) {
         db.hiredEmployees = resEmployees.rows.map(mapHiredEmployeeRow);
+      }
+
+      // Reconstruct db.jobListings from Supabase "ofertas_empleo", ensuring any hired profiles disappear
+      if (resJobs && resJobs.rows) {
+        const hiredIds = new Set((db.hiredEmployees || []).map(e => e.jobListingId));
+        const hiredNames = new Set((db.hiredEmployees || []).map(e => (e.employeeName || '').toLowerCase().trim()));
+        db.jobListings = resJobs.rows
+          .map(mapJobListingRow)
+          .filter(j => j.status === 'disponible' && !hiredIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
       }
 
       // Reconstruct db.payrollRecords from Supabase "registros_nomina"
@@ -10077,9 +10108,21 @@ app.put('/api/student/change-password', (req, res) => {
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
 app.get('/api/job-listings', async (req, res) => {
   const db = readDb();
-  await syncJobListingsFromSupabase(db);
   await syncEmployeesFromSupabase(db);
-  res.json({ success: true, jobListings: db.jobListings || [] });
+  await syncJobListingsFromSupabase(db);
+
+  const hiredIds = new Set((db.hiredEmployees || []).map(e => e.jobListingId));
+  const hiredNames = new Set((db.hiredEmployees || []).map(e => (e.employeeName || '').toLowerCase().trim()));
+
+  const activeJobs = (db.jobListings || []).filter(j => 
+    j.status === 'disponible' && 
+    !hiredIds.has(j.id) && 
+    !hiredNames.has((j.employeeName || '').toLowerCase().trim())
+  );
+
+  db.jobListings = activeJobs;
+  writeDb(db);
+  res.json({ success: true, jobListings: activeJobs });
 });
 
 app.post('/api/teacher/job-listings/batch', (req, res) => {
@@ -10180,7 +10223,7 @@ app.delete('/api/teacher/job-listings/:id', (req, res) => {
 
 app.delete('/api/teacher/job-listings', (req, res) => {
   const db = readDb();
-  db.jobListings = (db.jobListings || []).filter(j => j.status === 'contratado');
+  db.jobListings = [];
   if (dbPool) {
     dbPool.query("DELETE FROM ofertas_empleo WHERE estado = 'disponible'").catch(e => console.error(e));
   }
@@ -10197,17 +10240,18 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
   if (!db.hiredEmployees) db.hiredEmployees = [];
 
   // Sync latest from Supabase so all instances have real-time state
-  await syncJobListingsFromSupabase(db);
   await syncEmployeesFromSupabase(db);
+  await syncJobListingsFromSupabase(db);
 
   const job = db.jobListings.find(j => j.id === id);
   if (!job) return res.status(404).json({ error: 'Oferta de empleo no encontrada' });
   if (job.status !== 'disponible') return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
 
   // Guard against duplicate hire
-  const alreadyHired = db.hiredEmployees.some(e => e.jobListingId === id);
+  const alreadyHired = db.hiredEmployees.some(e => e.jobListingId === id || (e.employeeName && e.employeeName.toLowerCase().trim() === job.employeeName.toLowerCase().trim()));
   if (alreadyHired) {
     job.status = 'contratado';
+    db.jobListings = (db.jobListings || []).filter(j => j.id !== id && j.employeeName !== job.employeeName);
     writeDb(db);
     return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
   }
@@ -10238,8 +10282,23 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
 
   db.hiredEmployees.push(newHired);
 
-  await syncJobListingToSupabase(job);
+  // CRITICAL: When an employee has been hired, their candidate profile MUST disappear immediately
+  db.jobListings = (db.jobListings || []).filter(j => j.id !== job.id && j.employeeName !== job.employeeName);
+
+  // Sync hired employee to Supabase
   await syncHiredEmployeeToSupabase(newHired);
+
+  // Delete candidate profile from Supabase ofertas_empleo so it disappears across all environments (Render and local)
+  if (dbPool) {
+    try {
+      await safeDbQuery(
+        'DELETE FROM ofertas_empleo WHERE id = $1 OR nombre_empleado = $2',
+        [job.id, job.employeeName]
+      );
+    } catch (e) {
+      console.error('[Supabase DB] Error removing hired candidate from ofertas_empleo:', e);
+    }
+  }
 
   db.systemLogs.unshift({
     id: generateId('log'),

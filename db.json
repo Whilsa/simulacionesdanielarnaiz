@@ -135,18 +135,6 @@
       "timestamp": "2026-09-04T07:48:07.683Z"
     },
     {
-      "id": "tx-20e0shkpe",
-      "senderId": "corp-banco-central",
-      "senderName": "Banco Central Hipotecario S.A.",
-      "senderAccount": "ES210001000299887700",
-      "receiverId": "user-fk014qcn4",
-      "receiverName": "Fabricante Varillas",
-      "receiverAccount": "ES85000100023678794216",
-      "amount": 960000,
-      "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-c5nyu1ell",
-      "timestamp": "2026-09-04T07:47:26.982Z"
-    },
-    {
       "id": "tx-qd4cnt4h7",
       "senderId": "user-fk014qcn4",
       "senderName": "Fabricante Varillas",
@@ -156,6 +144,18 @@
       "receiverAccount": "ES210001000299887700",
       "amount": 960,
       "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-c5nyu1ell",
+      "timestamp": "2026-09-04T07:47:26.982Z"
+    },
+    {
+      "id": "tx-20e0shkpe",
+      "senderId": "corp-banco-central",
+      "senderName": "Banco Central Hipotecario S.A.",
+      "senderAccount": "ES210001000299887700",
+      "receiverId": "user-fk014qcn4",
+      "receiverName": "Fabricante Varillas",
+      "receiverAccount": "ES85000100023678794216",
+      "amount": 960000,
+      "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-c5nyu1ell",
       "timestamp": "2026-09-04T07:47:26.982Z"
     },
     {
@@ -268,6 +268,22 @@
     }
   ],
   "systemLogs": [
+    {
+      "id": "log-jgn0x43n1",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Varillas ha contratado a Javier Muñoz Moreno (Sueldo bruto: 1000€/mes, Edad: 32)",
+      "timestamp": "2026-09-04T08:07:31.340Z",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas"
+    },
+    {
+      "id": "log-d04rm9mlq",
+      "action": "HIRE_EMPLOYEE",
+      "details": "El alumno Fabricante Varillas ha contratado a Marta Díaz Sánchez (Sueldo bruto: 1000€/mes, Edad: 49)",
+      "timestamp": "2026-09-04T08:06:09.928Z",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas"
+    },
     {
       "id": "log-gndn82gb6",
       "action": "HIRE_EMPLOYEE",
@@ -6039,204 +6055,6 @@
   ],
   "jobListings": [
     {
-      "id": "job-315l4zfup",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Alba Alonso Moreno",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 20,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T06:59:57.133Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.263Z"
-    },
-    {
-      "id": "job-abc935tzp",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Sergio González López",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 35,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T06:59:58.573Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.250Z"
-    },
-    {
-      "id": "job-v0551m7mg",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Iván Muñoz Díaz",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 36,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:00.277Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.248Z"
-    },
-    {
-      "id": "job-xl72th2y2",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Andrea Sánchez Fernández",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 55,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:01.135Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.248Z"
-    },
-    {
-      "id": "job-283v2cxd2",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Rocío Pérez Martín",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 20,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:02.066Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.234Z"
-    },
-    {
-      "id": "job-i3ksbds2u",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Iván Hernández Fernández",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 34,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:04.821Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.233Z"
-    },
-    {
-      "id": "job-t9dj6k22l",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Marta Jiménez Fernández",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 20,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:05.653Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.233Z"
-    },
-    {
-      "id": "job-waqe6h3vy",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Daniel García Rodríguez",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 55,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:06.496Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.219Z"
-    },
-    {
-      "id": "job-n7gt48r0g",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Elena Pérez Ruiz",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 27,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:07.351Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.218Z"
-    },
-    {
-      "id": "job-pemf8fupm",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Daniel Fernández Martínez",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 26,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:09.062Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.218Z"
-    },
-    {
-      "id": "job-nlj4uput2",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Javier Ruiz Muñoz",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 32,
-      "status": "contratado",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.204Z"
-    },
-    {
-      "id": "job-36fpqvx8y",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Daniel Fernández Moreno",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 55,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.204Z"
-    },
-    {
-      "id": "job-hqbkm62t3",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Rocío Alonso Martín",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 47,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.202Z"
-    },
-    {
-      "id": "job-i178wymx4",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Marta Díaz Sánchez",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 49,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.187Z"
-    },
-    {
       "id": "job-5lhszih01",
       "title": "Operario industrial",
       "role": "operario",
@@ -6244,18 +6062,6 @@
       "gender": "hombre",
       "grossSalaryMonthly": 1000,
       "age": 54,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.187Z"
-    },
-    {
-      "id": "job-kc0et89qy",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Javier Muñoz Moreno",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 32,
       "status": "disponible",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.187Z"
@@ -6607,75 +6413,51 @@
       "status": "disponible",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.034Z"
-    },
-    {
-      "id": "job-qj98gruya",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Jorge Sánchez Martín",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 44,
-      "status": "contratado",
-      "hiredByStudentId": "user-fk014qcn4",
-      "hiredByStudentName": "Fabricante Varillas",
-      "hiredAtDate": "2026-09-04T07:49:50.229Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.033Z"
-    },
-    {
-      "id": "job-httxwvkre",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Carlos Romero Álvarez",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 55,
-      "status": "contratado",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.019Z"
-    },
-    {
-      "id": "job-p9xb0xngx",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Sofía Gutiérrez Díaz",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 31,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.019Z"
-    },
-    {
-      "id": "job-653mzccdt",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Mateo Rodríguez Alonso",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 50,
-      "status": "disponible",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.004Z"
-    },
-    {
-      "id": "job-uayo51plu",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Gonzalo Hernández Sánchez",
-      "gender": "hombre",
-      "grossSalaryMonthly": 1000,
-      "age": 51,
-      "status": "contratado",
-      "hiredByStudentId": "user-fk014qcn4",
-      "hiredByStudentName": "Fabricante Varillas",
-      "hiredAtDate": "2026-09-04T07:49:42.824Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.000Z"
     }
   ],
   "hiredEmployees": [
+    {
+      "id": "emp-c4ywihrez",
+      "jobListingId": "job-kc0et89qy",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "employeeName": "Javier Muñoz Moreno",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 32,
+      "hireDate": "2026-09-04T08:07:31.340Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-9ev60butp",
+      "jobListingId": "job-i178wymx4",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "employeeName": "Marta Díaz Sánchez",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 49,
+      "hireDate": "2026-09-04T08:06:09.928Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-9uvetux0e",
+      "jobListingId": "job-hqbkm62t3",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "employeeName": "Rocío Alonso Martín",
+      "role": "operario",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 47,
+      "hireDate": "2026-09-04T07:57:41.840Z",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
+    },
     {
       "id": "emp-3ulfe0yk1",
       "jobListingId": "job-qj98gruya",
@@ -7285,8 +7067,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-04T07:38:24.897Z",
-      "updatedAt": "2026-09-04T07:54:07.359Z"
+      "lastCalculatedAt": "2026-09-04T07:50:21.798Z",
+      "updatedAt": "2026-09-04T08:07:40.760Z"
     },
     {
       "studentId": "user-hgp3parur",
@@ -7326,7 +7108,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-04T07:44:14.852Z",
-      "updatedAt": "2026-09-04T07:54:07.374Z"
+      "updatedAt": "2026-09-04T08:07:40.774Z"
     },
     {
       "studentId": "profesor-1",
@@ -7366,7 +7148,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
-      "updatedAt": "2026-09-04T07:54:07.388Z"
+      "updatedAt": "2026-09-04T08:07:40.789Z"
     },
     {
       "studentId": "user-fk014qcn4",
@@ -7388,7 +7170,7 @@
       "line1PendingHours": 0,
       "line2PendingHours": 0,
       "naveInventories": {
-        "acq-oh84kqam2": {
+        "default_nave": {
           "ironKg": 0,
           "epoxiKg": 0,
           "metalKg": 0,
@@ -7403,8 +7185,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-04T07:45:52.608Z",
-      "updatedAt": "2026-09-04T07:54:07.402Z"
+      "lastCalculatedAt": "2026-09-04T07:51:58.686Z",
+      "updatedAt": "2026-09-04T08:07:40.805Z"
     }
   ],
   "companyProfiles": [],

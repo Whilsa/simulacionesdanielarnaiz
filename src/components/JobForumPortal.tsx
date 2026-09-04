@@ -46,7 +46,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
       const res = await fetch('/api/job-listings');
       const data = await res.json();
       if (data.jobListings) {
-        setJobListings(data.jobListings);
+        setJobListings(data.jobListings.filter((j: JobListing) => j.status === 'disponible'));
       }
     } catch (e) {
       console.error('Error cargando ofertas de empleo:', e);
@@ -75,6 +75,12 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   useEffect(() => {
     setIsLoading(true);
     Promise.all([fetchJobs(), fetchMyEmployeesAndMachinery()]).finally(() => setIsLoading(false));
+
+    // Periodic real-time poll so profiles hired on Render or other sessions disappear everywhere
+    const interval = setInterval(() => {
+      fetchJobs();
+    }, 5000);
+    return () => clearInterval(interval);
   }, [currentUser]);
 
   const handleHireEmployee = async (job: JobListing) => {
@@ -102,7 +108,13 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
         text: `¡Felicidades! Has contratado a ${job.employeeName} con un sueldo de ${formatNumber(job.grossSalaryMonthly)} €/mes.`
       });
 
+      // Immediate visual removal so the candidate profile disappears without waiting
+      setJobListings(prev => prev.filter(j => j.id !== job.id && j.employeeName !== job.employeeName));
+
       await Promise.all([fetchJobs(), fetchMyEmployeesAndMachinery()]);
+      if (onUserBalanceUpdated && typeof currentUser.balance === 'number') {
+        onUserBalanceUpdated(currentUser.balance);
+      }
     } catch (e) {
       setMessage({ type: 'error', text: 'Error en la solicitud de contratación' });
     } finally {
@@ -187,7 +199,11 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
     }
   };
 
-  const availableJobs = jobListings.filter(j => j.status === 'disponible');
+  const hiredEmployeeNames = new Set(myEmployees.map(e => (e.employeeName || '').toLowerCase().trim()));
+  const availableJobs = jobListings.filter(j => 
+    j.status === 'disponible' && 
+    !hiredEmployeeNames.has((j.employeeName || '').toLowerCase().trim())
+  );
   const filteredJobs = availableJobs.filter(j => {
     if (genderFilter !== 'todos' && j.gender !== genderFilter) return false;
     if (roleFilter !== 'todos') {
