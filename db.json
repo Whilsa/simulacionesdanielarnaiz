@@ -41,16 +41,6 @@
       "level": 3
     },
     {
-      "id": "user-hgp3parur",
-      "username": "cliente01",
-      "password": "1987",
-      "role": "student",
-      "name": "Fabricante Destornilladores completo",
-      "accountNumber": "ES89000100025748867825",
-      "balance": 133938.99,
-      "level": 1
-    },
-    {
       "id": "user-fk014qcn4",
       "username": "cliente02",
       "password": "1987",
@@ -59,9 +49,43 @@
       "accountNumber": "ES85000100023678794216",
       "balance": 60000,
       "level": 1
+    },
+    {
+      "id": "user-hgp3parur",
+      "username": "cliente01",
+      "password": "1987",
+      "role": "student",
+      "name": "Fabricante Destornilladores completo",
+      "accountNumber": "ES89000100025748867825",
+      "balance": 131384.68,
+      "level": 1
     }
   ],
   "transfers": [
+    {
+      "id": "tx-nndfpw9r4",
+      "senderId": "user-hgp3parur",
+      "senderName": "Fabricante Destornilladores completo",
+      "senderAccount": "ES89000100025748867825",
+      "receiverId": "profesor-1",
+      "receiverName": "BricoMaster Distribuciones, S.A.",
+      "receiverAccount": "ES990001000988776655",
+      "amount": 1320.11,
+      "concept": "Compra Mercado: Pegamento epoxi (1 u.), Fragmentos de hierro (1 u.), Pellets de plástico (1 u.)",
+      "timestamp": "2026-09-03T07:48:28.215Z"
+    },
+    {
+      "id": "tx-so44yiu9e",
+      "senderId": "user-hgp3parur",
+      "senderName": "Fabricante Destornilladores completo",
+      "senderAccount": "ES89000100025748867825",
+      "receiverId": "ofimatica-suministros",
+      "receiverName": "Suministros OfiTech S.L.",
+      "receiverAccount": "ES910002000588776655",
+      "amount": 1234.2,
+      "concept": "Compra de mobiliario/informática - Pedido Nº OFF-202609-34887",
+      "timestamp": "2026-09-03T07:45:24.519Z"
+    },
     {
       "id": "tx-jmedsilgo",
       "senderId": "user-hgp3parur",
@@ -1796,21 +1820,6 @@
       "createdAt": "2026-09-02T09:47:29.219Z"
     },
     {
-      "id": "job-n7gt48r0g",
-      "title": "Operario industrial",
-      "role": "operario",
-      "employeeName": "Elena Pérez Ruiz",
-      "gender": "mujer",
-      "grossSalaryMonthly": 1000,
-      "age": 27,
-      "status": "contratado",
-      "hiredByStudentId": "user-hgp3parur",
-      "hiredByStudentName": "Fabricante Destornilladores completo",
-      "hiredAtDate": "2026-09-03T07:00:07.351Z",
-      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
-      "createdAt": "2026-09-02T09:47:29.218Z"
-    },
-    {
       "id": "job-pemf8fupm",
       "title": "Operario industrial",
       "role": "operario",
@@ -1823,6 +1832,21 @@
       "hiredByStudentName": "Fabricante Destornilladores completo",
       "hiredAtDate": "2026-09-03T07:00:09.062Z",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop",
+      "createdAt": "2026-09-02T09:47:29.218Z"
+    },
+    {
+      "id": "job-n7gt48r0g",
+      "title": "Operario industrial",
+      "role": "operario",
+      "employeeName": "Elena Pérez Ruiz",
+      "gender": "mujer",
+      "grossSalaryMonthly": 1000,
+      "age": 27,
+      "status": "contratado",
+      "hiredByStudentId": "user-hgp3parur",
+      "hiredByStudentName": "Fabricante Destornilladores completo",
+      "hiredAtDate": "2026-09-03T07:00:07.351Z",
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop",
       "createdAt": "2026-09-02T09:47:29.218Z"
     },
     {
@@ -2308,6 +2332,38 @@
   ],
   "hiredEmployees": [
     {
+      "id": "emp-6nsxizimw",
+      "jobListingId": "job-36fpqvx8y",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Daniel Fernández Moreno",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 55,
+      "hireDate": "2026-09-03T07:43:56.327Z",
+      "assignedMachineryId": "mac-acq-unypz53oz",
+      "assignedMachineryTitle": "Línea de inyección de plástico y ensamblaje final",
+      "shift": 1,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
+      "id": "emp-iihvbriwl",
+      "jobListingId": "job-nlj4uput2",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "employeeName": "Javier Ruiz Muñoz",
+      "role": "operario",
+      "gender": "hombre",
+      "grossSalaryMonthly": 1000,
+      "age": 32,
+      "hireDate": "2026-09-03T07:43:54.796Z",
+      "assignedMachineryId": "mac-acq-unypz53oz",
+      "assignedMachineryTitle": "Línea de inyección de plástico y ensamblaje final",
+      "shift": 2,
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
+    },
+    {
       "id": "emp-3n963m26f",
       "jobListingId": "job-pemf8fupm",
       "studentId": "user-hgp3parur",
@@ -2318,7 +2374,9 @@
       "grossSalaryMonthly": 1000,
       "age": 26,
       "hireDate": "2026-09-03T07:00:08.135Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-unypz53oz",
+      "assignedMachineryTitle": "Línea de inyección de plástico y ensamblaje final",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -2332,6 +2390,8 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-03T07:00:07.351Z",
+      "assignedMachineryId": "mac-acq-6cjhexx1n",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -2346,7 +2406,9 @@
       "grossSalaryMonthly": 1000,
       "age": 55,
       "hireDate": "2026-09-03T07:00:06.496Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-6cjhexx1n",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -2360,7 +2422,9 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-03T07:00:05.653Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-6cjhexx1n",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -2485,9 +2549,63 @@
       "updatedAt": "2026-09-02T09:43:16.267Z"
     }
   ],
-  "telecomContracts": [],
+  "telecomContracts": [
+    {
+      "id": "tel_contract-spdcihk5i",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "planId": "tel-pyme-600",
+      "planName": "Plan pyme conectada 600 Mb",
+      "provider": "TeleCom Pymes España",
+      "monthlyPrice": 49.9,
+      "speedMbps": 600,
+      "mobileLinesCount": 3,
+      "propertyId": "",
+      "propertyTitle": "",
+      "status": "active",
+      "contractDate": "2026-09-03T07:44:27.332Z"
+    }
+  ],
   "telecomInvoices": [],
-  "officeOrders": [],
+  "officeOrders": [
+    {
+      "id": "off_ord-fuen4et54",
+      "orderNumber": "OFF-202609-34887",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "companyName": "Fabricante Destornilladores completo",
+      "nifCif": "B-84804694",
+      "purchaseDate": "2026-09-03T07:45:24.519Z",
+      "items": [
+        {
+          "itemId": "lap-01",
+          "category": "portatiles",
+          "imageUrl": "/images/products/portatil_ejecutivo.jpg",
+          "itemName": "Portátil UltraBook 14\" i5 / 16GB / 512GB SSD / 1.1kg",
+          "quantity": 1,
+          "unitPrice": 740,
+          "totalPrice": 740,
+          "categoryLabel": "Ordenadores portátiles"
+        },
+        {
+          "itemId": "tel-mov-01",
+          "category": "telefonos_moviles",
+          "imageUrl": "/images/products/telefono_movil_5g.jpg",
+          "itemName": "Smartphone empresarial 5G 128GB (resistente)",
+          "quantity": 1,
+          "unitPrice": 280,
+          "totalPrice": 280,
+          "categoryLabel": "Teléfonos fijos y móviles"
+        }
+      ],
+      "subtotal": 1020,
+      "ivaRate": 21,
+      "ivaAmount": 214.2,
+      "totalAmount": 1234.2,
+      "status": "completado_pagado",
+      "paymentMethod": "banco"
+    }
+  ],
   "purchasedVehicles": [
     {
       "id": "veh-btmwfsuih",
@@ -2582,7 +2700,112 @@
       "isDesTornillo": false
     }
   ],
-  "rawMaterialOrders": [],
+  "rawMaterialOrders": [
+    {
+      "id": "rmord-7hmu7hax4",
+      "studentId": "user-hgp3parur",
+      "studentName": "Fabricante Destornilladores completo",
+      "announcementId": "rm-epoxi",
+      "materialType": "epoxi",
+      "materialTitle": "Pegamento epoxi (1 u.), Fragmentos de hierro (1 u.), Pellets de plástico (1 u.)",
+      "quantity": 3,
+      "unitWeightKg": 668,
+      "totalKg": 2005,
+      "basePrice": 920,
+      "ivaAmount": 229.11,
+      "transportCost": 171,
+      "totalAmount": 1320.11,
+      "needsTransport": true,
+      "deliveryAddress": "Nave industrial 1 de 588 m² en Talavera de la Reina, Polígono Industrial Las Arenas, Nº 69, Talavera de la Reina, Talavera de la Reina",
+      "status": "entregado",
+      "requestedAt": "2026-09-03T07:48:28.215Z",
+      "approvedAt": "2026-09-03T07:48:28.215Z",
+      "estimatedDeliveryAt": "2026-09-03T07:48:28.215Z",
+      "deliveredAt": "2026-09-03T07:48:28.215Z",
+      "items": [
+        {
+          "totalKg": 5,
+          "quantity": 1,
+          "subtotal": 65,
+          "basePrice": 65,
+          "totalCost": 65,
+          "unitPrice": 65,
+          "materialType": "epoxi",
+          "unitWeightKg": 5,
+          "materialTitle": "Pegamento epoxi",
+          "announcementId": "rm-epoxi"
+        },
+        {
+          "totalKg": 1000,
+          "quantity": 1,
+          "subtotal": 475,
+          "basePrice": 475,
+          "totalCost": 475,
+          "unitPrice": 475,
+          "materialType": "hierro",
+          "unitWeightKg": 1000,
+          "materialTitle": "Fragmentos de hierro",
+          "announcementId": "rm-hierro"
+        },
+        {
+          "totalKg": 1000,
+          "quantity": 1,
+          "subtotal": 380,
+          "basePrice": 380,
+          "totalCost": 380,
+          "unitPrice": 380,
+          "materialType": "plastico",
+          "unitWeightKg": 1000,
+          "materialTitle": "Pellets de plástico",
+          "announcementId": "rm-plastico"
+        }
+      ],
+      "sellerId": "profesor-1",
+      "sellerName": "BricoMaster Distribuciones, S.A.",
+      "sellerLevel": "official",
+      "buyerLevel": 1,
+      "discountPercentage": 0,
+      "insuranceFee": 0,
+      "transportMethod": "vendedor_envio",
+      "lastTurnUserId": "user-hgp3parur",
+      "negotiationHistory": [
+        {
+          "id": "neg-udoq73e8e",
+          "note": "Solicitud inicial de compra realizada",
+          "action": "propuesta_inicial",
+          "authorId": "user-hgp3parur",
+          "quantity": 3,
+          "timestamp": "2026-09-03T07:48:28.215Z",
+          "authorName": "Fabricante Destornilladores completo",
+          "distanceKm": 150,
+          "totalAmount": 1320.11,
+          "insuranceFee": 0,
+          "pricePerUnit": 306.67,
+          "transportCost": 171,
+          "chargedPallets": 3,
+          "transportMethod": "vendedor_envio",
+          "discountPercentage": 0
+        },
+        {
+          "id": "neg-o4bxpxfbn",
+          "note": "Compra aceptada y entregada de forma inmediata",
+          "action": "aceptado",
+          "authorId": "profesor-1",
+          "quantity": 3,
+          "timestamp": "2026-09-03T07:48:28.215Z",
+          "authorName": "BricoMaster Distribuciones, S.A.",
+          "totalAmount": 1320.11,
+          "insuranceFee": 0,
+          "pricePerUnit": 306.67,
+          "transportCost": 171,
+          "transportMethod": "vendedor_envio",
+          "discountPercentage": 0
+        }
+      ],
+      "inventoryCredited": true,
+      "destinationNaveId": "acq-wl9a9gsw7"
+    }
+  ],
   "rawMaterialInventories": [
     {
       "studentId": "alumno-nivel-3-demo",
@@ -2621,15 +2844,15 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-03T06:52:29.434Z",
-      "updatedAt": "2026-09-03T07:16:48.588Z"
+      "lastCalculatedAt": "2026-09-03T07:32:53.803Z",
+      "updatedAt": "2026-09-04T06:50:47.352Z"
     },
     {
       "studentId": "user-hgp3parur",
-      "ironKg": 0,
+      "ironKg": 1000,
       "metalKg": 0,
-      "plasticKg": 0,
-      "epoxiKg": 0,
+      "plasticKg": 1000,
+      "epoxiKg": 5,
       "rodProductionMode": null,
       "producedRodsUnits": 0,
       "producedStarRodsUnits": 0,
@@ -2645,10 +2868,10 @@
       "line2PendingHours": 0,
       "naveInventories": {
         "acq-wl9a9gsw7": {
-          "ironKg": 0,
-          "epoxiKg": 0,
+          "ironKg": 1000,
+          "epoxiKg": 5,
           "metalKg": 0,
-          "plasticKg": 0,
+          "plasticKg": 1000,
           "line1PendingHours": 0,
           "line2PendingHours": 0,
           "producedRodsUnits": 0,
@@ -2661,8 +2884,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-03T07:14:51.750Z",
-      "updatedAt": "2026-09-03T07:16:48.603Z"
+      "lastCalculatedAt": "2026-09-03T16:56:44.787Z",
+      "updatedAt": "2026-09-04T06:50:47.366Z"
     },
     {
       "studentId": "profesor-1",
@@ -2702,12 +2925,23 @@
         }
       },
       "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
-      "updatedAt": "2026-09-03T07:16:48.617Z"
+      "updatedAt": "2026-09-04T06:50:47.379Z"
     }
   ],
   "companyProfiles": [],
   "marketMessages": [],
-  "notifications": [],
+  "notifications": [
+    {
+      "id": "notif-igh6ziid7",
+      "userId": "user-hgp3parur",
+      "title": "Materia prima recibida",
+      "message": "Tu compra de \"Pegamento epoxi (1 u.), Fragmentos de hierro (1 u.), Pellets de plástico (1 u.)\" por 1320.11 € ha sido aprobada y entregada de forma inmediata a tu almacén.",
+      "type": "order_approved",
+      "read": false,
+      "createdAt": "2026-09-03T07:48:28.221Z",
+      "relatedOrderId": "rmord-7hmu7hax4"
+    }
+  ],
   "relocationInvoices": [],
   "unifiedMonthlyInvoices": [],
   "marketContacts": [],

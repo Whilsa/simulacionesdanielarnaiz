@@ -6323,6 +6323,7 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
       await safeDbQuery(`DELETE FROM registros_nomina`);
       await safeDbQuery(`DELETE FROM obligaciones_fiscales`);
       await safeDbQuery(`DELETE FROM contratos_electricos`);
+      await safeDbQuery(`DELETE FROM facturas_electricidad`);
       await safeDbQuery(`DELETE FROM planos_distribucion_naves`);
       await safeDbQuery(`DELETE FROM contratos_telecom`);
       await safeDbQuery(`DELETE FROM facturas_telecom`);
@@ -6416,6 +6417,7 @@ app.post('/api/restore', (req, res) => {
     };
     db.systemLogs.unshift(newLog);
     writeDb(db);
+    syncAllToSupabase(db).catch(e => console.error('[Supabase Backup Restore Sync Error]:', e));
 
     res.json({ success: true, message: 'Copia de seguridad restaurada con éxito.' });
   } catch (error: any) {
