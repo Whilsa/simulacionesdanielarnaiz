@@ -255,18 +255,6 @@
       "timestamp": "2026-09-02T09:43:11.097Z"
     },
     {
-      "id": "tx-b76yr16c0",
-      "senderId": "user-hgp3parur",
-      "senderName": "Fabricante Destornilladores completo",
-      "senderAccount": "ES89000100025748867825",
-      "receiverId": "corp-banco-central",
-      "receiverName": "Banco Central Hipotecario S.A. - Comisión Apertura (1‰)",
-      "receiverAccount": "ES210001000299887700",
-      "amount": 250,
-      "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-egamp16nr",
-      "timestamp": "2026-09-02T09:42:58.926Z"
-    },
-    {
       "id": "tx-87hdqaxq8",
       "senderId": "corp-banco-central",
       "senderName": "Banco Central Hipotecario S.A.",
@@ -276,6 +264,18 @@
       "receiverAccount": "ES89000100025748867825",
       "amount": 250000,
       "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-egamp16nr",
+      "timestamp": "2026-09-02T09:42:58.926Z"
+    },
+    {
+      "id": "tx-b76yr16c0",
+      "senderId": "user-hgp3parur",
+      "senderName": "Fabricante Destornilladores completo",
+      "senderAccount": "ES89000100025748867825",
+      "receiverId": "corp-banco-central",
+      "receiverName": "Banco Central Hipotecario S.A. - Comisión Apertura (1‰)",
+      "receiverAccount": "ES210001000299887700",
+      "amount": 250,
+      "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-egamp16nr",
       "timestamp": "2026-09-02T09:42:58.926Z"
     },
     {
@@ -6139,7 +6139,7 @@
       "hireDate": "2026-09-04T09:29:35.157Z",
       "assignedMachineryId": "mac-acq-9xopbszv3",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 1,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6155,7 +6155,7 @@
       "hireDate": "2026-09-04T09:29:12.242Z",
       "assignedMachineryId": "mac-acq-9xopbszv3",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6169,9 +6169,9 @@
       "grossSalaryMonthly": 1000,
       "age": 31,
       "hireDate": "2026-09-04T09:28:53.092Z",
-      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6185,9 +6185,9 @@
       "grossSalaryMonthly": 1000,
       "age": 35,
       "hireDate": "2026-09-04T09:28:38.883Z",
-      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6201,7 +6201,7 @@
       "grossSalaryMonthly": 1000,
       "age": 23,
       "hireDate": "2026-09-04T09:28:22.480Z",
-      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
@@ -6217,7 +6217,7 @@
       "grossSalaryMonthly": 1000,
       "age": 33,
       "hireDate": "2026-09-04T09:28:11.314Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
@@ -6233,9 +6233,9 @@
       "grossSalaryMonthly": 1000,
       "age": 32,
       "hireDate": "2026-09-04T09:27:58.819Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 1,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6249,9 +6249,9 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T09:27:46.340Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6265,9 +6265,9 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-04T09:27:31.422Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-efa3rkjex",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6281,9 +6281,9 @@
       "grossSalaryMonthly": 1000,
       "age": 34,
       "hireDate": "2026-09-04T09:27:11.766Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-efa3rkjex",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6297,7 +6297,7 @@
       "grossSalaryMonthly": 1000,
       "age": 34,
       "hireDate": "2026-09-04T09:26:58.295Z",
-      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryId": "mac-acq-efa3rkjex",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
@@ -6313,7 +6313,7 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:50.019Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-et01ezjsr",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
@@ -6329,9 +6329,9 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:42.727Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-et01ezjsr",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 1,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6345,9 +6345,9 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T09:26:35.457Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-et01ezjsr",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6361,9 +6361,9 @@
       "grossSalaryMonthly": 1000,
       "age": 36,
       "hireDate": "2026-09-04T09:26:29.132Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6377,9 +6377,9 @@
       "grossSalaryMonthly": 1000,
       "age": 41,
       "hireDate": "2026-09-04T09:26:23.199Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6393,7 +6393,7 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-04T09:26:17.360Z",
-      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
@@ -6409,8 +6409,6 @@
       "grossSalaryMonthly": 1000,
       "age": 49,
       "hireDate": "2026-09-04T09:26:11.727Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6425,8 +6423,6 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:06.415Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6441,9 +6437,7 @@
       "grossSalaryMonthly": 1000,
       "age": 46,
       "hireDate": "2026-09-04T09:26:01.707Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6457,9 +6451,7 @@
       "grossSalaryMonthly": 1000,
       "age": 40,
       "hireDate": "2026-09-04T09:25:57.044Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6473,9 +6465,7 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-04T09:25:52.396Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6489,9 +6479,7 @@
       "grossSalaryMonthly": 1000,
       "age": 38,
       "hireDate": "2026-09-04T09:25:48.297Z",
-      "assignedMachineryId": "mac-acq-efa3rkjex",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6505,9 +6493,7 @@
       "grossSalaryMonthly": 1000,
       "age": 23,
       "hireDate": "2026-09-04T09:25:44.398Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 1,
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6521,8 +6507,6 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-04T09:25:39.514Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6537,9 +6521,7 @@
       "grossSalaryMonthly": 1000,
       "age": 21,
       "hireDate": "2026-09-04T09:25:34.135Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6553,9 +6535,7 @@
       "grossSalaryMonthly": 1000,
       "age": 54,
       "hireDate": "2026-09-04T09:25:31.756Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6569,9 +6549,7 @@
       "grossSalaryMonthly": 1000,
       "age": 32,
       "hireDate": "2026-09-04T08:07:31.340Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6585,9 +6563,7 @@
       "grossSalaryMonthly": 1000,
       "age": 49,
       "hireDate": "2026-09-04T08:06:09.928Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6601,8 +6577,6 @@
       "grossSalaryMonthly": 1000,
       "age": 47,
       "hireDate": "2026-09-04T07:57:41.840Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6617,8 +6591,6 @@
       "grossSalaryMonthly": 1000,
       "age": 44,
       "hireDate": "2026-09-04T07:49:50.229Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6633,9 +6605,7 @@
       "grossSalaryMonthly": 1000,
       "age": 55,
       "hireDate": "2026-09-04T07:49:49.233Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6649,9 +6619,7 @@
       "grossSalaryMonthly": 1000,
       "age": 31,
       "hireDate": "2026-09-04T07:49:47.378Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6665,9 +6633,7 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T07:49:45.902Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6681,9 +6647,7 @@
       "grossSalaryMonthly": 1000,
       "age": 51,
       "hireDate": "2026-09-04T07:49:42.824Z",
-      "assignedMachineryId": "mac-acq-9jf0a21gf",
-      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 3,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -7311,8 +7275,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-04T09:59:19.032Z",
-      "updatedAt": "2026-09-05T07:27:01.274Z"
+      "lastCalculatedAt": "2026-09-05T07:33:17.226Z",
+      "updatedAt": "2026-09-05T07:41:24.301Z"
     },
     {
       "studentId": "user-hgp3parur",
@@ -7352,7 +7316,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-04T07:44:14.852Z",
-      "updatedAt": "2026-09-05T07:27:01.289Z"
+      "updatedAt": "2026-09-05T07:41:24.451Z"
     },
     {
       "studentId": "profesor-1",
@@ -7392,7 +7356,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
-      "updatedAt": "2026-09-05T07:27:01.303Z"
+      "updatedAt": "2026-09-05T07:41:24.602Z"
     },
     {
       "studentId": "user-fk014qcn4",
@@ -7446,7 +7410,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-05T07:32:23.850Z",
-      "updatedAt": "2026-09-05T07:32:23.850Z"
+      "updatedAt": "2026-09-05T07:41:24.752Z"
     }
   ],
   "companyProfiles": [],
