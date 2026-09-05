@@ -1136,11 +1136,21 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
     // Optimistically update local state so UI updates instantly without unmounting/scrolling
     setData((prev) => {
       if (!prev || !prev.hiredEmployees) return prev;
+      const targetMac = prev.machineryAcquisitions?.find(
+        (m) => m.id === machineryId || m.machineryId === machineryId
+      );
       return {
         ...prev,
         hiredEmployees: prev.hiredEmployees.map((emp) =>
           emp.id === employeeId
-            ? { ...emp, assignedMachineryId: machineryId, shift: shift || 1 }
+            ? {
+                ...emp,
+                assignedMachineryId: machineryId,
+                assignedMachineryTitle: targetMac
+                  ? targetMac.title || targetMac.lineTitle
+                  : undefined,
+                shift: shift || 1,
+              }
             : emp
         ),
       };
@@ -1230,6 +1240,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
       );
     if (unassigned) {
       handleAssignEmployeeMachineryShift(unassigned.id, machineryId, shift);
+    } else {
+      setError("No tienes operarios sin asignar disponibles. Contrata nuevos operarios en la bolsa de empleo o desvincula uno existente.");
     }
   };
 
@@ -1255,6 +1267,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         warehouseIndex,
         shift,
       );
+    } else {
+      setError("No tienes personal logístico sin asignar disponible para este almacén.");
     }
   };
 
@@ -4191,7 +4205,15 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                           Asignación de maquinaria
                                         </label>
                                         <select
-                                          value={emp.assignedMachineryId || ""}
+                                          value={
+                                            (data.machineryAcquisitions || []).find(
+                                              (m) =>
+                                                m.id === emp.assignedMachineryId ||
+                                                m.machineryId === emp.assignedMachineryId
+                                            )?.id ||
+                                            emp.assignedMachineryId ||
+                                            ""
+                                          }
                                           disabled={updatingEmpId === emp.id}
                                           onChange={(e) =>
                                             handleAssignEmployeeMachineryShift(

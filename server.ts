@@ -407,7 +407,7 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS turno INT DEFAULT 1;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS avatar_url TEXT;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_empleados_contratados_oferta_id ON empleados_contratados (oferta_id);
+      CREATE INDEX IF NOT EXISTS idx_empleados_contratados_oferta_id ON empleados_contratados (oferta_id);
       ALTER TABLE ofertas_empleo ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS items JSONB;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_id VARCHAR(255);
