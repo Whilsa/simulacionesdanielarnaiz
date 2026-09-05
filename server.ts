@@ -54,9 +54,9 @@ function initPgPool(url: string) {
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined
     },
-    connectionTimeoutMillis: 15000,
-    idleTimeoutMillis: 10000,
-    max: 10,
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 1500,
+    max: 5,
     allowExitOnIdle: true
   });
 
@@ -1285,28 +1285,8 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
   if (!dbPool) return currentDb.hiredEmployees || [];
   try {
     const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
-    if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
-      const localMap = new Map((currentDb.hiredEmployees || []).map(e => [e.id, e]));
-      currentDb.hiredEmployees = resEmp.rows.map(row => {
-        const mapped = mapHiredEmployeeRow(row);
-        const local = localMap.get(mapped.id);
-        if (local) {
-          // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local
-          if (local.assignedMachineryId && !mapped.assignedMachineryId) {
-            mapped.assignedMachineryId = local.assignedMachineryId;
-            mapped.assignedMachineryTitle = local.assignedMachineryTitle;
-            mapped.shift = local.shift;
-          }
-          if (local.assignedVehicleId && !mapped.assignedVehicleId) {
-            mapped.assignedVehicleId = local.assignedVehicleId;
-            mapped.assignedVehicleTitle = local.assignedVehicleTitle;
-          }
-          if (local.assignedWarehouseIndex !== undefined && mapped.assignedWarehouseIndex === undefined) {
-            mapped.assignedWarehouseIndex = local.assignedWarehouseIndex;
-          }
-        }
-        return mapped;
-      });
+    if (resEmp && resEmp.rows) {
+      currentDb.hiredEmployees = resEmp.rows.map(mapHiredEmployeeRow);
       currentDb.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(currentDb, null, 2), 'utf-8');
     }
@@ -2120,169 +2100,138 @@ async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit) {
   }
 }
 
-async function runInBatches<T>(items: T[], batchSize: number, fn: (item: T) => Promise<any>): Promise<void> {
-  if (!items || items.length === 0) return;
-  for (let i = 0; i < items.length; i += batchSize) {
-    const chunk = items.slice(i, i + batchSize);
-    await Promise.allSettled(chunk.map(fn));
-  }
-}
-
-async function syncAccountsBulkToSupabase(users: User[]) {
-  const students = (users || []).filter(u => u.role === 'student');
-  await runInBatches(students, 4, u => 
-    syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level || 1)
-  );
-}
-
-async function syncMovimientosBulkToSupabase(transfers: Transfer[]) {
-  await runInBatches(transfers || [], 4, async tx => {
-    await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept, tx);
-    await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept, tx);
-  });
-}
-
-async function syncMachineryBulkToSupabase(machineries: MachineryAcquisition[]) {
-  await runInBatches(machineries || [], 4, mac => syncMachineryToSupabase(mac));
-}
-
-async function syncVehiclesBulkToSupabase(vehicles: PurchasedVehicle[]) {
-  await runInBatches(vehicles || [], 4, veh => syncVehicleToSupabase(veh));
-}
-
-async function syncHiredEmployeesBulkToSupabase(employees: HiredEmployee[]) {
-  await runInBatches(employees || [], 4, emp => syncHiredEmployeeToSupabase(emp));
-}
-
-async function syncRawMaterialOrdersBulkToSupabase(orders: RawMaterialOrder[]) {
-  await runInBatches(orders || [], 4, ord => syncRawMaterialOrderToSupabase(ord));
-}
-
-async function syncRawMaterialAnnouncementsBulkToSupabase(announcements: RawMaterialAnnouncement[]) {
-  await runInBatches(announcements || [], 4, ann => syncRawMaterialAnnouncementToSupabase(ann));
-}
-
-async function syncNotificationsBulkToSupabase(notifications: AppNotification[]) {
-  await runInBatches(notifications || [], 4, notif => syncNotificationToSupabase(notif));
-}
-
-let syncAllTimer: NodeJS.Timeout | null = null;
-let isSyncingAll = false;
-let syncAllPending = false;
-
-function scheduleDebouncedSyncAll(db?: DatabaseSchema) {
-  if (syncAllTimer) {
-    clearTimeout(syncAllTimer);
-  }
-  syncAllTimer = setTimeout(async () => {
-    syncAllTimer = null;
-    if (isSyncingAll) {
-      syncAllPending = true;
-      return;
-    }
-    isSyncingAll = true;
-    try {
-      const currentDb = db || readDb();
-      await syncAllToSupabase(currentDb);
-    } catch (err) {
-      console.error('[Debounced Supabase Sync Error]:', err);
-    } finally {
-      isSyncingAll = false;
-      if (syncAllPending) {
-        syncAllPending = false;
-        scheduleDebouncedSyncAll();
-      }
-    }
-  }, 3000);
-}
-
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
-    const studentUsers = (db.users || []).filter(u => u.role === 'student');
-    await runInBatches(studentUsers, 4, u => 
-      syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level || 1)
-    );
-
-    await runInBatches(db.transfers || [], 4, async tx => {
+    for (const user of db.users) {
+      if (user.role === 'student') {
+        await syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level || 1);
+      }
+    }
+    for (const tx of db.transfers) {
       await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept, tx);
       await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept, tx);
-    });
-
+    }
     if (db.properties) {
-      await runInBatches(db.properties, 4, prop => syncPropertyToSupabase(prop));
+      for (const prop of db.properties) {
+        await syncPropertyToSupabase(prop);
+      }
     }
     if (db.acquisitions) {
-      await runInBatches(db.acquisitions, 4, acq => syncAcquisitionToSupabase(acq));
+      for (const acq of db.acquisitions) {
+        await syncAcquisitionToSupabase(acq);
+      }
     }
     if (db.paymentObligations) {
-      await runInBatches(db.paymentObligations, 4, ob => syncObligationToSupabase(ob));
+      for (const ob of db.paymentObligations) {
+        await syncObligationToSupabase(ob);
+      }
     }
     if (db.loans) {
-      await runInBatches(db.loans, 4, loan => syncLoanToSupabase(loan));
+      for (const loan of db.loans) {
+        await syncLoanToSupabase(loan);
+      }
     }
     if (db.machineryAcquisitions) {
-      await runInBatches(db.machineryAcquisitions, 4, mac => syncMachineryToSupabase(mac));
+      for (const mac of db.machineryAcquisitions) {
+        await syncMachineryToSupabase(mac);
+      }
     }
     if (db.jobListings) {
-      await runInBatches(db.jobListings, 4, job => syncJobListingToSupabase(job));
+      for (const job of db.jobListings) {
+        await syncJobListingToSupabase(job);
+      }
     }
     if (db.hiredEmployees) {
-      await runInBatches(db.hiredEmployees, 4, emp => syncHiredEmployeeToSupabase(emp));
+      for (const emp of db.hiredEmployees) {
+        await syncHiredEmployeeToSupabase(emp);
+      }
     }
     if (db.payrollRecords) {
-      await runInBatches(db.payrollRecords, 4, pr => syncPayrollRecordToSupabase(pr));
+      for (const pr of db.payrollRecords) {
+        await syncPayrollRecordToSupabase(pr);
+      }
     }
     if (db.taxObligations) {
-      await runInBatches(db.taxObligations, 4, tax => syncTaxObligationToSupabase(tax));
+      for (const tax of db.taxObligations) {
+        await syncTaxObligationToSupabase(tax);
+      }
     }
     if (db.electricityContracts) {
-      await runInBatches(db.electricityContracts, 4, c => syncElectricityContractToSupabase(c));
+      for (const c of db.electricityContracts) {
+        await syncElectricityContractToSupabase(c);
+      }
     }
     if (db.electricityBills) {
-      await runInBatches(db.electricityBills, 4, b => syncElectricityBillToSupabase(b));
+      for (const b of db.electricityBills) {
+        await syncElectricityBillToSupabase(b);
+      }
     }
     if (db.naveFloorPlans) {
-      await runInBatches(db.naveFloorPlans, 4, fp => syncFloorPlanToSupabase(fp));
+      for (const fp of db.naveFloorPlans) {
+        await syncFloorPlanToSupabase(fp);
+      }
     }
     if (db.telecomContracts) {
-      await runInBatches(db.telecomContracts, 4, tc => syncTelecomContractToSupabase(tc));
+      for (const tc of db.telecomContracts) {
+        await syncTelecomContractToSupabase(tc);
+      }
     }
     if (db.telecomInvoices) {
-      await runInBatches(db.telecomInvoices, 4, ti => syncTelecomInvoiceToSupabase(ti));
+      for (const ti of db.telecomInvoices) {
+        await syncTelecomInvoiceToSupabase(ti);
+      }
     }
     if (db.officeOrders) {
-      await runInBatches(db.officeOrders, 4, oo => syncOfficeOrderToSupabase(oo));
+      for (const oo of db.officeOrders) {
+        await syncOfficeOrderToSupabase(oo);
+      }
     }
     if (db.purchasedVehicles) {
-      await runInBatches(db.purchasedVehicles, 4, veh => syncVehicleToSupabase(veh));
+      for (const veh of db.purchasedVehicles) {
+        await syncVehicleToSupabase(veh);
+      }
     }
     if (db.rawMaterialInventories) {
-      await runInBatches(db.rawMaterialInventories, 4, inv => {
-        const student = (db.users || []).find(u => u.id === inv.studentId);
-        return syncInventoryToSupabase(inv, student?.name);
-      });
+      for (const inv of db.rawMaterialInventories) {
+        const student = db.users.find(u => u.id === inv.studentId);
+        await syncInventoryToSupabase(inv, student?.name);
+      }
     }
     if (db.rawMaterialOrders) {
-      await runInBatches(db.rawMaterialOrders, 4, ord => syncRawMaterialOrderToSupabase(ord));
+      for (const ord of db.rawMaterialOrders) {
+        await syncRawMaterialOrderToSupabase(ord);
+      }
     }
     if (db.rawMaterialAnnouncements) {
-      await runInBatches(db.rawMaterialAnnouncements, 4, ann => syncRawMaterialAnnouncementToSupabase(ann));
+      for (const ann of db.rawMaterialAnnouncements) {
+        await syncRawMaterialAnnouncementToSupabase(ann);
+      }
     }
     if (db.companyProfiles) {
-      await runInBatches(db.companyProfiles, 4, cp => syncCompanyProfileToSupabase(cp));
+      for (const cp of db.companyProfiles) {
+        await syncCompanyProfileToSupabase(cp);
+      }
     }
     if (db.marketContacts) {
-      await runInBatches(db.marketContacts, 4, mc => syncMarketContactToSupabase(mc));
+      for (const mc of db.marketContacts) {
+        await syncMarketContactToSupabase(mc);
+      }
     }
     if (db.marketMessages) {
-      await runInBatches(db.marketMessages, 4, msg => syncMarketMessageToSupabase(msg));
+      for (const msg of db.marketMessages) {
+        await syncMarketMessageToSupabase(msg);
+      }
     }
     if (db.courtLawsuits) {
-      await runInBatches(db.courtLawsuits, 4, lawsuit => syncCourtLawsuitToSupabase(lawsuit));
+      for (const lawsuit of db.courtLawsuits) {
+        await syncCourtLawsuitToSupabase(lawsuit);
+      }
     }
     if (db.notifications) {
-      await runInBatches(db.notifications, 4, notif => syncNotificationToSupabase(notif));
+      for (const notif of db.notifications) {
+        await syncNotificationToSupabase(notif);
+      }
     }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
@@ -2626,7 +2575,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         });
       } else if (db.machineryAcquisitions && db.machineryAcquisitions.length > 0) {
         console.log(`[Supabase Sync] Syncing ${db.machineryAcquisitions.length} local machinery acquisitions to Supabase...`);
-        await syncMachineryBulkToSupabase(db.machineryAcquisitions);
+        for (const mac of db.machineryAcquisitions) {
+          await syncMachineryToSupabase(mac);
+        }
       }
 
       // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
@@ -3018,7 +2969,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         });
       } else if (db.rawMaterialAnnouncements && db.rawMaterialAnnouncements.length > 0) {
         console.log(`[Supabase Sync] Syncing ${db.rawMaterialAnnouncements.length} local announcements to Supabase...`);
-        await syncRawMaterialAnnouncementsBulkToSupabase(db.rawMaterialAnnouncements);
+        for (const ann of db.rawMaterialAnnouncements) {
+          await syncRawMaterialAnnouncementToSupabase(ann);
+        }
       }
 
       // Reconstruct db.companyProfiles
@@ -3137,7 +3090,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           };
         });
       } else if (db.courtLawsuits && db.courtLawsuits.length > 0) {
-        await runInBatches(db.courtLawsuits, 4, lawsuit => syncCourtLawsuitToSupabase(lawsuit));
+        for (const lawsuit of db.courtLawsuits) {
+          await syncCourtLawsuitToSupabase(lawsuit);
+        }
       }
 
       // Reconstruct db.notifications from Supabase "notificaciones"
@@ -3154,7 +3109,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
         }));
       } else if (db.notifications && db.notifications.length > 0) {
-        await syncNotificationsBulkToSupabase(db.notifications);
+        for (const notif of db.notifications) {
+          await syncNotificationToSupabase(notif);
+        }
       }
 
       db.isSeed = false;
@@ -5485,7 +5442,9 @@ function readDb(): DatabaseSchema {
 function writeDb(db: DatabaseSchema) {
   db.isSeed = false;
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  scheduleDebouncedSyncAll(db);
+  syncAllToSupabase(db).catch(err => {
+    console.error('[Supabase Sync Error]', err);
+  });
 }
 
 // Generate unique account number
