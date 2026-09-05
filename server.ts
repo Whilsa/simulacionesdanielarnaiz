@@ -1287,7 +1287,8 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
     const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
     if (resEmp && resEmp.rows) {
       currentDb.hiredEmployees = resEmp.rows.map(mapHiredEmployeeRow);
-      writeDb(currentDb);
+      currentDb.isSeed = false;
+      fs.writeFileSync(DB_FILE, JSON.stringify(currentDb, null, 2), 'utf-8');
     }
   } catch (e) {
     console.warn('[Supabase Real-Time Sync Warning for Hired Employees]:', e);
@@ -1335,7 +1336,8 @@ async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobList
       currentDb.jobListings = resJobs.rows
         .map(mapJobListingRow)
         .filter(j => j.status === 'disponible' && !hiredListingIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
-      writeDb(currentDb);
+      currentDb.isSeed = false;
+      fs.writeFileSync(DB_FILE, JSON.stringify(currentDb, null, 2), 'utf-8');
     }
   } catch (e) {
     console.warn('[Supabase Real-Time Sync Warning for Job Listings]:', e);
@@ -10335,7 +10337,7 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
   }
   if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
 
-  if (machineryId) {
+  if (machineryId && machineryId !== 'unassign' && machineryId !== '') {
     const mac = (db.machineryAcquisitions || []).find(m => m.id === machineryId || m.machineryId === machineryId);
     emp.assignedMachineryId = mac ? mac.id : machineryId;
     emp.assignedMachineryTitle = mac ? (mac.title || mac.lineTitle) : undefined;
@@ -10344,13 +10346,131 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
     emp.assignedMachineryTitle = undefined;
   }
 
-  if (shift !== undefined) {
+  if (shift !== undefined && shift !== null) {
     emp.shift = Number(shift) || 1;
   }
 
-  await syncHiredEmployeeToSupabase(emp);
   writeDb(db);
+  if (dbPool) {
+    syncHiredEmployeeToSupabase(emp).catch(e => console.error('[Supabase Assign Error]:', e));
+  }
   res.json({ success: true, employee: emp });
+});
+
+app.post('/api/student/employees/auto-assign-all', async (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId) return res.status(400).json({ error: 'Falta studentId' });
+
+  const db = readDb();
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+  if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+
+  const studentMachines = db.machineryAcquisitions.filter(m => String(m.studentId) === String(studentId));
+  const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId) && (e.role === 'operario' || !e.role));
+
+  if (studentMachines.length === 0) {
+    return res.status(400).json({ error: 'No tienes maquinaria industrial adquirida' });
+  }
+
+  // Create slot queue: For each machine, 3 shifts, 2 operators per shift = 6 slots per machine
+  const slots: { machineId: string; machineTitle: string; shift: number }[] = [];
+  studentMachines.forEach((mac, mIndex) => {
+    const title = mac.title || mac.lineTitle || `Línea de producción #${mIndex + 1}`;
+    for (let shift = 1; shift <= 3; shift++) {
+      slots.push({ machineId: mac.id, machineTitle: title, shift });
+      slots.push({ machineId: mac.id, machineTitle: title, shift });
+    }
+  });
+
+  let assignedCount = 0;
+  studentEmps.forEach((emp, index) => {
+    if (index < slots.length) {
+      const slot = slots[index];
+      emp.assignedMachineryId = slot.machineId;
+      emp.assignedMachineryTitle = slot.machineTitle;
+      emp.shift = slot.shift;
+      assignedCount++;
+    } else {
+      emp.assignedMachineryId = undefined;
+      emp.assignedMachineryTitle = undefined;
+    }
+  });
+
+  // Write local state immediately
+  writeDb(db);
+
+  // Sync to Supabase in a single atomic batch query
+  if (dbPool && studentEmps.length > 0) {
+    try {
+      const valueClauses: string[] = [];
+      const params: any[] = [];
+      let paramIdx = 1;
+
+      studentEmps.forEach((emp) => {
+        valueClauses.push(`($${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::int)`);
+        params.push(
+          emp.id,
+          emp.assignedMachineryId || null,
+          emp.assignedMachineryTitle || null,
+          Number(emp.shift) || 1
+        );
+      });
+
+      const sql = `
+        UPDATE empleados_contratados AS e
+        SET 
+          maquinaria_asignada_id = v.mac_id,
+          maquinaria_asignada_titulo = v.mac_title,
+          turno = v.shift
+        FROM (VALUES ${valueClauses.join(', ')}) AS v(id, mac_id, mac_title, shift)
+        WHERE e.id = v.id
+      `;
+
+      await safeDbQuery(sql, params);
+    } catch (e) {
+      console.error('[Supabase Auto-Assign Error]:', e);
+    }
+  }
+
+  res.json({
+    success: true,
+    message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
+    assignedCount,
+    employees: studentEmps
+  });
+});
+
+app.post('/api/student/employees/unassign-all', async (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId) return res.status(400).json({ error: 'Falta studentId' });
+
+  const db = readDb();
+  if (!db.hiredEmployees) db.hiredEmployees = [];
+
+  const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId));
+  studentEmps.forEach(emp => {
+    emp.assignedMachineryId = undefined;
+    emp.assignedMachineryTitle = undefined;
+  });
+
+  writeDb(db);
+
+  if (dbPool) {
+    try {
+      await safeDbQuery(
+        'UPDATE empleados_contratados SET maquinaria_asignada_id = NULL, maquinaria_asignada_titulo = NULL WHERE alumno_id = $1',
+        [studentId]
+      );
+    } catch (e) {
+      console.error('[Supabase Unassign All Error]:', e);
+    }
+  }
+
+  res.json({
+    success: true,
+    message: 'Se han desvinculado todos los operarios de la maquinaria.',
+    employees: studentEmps
+  });
 });
 
 // ================= TEACHER ASSET ADMINISTRATION & DELETES =================

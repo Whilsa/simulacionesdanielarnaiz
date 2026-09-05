@@ -11,36 +11,6 @@
       "level": 1
     },
     {
-      "id": "user-y1nlxn0li",
-      "username": "cliente05",
-      "password": "1987",
-      "role": "student",
-      "name": "Minorista",
-      "accountNumber": "ES54000100022747906482",
-      "balance": 3000,
-      "level": 3
-    },
-    {
-      "id": "user-fk014qcn4",
-      "username": "cliente02",
-      "password": "1987",
-      "role": "student",
-      "name": "Fabricante Varillas",
-      "accountNumber": "ES85000100023678794216",
-      "balance": 549039.45,
-      "level": 1
-    },
-    {
-      "id": "user-hgp3parur",
-      "username": "cliente01",
-      "password": "1987",
-      "role": "student",
-      "name": "Fabricante Destornilladores completo",
-      "accountNumber": "ES89000100025748867825",
-      "balance": 131384.68,
-      "level": 1
-    },
-    {
       "id": "user-qpn58rvxc",
       "username": "cliente03",
       "password": "1987",
@@ -59,9 +29,63 @@
       "accountNumber": "ES59000100022732081121",
       "balance": 3000,
       "level": 2
+    },
+    {
+      "id": "user-y1nlxn0li",
+      "username": "cliente05",
+      "password": "1987",
+      "role": "student",
+      "name": "Minorista",
+      "accountNumber": "ES54000100022747906482",
+      "balance": 3000,
+      "level": 3
+    },
+    {
+      "id": "user-fk014qcn4",
+      "username": "cliente02",
+      "password": "1987",
+      "role": "student",
+      "name": "Fabricante Varillas",
+      "accountNumber": "ES85000100023678794216",
+      "balance": 524149.75,
+      "level": 1
+    },
+    {
+      "id": "user-hgp3parur",
+      "username": "cliente01",
+      "password": "1987",
+      "role": "student",
+      "name": "Fabricante Destornilladores completo",
+      "accountNumber": "ES89000100025748867825",
+      "balance": 131384.68,
+      "level": 1
     }
   ],
   "transfers": [
+    {
+      "id": "tx-gv55p185u",
+      "senderId": "user-fk014qcn4",
+      "senderName": "Fabricante Varillas",
+      "senderAccount": "ES85000100023678794216",
+      "receiverId": "concesionario-vehiculos",
+      "receiverName": "Concesionario Industrial AutoCorp S.L.",
+      "receiverAccount": "ES880004000998877661",
+      "amount": 22385,
+      "concept": "Adquisición de vehículo (Carretilla elevadora contrapesada 2.5T) - Pago al contado",
+      "timestamp": "2026-09-04T10:22:01.667Z"
+    },
+    {
+      "id": "tx-244qiaqzm",
+      "senderId": "user-fk014qcn4",
+      "senderName": "Fabricante Varillas",
+      "senderAccount": "ES85000100023678794216",
+      "receiverId": "ofimatica-suministros",
+      "receiverName": "Suministros OfiTech S.L.",
+      "receiverAccount": "ES910002000588776655",
+      "amount": 2504.7,
+      "concept": "Compra de mobiliario/informática - Pedido Nº OFF-202609-14706",
+      "timestamp": "2026-09-04T10:18:19.255Z"
+    },
     {
       "id": "tx-yvfnwmsia",
       "senderId": "user-fk014qcn4",
@@ -231,18 +255,6 @@
       "timestamp": "2026-09-02T09:43:11.097Z"
     },
     {
-      "id": "tx-87hdqaxq8",
-      "senderId": "corp-banco-central",
-      "senderName": "Banco Central Hipotecario S.A.",
-      "senderAccount": "ES210001000299887700",
-      "receiverId": "user-hgp3parur",
-      "receiverName": "Fabricante Destornilladores completo",
-      "receiverAccount": "ES89000100025748867825",
-      "amount": 250000,
-      "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-egamp16nr",
-      "timestamp": "2026-09-02T09:42:58.926Z"
-    },
-    {
       "id": "tx-b76yr16c0",
       "senderId": "user-hgp3parur",
       "senderName": "Fabricante Destornilladores completo",
@@ -252,6 +264,18 @@
       "receiverAccount": "ES210001000299887700",
       "amount": 250,
       "concept": "Comisión de apertura de préstamo hipotecario (1‰): Ref. prestamo-egamp16nr",
+      "timestamp": "2026-09-02T09:42:58.926Z"
+    },
+    {
+      "id": "tx-87hdqaxq8",
+      "senderId": "corp-banco-central",
+      "senderName": "Banco Central Hipotecario S.A.",
+      "senderAccount": "ES210001000299887700",
+      "receiverId": "user-hgp3parur",
+      "receiverName": "Fabricante Destornilladores completo",
+      "receiverAccount": "ES89000100025748867825",
+      "amount": 250000,
+      "concept": "Concesión e ingreso de préstamo hipotecario: Ref. prestamo-egamp16nr",
       "timestamp": "2026-09-02T09:42:58.926Z"
     },
     {
@@ -268,6 +292,12 @@
     }
   ],
   "systemLogs": [
+    {
+      "id": "log-debug-5l8drf9gh",
+      "action": "LOGIN_ATTEMPT",
+      "details": "Intento de acceso recibido: usuario \"cliente02\".",
+      "timestamp": "2026-09-05T07:10:14.575Z"
+    },
     {
       "id": "log-jgn0x43n1",
       "action": "HIRE_EMPLOYEE",
@@ -5648,9 +5678,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:28.493Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.426Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.426Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -5702,9 +5732,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:24.830Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.440Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.440Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -5756,9 +5786,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:21.181Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.454Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.454Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -5810,9 +5840,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:16.670Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.469Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.469Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -5864,9 +5894,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:12.644Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.483Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.483Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -5918,9 +5948,9 @@
       "installmentCount": 24,
       "purchaseDate": "2026-09-04T07:48:07.683Z",
       "assemblyDays": 5,
-      "assemblyEndDate": "2026-09-04T07:52:24.497Z",
-      "assemblyFinishDate": "2026-09-04T07:52:24.497Z",
-      "status": "pendiente_energia",
+      "assemblyEndDate": "2026-09-04T18:20:57.430Z",
+      "assemblyFinishDate": "2026-09-04T18:20:57.430Z",
+      "status": "operativa",
       "installedAtNaveId": "acq-oh84kqam2",
       "installedNaveId": "acq-oh84kqam2",
       "installationNaveId": "acq-oh84kqam2",
@@ -6107,7 +6137,7 @@
       "grossSalaryMonthly": 1000,
       "age": 38,
       "hireDate": "2026-09-04T09:29:35.157Z",
-      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryId": "mac-acq-9xopbszv3",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
@@ -6123,7 +6153,9 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-04T09:29:12.242Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6137,7 +6169,9 @@
       "grossSalaryMonthly": 1000,
       "age": 31,
       "hireDate": "2026-09-04T09:28:53.092Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6151,7 +6185,9 @@
       "grossSalaryMonthly": 1000,
       "age": 35,
       "hireDate": "2026-09-04T09:28:38.883Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6165,7 +6201,9 @@
       "grossSalaryMonthly": 1000,
       "age": 23,
       "hireDate": "2026-09-04T09:28:22.480Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6179,6 +6217,8 @@
       "grossSalaryMonthly": 1000,
       "age": 33,
       "hireDate": "2026-09-04T09:28:11.314Z",
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6193,6 +6233,8 @@
       "grossSalaryMonthly": 1000,
       "age": 32,
       "hireDate": "2026-09-04T09:27:58.819Z",
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6207,7 +6249,9 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T09:27:46.340Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6221,7 +6265,9 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-04T09:27:31.422Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6235,7 +6281,9 @@
       "grossSalaryMonthly": 1000,
       "age": 34,
       "hireDate": "2026-09-04T09:27:11.766Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6249,7 +6297,9 @@
       "grossSalaryMonthly": 1000,
       "age": 34,
       "hireDate": "2026-09-04T09:26:58.295Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-wxj5ruw6r",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6263,6 +6313,8 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:50.019Z",
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6277,6 +6329,8 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:42.727Z",
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6291,7 +6345,9 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T09:26:35.457Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6305,7 +6361,9 @@
       "grossSalaryMonthly": 1000,
       "age": 36,
       "hireDate": "2026-09-04T09:26:29.132Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6319,7 +6377,9 @@
       "grossSalaryMonthly": 1000,
       "age": 41,
       "hireDate": "2026-09-04T09:26:23.199Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6333,7 +6393,9 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-04T09:26:17.360Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-e3eu3ziff",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6347,6 +6409,8 @@
       "grossSalaryMonthly": 1000,
       "age": 49,
       "hireDate": "2026-09-04T09:26:11.727Z",
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6361,6 +6425,8 @@
       "grossSalaryMonthly": 1000,
       "age": 22,
       "hireDate": "2026-09-04T09:26:06.415Z",
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6375,7 +6441,9 @@
       "grossSalaryMonthly": 1000,
       "age": 46,
       "hireDate": "2026-09-04T09:26:01.707Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6389,7 +6457,9 @@
       "grossSalaryMonthly": 1000,
       "age": 40,
       "hireDate": "2026-09-04T09:25:57.044Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6403,7 +6473,9 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-04T09:25:52.396Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6417,7 +6489,9 @@
       "grossSalaryMonthly": 1000,
       "age": 38,
       "hireDate": "2026-09-04T09:25:48.297Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-efa3rkjex",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6431,9 +6505,9 @@
       "grossSalaryMonthly": 1000,
       "age": 23,
       "hireDate": "2026-09-04T09:25:44.398Z",
-      "assignedMachineryId": "mac-acq-9xopbszv3",
+      "assignedMachineryId": "mac-acq-et01ezjsr",
       "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
-      "shift": 2,
+      "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6447,6 +6521,8 @@
       "grossSalaryMonthly": 1000,
       "age": 27,
       "hireDate": "2026-09-04T09:25:39.514Z",
+      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6461,7 +6537,9 @@
       "grossSalaryMonthly": 1000,
       "age": 21,
       "hireDate": "2026-09-04T09:25:34.135Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6475,7 +6553,9 @@
       "grossSalaryMonthly": 1000,
       "age": 54,
       "hireDate": "2026-09-04T09:25:31.756Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6489,7 +6569,9 @@
       "grossSalaryMonthly": 1000,
       "age": 32,
       "hireDate": "2026-09-04T08:07:31.340Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6503,7 +6585,9 @@
       "grossSalaryMonthly": 1000,
       "age": 49,
       "hireDate": "2026-09-04T08:06:09.928Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-et01ezjsr",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6517,6 +6601,8 @@
       "grossSalaryMonthly": 1000,
       "age": 47,
       "hireDate": "2026-09-04T07:57:41.840Z",
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
@@ -6531,6 +6617,8 @@
       "grossSalaryMonthly": 1000,
       "age": 44,
       "hireDate": "2026-09-04T07:49:50.229Z",
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
@@ -6545,7 +6633,9 @@
       "grossSalaryMonthly": 1000,
       "age": 55,
       "hireDate": "2026-09-04T07:49:49.233Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6559,7 +6649,9 @@
       "grossSalaryMonthly": 1000,
       "age": 31,
       "hireDate": "2026-09-04T07:49:47.378Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 2,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     },
     {
@@ -6573,7 +6665,9 @@
       "grossSalaryMonthly": 1000,
       "age": 50,
       "hireDate": "2026-09-04T07:49:45.902Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6587,7 +6681,9 @@
       "grossSalaryMonthly": 1000,
       "age": 51,
       "hireDate": "2026-09-04T07:49:42.824Z",
-      "shift": 1,
+      "assignedMachineryId": "mac-acq-9jf0a21gf",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
+      "shift": 3,
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop"
     },
     {
@@ -6777,6 +6873,8 @@
       "grossSalaryMonthly": 1000,
       "age": 20,
       "hireDate": "2026-09-03T06:59:57.133Z",
+      "assignedMachineryId": "mac-acq-6cjhexx1n",
+      "assignedMachineryTitle": "Línea de fabricación de metal / hierro (varilla y punta)",
       "shift": 1,
       "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop"
     }
@@ -6784,6 +6882,20 @@
   "payrollRecords": [],
   "taxObligations": [],
   "electricityContracts": [
+    {
+      "id": "elec_contract-7kp4cxyrb",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "propertyId": "acq-oh84kqam2",
+      "propertyTitle": "Nave industrial 3 de 1980 m² en Sevilla",
+      "contractedPowerKw": 260,
+      "tariffName": "IberLuz 3.0TD Industrial",
+      "pricePerKwDay": 0.11,
+      "pricePerKwh": 0.14,
+      "status": "active",
+      "contractDate": "2026-09-04T10:20:57.430Z",
+      "cupsCode": "ES0031405708106408F"
+    },
     {
       "id": "elec_contract-c1ximjl5q",
       "studentId": "user-hgp3parur",
@@ -6808,14 +6920,14 @@
       "propertyTitle": "Nave industrial 3 de 1980 m² en Sevilla",
       "studentId": "user-fk014qcn4",
       "machineryZoneM2": 1440,
-      "storageZoneM2": 30,
-      "rawMaterialsStorageM2": 30,
+      "storageZoneM2": 440,
+      "rawMaterialsStorageM2": 440,
       "semiFinishedStorageM2": 0,
       "finishedGoodsStorageM2": 0,
-      "adminZoneM2": 0,
-      "freeZoneM2": 510,
+      "adminZoneM2": 100,
+      "freeZoneM2": 0,
       "warehousesCount": 1,
-      "updatedAt": "2026-09-04T07:48:28.493Z"
+      "updatedAt": "2026-09-04T10:21:37.349Z"
     },
     {
       "id": "floor_plan-x8r5t9cvo",
@@ -6836,6 +6948,21 @@
   ],
   "telecomContracts": [
     {
+      "id": "tel_contract-mj01neydk",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "planId": "tel-corp-2000",
+      "planName": "Plan corporativo fibra dedicada 2 Gbps",
+      "provider": "Global Telco Business",
+      "monthlyPrice": 179.9,
+      "speedMbps": 2000,
+      "mobileLinesCount": 15,
+      "propertyId": "",
+      "propertyTitle": "",
+      "status": "active",
+      "contractDate": "2026-09-04T10:15:20.900Z"
+    },
+    {
       "id": "tel_contract-spdcihk5i",
       "studentId": "user-hgp3parur",
       "studentName": "Fabricante Destornilladores completo",
@@ -6853,6 +6980,43 @@
   ],
   "telecomInvoices": [],
   "officeOrders": [
+    {
+      "id": "off_ord-mokaht3ao",
+      "orderNumber": "OFF-202609-14706",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "companyName": "Fabricante Varillas",
+      "nifCif": "B-72499709",
+      "purchaseDate": "2026-09-04T10:18:19.255Z",
+      "items": [
+        {
+          "itemId": "lap-03",
+          "category": "portatiles",
+          "imageUrl": "/images/products/portatil_ejecutivo.jpg",
+          "itemName": "Workstation portátil 16\" Ryzen 7 / 32GB / gráficos dedicados",
+          "quantity": 1,
+          "unitPrice": 1450,
+          "totalPrice": 1450,
+          "categoryLabel": "Ordenadores portátiles"
+        },
+        {
+          "itemId": "tel-mov-02",
+          "category": "telefonos_moviles",
+          "imageUrl": "/images/products/telefono_redmi_blue.jpg",
+          "itemName": "Smartphone Pro ejecutivo 5G 256GB pantalla AMOLED",
+          "quantity": 1,
+          "unitPrice": 620,
+          "totalPrice": 620,
+          "categoryLabel": "Teléfonos fijos y móviles"
+        }
+      ],
+      "subtotal": 2070,
+      "ivaRate": 21,
+      "ivaAmount": 434.7,
+      "totalAmount": 2504.7,
+      "status": "completado_pagado",
+      "paymentMethod": "banco"
+    },
     {
       "id": "off_ord-fuen4et54",
       "orderNumber": "OFF-202609-34887",
@@ -6892,6 +7056,24 @@
     }
   ],
   "purchasedVehicles": [
+    {
+      "id": "veh-cc0y0yjms",
+      "studentId": "user-fk014qcn4",
+      "studentName": "Fabricante Varillas",
+      "vehicleType": "carretilla_elevadora",
+      "title": "Carretilla elevadora contrapesada 2.5T",
+      "basePrice": 18500,
+      "ivaAmount": 3885,
+      "totalPrice": 22385,
+      "paymentMethod": "contado",
+      "purchaseDate": "2026-09-04T10:22:01.667Z",
+      "assignedWarehouseIndex": 1,
+      "assignedPropertyId": "acq-oh84kqam2",
+      "assignedPropertyTitle": "Nave industrial 3 de 1980 m² en Sevilla",
+      "assignedWarehouseName": "Nave industrial 3 de 1980 m² en Sevilla (Inmueble nave industrial)",
+      "status": "activo",
+      "imageUrl": "/images/vehicles/carretilla_elevadora.jpg"
+    },
     {
       "id": "veh-btmwfsuih",
       "studentId": "user-hgp3parur",
@@ -7130,7 +7312,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-04T09:59:19.032Z",
-      "updatedAt": "2026-09-04T09:59:19.032Z"
+      "updatedAt": "2026-09-05T07:27:01.274Z"
     },
     {
       "studentId": "user-hgp3parur",
@@ -7170,7 +7352,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-04T07:44:14.852Z",
-      "updatedAt": "2026-09-04T09:56:10.994Z"
+      "updatedAt": "2026-09-05T07:27:01.289Z"
     },
     {
       "studentId": "profesor-1",
@@ -7210,7 +7392,7 @@
         }
       },
       "lastCalculatedAt": "2026-09-03T06:42:58.422Z",
-      "updatedAt": "2026-09-04T09:56:11.016Z"
+      "updatedAt": "2026-09-05T07:27:01.303Z"
     },
     {
       "studentId": "user-fk014qcn4",
@@ -7263,8 +7445,8 @@
           "producedScrewdriversUnits": 0
         }
       },
-      "lastCalculatedAt": "2026-09-04T09:59:34.912Z",
-      "updatedAt": "2026-09-04T09:59:34.912Z"
+      "lastCalculatedAt": "2026-09-05T07:32:23.850Z",
+      "updatedAt": "2026-09-05T07:32:23.850Z"
     }
   ],
   "companyProfiles": [],

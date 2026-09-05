@@ -1245,6 +1245,46 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
     }
   };
 
+  const handleAutoAssignAllEmployees = async () => {
+    if (!currentUser?.id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/student/employees/auto-assign-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: currentUser.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al auto-asignar operarios");
+      await fetchCompanyData(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUnassignAllEmployees = async () => {
+    if (!currentUser?.id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/student/employees/unassign-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: currentUser.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al desvincular operarios");
+      await fetchCompanyData(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAutoAssignWarehouseShift = (
     warehouseIndex: number,
     shift: number,
@@ -3825,138 +3865,154 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         data.machineryAcquisitions.length > 0 && (
                           <div className="space-y-4">
                             <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
-                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                                  <Wrench className="w-4 h-4 text-amber-600" />
-                                  <span>
-                                    Cobertura de operarios por máquina y turno
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
+                                <div>
+                                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                    <Wrench className="w-4 h-4 text-amber-600" />
+                                    <span>
+                                      Cobertura de operarios por máquina y turno
+                                    </span>
+                                  </h3>
+                                  <span className="text-xs text-slate-500 font-medium">
+                                    Requisito: 2 operarios por turno y máquina (Total requerido: {data.machineryAcquisitions.length * 6} operarios)
                                   </span>
-                                </h3>
-                                <span className="text-xs text-slate-500 font-medium">
-                                  Requisito: 2 operarios / turno / máquina
-                                </span>
+                                </div>
+
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={handleAutoAssignAllEmployees}
+                                    disabled={loading}
+                                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                                    title="Distribuye automáticamente todos tus operarios en las máquinas (2 por turno: Mañana, Tarde y Noche)"
+                                  >
+                                    <Zap className="w-3.5 h-3.5" />
+                                    <span>⚡ Auto-asignar plantilla completa</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleUnassignAllEmployees}
+                                    disabled={loading}
+                                    className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition cursor-pointer active:scale-95 disabled:opacity-50"
+                                    title="Desvincular todos los operarios de la maquinaria"
+                                  >
+                                    Desvincular todos
+                                  </button>
+                                </div>
                               </div>
 
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {data.machineryAcquisitions.map((m) => {
+                                {data.machineryAcquisitions.map((m, mIdx) => {
                                   const assignedToThisMachine =
                                     hiredList.filter(
                                       (e) => e.assignedMachineryId
                                         ? (String(e.assignedMachineryId) === String(m.id) || String(e.assignedMachineryId) === String(m.machineryId))
                                         : Boolean(e.assignedMachineryTitle && (e.assignedMachineryTitle === m.title || e.assignedMachineryTitle === m.lineTitle))
                                     );
-                                  const countMorning =
-                                    assignedToThisMachine.filter(
-                                      (e) => (Number(e.shift) || 1) === 1,
-                                    ).length;
-                                  const countAfternoon =
-                                    assignedToThisMachine.filter(
-                                      (e) => Number(e.shift) === 2,
-                                    ).length;
-                                  const countNight =
-                                    assignedToThisMachine.filter(
-                                      (e) => Number(e.shift) === 3,
-                                    ).length;
+                                  const morningEmps = assignedToThisMachine.filter(
+                                    (e) => (Number(e.shift) || 1) === 1,
+                                  );
+                                  const afternoonEmps = assignedToThisMachine.filter(
+                                    (e) => Number(e.shift) === 2,
+                                  );
+                                  const nightEmps = assignedToThisMachine.filter(
+                                    (e) => Number(e.shift) === 3,
+                                  );
 
                                   return (
                                     <div
                                       key={m.id}
-                                      className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs"
+                                      className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs flex flex-col justify-between"
                                     >
-                                      <div className="font-bold text-slate-900 text-sm mb-1">
-                                        {m.title || m.lineTitle}
+                                      <div>
+                                        <div className="flex items-start justify-between gap-2 mb-1">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
+                                              Máquina #{mIdx + 1}
+                                            </span>
+                                            <span className="font-bold text-slate-900 text-sm">
+                                              {m.title || m.lineTitle}
+                                            </span>
+                                          </div>
+                                          <span className="text-[10px] font-mono font-bold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200 shrink-0">
+                                            {assignedToThisMachine.length} / 6 operarios
+                                          </span>
+                                        </div>
+                                        <p className="text-[11px] text-slate-500 mb-3">
+                                          Ubicación: {m.installationNaveTitle}
+                                        </p>
                                       </div>
-                                      <p className="text-[11px] text-slate-500 mb-3">
-                                        Ubicación: {m.installationNaveTitle}
-                                      </p>
 
-                                      <div className="grid grid-cols-3 gap-2">
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAutoAssignMachineryShift(m.id, 1)}
-                                          title="Haz clic para asignar un empleado sin asignar a este turno"
-                                          className={`p-2.5 rounded-xl border flex flex-col items-center text-center cursor-pointer transition hover:scale-[1.03] active:scale-[0.97] hover:shadow-xs group ${
-                                            countMorning >= 2
-                                              ? "bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100/80"
-                                              : "bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100/80"
-                                          }`}
-                                        >
-                                          <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno mañana
-                                          </span>
-                                          <span className="text-[9px] opacity-75 font-semibold block my-0.5">
-                                            06:00 - 14:00 h
-                                          </span>
-                                          <span className="text-base font-extrabold my-0.5">
-                                            {countMorning} / 2
-                                          </span>
-                                          <span className="text-[9px] font-semibold">
-                                            {countMorning >= 2
-                                              ? "✅ Cubierto"
-                                              : `Faltan ${2 - countMorning}`}
-                                          </span>
-                                          <span className="text-[8px] font-extrabold text-blue-700 opacity-80 group-hover:opacity-100 mt-1 underline">
-                                            + Auto-asignar
-                                          </span>
-                                        </button>
+                                      <div className="grid grid-cols-3 gap-2 mt-2">
+                                        {[
+                                          { shiftNum: 1, label: "Turno mañana", hours: "06:00 - 14:00 h", emps: morningEmps },
+                                          { shiftNum: 2, label: "Turno tarde", hours: "14:00 - 22:00 h", emps: afternoonEmps },
+                                          { shiftNum: 3, label: "Turno noche", hours: "22:00 - 06:00 h", emps: nightEmps },
+                                        ].map(({ shiftNum, label, hours, emps }) => {
+                                          const isCovered = emps.length >= 2;
+                                          return (
+                                            <div
+                                              key={shiftNum}
+                                              className={`p-2.5 rounded-xl border flex flex-col justify-between text-center transition ${
+                                                isCovered
+                                                  ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
+                                                  : "bg-amber-50/70 border-amber-200 text-amber-950"
+                                              }`}
+                                            >
+                                              <div>
+                                                <span className="font-bold text-[10px] uppercase tracking-wider block">
+                                                  {label}
+                                                </span>
+                                                <span className="text-[9px] opacity-75 font-semibold block my-0.5">
+                                                  {hours}
+                                                </span>
+                                                <div className="text-base font-extrabold my-0.5">
+                                                  {emps.length} / 2
+                                                </div>
+                                                <span className="text-[9px] font-semibold block mb-1.5">
+                                                  {isCovered ? "✅ Cubierto" : `Faltan ${2 - emps.length}`}
+                                                </span>
 
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAutoAssignMachineryShift(m.id, 2)}
-                                          title="Haz clic para asignar un empleado sin asignar a este turno"
-                                          className={`p-2.5 rounded-xl border flex flex-col items-center text-center cursor-pointer transition hover:scale-[1.03] active:scale-[0.97] hover:shadow-xs group ${
-                                            countAfternoon >= 2
-                                              ? "bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100/80"
-                                              : "bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100/80"
-                                          }`}
-                                        >
-                                          <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno tarde
-                                          </span>
-                                          <span className="text-[9px] opacity-75 font-semibold block my-0.5">
-                                            14:00 - 22:00 h
-                                          </span>
-                                          <span className="text-base font-extrabold my-0.5">
-                                            {countAfternoon} / 2
-                                          </span>
-                                          <span className="text-[9px] font-semibold">
-                                            {countAfternoon >= 2
-                                              ? "✅ Cubierto"
-                                              : `Faltan ${2 - countAfternoon}`}
-                                          </span>
-                                          <span className="text-[8px] font-extrabold text-blue-700 opacity-80 group-hover:opacity-100 mt-1 underline">
-                                            + Auto-asignar
-                                          </span>
-                                        </button>
+                                                {/* Assigned employee chips with quick unassign */}
+                                                {emps.length > 0 && (
+                                                  <div className="flex flex-col gap-1 mb-2">
+                                                    {emps.map((emp) => (
+                                                      <div
+                                                        key={emp.id}
+                                                        className="flex items-center justify-between gap-1 bg-white/90 border border-slate-200/80 rounded-lg px-1.5 py-0.5 text-[9px] font-medium text-slate-800 shadow-2xs"
+                                                      >
+                                                        <span className="truncate max-w-[80px] text-left font-medium">
+                                                          {emp.employeeName}
+                                                        </span>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => handleAssignEmployeeMachineryShift(emp.id, "unassign", emp.shift || 1)}
+                                                          disabled={updatingEmpId === emp.id}
+                                                          title="Desvincular este operario del turno"
+                                                          className="text-slate-400 hover:text-rose-600 font-bold px-0.5 hover:bg-rose-50 rounded transition cursor-pointer"
+                                                        >
+                                                          ✕
+                                                        </button>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
 
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAutoAssignMachineryShift(m.id, 3)}
-                                          title="Haz clic para asignar un empleado sin asignar a este turno"
-                                          className={`p-2.5 rounded-xl border flex flex-col items-center text-center cursor-pointer transition hover:scale-[1.03] active:scale-[0.97] hover:shadow-xs group ${
-                                            countNight >= 2
-                                              ? "bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100/80"
-                                              : "bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100/80"
-                                          }`}
-                                        >
-                                          <span className="font-bold text-[10px] uppercase tracking-wider block">
-                                            Turno noche
-                                          </span>
-                                          <span className="text-[9px] opacity-75 font-semibold block my-0.5">
-                                            22:00 - 06:00 h
-                                          </span>
-                                          <span className="text-base font-extrabold my-0.5">
-                                            {countNight} / 2
-                                          </span>
-                                          <span className="text-[9px] font-semibold">
-                                            {countNight >= 2
-                                              ? "✅ Cubierto"
-                                              : `Faltan ${2 - countNight}`}
-                                          </span>
-                                          <span className="text-[8px] font-extrabold text-blue-700 opacity-80 group-hover:opacity-100 mt-1 underline">
-                                            + Auto-asignar
-                                          </span>
-                                        </button>
+                                              {emps.length < 2 && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleAutoAssignMachineryShift(m.id, shiftNum)}
+                                                  disabled={updatingEmpId !== null}
+                                                  title="Haz clic para asignar un operario sin asignar a este turno"
+                                                  className="w-full py-1 px-1 rounded-lg text-[9px] font-extrabold bg-blue-600 hover:bg-blue-700 text-white transition cursor-pointer active:scale-95 disabled:opacity-50 mt-1"
+                                                >
+                                                  + Asignar
+                                                </button>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
                                       </div>
                                     </div>
                                   );
@@ -4199,87 +4255,91 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   {/* Role Assignment Controls */}
                                   <div className="space-y-2.5 mb-4">
                                     {/* OPERARIO */}
-                                    {(!emp.role || emp.role === "operario") && (
-                                      <>
-                                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                                          Asignación de maquinaria
-                                        </label>
-                                        <select
-                                          value={
-                                            (data.machineryAcquisitions || []).find(
-                                              (m) =>
-                                                m.id === emp.assignedMachineryId ||
-                                                m.machineryId === emp.assignedMachineryId
-                                            )?.id ||
-                                            emp.assignedMachineryId ||
-                                            ""
-                                          }
-                                          disabled={updatingEmpId === emp.id}
-                                          onChange={(e) =>
-                                            handleAssignEmployeeMachineryShift(
-                                              emp.id,
-                                              e.target.value,
-                                              emp.shift || 1,
-                                            )
-                                          }
-                                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
-                                        >
-                                          <option value="">
-                                            -- Sin máquina asignada --
-                                          </option>
-                                          {(
-                                            data.machineryAcquisitions || []
-                                          ).map((m) => (
-                                            <option key={m.id} value={m.id}>
-                                              {m.title || m.lineTitle} (
-                                              {m.installationNaveTitle})
-                                            </option>
-                                          ))}
-                                        </select>
+                                    {(!emp.role || emp.role === "operario") && (() => {
+                                      const assignedMac = (data.machineryAcquisitions || []).find(
+                                        (m) =>
+                                          m.id === emp.assignedMachineryId ||
+                                          m.machineryId === emp.assignedMachineryId
+                                      );
+                                      const currentMacId = assignedMac ? assignedMac.id : emp.assignedMachineryId;
 
-                                        {emp.assignedMachineryId && (
-                                          <div className="flex items-center justify-between pt-1">
-                                            <span className="text-xs text-slate-500 font-medium">
-                                              Turno asignado:
-                                            </span>
-                                            <div className="flex gap-1">
-                                              {[
-                                                {
-                                                  shiftNum: 1,
-                                                  label: "Mañana",
-                                                },
-                                                { shiftNum: 2, label: "Tarde" },
-                                                { shiftNum: 3, label: "Noche" },
-                                              ].map(({ shiftNum, label }) => (
-                                                <button
-                                                  key={shiftNum}
-                                                  disabled={
-                                                    updatingEmpId === emp.id
-                                                  }
-                                                  onClick={() =>
-                                                    handleAssignEmployeeMachineryShift(
-                                                      emp.id,
-                                                      emp.assignedMachineryId!,
-                                                      shiftNum,
-                                                    )
-                                                  }
-                                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition text-center ${
-                                                    emp.shift === shiftNum
-                                                      ? "bg-blue-600 text-white border-blue-600"
-                                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                                                  }`}
-                                                >
-                                                  <div>{label}</div>
-                                                  <div className="text-[8px] opacity-80 font-normal">
-                                                    {shiftNum === 1 ? '06:00-14:00' : shiftNum === 2 ? '14:00-22:00' : '22:00-06:00'}
-                                                  </div>
-                                                </button>
-                                              ))}
+                                      return (
+                                        <>
+                                          <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                                            Asignación de maquinaria
+                                          </label>
+                                          <select
+                                            value={currentMacId || ""}
+                                            disabled={updatingEmpId === emp.id}
+                                            onChange={(e) =>
+                                              handleAssignEmployeeMachineryShift(
+                                                emp.id,
+                                                e.target.value,
+                                                Number(emp.shift) || 1,
+                                              )
+                                            }
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
+                                          >
+                                            <option value="">
+                                              -- Sin máquina asignada --
+                                            </option>
+                                            {(
+                                              data.machineryAcquisitions || []
+                                            ).map((m, mIdx) => (
+                                              <option key={m.id} value={m.id}>
+                                                Máquina #{mIdx + 1}: {m.title || m.lineTitle} ({m.installationNaveTitle})
+                                              </option>
+                                            ))}
+                                          </select>
+
+                                          {currentMacId && (
+                                            <div className="flex items-center justify-between pt-1">
+                                              <span className="text-xs text-slate-500 font-medium">
+                                                Turno asignado:
+                                              </span>
+                                              <div className="flex gap-1">
+                                                {[
+                                                  {
+                                                    shiftNum: 1,
+                                                    label: "Mañana",
+                                                  },
+                                                  { shiftNum: 2, label: "Tarde" },
+                                                  { shiftNum: 3, label: "Noche" },
+                                                ].map(({ shiftNum, label }) => {
+                                                  const isSelected = (Number(emp.shift) || 1) === shiftNum;
+                                                  return (
+                                                    <button
+                                                      key={shiftNum}
+                                                      type="button"
+                                                      disabled={
+                                                        updatingEmpId === emp.id
+                                                      }
+                                                      onClick={() =>
+                                                        handleAssignEmployeeMachineryShift(
+                                                          emp.id,
+                                                          currentMacId,
+                                                          shiftNum,
+                                                        )
+                                                      }
+                                                      className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition text-center cursor-pointer ${
+                                                        isSelected
+                                                          ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+                                                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                                                      }`}
+                                                    >
+                                                      <div>{label}</div>
+                                                      <div className="text-[8px] opacity-80 font-normal">
+                                                        {shiftNum === 1 ? '06:00-14:00' : shiftNum === 2 ? '14:00-22:00' : '22:00-06:00'}
+                                                      </div>
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
                                             </div>
-                                          </div>
-                                        )}
-                                      </>
-                                    )}
+                                          )}
+                                        </>
+                                      );
+                                    })()}
 
 
                                     {/* CAMIONERO O CARRETILLERO */}
