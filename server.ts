@@ -21,6 +21,10 @@ const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
+// Server lifecycle state: ensure no operations are processed before initial Supabase restoration completes
+let isServerReady = false;
+let serverInitError: string | null = null;
+
 // Bypass self-signed TLS/SSL certificate checks for Supabase pooler connections
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
@@ -54,29 +58,24 @@ function initPgPool(url: string) {
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined
     },
-    connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 1500,
-    max: 5,
+    connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 10000,
+    max: 10,
     allowExitOnIdle: true
   });
 
   process.env.DATABASE_URL = effectiveUrl;
   console.log('[Supabase DB] PostgreSQL pool configured automatically with transaction pooler.');
-
-  // Trigger table initialization & restore from Supabase asynchronously
-  initSupabaseTables().then(res => {
-    if (res.success) {
-      restoreFromSupabase().catch(e => console.error('[Supabase Auto Restore Error]', e));
-    }
-  }).catch(e => console.error('[Supabase Table Init Error]', e));
 }
 
 async function safeDbQuery(text: string, params?: any[], retries = 5): Promise<pg.QueryResult<any> | null> {
   if (!dbPool) return null;
+  let lastErr: any = null;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await dbPool.query(text, params);
     } catch (err: any) {
+      lastErr = err;
       const errMsg = err?.message || String(err);
       const isConnError =
         errMsg.includes('EMAXCONNSESSION') ||
@@ -91,9 +90,10 @@ async function safeDbQuery(text: string, params?: any[], retries = 5): Promise<p
         continue;
       }
       console.warn(`[Supabase DB Query Attempt ${attempt}/${retries} Error]:`, errMsg);
-      return null;
+      throw err;
     }
   }
+  if (lastErr) throw lastErr;
   return null;
 }
 
@@ -803,6 +803,7 @@ async function syncAccountToSupabase(id: string, alumno: string, saldo: number, 
     }
   } catch (e) {
     console.error('[Supabase DB] Error syncing account to Supabase:', e);
+    throw e;
   }
 }
 
@@ -940,6 +941,7 @@ async function syncMovimientoToSupabase(
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing movement to Supabase:', e);
+    throw e;
   }
 }
 
@@ -975,6 +977,7 @@ async function syncPropertyToSupabase(prop: PropertyListing) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing property to Supabase:', e);
+    throw e;
   }
 }
 
@@ -984,6 +987,7 @@ async function deletePropertyFromSupabase(id: string) {
     await safeDbQuery('DELETE FROM inmuebles WHERE id = $1 OR id = $2', [String(id), isNaN(Number(id)) ? -1 : Number(id)]);
   } catch (e) {
     console.error('[Supabase DB] Error deleting property from Supabase:', e);
+    throw e;
   }
 }
 
@@ -1021,6 +1025,7 @@ async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing acquisition to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1050,6 +1055,7 @@ async function syncObligationToSupabase(ob: PaymentObligation) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing obligation to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1104,6 +1110,7 @@ async function syncLoanToSupabase(loan: BankLoan) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing loan to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1165,6 +1172,7 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing machinery acquisition to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1205,6 +1213,7 @@ async function syncJobListingToSupabase(job: JobListing) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing job listing:', e);
+    throw e;
   }
 }
 
@@ -1255,6 +1264,7 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing hired employee:', e);
+    throw e;
   }
 }
 
@@ -1285,10 +1295,29 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
   if (!dbPool) return currentDb.hiredEmployees || [];
   try {
     const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
-    if (resEmp && resEmp.rows) {
-      currentDb.hiredEmployees = resEmp.rows.map(mapHiredEmployeeRow);
+    if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
+      const localMap = new Map((currentDb.hiredEmployees || []).map(e => [e.id, e]));
+      currentDb.hiredEmployees = resEmp.rows.map(row => {
+        const mapped = mapHiredEmployeeRow(row);
+        const local = localMap.get(mapped.id);
+        if (local) {
+          // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local
+          if (local.assignedMachineryId && !mapped.assignedMachineryId) {
+            mapped.assignedMachineryId = local.assignedMachineryId;
+            mapped.assignedMachineryTitle = local.assignedMachineryTitle;
+            mapped.shift = local.shift;
+          }
+          if (local.assignedVehicleId && !mapped.assignedVehicleId) {
+            mapped.assignedVehicleId = local.assignedVehicleId;
+            mapped.assignedVehicleTitle = local.assignedVehicleTitle;
+          }
+          if (local.assignedWarehouseIndex !== undefined && mapped.assignedWarehouseIndex === undefined) {
+            mapped.assignedWarehouseIndex = local.assignedWarehouseIndex;
+          }
+        }
+        return mapped;
+      });
       currentDb.isSeed = false;
-      fs.writeFileSync(DB_FILE, JSON.stringify(currentDb, null, 2), 'utf-8');
     }
   } catch (e) {
     console.warn('[Supabase Real-Time Sync Warning for Hired Employees]:', e);
@@ -1337,7 +1366,6 @@ async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobList
         .map(mapJobListingRow)
         .filter(j => j.status === 'disponible' && !hiredListingIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
       currentDb.isSeed = false;
-      fs.writeFileSync(DB_FILE, JSON.stringify(currentDb, null, 2), 'utf-8');
     }
   } catch (e) {
     console.warn('[Supabase Real-Time Sync Warning for Job Listings]:', e);
@@ -1390,6 +1418,7 @@ async function syncVehicleToSupabase(veh: PurchasedVehicle) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing vehicle to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1469,6 +1498,7 @@ async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: 
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing raw material inventory to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1549,6 +1579,7 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing raw material order to Supabase:', e);
+    throw e;
   }
 }
 
@@ -1589,6 +1620,7 @@ async function syncTaxObligationToSupabase(to: TaxObligation) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing tax obligation:', e);
+    throw e;
   }
 }
 
@@ -2100,138 +2132,169 @@ async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit) {
   }
 }
 
+async function runInBatches<T>(items: T[], batchSize: number, fn: (item: T) => Promise<any>): Promise<void> {
+  if (!items || items.length === 0) return;
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    await Promise.allSettled(chunk.map(fn));
+  }
+}
+
+async function syncAccountsBulkToSupabase(users: User[]) {
+  const students = (users || []).filter(u => u.role === 'student');
+  await runInBatches(students, 4, u => 
+    syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level || 1)
+  );
+}
+
+async function syncMovimientosBulkToSupabase(transfers: Transfer[]) {
+  await runInBatches(transfers || [], 4, async tx => {
+    await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept, tx);
+    await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept, tx);
+  });
+}
+
+async function syncMachineryBulkToSupabase(machineries: MachineryAcquisition[]) {
+  await runInBatches(machineries || [], 4, mac => syncMachineryToSupabase(mac));
+}
+
+async function syncVehiclesBulkToSupabase(vehicles: PurchasedVehicle[]) {
+  await runInBatches(vehicles || [], 4, veh => syncVehicleToSupabase(veh));
+}
+
+async function syncHiredEmployeesBulkToSupabase(employees: HiredEmployee[]) {
+  await runInBatches(employees || [], 4, emp => syncHiredEmployeeToSupabase(emp));
+}
+
+async function syncRawMaterialOrdersBulkToSupabase(orders: RawMaterialOrder[]) {
+  await runInBatches(orders || [], 4, ord => syncRawMaterialOrderToSupabase(ord));
+}
+
+async function syncRawMaterialAnnouncementsBulkToSupabase(announcements: RawMaterialAnnouncement[]) {
+  await runInBatches(announcements || [], 4, ann => syncRawMaterialAnnouncementToSupabase(ann));
+}
+
+async function syncNotificationsBulkToSupabase(notifications: AppNotification[]) {
+  await runInBatches(notifications || [], 4, notif => syncNotificationToSupabase(notif));
+}
+
+let syncAllTimer: NodeJS.Timeout | null = null;
+let isSyncingAll = false;
+let syncAllPending = false;
+
+function scheduleDebouncedSyncAll(db?: DatabaseSchema) {
+  if (syncAllTimer) {
+    clearTimeout(syncAllTimer);
+  }
+  syncAllTimer = setTimeout(async () => {
+    syncAllTimer = null;
+    if (isSyncingAll) {
+      syncAllPending = true;
+      return;
+    }
+    isSyncingAll = true;
+    try {
+      const currentDb = db || readDb();
+      await syncAllToSupabase(currentDb);
+    } catch (err) {
+      console.error('[Debounced Supabase Sync Error]:', err);
+    } finally {
+      isSyncingAll = false;
+      if (syncAllPending) {
+        syncAllPending = false;
+        scheduleDebouncedSyncAll();
+      }
+    }
+  }, 3000);
+}
+
 async function syncAllToSupabase(db: DatabaseSchema) {
   if (!dbPool) return;
   try {
-    for (const user of db.users) {
-      if (user.role === 'student') {
-        await syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level || 1);
-      }
-    }
-    for (const tx of db.transfers) {
+    const studentUsers = (db.users || []).filter(u => u.role === 'student');
+    await runInBatches(studentUsers, 4, u => 
+      syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level || 1)
+    );
+
+    await runInBatches(db.transfers || [], 4, async tx => {
       await syncMovimientoToSupabase(tx.id + '-out', tx.senderId, 'TRANSFER_OUT', tx.amount, tx.timestamp, tx.concept, tx);
       await syncMovimientoToSupabase(tx.id + '-in', tx.receiverId, 'TRANSFER_IN', tx.amount, tx.timestamp, tx.concept, tx);
-    }
+    });
+
     if (db.properties) {
-      for (const prop of db.properties) {
-        await syncPropertyToSupabase(prop);
-      }
+      await runInBatches(db.properties, 4, prop => syncPropertyToSupabase(prop));
     }
     if (db.acquisitions) {
-      for (const acq of db.acquisitions) {
-        await syncAcquisitionToSupabase(acq);
-      }
+      await runInBatches(db.acquisitions, 4, acq => syncAcquisitionToSupabase(acq));
     }
     if (db.paymentObligations) {
-      for (const ob of db.paymentObligations) {
-        await syncObligationToSupabase(ob);
-      }
+      await runInBatches(db.paymentObligations, 4, ob => syncObligationToSupabase(ob));
     }
     if (db.loans) {
-      for (const loan of db.loans) {
-        await syncLoanToSupabase(loan);
-      }
+      await runInBatches(db.loans, 4, loan => syncLoanToSupabase(loan));
     }
     if (db.machineryAcquisitions) {
-      for (const mac of db.machineryAcquisitions) {
-        await syncMachineryToSupabase(mac);
-      }
+      await runInBatches(db.machineryAcquisitions, 4, mac => syncMachineryToSupabase(mac));
     }
     if (db.jobListings) {
-      for (const job of db.jobListings) {
-        await syncJobListingToSupabase(job);
-      }
+      await runInBatches(db.jobListings, 4, job => syncJobListingToSupabase(job));
     }
     if (db.hiredEmployees) {
-      for (const emp of db.hiredEmployees) {
-        await syncHiredEmployeeToSupabase(emp);
-      }
+      await runInBatches(db.hiredEmployees, 4, emp => syncHiredEmployeeToSupabase(emp));
     }
     if (db.payrollRecords) {
-      for (const pr of db.payrollRecords) {
-        await syncPayrollRecordToSupabase(pr);
-      }
+      await runInBatches(db.payrollRecords, 4, pr => syncPayrollRecordToSupabase(pr));
     }
     if (db.taxObligations) {
-      for (const tax of db.taxObligations) {
-        await syncTaxObligationToSupabase(tax);
-      }
+      await runInBatches(db.taxObligations, 4, tax => syncTaxObligationToSupabase(tax));
     }
     if (db.electricityContracts) {
-      for (const c of db.electricityContracts) {
-        await syncElectricityContractToSupabase(c);
-      }
+      await runInBatches(db.electricityContracts, 4, c => syncElectricityContractToSupabase(c));
     }
     if (db.electricityBills) {
-      for (const b of db.electricityBills) {
-        await syncElectricityBillToSupabase(b);
-      }
+      await runInBatches(db.electricityBills, 4, b => syncElectricityBillToSupabase(b));
     }
     if (db.naveFloorPlans) {
-      for (const fp of db.naveFloorPlans) {
-        await syncFloorPlanToSupabase(fp);
-      }
+      await runInBatches(db.naveFloorPlans, 4, fp => syncFloorPlanToSupabase(fp));
     }
     if (db.telecomContracts) {
-      for (const tc of db.telecomContracts) {
-        await syncTelecomContractToSupabase(tc);
-      }
+      await runInBatches(db.telecomContracts, 4, tc => syncTelecomContractToSupabase(tc));
     }
     if (db.telecomInvoices) {
-      for (const ti of db.telecomInvoices) {
-        await syncTelecomInvoiceToSupabase(ti);
-      }
+      await runInBatches(db.telecomInvoices, 4, ti => syncTelecomInvoiceToSupabase(ti));
     }
     if (db.officeOrders) {
-      for (const oo of db.officeOrders) {
-        await syncOfficeOrderToSupabase(oo);
-      }
+      await runInBatches(db.officeOrders, 4, oo => syncOfficeOrderToSupabase(oo));
     }
     if (db.purchasedVehicles) {
-      for (const veh of db.purchasedVehicles) {
-        await syncVehicleToSupabase(veh);
-      }
+      await runInBatches(db.purchasedVehicles, 4, veh => syncVehicleToSupabase(veh));
     }
     if (db.rawMaterialInventories) {
-      for (const inv of db.rawMaterialInventories) {
-        const student = db.users.find(u => u.id === inv.studentId);
-        await syncInventoryToSupabase(inv, student?.name);
-      }
+      await runInBatches(db.rawMaterialInventories, 4, inv => {
+        const student = (db.users || []).find(u => u.id === inv.studentId);
+        return syncInventoryToSupabase(inv, student?.name);
+      });
     }
     if (db.rawMaterialOrders) {
-      for (const ord of db.rawMaterialOrders) {
-        await syncRawMaterialOrderToSupabase(ord);
-      }
+      await runInBatches(db.rawMaterialOrders, 4, ord => syncRawMaterialOrderToSupabase(ord));
     }
     if (db.rawMaterialAnnouncements) {
-      for (const ann of db.rawMaterialAnnouncements) {
-        await syncRawMaterialAnnouncementToSupabase(ann);
-      }
+      await runInBatches(db.rawMaterialAnnouncements, 4, ann => syncRawMaterialAnnouncementToSupabase(ann));
     }
     if (db.companyProfiles) {
-      for (const cp of db.companyProfiles) {
-        await syncCompanyProfileToSupabase(cp);
-      }
+      await runInBatches(db.companyProfiles, 4, cp => syncCompanyProfileToSupabase(cp));
     }
     if (db.marketContacts) {
-      for (const mc of db.marketContacts) {
-        await syncMarketContactToSupabase(mc);
-      }
+      await runInBatches(db.marketContacts, 4, mc => syncMarketContactToSupabase(mc));
     }
     if (db.marketMessages) {
-      for (const msg of db.marketMessages) {
-        await syncMarketMessageToSupabase(msg);
-      }
+      await runInBatches(db.marketMessages, 4, msg => syncMarketMessageToSupabase(msg));
     }
     if (db.courtLawsuits) {
-      for (const lawsuit of db.courtLawsuits) {
-        await syncCourtLawsuitToSupabase(lawsuit);
-      }
+      await runInBatches(db.courtLawsuits, 4, lawsuit => syncCourtLawsuitToSupabase(lawsuit));
     }
     if (db.notifications) {
-      for (const notif of db.notifications) {
-        await syncNotificationToSupabase(notif);
-      }
+      await runInBatches(db.notifications, 4, notif => syncNotificationToSupabase(notif));
     }
   } catch (e) {
     console.error('[Supabase DB] Error in full Supabase sync:', e);
@@ -2575,9 +2638,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         });
       } else if (db.machineryAcquisitions && db.machineryAcquisitions.length > 0) {
         console.log(`[Supabase Sync] Syncing ${db.machineryAcquisitions.length} local machinery acquisitions to Supabase...`);
-        for (const mac of db.machineryAcquisitions) {
-          await syncMachineryToSupabase(mac);
-        }
+        await syncMachineryBulkToSupabase(db.machineryAcquisitions);
       }
 
       // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
@@ -2969,9 +3030,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         });
       } else if (db.rawMaterialAnnouncements && db.rawMaterialAnnouncements.length > 0) {
         console.log(`[Supabase Sync] Syncing ${db.rawMaterialAnnouncements.length} local announcements to Supabase...`);
-        for (const ann of db.rawMaterialAnnouncements) {
-          await syncRawMaterialAnnouncementToSupabase(ann);
-        }
+        await syncRawMaterialAnnouncementsBulkToSupabase(db.rawMaterialAnnouncements);
       }
 
       // Reconstruct db.companyProfiles
@@ -3090,9 +3149,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           };
         });
       } else if (db.courtLawsuits && db.courtLawsuits.length > 0) {
-        for (const lawsuit of db.courtLawsuits) {
-          await syncCourtLawsuitToSupabase(lawsuit);
-        }
+        await runInBatches(db.courtLawsuits, 4, lawsuit => syncCourtLawsuitToSupabase(lawsuit));
       }
 
       // Reconstruct db.notifications from Supabase "notificaciones"
@@ -3109,9 +3166,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
         }));
       } else if (db.notifications && db.notifications.length > 0) {
-        for (const notif of db.notifications) {
-          await syncNotificationToSupabase(notif);
-        }
+        await syncNotificationsBulkToSupabase(db.notifications);
       }
 
       db.isSeed = false;
@@ -3157,6 +3212,19 @@ app.use((req, res, next) => {
 
   if (shouldRewrite) {
     req.url = '/api' + req.url;
+  }
+  next();
+});
+
+// Guard middleware: prevent operating on half-loaded or uninitialized data before restoreFromSupabase completes
+app.use((req, res, next) => {
+  const isApi = req.url.startsWith('/api/') || req.path.startsWith('/api/');
+  if (isApi && !isServerReady && req.path !== '/api/health' && req.path !== '/api/supabase-status') {
+    return res.status(503).json({
+      error: 'El servidor se está inicializando y restaurando los datos desde Supabase. Por favor, reintenta en unos segundos.',
+      status: 'initializing',
+      initError: serverInitError
+    });
   }
   next();
 });
@@ -5442,9 +5510,6 @@ function readDb(): DatabaseSchema {
 function writeDb(db: DatabaseSchema) {
   db.isSeed = false;
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  syncAllToSupabase(db).catch(err => {
-    console.error('[Supabase Sync Error]', err);
-  });
 }
 
 // Generate unique account number
@@ -5669,6 +5734,7 @@ app.post('/login', loginHandler);
 const handleGetUsersRoute = async (req: express.Request, res: express.Response) => {
   const role = req.query.role as string;
   const db = readDb();
+  let usersList = (db.users || []).map(u => ({ ...u }));
 
   if (dbPool) {
     try {
@@ -5676,7 +5742,7 @@ const handleGetUsersRoute = async (req: express.Request, res: express.Response) 
       if (resCuentas && resCuentas.rows && resCuentas.rows.length > 0) {
         for (const row of resCuentas.rows) {
           const rowId = String(row.id);
-          const existing = db.users.find(u => u.id === rowId || (row.usuario && u.username.toLowerCase() === String(row.usuario).toLowerCase()));
+          const existing = usersList.find(u => u.id === rowId || (row.usuario && u.username.toLowerCase() === String(row.usuario).toLowerCase()));
           if (existing) {
             existing.balance = Number(row.saldo !== undefined ? row.saldo : existing.balance);
             if (row.password) existing.password = String(row.password);
@@ -5684,7 +5750,7 @@ const handleGetUsersRoute = async (req: express.Request, res: express.Response) 
             if (row.alumno) existing.name = String(row.alumno);
             if (row.account_number) existing.accountNumber = String(row.account_number);
           } else if (row.rol !== 'teacher' && row.usuario) {
-            db.users.push({
+            usersList.push({
               id: rowId,
               username: String(row.usuario).toLowerCase(),
               password: String(row.password || '123'),
@@ -5696,7 +5762,6 @@ const handleGetUsersRoute = async (req: express.Request, res: express.Response) 
             });
           }
         }
-        writeDb(db);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Users]:', e);
@@ -5704,10 +5769,10 @@ const handleGetUsersRoute = async (req: express.Request, res: express.Response) 
   }
 
   if (role === 'teacher') {
-    res.json({ users: db.users, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, supabaseConnected: !!dbPool });
+    res.json({ users: usersList, instanceId: SERVER_INSTANCE_ID, isSeed: db.isSeed || false, supabaseConnected: !!dbPool });
   } else {
     // Only return students and filter out password/admin details
-    const publicStudents = db.users
+    const publicStudents = usersList
       .filter(u => u.role === 'student')
       .map(({ password: _, ...u }) => u);
     res.json({ users: publicStudents });
@@ -6025,14 +6090,21 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
   writeDb(db);
 
   // Sync balances and transfer movements to Supabase PostgreSQL
-  if (sender.role === 'student') {
-    await syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level);
+  try {
+    const syncTasks: Promise<any>[] = [];
+    if (sender.role === 'student') {
+      syncTasks.push(syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level));
+    }
+    if (receiver.role === 'student') {
+      syncTasks.push(syncAccountToSupabase(receiver.id, receiver.name, receiver.balance, receiver.username, receiver.password, receiver.accountNumber, receiver.role, receiver.level));
+    }
+    syncTasks.push(syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer));
+    syncTasks.push(syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer));
+    await Promise.all(syncTasks);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Transfer]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la transferencia con la base de datos central. Por favor, reintenta.' });
   }
-  if (receiver.role === 'student') {
-    await syncAccountToSupabase(receiver.id, receiver.name, receiver.balance, receiver.username, receiver.password, receiver.accountNumber, receiver.role, receiver.level);
-  }
-  await syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer);
-  await syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer);
 
   res.json({ success: true, transfer: newTransfer, senderBalance: sender.balance });
 };
@@ -6332,11 +6404,12 @@ app.post('/api/restore', (req, res) => {
 // Get all property listings (with live Supabase sync)
 app.get('/api/properties', async (req, res) => {
   const db = readDb();
+  let properties = db.properties || [];
   if (dbPool) {
     try {
       const resInm = await safeDbQuery('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC');
       if (resInm && resInm.rows) {
-        db.properties = resInm.rows.map(row => ({
+        properties = resInm.rows.map(row => ({
           id: String(row.id),
           title: String(row.titulo),
           type: String(row.tipo) as PropertyType,
@@ -6357,13 +6430,12 @@ app.get('/api/properties', async (req, res) => {
           deferredPaymentConfig: row.config_pago_aplazado ? (typeof row.config_pago_aplazado === 'string' ? JSON.parse(row.config_pago_aplazado) : row.config_pago_aplazado) : undefined,
           createdTimestamp: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
         }));
-        writeDb(db);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Properties]:', e);
     }
   }
-  res.json({ properties: db.properties || [] });
+  res.json({ properties });
 });
 
 // Get acquisitions (filtered by studentId if query parameter provided)
@@ -6501,7 +6573,7 @@ app.delete('/api/properties', (req, res) => {
 });
 
 // Delete property listing (Teacher only)
-app.delete('/api/properties/:id', (req, res) => {
+app.delete('/api/properties/:id', async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   
@@ -6512,13 +6584,18 @@ app.delete('/api/properties/:id', (req, res) => {
 
   db.properties.splice(index, 1);
   writeDb(db);
-  deletePropertyFromSupabase(String(id)).catch(e => console.error(e));
+  try {
+    await deletePropertyFromSupabase(String(id));
+  } catch (e) {
+    console.error('[Supabase Delete Property Error]:', e);
+    return res.status(500).json({ error: 'Error al eliminar el inmueble de la base de datos central.' });
+  }
 
   res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
 });
 
 // Buy or Rent Property (Student Action)
-app.post('/api/properties/buy-rent', (req, res) => {
+app.post('/api/properties/buy-rent', async (req, res) => {
   const { propertyId, studentId, useDeferredPayment } = req.body;
   const db = readDb();
 
@@ -6642,12 +6719,17 @@ app.post('/api/properties/buy-rent', (req, res) => {
     writeDb(db);
 
     // Sync all new data to Supabase
-    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-    syncPropertyToSupabase(property).catch(e => console.error(e));
-    syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
-    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialPaymentTotal, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
-    for (const ob of generatedObligations) {
-      syncObligationToSupabase(ob).catch(e => console.error(e));
+    try {
+      await Promise.all([
+        syncAccountToSupabase(student.id, student.name, student.balance),
+        syncPropertyToSupabase(property),
+        syncAcquisitionToSupabase(acquisition),
+        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialPaymentTotal, newTransfer.timestamp, newTransfer.concept, newTransfer),
+        ...generatedObligations.map(ob => syncObligationToSupabase(ob))
+      ]);
+    } catch (syncErr) {
+      console.error('[Supabase Sync Error - Property Rent]:', syncErr);
+      return res.status(500).json({ error: 'Error al sincronizar el alquiler con la base de datos central. Por favor, reintenta.' });
     }
 
     return res.json({
@@ -6715,10 +6797,17 @@ app.post('/api/properties/buy-rent', (req, res) => {
       writeDb(db);
 
       // Sync all new data to Supabase
-      syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-      syncPropertyToSupabase(property).catch(e => console.error(e));
-      syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
-      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+      try {
+        await Promise.all([
+          syncAccountToSupabase(student.id, student.name, student.balance),
+          syncPropertyToSupabase(property),
+          syncAcquisitionToSupabase(acquisition),
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer)
+        ]);
+      } catch (syncErr) {
+        console.error('[Supabase Sync Error - Property Buy Cash]:', syncErr);
+        return res.status(500).json({ error: 'Error al sincronizar la compra al contado con la base de datos central. Por favor, reintenta.' });
+      }
 
       return res.json({
         success: true,
@@ -6818,12 +6907,17 @@ app.post('/api/properties/buy-rent', (req, res) => {
       writeDb(db);
 
       // Sync all new data to Supabase
-      syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-      syncPropertyToSupabase(property).catch(e => console.error(e));
-      syncAcquisitionToSupabase(acquisition).catch(e => console.error(e));
-      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
-      for (const ob of generatedObligations) {
-        syncObligationToSupabase(ob).catch(e => console.error(e));
+      try {
+        await Promise.all([
+          syncAccountToSupabase(student.id, student.name, student.balance),
+          syncPropertyToSupabase(property),
+          syncAcquisitionToSupabase(acquisition),
+          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer),
+          ...generatedObligations.map(ob => syncObligationToSupabase(ob))
+        ]);
+      } catch (syncErr) {
+        console.error('[Supabase Sync Error - Property Buy Deferred]:', syncErr);
+        return res.status(500).json({ error: 'Error al sincronizar la compra aplazada con la base de datos central. Por favor, reintenta.' });
       }
 
       return res.json({
@@ -7031,7 +7125,7 @@ app.get('/api/machinery/catalog', (req, res) => {
 });
 
 // BUY machinery line
-app.post('/api/machinery/buy', (req, res) => {
+app.post('/api/machinery/buy', async (req, res) => {
   const { studentId, machineryId, optionId, targetNaveId, paymentMethod } = req.body;
   const db = readDb();
 
@@ -7203,9 +7297,16 @@ app.post('/api/machinery/buy', (req, res) => {
     writeDb(db);
 
     // Sync to Supabase
-    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
-    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+    try {
+      await Promise.all([
+        syncAccountToSupabase(student.id, student.name, student.balance),
+        syncMachineryToSupabase(machAcq),
+        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer)
+      ]);
+    } catch (syncErr) {
+      console.error('[Supabase Sync Error - Machinery Buy Cash]:', syncErr);
+      return res.status(500).json({ error: 'Error al sincronizar la adquisición de maquinaria con la base de datos central. Por favor, reintenta.' });
+    }
 
     const statusMsg = isPowerContracted
       ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcquisition.propertyTitle}.`
@@ -7332,11 +7433,16 @@ app.post('/api/machinery/buy', (req, res) => {
     writeDb(db);
 
     // Sync to Supabase
-    syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
-    syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
-    for (const ob of generatedObligations) {
-      syncObligationToSupabase(ob).catch(e => console.error(e));
+    try {
+      await Promise.all([
+        syncAccountToSupabase(student.id, student.name, student.balance),
+        syncMachineryToSupabase(machAcq),
+        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer),
+        ...generatedObligations.map(ob => syncObligationToSupabase(ob))
+      ]);
+    } catch (syncErr) {
+      console.error('[Supabase Sync Error - Machinery Buy Deferred]:', syncErr);
+      return res.status(500).json({ error: 'Error al sincronizar la compra aplazada de maquinaria con la base de datos central. Por favor, reintenta.' });
     }
 
     const defStatusMsg = isPowerContracted
@@ -7575,9 +7681,6 @@ app.get('/api/company/:studentId', async (req, res) => {
       }
     }
   }
-  if (statusChanged) {
-    writeDb(db);
-  }
 
   const ownedProperties = acquisitions.filter(a => a.operation === 'compra');
   const rentedProperties = acquisitions.filter(a => a.operation === 'alquiler');
@@ -7675,7 +7778,7 @@ app.get('/api/company/:studentId', async (req, res) => {
 });
 
 // Pay due obligation (Promissory note / Bill of exchange / Rent installment)
-app.post('/api/obligations/pay', (req, res) => {
+app.post('/api/obligations/pay', async (req, res) => {
   const { obligationId, studentId } = req.body;
   const db = readDb();
 
@@ -7747,14 +7850,22 @@ app.post('/api/obligations/pay', (req, res) => {
   writeDb(db);
 
   // Sync to Supabase
-  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-  syncObligationToSupabase(obligation).catch(e => console.error(e));
-  syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', obligation.amount, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
-  if (acq) {
-    syncAcquisitionToSupabase(acq).catch(e => console.error(e));
-  }
-  if (machAcq) {
-    syncMachineryToSupabase(machAcq).catch(e => console.error(e));
+  try {
+    const syncPromises: Promise<any>[] = [
+      syncAccountToSupabase(student.id, student.name, student.balance),
+      syncObligationToSupabase(obligation),
+      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', obligation.amount, newTransfer.timestamp, newTransfer.concept, newTransfer)
+    ];
+    if (acq) {
+      syncPromises.push(syncAcquisitionToSupabase(acq));
+    }
+    if (machAcq) {
+      syncPromises.push(syncMachineryToSupabase(machAcq));
+    }
+    await Promise.all(syncPromises);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Obligation Pay]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar el pago de la obligación con la base de datos central. Por favor, reintenta.' });
   }
 
   res.json({
@@ -7766,7 +7877,7 @@ app.post('/api/obligations/pay', (req, res) => {
 });
 
 // Pay due tax obligation (IRPF or Social Security)
-app.post('/api/taxes/pay', (req, res) => {
+app.post('/api/taxes/pay', async (req, res) => {
   const { taxId, studentId } = req.body;
   const db = readDb();
 
@@ -7823,9 +7934,16 @@ app.post('/api/taxes/pay', (req, res) => {
   writeDb(db);
 
   // Sync to Supabase
-  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-  syncTaxObligationToSupabase(tax).catch(e => console.error(e));
-  syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', tax.amount, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+  try {
+    await Promise.all([
+      syncAccountToSupabase(student.id, student.name, student.balance),
+      syncTaxObligationToSupabase(tax),
+      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', tax.amount, newTransfer.timestamp, newTransfer.concept, newTransfer)
+    ]);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Tax Pay]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la liquidación tributaria con la base de datos central. Por favor, reintenta.' });
+  }
 
   return res.json({
     success: true,
@@ -9828,7 +9946,7 @@ app.get('/api/loans', (req, res) => {
 });
 
 // Student requests a loan
-app.post('/api/loans/request', (req, res) => {
+app.post('/api/loans/request', async (req, res) => {
   const { studentId, requestedAmount, termMonths, collateralType, propertyId, surfaceM2, appraisalValue } = req.body;
   const db = readDb();
 
@@ -9913,7 +10031,12 @@ app.post('/api/loans/request', (req, res) => {
   db.loans.unshift(newLoan);
   writeDb(db);
 
-  syncLoanToSupabase(newLoan).catch(e => console.error(e));
+  try {
+    await syncLoanToSupabase(newLoan);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Loan Request]:', syncErr);
+    return res.status(500).json({ error: 'Error al registrar el préstamo en la base de datos central. Por favor, reintenta.' });
+  }
 
   let responseMessage = '';
   if (status === 'offered') {
@@ -9934,7 +10057,7 @@ app.post('/api/loans/request', (req, res) => {
 });
 
 // Student accepts loan offer
-app.post('/api/loans/:id/accept', (req, res) => {
+app.post('/api/loans/:id/accept', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
   const db = readDb();
@@ -9999,10 +10122,17 @@ app.post('/api/loans/:id/accept', (req, res) => {
 
   writeDb(db);
 
-  syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-  syncLoanToSupabase(loan).catch(e => console.error(e));
-  syncMovimientoToSupabase(feeTransfer.id + '-out', student.id, 'TRANSFER_OUT', loan.openingFee, feeTransfer.timestamp, feeTransfer.concept, feeTransfer).catch(e => console.error(e));
-  syncMovimientoToSupabase(loanDisbursementTransfer.id + '-in', student.id, 'TRANSFER_IN', loan.offeredAmount, loanDisbursementTransfer.timestamp, loanDisbursementTransfer.concept, loanDisbursementTransfer).catch(e => console.error(e));
+  try {
+    await Promise.all([
+      syncAccountToSupabase(student.id, student.name, student.balance),
+      syncLoanToSupabase(loan),
+      syncMovimientoToSupabase(feeTransfer.id + '-out', student.id, 'TRANSFER_OUT', loan.openingFee, feeTransfer.timestamp, feeTransfer.concept, feeTransfer),
+      syncMovimientoToSupabase(loanDisbursementTransfer.id + '-in', student.id, 'TRANSFER_IN', loan.offeredAmount, loanDisbursementTransfer.timestamp, loanDisbursementTransfer.concept, loanDisbursementTransfer)
+    ]);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Loan Accept]:', syncErr);
+    return res.status(500).json({ error: 'Error al formalizar el préstamo en la base de datos central. Por favor, reintenta.' });
+  }
 
   res.json({
     success: true,
@@ -10013,7 +10143,7 @@ app.post('/api/loans/:id/accept', (req, res) => {
 });
 
 // Student rejects loan offer
-app.post('/api/loans/:id/reject', (req, res) => {
+app.post('/api/loans/:id/reject', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
   const db = readDb();
@@ -10026,7 +10156,12 @@ app.post('/api/loans/:id/reject', (req, res) => {
   loan.status = 'rejected';
   writeDb(db);
 
-  syncLoanToSupabase(loan).catch(e => console.error(e));
+  try {
+    await syncLoanToSupabase(loan);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Loan Reject]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar el rechazo del préstamo con la base de datos central.' });
+  }
 
   res.json({
     success: true,
@@ -10036,7 +10171,7 @@ app.post('/api/loans/:id/reject', (req, res) => {
 });
 
 // Teacher reviews / modifies / approves loan request
-app.post('/api/teacher/loans/:id/review', (req, res) => {
+app.post('/api/teacher/loans/:id/review', async (req, res) => {
   const { id } = req.params;
   const { action, offeredAmount, annualInterestRate, termMonths, teacherNotes } = req.body;
   const db = readDb();
@@ -10067,7 +10202,12 @@ app.post('/api/teacher/loans/:id/review', (req, res) => {
   }
 
   writeDb(db);
-  syncLoanToSupabase(loan).catch(e => console.error(e));
+  try {
+    await syncLoanToSupabase(loan);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Teacher Loan Review]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la revisión del préstamo con la base de datos central.' });
+  }
 
   res.json({
     success: true,
@@ -10122,8 +10262,6 @@ app.get('/api/job-listings', async (req, res) => {
     !hiredNames.has((j.employeeName || '').toLowerCase().trim())
   );
 
-  db.jobListings = activeJobs;
-  writeDb(db);
   res.json({ success: true, jobListings: activeJobs });
 });
 
@@ -10288,7 +10426,12 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
   db.jobListings = (db.jobListings || []).filter(j => j.id !== job.id && j.employeeName !== job.employeeName);
 
   // Sync hired employee to Supabase
-  await syncHiredEmployeeToSupabase(newHired);
+  try {
+    await syncHiredEmployeeToSupabase(newHired);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Hire Employee]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la contratación con la base de datos central.' });
+  }
 
   // Delete candidate profile from Supabase ofertas_empleo so it disappears across all environments (Render and local)
   if (dbPool) {
@@ -10598,7 +10741,7 @@ app.delete('/api/loans/:id', (req, res) => {
   res.json({ success: true, message: 'Préstamo eliminado' });
 });
 
-app.put('/api/loans/:id', (req, res) => {
+app.put('/api/loans/:id', async (req, res) => {
   const { id } = req.params;
   const { offeredAmount, annualInterestRate, termMonths, status } = req.body;
   const db = readDb();
@@ -10610,8 +10753,13 @@ app.put('/api/loans/:id', (req, res) => {
   if (termMonths !== undefined) loan.termMonths = Number(termMonths);
   if (status) loan.status = status;
 
-  syncLoanToSupabase(loan).catch(e => console.error(e));
   writeDb(db);
+  try {
+    await syncLoanToSupabase(loan);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Loan Update]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar el préstamo con la base de datos central.' });
+  }
   res.json({ success: true, loan });
 });
 
@@ -10636,7 +10784,7 @@ app.get('/api/electricity/contract', (req, res) => {
   res.json({ success: true, contract: contract || null, contracts: allContracts });
 });
 
-app.post('/api/electricity/contract', (req, res) => {
+app.post('/api/electricity/contract', async (req, res) => {
   const { studentId, propertyId, acquisitionId, propertyTitle, contractedPowerKw, powerKw } = req.body;
   const db = readDb();
   const student = db.users.find(u => u.id === studentId);
@@ -10704,6 +10852,7 @@ app.post('/api/electricity/contract', (req, res) => {
   const propPowerNeeded = propMachineryPowerNeeded + 10;
 
   let unblockedCount = 0;
+  const machinerySyncPromises: Promise<any>[] = [];
   if (pKw >= propPowerNeeded) {
     const now = new Date();
     const finishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
@@ -10713,14 +10862,23 @@ app.post('/api/electricity/contract', (req, res) => {
         m.assemblyFinishDate = finishDate.toISOString();
         m.assemblyEndDate = finishDate.toISOString();
         unblockedCount++;
-        syncMachineryToSupabase(m).catch(e => console.error(e));
+        machinerySyncPromises.push(syncMachineryToSupabase(m));
       }
     }
   }
 
   checkAndProcessAutomatedElectricity(db);
-  syncElectricityContractToSupabase(contract).catch(e => console.error(e));
   writeDb(db);
+
+  try {
+    await Promise.all([
+      syncElectricityContractToSupabase(contract),
+      ...machinerySyncPromises
+    ]);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Electricity Contract]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar el contrato eléctrico con la base de datos central.' });
+  }
 
   const message = unblockedCount > 0 
     ? `¡Suministro eléctrico contratado (${pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 8 horas para ${unblockedCount} línea(s) de maquinaria.`
@@ -11511,11 +11669,13 @@ function syncStudentAnnouncementsStockWithInventory(db: DatabaseSchema) {
 
 app.get('/api/raw-materials/announcements', async (req, res) => {
   const db = readDb();
+  let announcements = db.rawMaterialAnnouncements || [];
+
   if (dbPool) {
     try {
       const resRaw = await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
       if (resRaw && resRaw.rows && resRaw.rows.length > 0) {
-        db.rawMaterialAnnouncements = resRaw.rows.map((row: any) => {
+        announcements = resRaw.rows.map((row: any) => {
           let parsedLevel: number | 'official' | undefined = undefined;
           if (row.seller_level === 'official') {
             parsedLevel = 'official';
@@ -11569,25 +11729,16 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
             priceAlert: parsedPriceAlert
           };
         });
-        syncStudentAnnouncementsStockWithInventory(db);
-        writeDb(db);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Announcements]:', e);
     }
   }
 
-  if (!db.rawMaterialAnnouncements || db.rawMaterialAnnouncements.length === 0) {
-    db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
-    for (const ann of db.rawMaterialAnnouncements) {
-      syncRawMaterialAnnouncementToSupabase(ann).catch(e => console.error(e));
-    }
-    writeDb(db);
-  } else {
-    syncStudentAnnouncementsStockWithInventory(db);
-    writeDb(db);
+  if (!announcements || announcements.length === 0) {
+    announcements = getDefaultSeedRawMaterialAnnouncements();
   }
-  res.json({ success: true, announcements: db.rawMaterialAnnouncements });
+  res.json({ success: true, announcements });
 });
 
 app.post('/api/raw-materials/announcements', async (req, res) => {
@@ -12098,7 +12249,6 @@ app.get('/api/raw-materials/orders', async (req, res) => {
           inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
           destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
         }));
-        writeDb(db);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Orders]:', e);
@@ -12137,7 +12287,7 @@ app.get('/api/raw-materials/orders', async (req, res) => {
   res.json({ success: true, orders });
 });
 
-app.post('/api/raw-materials/orders', (req, res) => {
+app.post('/api/raw-materials/orders', async (req, res) => {
   const {
     studentId,
     announcementId,
@@ -12153,6 +12303,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
     note
   } = req.body;
   const db = readDb();
+  const pendingSyncPromises: Promise<any>[] = [];
 
   const buyer = db.users.find(u => u.id === studentId);
   if (!buyer) return res.status(404).json({ error: 'Alumno o usuario no encontrado' });
@@ -12446,7 +12597,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
     }
     if (!isTeacherBuyer) {
       buyer.balance = Math.round((buyer.balance - totalAmount) * 100) / 100;
-      syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role).catch(e => console.error(e));
+      pendingSyncPromises.push(syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role));
     }
   }
 
@@ -12591,7 +12742,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
 
         if (transportExpense > 0) {
           sellerUser.balance = Math.round((sellerUser.balance - transportExpense) * 100) / 100;
-          syncAccountToSupabase(sellerUser.id, sellerUser.name, sellerUser.balance, sellerUser.username, sellerUser.password, sellerUser.accountNumber, sellerUser.role).catch(e => console.error(e));
+          pendingSyncPromises.push(syncAccountToSupabase(sellerUser.id, sellerUser.name, sellerUser.balance, sellerUser.username, sellerUser.password, sellerUser.accountNumber, sellerUser.role));
 
           const txTransport = generateId('tx');
           const transferTransport: Transfer = {
@@ -12673,7 +12824,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
 
           if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
           db.rawMaterialOrders.unshift(transportInvoiceOrder);
-          syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+          pendingSyncPromises.push(syncRawMaterialOrderToSupabase(transportInvoiceOrder));
         }
 
         addNotification(
@@ -12700,17 +12851,17 @@ app.post('/api/raw-materials/orders', (req, res) => {
         timestamp: now.toISOString()
       };
       db.transfers.unshift(transfer);
-      syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+      pendingSyncPromises.push(syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept, transfer));
     }
   }
 
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
   db.rawMaterialOrders.unshift(order);
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+  pendingSyncPromises.push(syncRawMaterialOrderToSupabase(order));
 
   if (isAutoApproved) {
     const inv = checkAndCalculateProduction(db, buyer.id);
-    syncInventoryToSupabase(inv, buyer.name).catch(e => console.error(e));
+    pendingSyncPromises.push(syncInventoryToSupabase(inv, buyer.name));
 
     addNotification(
       db,
@@ -12731,6 +12882,13 @@ app.post('/api/raw-materials/orders', (req, res) => {
     });
 
     writeDb(db);
+
+    try {
+      await Promise.all(pendingSyncPromises);
+    } catch (syncErr) {
+      console.error('[Supabase Sync Error - Raw Materials Order Direct]:', syncErr);
+      return res.status(500).json({ error: 'Error al sincronizar el pedido de materias primas con la base de datos central. Por favor, reintenta.' });
+    }
 
     return res.json({
       success: true,
@@ -12759,6 +12917,13 @@ app.post('/api/raw-materials/orders', (req, res) => {
 
   writeDb(db);
 
+  try {
+    await Promise.all(pendingSyncPromises);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Raw Materials Order Request]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la solicitud de compra con la base de datos central. Por favor, reintenta.' });
+  }
+
   res.json({
     success: true,
     order,
@@ -12766,7 +12931,7 @@ app.post('/api/raw-materials/orders', (req, res) => {
   });
 });
 
-app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
+app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
   const { id } = req.params;
   const {
     userId,
@@ -12866,8 +13031,6 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
   if (!order.negotiationHistory) order.negotiationHistory = [];
   order.negotiationHistory.push(entry);
 
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
   const recipientId = user.id === order.studentId ? (order.sellerId || 'profesor-1') : order.studentId;
   addNotification(
     db,
@@ -12880,6 +13043,13 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
 
   writeDb(db);
 
+  try {
+    await syncRawMaterialOrderToSupabase(order);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Order Negotiate]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la negociación con la base de datos central.' });
+  }
+
   res.json({
     success: true,
     order,
@@ -12887,10 +13057,11 @@ app.post('/api/raw-materials/orders/:id/negotiate', (req, res) => {
   });
 });
 
-app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
+app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
   const { id } = req.params;
   const { userId } = req.body;
   const db = readDb();
+  const pendingSyncPromises: Promise<any>[] = [];
 
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
   const order = db.rawMaterialOrders.find(o => o.id === id);
@@ -12916,7 +13087,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
   processStockDeductionForOrder(db, order);
 
   buyer.balance = Math.round((buyer.balance - order.totalAmount) * 100) / 100;
-  syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role).catch(e => console.error(e));
+  pendingSyncPromises.push(syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role));
 
   const seller = db.users.find(u => u.id === order.sellerId);
   if (seller && seller.role !== 'teacher') {
@@ -12951,8 +13122,6 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
 
     if (transportExpense > 0) {
       seller.balance = Math.round((seller.balance - transportExpense) * 100) / 100;
-      syncAccountToSupabase(seller.id, seller.name, seller.balance, seller.username, seller.password, seller.accountNumber, seller.role).catch(e => console.error(e));
-
       const txTransport = generateId('tx');
       const transferTransport: Transfer = {
         id: txTransport,
@@ -13033,8 +13202,10 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
 
       if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
       db.rawMaterialOrders.unshift(transportInvoiceOrder);
-      syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+      pendingSyncPromises.push(syncRawMaterialOrderToSupabase(transportInvoiceOrder));
     }
+
+    pendingSyncPromises.push(syncAccountToSupabase(seller.id, seller.name, seller.balance, seller.username, seller.password, seller.accountNumber, seller.role));
   }
 
   const now = new Date();
@@ -13053,8 +13224,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
   order.estimatedDeliveryAt = isL1Raw ? now.toISOString() : new Date(now.getTime() + deliveryDays * 24 * 60 * 60 * 1000).toISOString();
 
   const inv = checkAndCalculateProduction(db, order.studentId);
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-  syncInventoryToSupabase(inv, buyer.name).catch(e => console.error(e));
+  pendingSyncPromises.push(syncInventoryToSupabase(inv, buyer.name));
 
   if (!order.negotiationHistory) order.negotiationHistory = [];
   order.negotiationHistory.push({
@@ -13073,7 +13243,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
     note: 'Solicitud aceptada y operación formalizada'
   });
 
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
+  pendingSyncPromises.push(syncRawMaterialOrderToSupabase(order));
 
   const txId = generateId('tx');
   const transfer: Transfer = {
@@ -13089,7 +13259,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
     timestamp: now.toISOString()
   };
   db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+  pendingSyncPromises.push(syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept, transfer));
 
   addNotification(
     db,
@@ -13124,6 +13294,13 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
 
   writeDb(db);
 
+  try {
+    await Promise.all(pendingSyncPromises);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Raw Materials Order Approve]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar la aprobación de la orden con la base de datos central. Por favor, reintenta.' });
+  }
+
   res.json({
     success: true,
     order,
@@ -13133,7 +13310,7 @@ app.post('/api/raw-materials/orders/:id/approve', (req, res) => {
   });
 });
 
-app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
+app.post('/api/raw-materials/orders/:id/reject', async (req, res) => {
   const { id } = req.params;
   const { rejectionReason, userId } = req.body;
   const db = readDb();
@@ -13165,29 +13342,14 @@ app.post('/api/raw-materials/orders/:id/reject', (req, res) => {
     note: `Operación rechazada: ${rejectionReason || 'No especificado'}`
   });
 
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
-  addNotification(
-    db,
-    order.studentId,
-    'Solicitud rechazada',
-    `La solicitud de compra para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
-    'order_rejected',
-    order.id
-  );
-
-  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
-    addNotification(
-      db,
-      order.sellerId,
-      'Solicitud rechazada',
-      `La solicitud para "${order.materialTitle}" ha sido rechazada. Motivo: ${rejectionReason || 'Sin motivo especificado'}.`,
-      'order_rejected',
-      order.id
-    );
-  }
-
   writeDb(db);
+
+  try {
+    await syncRawMaterialOrderToSupabase(order);
+  } catch (syncErr) {
+    console.error('[Supabase Sync Error - Raw Materials Order Reject]:', syncErr);
+    return res.status(500).json({ error: 'Error al sincronizar el rechazo del pedido con la base de datos central.' });
+  }
 
   res.json({ success: true, order, message: 'Solicitud rechazada.' });
 });
@@ -13381,7 +13543,6 @@ app.get('/api/market/company-profiles', async (req, res) => {
           level: Number(row.level || 1),
           updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
         }));
-        writeDb(db);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Company Profiles]:', e);
@@ -14696,7 +14857,6 @@ app.get('/api/market/messages', (req, res) => {
       syncMarketMessageToSupabase(m).catch(e => console.error(e));
     }
   });
-  if (modified) writeDb(db);
 
   const msgs = db.marketMessages.filter(
     m => (m.senderId === userId && m.recipientId === partnerId) ||
@@ -15655,7 +15815,6 @@ app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentI
   const inv = checkAndCalculateProduction(db, studentId);
   const student = db.users.find(u => u.id === studentId);
   syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
-  writeDb(db);
 
   const rawMaterials = {
     fragmentos_hierro_kg: inv.ironKg || 0,
@@ -16794,9 +16953,21 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
 
 async function startServer() {
-  // Create Supabase tables "cuentas" and "movimientos" if they do not exist
-  await initSupabaseTables();
-  await restoreFromSupabase().catch(e => console.error('[Supabase Startup Restore Error]', e));
+  console.log('[Banco Escolar] Iniciando secuencia de arranque y restauración...');
+  try {
+    const tableInitRes = await initSupabaseTables();
+    if (!tableInitRes.success) {
+      console.error('[Supabase Table Init Warning/Error]:', tableInitRes.error);
+    }
+
+    console.log('[Banco Escolar] Restaurando datos desde Supabase antes de aceptar peticiones...');
+    const restoreRes = await restoreFromSupabase();
+    console.log(`[Banco Escolar] Restauración inicial completada con éxito. Cuentas: ${restoreRes.restoredUsers}, Movimientos: ${restoreRes.restoredMovements}`);
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err);
+    console.error('[Banco Escolar] Error crítico al inicializar/restaurar desde Supabase:', errorMsg);
+    serverInitError = errorMsg;
+  }
 
   try {
     const startupDb = readDb();
@@ -16837,8 +17008,11 @@ async function startServer() {
     });
   }
 
+  // Mark server as ready to process API requests
+  isServerReady = true;
+
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Banco Escolar] Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`[Banco Escolar] Servidor corriendo y listo para recibir peticiones en http://localhost:${PORT}`);
   });
 }
 
