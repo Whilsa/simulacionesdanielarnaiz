@@ -1,0 +1,99 @@
+{
+  "p1": {
+    "pass": true,
+    "successCount": 1,
+    "failCount": 9,
+    "senderBefore": 100,
+    "senderAfter": 0,
+    "recipBefore": 0,
+    "recipAfter": 100
+  },
+  "p2": {
+    "pass": true,
+    "successCount": 1,
+    "failCount": 1,
+    "senderAfter": 40,
+    "bAfter": 0,
+    "cAfter": 60,
+    "totalTransferred": 60
+  },
+  "p3": {
+    "pass": true,
+    "beforeJsonb": {
+      "test_nave_a1": {
+        "plasticKg": 100
+      },
+      "test_nave_a2": {
+        "plasticKg": 0
+      }
+    },
+    "afterJsonb": {
+      "test_nave_a1": {
+        "plasticKg": 50
+      },
+      "test_nave_a2": {
+        "plasticKg": 50
+      }
+    },
+    "nave1": 50,
+    "nave2": 50,
+    "total": 100
+  },
+  "p4": {
+    "pass": true,
+    "successCount": 1,
+    "failCount": 1,
+    "nave1": 0,
+    "nave2": 0,
+    "nave3": 50,
+    "total": 50
+  },
+  "p5": {
+    "pass": true,
+    "http200Count": 2,
+    "idemRowCount": 1,
+    "senderStock": 75,
+    "recipStock": 25
+  },
+  "p6": {
+    "pass": true,
+    "successCount": 2,
+    "senderStock": 35,
+    "recipStock": 65
+  },
+  "p7": {
+    "pass": true,
+    "httpStatus": 400,
+    "errorMessage": "Saldo insuficiente para contratar el servicio de transporte exterior (6.84 € por 1 palet(s) a 18 km). Tu saldo disponible es 0.00 €.",
+    "balanceBefore": 0,
+    "balanceAfter": 0,
+    "stockSender": 35,
+    "stockRecip": 65,
+    "movsDelta": 0,
+    "ordersDelta": 0
+  },
+  "p8": {
+    "pass": true,
+    "httpStatus": 400,
+    "balancePreserved": 5000,
+    "stockPreserved": 50,
+    "movsPreserved": 7
+  },
+  "p9": {
+    "pass": true,
+    "crossSuccessCount": 6,
+    "deadlockDetected": false,
+    "initialStock": 400,
+    "finalTotalStock": 400
+  },
+  "p10_jsonb": {
+    "table": "materias_primas_inventario",
+    "column": "desglose_almacenes",
+    "type": "JSONB",
+    "sample": {
+      "test_nave_a1": {
+        "plasticKg": 100
+      }
+    }
+  }
+}

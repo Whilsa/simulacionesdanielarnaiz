@@ -1,0 +1,643 @@
+[
+  {
+    "id": "1.A",
+    "category": "MATERIAS PRIMAS",
+    "name": "Dos compras al contado concurrentes con saldo limitado",
+    "concurrentRequests": 2,
+    "expected": "1 aceptada (HTTP 200), 1 rechazada (HTTP 400), saldo = 12.60 €, 1 movimiento, sin saldo negativo",
+    "actual": "HTTP [400, 200], saldo PG: 12.6 €, movimientos PG: 1, pedidos PG: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "res1": {
+        "status": 400,
+        "data": {
+          "error": "Saldo insuficiente en tu cuenta bancaria (12.60 € disponible) para realizar esta compra por importe de 687.40 €."
+        }
+      },
+      "res2": {
+        "status": 200,
+        "data": {
+          "success": true,
+          "order": {
+            "id": "rmord-zppq2ah9v",
+            "studentId": "test_buyer_rm_1",
+            "studentName": "Alumno RM Concurrente A",
+            "buyerLevel": 1,
+            "sellerId": "profesor-1",
+            "sellerName": "BricoMaster Distribuciones, S.A.",
+            "sellerLevel": "official",
+            "announcementId": "rm-hierro",
+            "materialType": "hierro",
+            "materialTitle": "Fragmentos de hierro",
+            "quantity": 1,
+            "unitWeightKg": 1000,
+            "totalKg": 1000,
+            "basePrice": 475,
+            "subtotalAmount": 475,
+            "unitPrice": 475,
+            "discountPercentage": 0,
+            "discountAmount": 0,
+            "insuranceFee": 0,
+            "hasInsurance": false,
+            "ivaAmount": 119.3,
+            "transportCost": 93.1,
+            "distanceKm": 245,
+            "chargedPallets": 1,
+            "transportMethod": "vendedor_envio",
+            "totalAmount": 687.4,
+            "needsTransport": true,
+            "deliveryAddress": "Nave industrial Test test_buyer_rm_1, Polígono Industrial Concurrencia 1",
+            "destinationNaveId": "acq-test-nave-test_buyer_rm_1",
+            "status": "entregado",
+            "requestedAt": "2026-09-09T07:32:41.661Z",
+            "approvedAt": "2026-09-09T07:32:41.661Z",
+            "deliveredAt": "2026-09-09T07:32:41.661Z",
+            "estimatedDeliveryDays": 0,
+            "estimatedDeliveryAt": "2026-09-09T07:32:41.661Z",
+            "items": [
+              {
+                "announcementId": "rm-hierro",
+                "materialType": "hierro",
+                "materialTitle": "Fragmentos de hierro",
+                "quantity": 1,
+                "unitWeightKg": 1000,
+                "totalKg": 1000,
+                "basePrice": 475,
+                "unitPrice": 475,
+                "subtotal": 475,
+                "totalCost": 475
+              }
+            ],
+            "lastTurnUserId": "test_buyer_rm_1",
+            "negotiationHistory": [
+              {
+                "id": "neg-onau4oenh",
+                "authorId": "test_buyer_rm_1",
+                "authorName": "Alumno RM Concurrente A",
+                "timestamp": "2026-09-09T07:32:41.661Z",
+                "action": "propuesta_inicial",
+                "quantity": 1,
+                "pricePerUnit": 475,
+                "discountPercentage": 0,
+                "insuranceFee": 0,
+                "transportCost": 93.1,
+                "distanceKm": 245,
+                "chargedPallets": 1,
+                "transportMethod": "vendedor_envio",
+                "totalAmount": 687.4,
+                "note": "Solicitud inicial de compra realizada"
+              },
+              {
+                "id": "neg-ife0giixq",
+                "authorId": "profesor-1",
+                "authorName": "BricoMaster Distribuciones, S.A.",
+                "timestamp": "2026-09-09T07:32:41.661Z",
+                "action": "aceptado",
+                "quantity": 1,
+                "pricePerUnit": 475,
+                "discountPercentage": 0,
+                "insuranceFee": 0,
+                "transportCost": 93.1,
+                "transportMethod": "vendedor_envio",
+                "totalAmount": 687.4,
+                "note": "Compra aceptada y entregada de forma inmediata"
+              }
+            ],
+            "stockDeducted": true,
+            "inventoryCredited": true
+          },
+          "message": "¡Compra realizada con éxito! Se han descontado 687.40 € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén."
+        }
+      },
+      "pgBalance": 12.6,
+      "pgMovsCount": 1
+    }
+  },
+  {
+    "id": "1.B",
+    "category": "MATERIAS PRIMAS",
+    "name": "Dos aprobaciones concurrentes del MISMO pedido",
+    "concurrentRequests": 2,
+    "expected": "1 sola aprobación efectiva, saldo comprador: 516 €, saldo vendedor: 984 €, exactamente 1 movimiento de cargo",
+    "actual": "HTTP [200, 200], saldo comprador: 516 €, saldo vendedor: 984 €, movimientos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "res1Status": 200,
+      "res2Status": 200,
+      "buyerBal": 516,
+      "sellerBal": 984,
+      "movsCount": 1
+    }
+  },
+  {
+    "id": "1.C",
+    "category": "MATERIAS PRIMAS",
+    "name": "Dos operaciones concurrentes sobre stock limitado",
+    "concurrentRequests": 2,
+    "expected": "Control de stock previene sobreventa o genera rechazo ordenado sin inventarios negativos",
+    "actual": "HTTP [200, 200]",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "res1": {
+        "status": 200,
+        "data": {
+          "success": true,
+          "order": {
+            "id": "rmord-x6ctkbfxz",
+            "studentId": "test_buyer_rm_3a",
+            "studentName": "Comprador Stock A",
+            "buyerLevel": 2,
+            "sellerId": "test_seller_rm_3",
+            "sellerName": "Vendedor Alumno Stock",
+            "sellerLevel": 1,
+            "announcementId": "test-ann-stock-limit",
+            "materialType": "producto_final",
+            "materialTitle": "Destornilladores M3 Concurrencia",
+            "quantity": 4,
+            "unitWeightKg": 0,
+            "totalKg": 0,
+            "basePrice": 400,
+            "subtotalAmount": 400,
+            "unitPrice": 100,
+            "discountPercentage": 0,
+            "discountAmount": 0,
+            "insuranceFee": 0,
+            "hasInsurance": false,
+            "ivaAmount": 103.47,
+            "transportCost": 92.72,
+            "distanceKm": 244,
+            "chargedPallets": 1,
+            "transportMethod": "vendedor_envio",
+            "totalAmount": 596.19,
+            "needsTransport": true,
+            "deliveryAddress": "Nave industrial Test test_buyer_rm_3a, Polígono Industrial Concurrencia 1",
+            "destinationNaveId": "acq-test-nave-test_buyer_rm_3a",
+            "status": "pendiente",
+            "requestedAt": "2026-09-09T07:32:42.510Z",
+            "items": [
+              {
+                "announcementId": "test-ann-stock-limit",
+                "materialType": "producto_final",
+                "materialTitle": "Destornilladores M3 Concurrencia",
+                "quantity": 4,
+                "unitWeightKg": 0,
+                "totalKg": 0,
+                "basePrice": 400,
+                "unitPrice": 100,
+                "subtotal": 400,
+                "totalCost": 400
+              }
+            ],
+            "lastTurnUserId": "test_buyer_rm_3a",
+            "negotiationHistory": [
+              {
+                "id": "neg-5i22sijxz",
+                "authorId": "test_buyer_rm_3a",
+                "authorName": "Comprador Stock A",
+                "timestamp": "2026-09-09T07:32:42.510Z",
+                "action": "propuesta_inicial",
+                "quantity": 4,
+                "pricePerUnit": 100,
+                "discountPercentage": 0,
+                "insuranceFee": 0,
+                "transportCost": 92.72,
+                "distanceKm": 244,
+                "chargedPallets": 1,
+                "transportMethod": "vendedor_envio",
+                "totalAmount": 596.19,
+                "note": "Solicitud inicial de compra realizada"
+              }
+            ]
+          },
+          "message": "Solicitud de compra enviada con éxito. Pendiente de revisión por Vendedor Alumno Stock."
+        }
+      },
+      "res2": {
+        "status": 200,
+        "data": {
+          "success": true,
+          "order": {
+            "id": "rmord-8itovlg3b",
+            "studentId": "test_buyer_rm_3b",
+            "studentName": "Comprador Stock B",
+            "buyerLevel": 2,
+            "sellerId": "test_seller_rm_3",
+            "sellerName": "Vendedor Alumno Stock",
+            "sellerLevel": 1,
+            "announcementId": "test-ann-stock-limit",
+            "materialType": "producto_final",
+            "materialTitle": "Destornilladores M3 Concurrencia",
+            "quantity": 4,
+            "unitWeightKg": 0,
+            "totalKg": 0,
+            "basePrice": 400,
+            "subtotalAmount": 400,
+            "unitPrice": 100,
+            "discountPercentage": 0,
+            "discountAmount": 0,
+            "insuranceFee": 0,
+            "hasInsurance": false,
+            "ivaAmount": 103.47,
+            "transportCost": 92.72,
+            "distanceKm": 244,
+            "chargedPallets": 1,
+            "transportMethod": "vendedor_envio",
+            "totalAmount": 596.19,
+            "needsTransport": true,
+            "deliveryAddress": "Nave industrial Test test_buyer_rm_3b, Polígono Industrial Concurrencia 1",
+            "destinationNaveId": "acq-test-nave-test_buyer_rm_3b",
+            "status": "pendiente",
+            "requestedAt": "2026-09-09T07:32:42.523Z",
+            "items": [
+              {
+                "announcementId": "test-ann-stock-limit",
+                "materialType": "producto_final",
+                "materialTitle": "Destornilladores M3 Concurrencia",
+                "quantity": 4,
+                "unitWeightKg": 0,
+                "totalKg": 0,
+                "basePrice": 400,
+                "unitPrice": 100,
+                "subtotal": 400,
+                "totalCost": 400
+              }
+            ],
+            "lastTurnUserId": "test_buyer_rm_3b",
+            "negotiationHistory": [
+              {
+                "id": "neg-8poxiryve",
+                "authorId": "test_buyer_rm_3b",
+                "authorName": "Comprador Stock B",
+                "timestamp": "2026-09-09T07:32:42.523Z",
+                "action": "propuesta_inicial",
+                "quantity": 4,
+                "pricePerUnit": 100,
+                "discountPercentage": 0,
+                "insuranceFee": 0,
+                "transportCost": 92.72,
+                "distanceKm": 244,
+                "chargedPallets": 1,
+                "transportMethod": "vendedor_envio",
+                "totalAmount": 596.19,
+                "note": "Solicitud inicial de compra realizada"
+              }
+            ]
+          },
+          "message": "Solicitud de compra enviada con éxito. Pendiente de revisión por Vendedor Alumno Stock."
+        }
+      }
+    }
+  },
+  {
+    "id": "2.A",
+    "category": "MAQUINARIA",
+    "name": "Varias compras simultáneas (3) con saldo para solo una",
+    "concurrentRequests": 3,
+    "expected": "1 compra aceptada (200), 2 rechazadas (400), saldo = 4,160 €, 1 movimiento, 1 adquisición en PG",
+    "actual": "HTTP [400, 200, 400], saldo PG: 4160 €, movimientos: 1, máquinas: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 400,
+      "r2Status": 200,
+      "r3Status": 400,
+      "pgBal": 4160,
+      "pgMovsCount": 1,
+      "pgMacCount": 1
+    }
+  },
+  {
+    "id": "2.B",
+    "category": "MAQUINARIA",
+    "name": "Dos peticiones simultáneas con MISMA clave de idempotencia",
+    "concurrentRequests": 2,
+    "expected": "Ambas HTTP 200 con mismo resultado, 1 sola compra efectiva, 1 movimiento, 1 adquisición, saldo = 24,160 €",
+    "actual": "HTTP [200, 200], saldo: 24160 €, movs: 1, adquisiciones: 1, idem en PG: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 24160,
+      "pgMovsCount": 1,
+      "pgMacCount": 1
+    }
+  },
+  {
+    "id": "3.A",
+    "category": "VEHÍCULOS",
+    "name": "Compra individual concurrente con saldo limitado",
+    "concurrentRequests": 2,
+    "expected": "1 aceptada (200), 1 rechazada (400), saldo = 800 €, 1 movimiento, 1 vehículo en PG",
+    "actual": "HTTP [200, 400], saldo: 800 €, movs: 1, vehículos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 400,
+      "pgBal": 800,
+      "pgMovsCount": 1,
+      "pgVehCount": 1
+    }
+  },
+  {
+    "id": "3.B",
+    "category": "VEHÍCULOS",
+    "name": "Dos carritos simultáneos con saldo limitado",
+    "concurrentRequests": 2,
+    "expected": "1 carrito aceptado (200), 1 rechazado (400), saldo = 5,800 €, 1 movimiento, 2 vehículos comprados",
+    "actual": "HTTP [200, 400], saldo: 5800 €, movs: 1, vehículos: 2",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 400,
+      "pgBal": 5800,
+      "pgMovsCount": 1,
+      "pgVehCount": 2
+    }
+  },
+  {
+    "id": "3.C",
+    "category": "VEHÍCULOS",
+    "name": "Dos carritos simultáneos con MISMA clave de idempotencia",
+    "concurrentRequests": 2,
+    "expected": "Ambas 200, 1 solo cobro (saldo = 37,900 €), 1 movimiento, 1 vehículo insertado",
+    "actual": "HTTP [200, 200], saldo: 37900 €, movs: 1, vehículos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 37900,
+      "pgMovsCount": 1,
+      "pgVehCount": 1
+    }
+  },
+  {
+    "id": "4.A",
+    "category": "TIENDA DE OFICINA",
+    "name": "Varias compras concurrentes con saldo limitado (3 concurrentes)",
+    "concurrentRequests": 3,
+    "expected": "1 compra aceptada (200), 2 rechazadas (400), saldo = 54.80 €, 1 movimiento, 1 pedido en PG",
+    "actual": "HTTP [200, 400, 400], saldo: 54.8 €, movs: 1, pedidos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 400,
+      "r3Status": 400,
+      "pgBal": 54.8,
+      "pgMovsCount": 1,
+      "pgOrdersCount": 1
+    }
+  },
+  {
+    "id": "4.B",
+    "category": "TIENDA DE OFICINA",
+    "name": "Dos compras de oficina simultáneas con MISMA clave de idempotencia",
+    "concurrentRequests": 2,
+    "expected": "Ambas 200, 1 solo cobro (saldo = 54.80 €), 1 movimiento, 1 pedido insertado",
+    "actual": "HTTP [200, 200], saldo: 54.8 €, movs: 1, pedidos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 54.8,
+      "pgMovsCount": 1,
+      "pgOrdersCount": 1
+    }
+  },
+  {
+    "id": "5.A",
+    "category": "DEMANDAS",
+    "name": "Dos solicitudes concurrentes de demanda con saldo limitado",
+    "concurrentRequests": 2,
+    "expected": "1 demanda aceptada (200), 1 rechazada por falta de fondos para minuta (400), saldo = 185.00 €, 1 movimiento, 1 demanda",
+    "actual": "HTTP [200, 400], saldo: 185 €, movs: 1, demandas: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 400,
+      "pgBal": 185,
+      "pgMovsCount": 1,
+      "pgLawsuitsCount": 1
+    }
+  },
+  {
+    "id": "5.B",
+    "category": "DEMANDAS",
+    "name": "Dos solicitudes simultáneas de demanda con MISMA clave de idempotencia",
+    "concurrentRequests": 2,
+    "expected": "Ambas 200 con mismo resultado, 1 solo cobro de minuta (saldo = 3,185 €), 1 movimiento, 1 demanda",
+    "actual": "HTTP [200, 200], saldo: 3185 €, movs: 1, demandas: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 3185,
+      "pgMovsCount": 1,
+      "pgLawsuitsCount": 1
+    }
+  },
+  {
+    "id": "6.A",
+    "category": "EMBARGO PREVENTIVO",
+    "name": "Embargo preventivo (390 €) y transferencia voluntaria (400 €) con saldo 500 €",
+    "concurrentRequests": 2,
+    "expected": "Solamente 1 operación se ejecuta (o embargo o transferencia), nunca saldo negativo (saldo >= 0)",
+    "actual": "HTTP Embargo: 200, HTTP Transfer: 400, saldo demandado: 110 €, movimientos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "rEmbargoStatus": 200,
+      "rTransferStatus": 400,
+      "pgBal": 110,
+      "pgMovsCount": 1,
+      "lawsuitState": "embargo_preventivo"
+    }
+  },
+  {
+    "id": "6.B",
+    "category": "EMBARGO PREVENTIVO",
+    "name": "Dos embargos simultáneos sobre el MISMO expediente",
+    "concurrentRequests": 2,
+    "expected": "Como máximo 1 embargo efectivo, saldo = 3,700 €, exactamente 1 movimiento de traba de embargo",
+    "actual": "HTTP [200, 200], saldo: 3700 €, movimientos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 3700,
+      "pgMovsCount": 1
+    }
+  },
+  {
+    "id": "7.A",
+    "category": "PAGO / SETTLEMENT JUDICIAL",
+    "name": "Dos pagos/settlements del MISMO expediente simultáneos",
+    "concurrentRequests": 2,
+    "expected": "1 único pago efectivo, saldo demandado: 3,000 €, saldo demandante: 3,000 €, estado: allanada_pagada, 1 movimiento",
+    "actual": "HTTP [200, 200], saldo demandado: 3000 €, saldo demandante: 3000 €, estado: allanada_pagada, movs: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "defBal": 3000,
+      "plainBal": 3000,
+      "movsCount": 1,
+      "estado": "allanada_pagada"
+    }
+  },
+  {
+    "id": "7.B",
+    "category": "PAGO / SETTLEMENT JUDICIAL",
+    "name": "Settlement (1,000 €) y transferencia (1,000 €) concurrentes con saldo 1,500 €",
+    "concurrentRequests": 2,
+    "expected": "1 aceptada (200), 1 rechazada (400), saldo = 500.00 €, nunca saldo negativo, 1 movimiento",
+    "actual": "HTTP Settle: 400, HTTP Transfer: 200, saldo demandado: 500 €, movimientos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "rSettleStatus": 400,
+      "rTxStatus": 200,
+      "defBal": 500,
+      "movsCount": 1
+    }
+  },
+  {
+    "id": "7.C",
+    "category": "PAGO / SETTLEMENT JUDICIAL",
+    "name": "Dos settlements simultáneos con MISMA clave de idempotencia",
+    "concurrentRequests": 2,
+    "expected": "Ambas 200 con mismo resultado, 1 solo pago efectivo (saldo demandado = 3,500 €, demandante = 2,500 €), 1 movimiento",
+    "actual": "HTTP [200, 200], saldo demandado: 3500 €, saldo demandante: 2500 €, movimientos: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "defBal": 3500,
+      "plainBal": 2500,
+      "movsCount": 1
+    }
+  },
+  {
+    "id": "8",
+    "category": "DEADLOCKS",
+    "name": "30 transferencias concurrentes cruzadas bidireccionales (A <-> B)",
+    "concurrentRequests": 30,
+    "expected": "0 deadlocks detectados (código 40P01), 30 transferencias exitosas, saldos finales exactos (10,000 € c/u)",
+    "actual": "Exitosas: 30/30, Deadlocks: 0, Saldo A: 10000 €, Saldo B: 10000 €",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "totalSuccess": 30,
+      "totalErrors": 0,
+      "totalDeadlocks": 0,
+      "balA": 10000,
+      "balB": 10000
+    }
+  },
+  {
+    "id": "9.A",
+    "category": "IDEMPOTENCIA",
+    "name": "Idempotencia secuencial persistida en PostgreSQL",
+    "concurrentRequests": 2,
+    "expected": "Segunda llamada responde con la respuesta guardada sin volver a cobrar, saldo = 13,950 €, 1 movimiento",
+    "actual": "HTTP [200, 200], saldo: 13950 €, movs: 1, vehículos: 1, registro en operaciones_idempotencia: 1",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgBal": 13950,
+      "pgMovsCount": 1,
+      "idemRows": 1
+    }
+  },
+  {
+    "id": "10",
+    "category": "ROLLBACK",
+    "name": "Rollback completo ante error en transacción",
+    "concurrentRequests": 1,
+    "expected": "HTTP 400, saldo intacto (100.00 €), 0 movimientos creados, 0 vehículos creados",
+    "actual": "HTTP 400, saldo: 100 €, movimientos: 0, vehículos: 0",
+    "pass": true,
+    "negativeBalanceDetected": false,
+    "duplicationDetected": false,
+    "deadlocksDetected": false,
+    "partialStateDetected": false,
+    "details": {
+      "status": 400,
+      "pgBal": 100,
+      "pgMovsCount": 0,
+      "pgVehCount": 0
+    }
+  }
+]

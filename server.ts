@@ -408,6 +408,14 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS turno INT DEFAULT 1;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS avatar_url TEXT;
       CREATE INDEX IF NOT EXISTS idx_empleados_contratados_oferta_id ON empleados_contratados (oferta_id);
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'uq_empleados_contratados_oferta_id'
+        ) THEN
+          ALTER TABLE empleados_contratados ADD CONSTRAINT uq_empleados_contratados_oferta_id UNIQUE (oferta_id);
+        END IF;
+      END $$;
       ALTER TABLE ofertas_empleo ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS items JSONB;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS seller_id VARCHAR(255);
@@ -424,6 +432,7 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS invoice_number TEXT;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS inventory_credited BOOLEAN DEFAULT FALSE;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS destination_nave_id VARCHAR(255);
+      ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
       ALTER TABLE materias_primas_pedidos ALTER COLUMN cantidad TYPE NUMERIC(12, 2);
       ALTER TABLE materias_primas_pedidos ALTER COLUMN buyer_level TYPE VARCHAR(50);
       ALTER TABLE materias_primas_pedidos ALTER COLUMN seller_level TYPE VARCHAR(50);
@@ -760,12 +769,147 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE demandas_judiciales ADD COLUMN IF NOT EXISTS minuta_demandado_iva NUMERIC(12, 2);
       ALTER TABLE demandas_judiciales ADD COLUMN IF NOT EXISTS minuta_demandado_total NUMERIC(12, 2);
       ALTER TABLE demandas_judiciales ADD COLUMN IF NOT EXISTS minuta_demandado_factura_num VARCHAR(255);
+
+      CREATE TABLE IF NOT EXISTS operaciones_idempotencia (
+        clave VARCHAR(255) PRIMARY KEY,
+        respuesta JSONB NOT NULL,
+        fecha TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     console.log('[Supabase DB] Tables verified/created.');
     return { success: true, message: 'Tablas de Supabase creadas o verificadas con éxito.' };
   } catch (error: any) {
     console.error('[Supabase DB] Error initializing tables in Supabase:', error);
     return { success: false, error: error.message || String(error) };
+  }
+}
+
+// ================= TRANSACTIONAL CONCURRENCY & IDEMPOTENCY ENGINE =================
+
+async function withPostgresTransaction<T>(
+  callback: (client: pg.PoolClient) => Promise<T>,
+  idempotencyKey?: string
+): Promise<T> {
+  if (!dbPool) {
+    throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
+  }
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. If an idempotencyKey is provided, atomically acquire row lock / register idempotency intent in PostgreSQL
+    if (idempotencyKey) {
+      const initRes = await client.query(
+        `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha)
+         VALUES ($1, '{"__status":"pending"}'::jsonb, CURRENT_TIMESTAMP)
+         ON CONFLICT (clave) DO UPDATE
+           SET clave = EXCLUDED.clave
+         RETURNING (xmax = 0) AS is_inserted, respuesta`,
+        [idempotencyKey]
+      );
+
+      const row = initRes.rows[0];
+      const isInserted = row?.is_inserted;
+      const existingResp = row?.respuesta;
+
+      // If the row already existed and has a completed response (not pending), return it immediately
+      if (!isInserted && existingResp && existingResp.__status !== 'pending') {
+        await client.query('COMMIT');
+        return existingResp as T;
+      }
+    }
+
+    // 2. Execute transactional business logic
+    const result = await callback(client);
+
+    // 3. Atomically persist final idempotency record within the SAME PostgreSQL transaction BEFORE COMMIT
+    if (idempotencyKey) {
+      await client.query(
+        `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (clave) DO UPDATE SET respuesta = EXCLUDED.respuesta`,
+        [idempotencyKey, JSON.stringify(result)]
+      );
+    }
+
+    // 4. Commit financial changes AND idempotency record together
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('[PostgreSQL Rollback Error]:', rollbackErr);
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+const inFlightOperations = new Map<string, Promise<any>>();
+
+async function executeWithIdempotency<T>(
+  key: string,
+  operation: (idemKey: string) => Promise<T>
+): Promise<T> {
+  // 1. If an identical operation is already in-flight in this Node process, await its existing promise
+  if (inFlightOperations.has(key)) {
+    return (await inFlightOperations.get(key)) as T;
+  }
+
+  // 2. Build the async execution promise
+  const inFlightPromise = (async () => {
+    // Check if already committed in PostgreSQL (e.g. past request or across server restarts)
+    if (dbPool) {
+      try {
+        const existing = await safeDbQuery('SELECT respuesta FROM operaciones_idempotencia WHERE clave = $1', [key]);
+        if (existing && existing.rows && existing.rows.length > 0) {
+          const resp = existing.rows[0].respuesta;
+          if (resp && resp.__status !== 'pending') {
+            return resp as T;
+          }
+        }
+      } catch (e) {
+        // Non-fatal, continue execution
+      }
+    }
+
+    // Execute the transactional operation
+    const result = await operation(key);
+
+    // Extra safety: ensure recorded in case the operation ran in fallback mode without withPostgresTransaction
+    if (dbPool) {
+      try {
+        await safeDbQuery(
+          `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha) 
+           VALUES ($1, $2, CURRENT_TIMESTAMP) 
+           ON CONFLICT (clave) DO UPDATE SET respuesta = EXCLUDED.respuesta`,
+          [key, JSON.stringify(result)]
+        );
+      } catch (e) {
+        // Non-fatal
+      }
+    }
+
+    return result;
+  })();
+
+  // Prevent Node.js process crashes due to unhandled promise rejections when an operation fails
+  inFlightPromise.catch(() => {});
+
+  // Synchronously register promise into inFlightOperations before any async turn
+  inFlightOperations.set(key, inFlightPromise);
+
+  try {
+    return await inFlightPromise;
+  } catch (err) {
+    inFlightOperations.delete(key);
+    throw err;
+  } finally {
+    setTimeout(() => {
+      inFlightOperations.delete(key);
+    }, 10000);
   }
 }
 
@@ -1029,10 +1173,11 @@ async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
   }
 }
 
-async function syncObligationToSupabase(ob: PaymentObligation) {
-  if (!dbPool) return;
+async function syncObligationToSupabase(ob: PaymentObligation, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (id) DO UPDATE SET 
@@ -1114,8 +1259,8 @@ async function syncLoanToSupabase(loan: BankLoan) {
   }
 }
 
-async function syncMachineryToSupabase(mac: MachineryAcquisition) {
-  if (!dbPool) return;
+async function syncMachineryToSupabase(mac: MachineryAcquisition, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
     const lineTitleVal = mac.lineTitle || mac.title || mac.optionTitle || 'Línea de maquinaria';
     const deferredPriceVal = mac.deferredPrice || mac.financedPrice || mac.basePrice || 0;
@@ -1130,7 +1275,8 @@ async function syncMachineryToSupabase(mac: MachineryAcquisition) {
     const capacityVal = mac.productionCapacityUnitsPerHour || 60;
     const equipmentVal = JSON.stringify(mac.equipmentList || mac.equipment || []);
 
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO maquinaria_adquisiciones (
         id, maquinaria_id, linea_titulo, categoria, alumno_id, alumno_nombre,
         precio_base, precio_financiado, importe_iva, precio_total, entrada_pagada, saldo_pendiente,
@@ -1217,11 +1363,10 @@ async function syncJobListingToSupabase(job: JobListing) {
   }
 }
 
-async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
-  if (!dbPool) return;
+async function syncHiredEmployeeToSupabase(emp: HiredEmployee, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
-      `INSERT INTO empleados_contratados (
+    const queryText = `INSERT INTO empleados_contratados (
         id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, puesto, genero, sueldo_bruto_mensual, edad, fecha_contratacion,
         maquinaria_asignada_id, maquinaria_asignada_titulo, vehiculo_asignado_id, vehiculo_asignado_titulo, almacen_asignado_index, turno, avatar_url
       )
@@ -1241,27 +1386,32 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee) {
          vehiculo_asignado_titulo = EXCLUDED.vehiculo_asignado_titulo,
          almacen_asignado_index = EXCLUDED.almacen_asignado_index,
          turno = EXCLUDED.turno,
-         avatar_url = EXCLUDED.avatar_url`,
-      [
-        emp.id,
-        emp.jobListingId,
-        emp.studentId,
-        emp.studentName,
-        emp.employeeName,
-        emp.role || 'operario',
-        emp.gender,
-        emp.grossSalaryMonthly,
-        emp.age,
-        parseNullableSafeDate(emp.hireDate),
-        emp.assignedMachineryId || null,
-        emp.assignedMachineryTitle || null,
-        emp.assignedVehicleId || null,
-        emp.assignedVehicleTitle || null,
-        emp.assignedWarehouseIndex !== undefined ? emp.assignedWarehouseIndex : null,
-        emp.shift || 1,
-        emp.avatarUrl || null
-      ]
-    );
+         avatar_url = EXCLUDED.avatar_url`;
+    const params = [
+      emp.id,
+      emp.jobListingId,
+      emp.studentId,
+      emp.studentName,
+      emp.employeeName,
+      emp.role || 'operario',
+      emp.gender,
+      emp.grossSalaryMonthly,
+      emp.age,
+      parseNullableSafeDate(emp.hireDate),
+      emp.assignedMachineryId || null,
+      emp.assignedMachineryTitle || null,
+      emp.assignedVehicleId || null,
+      emp.assignedVehicleTitle || null,
+      emp.assignedWarehouseIndex !== undefined ? emp.assignedWarehouseIndex : null,
+      emp.shift || 1,
+      emp.avatarUrl || null
+    ];
+
+    if (client) {
+      await client.query(queryText, params);
+    } else {
+      await safeDbQuery(queryText, params);
+    }
   } catch (e) {
     console.error('[Supabase DB] Error syncing hired employee:', e);
     throw e;
@@ -1373,10 +1523,11 @@ async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobList
   return currentDb.jobListings || [];
 }
 
-async function syncVehicleToSupabase(veh: PurchasedVehicle) {
-  if (!dbPool) return;
+async function syncVehicleToSupabase(veh: PurchasedVehicle, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO vehiculos_comprados (
         id, alumno_id, alumno_nombre, vehiculo_tipo, titulo,
         precio_base, importe_iva, precio_total, metodo_pago, fecha_compra,
@@ -1422,8 +1573,8 @@ async function syncVehicleToSupabase(veh: PurchasedVehicle) {
   }
 }
 
-async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: string) {
-  if (!dbPool) return;
+async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: string, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
     const starRods = (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0;
     const flatRods = (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0;
@@ -1436,7 +1587,8 @@ async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: 
       ? JSON.stringify((inv as any).naveInventories)
       : null;
 
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO materias_primas_inventario (
         alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
         pellets_plastico_kg, pegamento_epoxi_kg, rod_production_mode,
@@ -1502,12 +1654,13 @@ async function syncInventoryToSupabase(inv: RawMaterialInventory, studentName?: 
   }
 }
 
-async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
-  if (!dbPool) return;
+async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
     const itemsJson = ord.items && ord.items.length > 0 ? JSON.stringify(ord.items) : null;
     const historyJson = ord.negotiationHistory && ord.negotiationHistory.length > 0 ? JSON.stringify(ord.negotiationHistory) : null;
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO materias_primas_pedidos (
         id, alumno_id, alumno_nombre, announcement_id, materia_tipo, materia_titulo,
         cantidad, peso_unitario_kg, peso_total_kg, precio_base, importe_iva, coste_transporte,
@@ -1515,9 +1668,9 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
         estado, fecha_pedido, fecha_aprobado, fecha_estimada_entrega, fecha_entrega, items,
         seller_id, seller_name, seller_level, buyer_level, discount_percentage, insurance_fee,
         transport_method, last_turn_user_id, negotiation_history, shipped_at, invoiced_at, invoice_number, inventory_credited,
-        destination_nave_id
+        destination_nave_id, rejection_reason
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
       ON CONFLICT (id) DO UPDATE SET
         estado = EXCLUDED.estado,
         fecha_aprobado = EXCLUDED.fecha_aprobado,
@@ -1537,7 +1690,8 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
         invoiced_at = EXCLUDED.invoiced_at,
         invoice_number = EXCLUDED.invoice_number,
         inventory_credited = EXCLUDED.inventory_credited,
-        destination_nave_id = EXCLUDED.destination_nave_id`,
+        destination_nave_id = EXCLUDED.destination_nave_id,
+        rejection_reason = EXCLUDED.rejection_reason`,
       [
         ord.id,
         ord.studentId || '',
@@ -1574,7 +1728,8 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder) {
         parseNullableSafeDate(ord.invoicedAt),
         ord.invoiceNumber || null,
         ord.inventoryCredited || false,
-        ord.destinationNaveId || null
+        ord.destinationNaveId || null,
+        ord.rejectionReason || null
       ]
     );
   } catch (e) {
@@ -1838,10 +1993,11 @@ async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice) {
   }
 }
 
-async function syncOfficeOrderToSupabase(order: OfficePurchaseOrder) {
-  if (!dbPool) return;
+async function syncOfficeOrderToSupabase(order: OfficePurchaseOrder, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO pedidos_oficina (
         id, numero_pedido, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
         fecha_compra, items, subtotal, tipo_iva, importe_iva, importe_total,
@@ -1869,11 +2025,12 @@ async function syncOfficeOrderToSupabase(order: OfficePurchaseOrder) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing office order to Supabase:', e);
+    throw e;
   }
 }
 
-async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncement) {
-  if (!dbPool) return;
+async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncement, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
     let sLevel: string | null = null;
     if (ann.sellerLevel !== undefined && ann.sellerLevel !== null) {
@@ -1890,7 +2047,8 @@ async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncemen
     const priceAlertJson = ann.priceAlert ? JSON.stringify(ann.priceAlert) : null;
     const isDesTornilloVal = ann.isDesTornillo !== undefined ? !!ann.isDesTornillo : false;
 
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO anuncios_materia_prima (
         id, material_type, title, presentation, unit_weight_kg, is_pallet, price_per_unit,
         description, updated_at, duration_days, expiration_date, stock, active, seller_id, seller_name, seller_level,
@@ -1988,14 +2146,15 @@ async function deleteRawMaterialAnnouncementFromSupabase(id: string) {
   }
 }
 
-async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit) {
-  if (!dbPool) return;
+async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
     const attachmentsJson = lawsuit.attachments && lawsuit.attachments.length > 0 ? JSON.stringify(lawsuit.attachments) : null;
     const pagareDataJson = lawsuit.promissoryNoteData ? JSON.stringify(lawsuit.promissoryNoteData) : null;
     const defAttachmentsJson = lawsuit.defendantAnswerAttachments && lawsuit.defendantAnswerAttachments.length > 0 ? JSON.stringify(lawsuit.defendantAnswerAttachments) : null;
 
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO demandas_judiciales (
         id, numero_autos, juzgado, tipo, subtipo,
         demandante_id, demandante_nombre, demandante_nif, demandante_iban,
@@ -2129,6 +2288,7 @@ async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing court lawsuit to Supabase:', e);
+    throw e;
   }
 }
 
@@ -5883,88 +6043,180 @@ const handleAdjustBalanceRoute = async (req: express.Request, res: express.Respo
     return res.status(400).json({ error: 'Cantidad inválida' });
   }
 
-  const db = readDb();
-  const userIndex = db.users.findIndex(u => u.id === id);
-
-  if (userIndex === -1) {
-    return res.status(404).json({ error: 'Usuario no encontrado' });
-  }
-
-  const user = db.users[userIndex];
-  const oldBalance = user.balance;
   const changeValue = Number(amount);
-
-  let transferAmount = changeValue;
-  let isAdd = true;
-
-  if (actionType === 'add') {
-    user.balance = Number((user.balance + changeValue).toFixed(2));
-    isAdd = true;
-  } else if (actionType === 'subtract') {
-    user.balance = Number(Math.max(0, user.balance - changeValue).toFixed(2));
-    isAdd = false;
-  } else if (actionType === 'set') {
-    const diff = changeValue - user.balance;
-    user.balance = Number(Math.max(0, changeValue).toFixed(2));
-    if (diff >= 0) {
-      isAdd = true;
-      transferAmount = Number(diff.toFixed(2));
-    } else {
-      isAdd = false;
-      transferAmount = Number(Math.abs(diff).toFixed(2));
-    }
-  }
-
-  // Create forced transaction transfer record
-  const defaultConcept = concept && concept.trim() !== '' 
-    ? concept.trim() 
-    : (isAdd ? 'Abono forzado de fondos por Administración Docente' : 'Cobro forzado de fondos por Administración Docente');
-
   const teacherIBAN = 'ES99 0000 0000 0000 0000 0000';
-  let forcedTransfer: Transfer | null = null;
 
-  if (transferAmount > 0) {
-    forcedTransfer = {
-      id: generateId('tx'),
-      senderId: isAdd ? 'teacher-admin' : user.id,
-      senderName: isAdd ? 'Administración Docente / Profesor' : user.name,
-      senderAccount: isAdd ? teacherIBAN : user.accountNumber,
-      receiverId: isAdd ? user.id : 'teacher-admin',
-      receiverName: isAdd ? user.name : 'Administración Docente / Profesor',
-      receiverAccount: isAdd ? user.accountNumber : teacherIBAN,
-      amount: transferAmount,
-      concept: defaultConcept,
-      timestamp: new Date().toISOString()
-    };
-    db.transfers.unshift(forcedTransfer);
-  }
+  try {
+    if (dbPool) {
+      const result = await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query(
+          'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+          [id]
+        );
+        if (!lockRes || lockRes.rows.length === 0) {
+          const err: any = new Error('Usuario no encontrado en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
 
-  const newLog: SystemLog = {
-    id: generateId('log'),
-    action: 'BALANCE_ADJUSTMENT',
-    details: `Transacción forzada (${isAdd ? 'Ingreso' : 'Deducción'}) para ${user.name}. Concepto: "${defaultConcept}". Importe: ${transferAmount} €, Anterior: ${oldBalance} €, Nuevo: ${user.balance} €`,
-    timestamp: new Date().toISOString()
-  };
-  db.systemLogs.unshift(newLog);
+        const userRow = lockRes.rows[0];
+        const oldBalance = Number(userRow.saldo);
+        let newBalance = oldBalance;
+        let transferAmount = changeValue;
+        let isAdd = true;
 
-  writeDb(db);
+        if (actionType === 'add') {
+          newBalance = Number((oldBalance + changeValue).toFixed(2));
+          isAdd = true;
+        } else if (actionType === 'subtract') {
+          newBalance = Number(Math.max(0, oldBalance - changeValue).toFixed(2));
+          isAdd = false;
+        } else if (actionType === 'set') {
+          const diff = changeValue - oldBalance;
+          newBalance = Number(Math.max(0, changeValue).toFixed(2));
+          if (diff >= 0) {
+            isAdd = true;
+            transferAmount = Number(diff.toFixed(2));
+          } else {
+            isAdd = false;
+            transferAmount = Number(Math.abs(diff).toFixed(2));
+          }
+        }
 
-  if (user.role === 'student') {
-    await syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level);
-    if (forcedTransfer) {
-      await syncMovimientoToSupabase(
-        forcedTransfer.id + (isAdd ? '-in' : '-out'),
-        user.id,
-        isAdd ? 'TRANSFER_IN' : 'TRANSFER_OUT',
-        transferAmount,
-        forcedTransfer.timestamp,
-        defaultConcept,
-        forcedTransfer
-      );
+        const defaultConcept = concept && concept.trim() !== '' 
+          ? concept.trim() 
+          : (isAdd ? 'Abono forzado de fondos por Administración Docente' : 'Cobro forzado de fondos por Administración Docente');
+
+        // Update balance in PostgreSQL
+        await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, id]);
+
+        let forcedTransfer: Transfer | null = null;
+        if (transferAmount > 0) {
+          const txId = generateId('tx');
+          const nowIso = new Date().toISOString();
+          forcedTransfer = {
+            id: txId,
+            senderId: isAdd ? 'teacher-admin' : userRow.id,
+            senderName: isAdd ? 'Administración Docente / Profesor' : userRow.alumno,
+            senderAccount: isAdd ? teacherIBAN : userRow.account_number,
+            receiverId: isAdd ? userRow.id : 'teacher-admin',
+            receiverName: isAdd ? userRow.alumno : 'Administración Docente / Profesor',
+            receiverAccount: isAdd ? userRow.account_number : teacherIBAN,
+            amount: transferAmount,
+            concept: defaultConcept,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            [
+              txId + (isAdd ? '-in' : '-out'),
+              userRow.id,
+              isAdd ? 'TRANSFER_IN' : 'TRANSFER_OUT',
+              transferAmount,
+              nowIso,
+              defaultConcept,
+              forcedTransfer.senderId,
+              forcedTransfer.senderName,
+              forcedTransfer.senderAccount,
+              forcedTransfer.receiverId,
+              forcedTransfer.receiverName,
+              forcedTransfer.receiverAccount
+            ]
+          );
+        }
+
+        // Update in-memory state
+        const db = readDb();
+        const userIndex = db.users.findIndex(u => u.id === id);
+        let updatedUser = null;
+        if (userIndex !== -1) {
+          db.users[userIndex].balance = newBalance;
+          updatedUser = db.users[userIndex];
+        }
+        if (forcedTransfer) {
+          db.transfers.unshift(forcedTransfer);
+        }
+        const newLog: SystemLog = {
+          id: generateId('log'),
+          action: 'BALANCE_ADJUSTMENT',
+          details: `Transacción forzada (${isAdd ? 'Ingreso' : 'Deducción'}) para ${userRow.alumno}. Concepto: "${defaultConcept}". Importe: ${transferAmount} €, Anterior: ${oldBalance} €, Nuevo: ${newBalance} €`,
+          timestamp: new Date().toISOString()
+        };
+        db.systemLogs.unshift(newLog);
+        writeDb(db);
+
+        return { user: updatedUser || { ...userRow, balance: newBalance }, updatedBalance: newBalance };
+      });
+
+      return res.json(result);
+    } else {
+      // Fallback in-memory
+      const db = readDb();
+      const userIndex = db.users.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+      const user = db.users[userIndex];
+      const oldBalance = user.balance;
+      let transferAmount = changeValue;
+      let isAdd = true;
+
+      if (actionType === 'add') {
+        user.balance = Number((user.balance + changeValue).toFixed(2));
+        isAdd = true;
+      } else if (actionType === 'subtract') {
+        user.balance = Number(Math.max(0, user.balance - changeValue).toFixed(2));
+        isAdd = false;
+      } else if (actionType === 'set') {
+        const diff = changeValue - user.balance;
+        user.balance = Number(Math.max(0, changeValue).toFixed(2));
+        if (diff >= 0) {
+          isAdd = true;
+          transferAmount = Number(diff.toFixed(2));
+        } else {
+          isAdd = false;
+          transferAmount = Number(Math.abs(diff).toFixed(2));
+        }
+      }
+
+      const defaultConcept = concept && concept.trim() !== '' 
+        ? concept.trim() 
+        : (isAdd ? 'Abono forzado de fondos por Administración Docente' : 'Cobro forzado de fondos por Administración Docente');
+
+      let forcedTransfer: Transfer | null = null;
+      if (transferAmount > 0) {
+        forcedTransfer = {
+          id: generateId('tx'),
+          senderId: isAdd ? 'teacher-admin' : user.id,
+          senderName: isAdd ? 'Administración Docente / Profesor' : user.name,
+          senderAccount: isAdd ? teacherIBAN : user.accountNumber,
+          receiverId: isAdd ? user.id : 'teacher-admin',
+          receiverName: isAdd ? user.name : 'Administración Docente / Profesor',
+          receiverAccount: isAdd ? user.accountNumber : teacherIBAN,
+          amount: transferAmount,
+          concept: defaultConcept,
+          timestamp: new Date().toISOString()
+        };
+        db.transfers.unshift(forcedTransfer);
+      }
+
+      const newLog: SystemLog = {
+        id: generateId('log'),
+        action: 'BALANCE_ADJUSTMENT',
+        details: `Transacción forzada (${isAdd ? 'Ingreso' : 'Deducción'}) para ${user.name}. Concepto: "${defaultConcept}". Importe: ${transferAmount} €, Anterior: ${oldBalance} €, Nuevo: ${user.balance} €`,
+        timestamp: new Date().toISOString()
+      };
+      db.systemLogs.unshift(newLog);
+      writeDb(db);
+
+      return res.json({ user, updatedBalance: user.balance });
     }
+  } catch (err: any) {
+    console.error('[Adjust Balance Transaction Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al ajustar el saldo' });
   }
-
-  res.json({ user, updatedBalance: user.balance });
 };
 
 app.put('/api/users/:id/adjust-balance', handleAdjustBalanceRoute);
@@ -6035,78 +6287,164 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
     return res.status(400).json({ error: 'No puedes hacerte una transferencia a ti mismo' });
   }
 
-  const db = readDb();
+  const transferAmount = Number(Number(amount).toFixed(2));
+  const transferConcept = concept && concept.trim() !== '' ? concept.trim() : 'Transferencia inmediata';
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `tx_${senderId}_${receiverId}_${transferAmount.toFixed(2)}_${transferConcept}_${Math.floor(Date.now() / 4000)}`;
 
-  // Process automatic payments for sender first
-  processStudentAutomaticPayments(db, senderId);
-  const senderStatus = getStudentPaymentStatus(db, senderId);
-  if (senderStatus.isBlocked) {
-    return res.status(400).json({
-      error: `Operación denegada: Tu cuenta tiene pagos vencidos impagados por un total de ${formatCurrency(senderStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
-    });
-  }
-
-  const senderIndex = db.users.findIndex(u => u.id === senderId);
-  const receiverIndex = db.users.findIndex(u => u.id === receiverId);
-
-  if (senderIndex === -1) {
-    return res.status(404).json({ error: 'Emisor no encontrado' });
-  }
-  if (receiverIndex === -1) {
-    return res.status(404).json({ error: 'Destinatario no encontrado' });
-  }
-
-  const sender = db.users[senderIndex];
-  const receiver = db.users[receiverIndex];
-  const transferAmount = Number(amount);
-
-  if (sender.balance < transferAmount) {
-    return res.status(400).json({ error: 'Saldo insuficiente para completar la transferencia' });
-  }
-
-  // Deduct from sender and add to receiver
-  sender.balance = Number((sender.balance - transferAmount).toFixed(2));
-  receiver.balance = Number((receiver.balance + transferAmount).toFixed(2));
-
-  // Process automatic payments for receiver in case incoming funds settle overdue debt
-  if (receiver.role === 'student') {
-    processStudentAutomaticPayments(db, receiver.id);
-  }
-
-  const newTransfer: Transfer = {
-    id: generateId('tx'),
-    senderId: sender.id,
-    senderName: sender.name,
-    senderAccount: sender.accountNumber,
-    receiverId: receiver.id,
-    receiverName: receiver.name,
-    receiverAccount: receiver.accountNumber,
-    amount: transferAmount,
-    concept: concept ? concept.trim() : 'Transferencia inmediata',
-    timestamp: new Date().toISOString()
-  };
-
-  db.transfers.unshift(newTransfer);
-  writeDb(db);
-
-  // Sync balances and transfer movements to Supabase PostgreSQL
   try {
-    const syncTasks: Promise<any>[] = [];
-    if (sender.role === 'student') {
-      syncTasks.push(syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level));
-    }
-    if (receiver.role === 'student') {
-      syncTasks.push(syncAccountToSupabase(receiver.id, receiver.name, receiver.balance, receiver.username, receiver.password, receiver.accountNumber, receiver.role, receiver.level));
-    }
-    syncTasks.push(syncMovimientoToSupabase(newTransfer.id + '-out', sender.id, 'TRANSFER_OUT', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer));
-    syncTasks.push(syncMovimientoToSupabase(newTransfer.id + '-in', receiver.id, 'TRANSFER_IN', transferAmount, newTransfer.timestamp, newTransfer.concept, newTransfer));
-    await Promise.all(syncTasks);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Transfer]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la transferencia con la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock sender and receiver in sorted alphabetical order to prevent deadlocks
+          const sortedIds = [senderId, receiverId].sort();
+          const lockRes = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = ANY($1) ORDER BY id FOR UPDATE',
+            [sortedIds]
+          );
 
-  res.json({ success: true, transfer: newTransfer, senderBalance: sender.balance });
+          const senderRow = lockRes.rows.find((r: any) => r.id === senderId);
+          const receiverRow = lockRes.rows.find((r: any) => r.id === receiverId);
+
+          if (!senderRow) {
+            const err: any = new Error('Emisor no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (!receiverRow) {
+            const err: any = new Error('Destinatario no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const senderBalance = Number(senderRow.saldo);
+          if (senderBalance < transferAmount) {
+            const err: any = new Error('Saldo insuficiente para completar la transferencia');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newSenderBalance = Number((senderBalance - transferAmount).toFixed(2));
+          const newReceiverBalance = Number((Number(receiverRow.saldo) + transferAmount).toFixed(2));
+
+          // Atomically update both accounts in PostgreSQL
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSenderBalance, senderId]);
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newReceiverBalance, receiverId]);
+
+          const txId = generateId('tx');
+          const nowIso = new Date().toISOString();
+
+          const newTransfer: Transfer = {
+            id: txId,
+            senderId: senderRow.id,
+            senderName: senderRow.alumno,
+            senderAccount: senderRow.account_number,
+            receiverId: receiverRow.id,
+            receiverName: receiverRow.alumno,
+            receiverAccount: receiverRow.account_number,
+            amount: transferAmount,
+            concept: transferConcept,
+            timestamp: nowIso
+          };
+
+          // Record transfer movements in PostgreSQL
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              senderRow.id,
+              transferAmount,
+              nowIso,
+              transferConcept,
+              senderRow.id,
+              senderRow.alumno,
+              senderRow.account_number,
+              receiverRow.id,
+              receiverRow.alumno,
+              receiverRow.account_number
+            ]
+          );
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-in',
+              receiverRow.id,
+              transferAmount,
+              nowIso,
+              transferConcept,
+              senderRow.id,
+              senderRow.alumno,
+              senderRow.account_number,
+              receiverRow.id,
+              receiverRow.alumno,
+              receiverRow.account_number
+            ]
+          );
+
+          // Update in-memory local state
+          const db = readDb();
+          const sIdx = db.users.findIndex(u => u.id === senderId);
+          if (sIdx !== -1) db.users[sIdx].balance = newSenderBalance;
+          const rIdx = db.users.findIndex(u => u.id === receiverId);
+          if (rIdx !== -1) db.users[rIdx].balance = newReceiverBalance;
+          db.transfers.unshift(newTransfer);
+          writeDb(db);
+
+          return { success: true, transfer: newTransfer, senderBalance: newSenderBalance };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const sender = db.users.find(u => u.id === senderId);
+        const receiver = db.users.find(u => u.id === receiverId);
+
+        if (!sender) {
+          const err: any = new Error('Emisor no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (!receiver) {
+          const err: any = new Error('Destinatario no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (sender.balance < transferAmount) {
+          const err: any = new Error('Saldo insuficiente para completar la transferencia');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        sender.balance = Number((sender.balance - transferAmount).toFixed(2));
+        receiver.balance = Number((receiver.balance + transferAmount).toFixed(2));
+
+        const newTransfer: Transfer = {
+          id: generateId('tx'),
+          senderId: sender.id,
+          senderName: sender.name,
+          senderAccount: sender.accountNumber,
+          receiverId: receiver.id,
+          receiverName: receiver.name,
+          receiverAccount: receiver.accountNumber,
+          amount: transferAmount,
+          concept: transferConcept,
+          timestamp: new Date().toISOString()
+        };
+
+        db.transfers.unshift(newTransfer);
+        writeDb(db);
+        return { success: true, transfer: newTransfer, senderBalance: sender.balance };
+      }
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Transfer Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la transferencia' });
+  }
 };
 
 app.post('/api/transfers', handleTransferRoute);
@@ -6597,339 +6935,483 @@ app.delete('/api/properties/:id', async (req, res) => {
 // Buy or Rent Property (Student Action)
 app.post('/api/properties/buy-rent', async (req, res) => {
   const { propertyId, studentId, useDeferredPayment } = req.body;
-  const db = readDb();
 
-  const property = db.properties.find(p => p.id === propertyId);
-  if (!property) {
-    return res.status(404).json({ error: 'Inmueble no encontrado' });
-  }
-  if (property.status !== 'available') {
-    return res.status(400).json({ error: 'Este inmueble ya no se encuentra disponible' });
+  if (!propertyId || !studentId) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos (propertyId, studentId)' });
   }
 
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Estudiante no encontrado' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `buy_rent_${studentId}_${propertyId}_${useDeferredPayment ? 'deferred' : 'direct'}_${Math.floor(Date.now() / 5000)}`;
 
-  // Check for automatic payments and overdue debt blocking
-  processStudentAutomaticPayments(db, studentId);
-  const studentStatus = getStudentPaymentStatus(db, studentId);
-  if (studentStatus.isBlocked) {
-    return res.status(400).json({
-      error: `Operación de compra/alquiler bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+  try {
+    const responseData = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock student account and property row atomically
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const propLock = await client.query(
+            'SELECT id, titulo, tipo, operacion, superficie_m2, precio, precio_m2, porcentaje_suelo, comunidad, municipio, direccion, imagen_url, estado, propietario_id, propietario_nombre, config_pago_aplazado FROM inmuebles WHERE id = $1 FOR UPDATE',
+            [propertyId]
+          );
+          if (!propLock || propLock.rows.length === 0) {
+            const err: any = new Error('Inmueble no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const propertyRow = propLock.rows[0];
+
+          if (propertyRow.estado !== 'available') {
+            const err: any = new Error('Este inmueble ya no se encuentra disponible');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const vendorName = propertyRow.propietario_nombre && propertyRow.propietario_nombre !== 'Profesor de Contabilidad'
+            ? propertyRow.propietario_nombre
+            : 'Inmobiliaria Polígonos de España S.A.';
+          const vendorId = propertyRow.propietario_id && propertyRow.propietario_id !== 'profesor-1' ? propertyRow.propietario_id : 'corp-1';
+          const vendorAccount = 'ES210001000299887711';
+
+          const basePrice = Number(propertyRow.precio);
+          const ivaRate = 0.21;
+          const ivaAmount = Number((basePrice * ivaRate).toFixed(2));
+          const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+          const studentBalance = Number(studentRow.saldo);
+
+          // --- CASE 1: RENT (ALQUILER) ---
+          if (propertyRow.operacion === 'alquiler') {
+            const monthlyRentBase = basePrice;
+            const monthlyIva = Number((monthlyRentBase * 0.21).toFixed(2));
+            const monthlyRentTotal = Number((monthlyRentBase + monthlyIva).toFixed(2));
+            const depositAmount = monthlyRentBase * 2;
+            const initialPaymentTotal = Number((depositAmount + monthlyRentTotal).toFixed(2));
+
+            if (studentBalance < initialPaymentTotal) {
+              const err: any = new Error(`Saldo insuficiente. Se requieren ${formatCurrency(initialPaymentTotal)} (Fianza de 2 meses: ${formatCurrency(depositAmount)} + 1er Mes con IVA: ${formatCurrency(monthlyRentTotal)})`);
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const newBalance = Number((studentBalance - initialPaymentTotal).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+            await client.query('UPDATE inmuebles SET estado = $1 WHERE id = $2', ['rented', propertyRow.id]);
+
+            const txId = generateId('tx');
+            const nowIso = new Date().toISOString();
+            const newTransfer: Transfer = {
+              id: txId,
+              senderId: studentRow.id,
+              senderName: studentRow.alumno,
+              senderAccount: studentRow.account_number,
+              receiverId: vendorId,
+              receiverName: vendorName,
+              receiverAccount: vendorAccount,
+              amount: initialPaymentTotal,
+              concept: `Alquiler e IVA (Fianza 2m + 1er mes): ${propertyRow.titulo}`,
+              timestamp: nowIso
+            };
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [txId + '-out', studentRow.id, initialPaymentTotal, nowIso, newTransfer.concept, studentRow.id, studentRow.alumno, studentRow.account_number, vendorId, vendorName, vendorAccount]
+            );
+
+            const acquisitionId = generateId('acq');
+            const nextDueDate = new Date();
+            nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+
+            await client.query(
+              `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, alquiler_mensual, proximo_pago_alquiler)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+              [
+                acquisitionId,
+                propertyRow.id,
+                propertyRow.titulo,
+                propertyRow.tipo,
+                'alquiler',
+                studentRow.id,
+                studentRow.alumno,
+                propertyRow.superficie_m2,
+                `${propertyRow.direccion}, ${propertyRow.municipio}`,
+                propertyRow.imagen_url,
+                propertyRow.porcentaje_suelo,
+                monthlyRentBase,
+                monthlyIva,
+                monthlyRentTotal,
+                nowIso,
+                'contado',
+                monthlyRentTotal,
+                nextDueDate.toISOString()
+              ]
+            );
+
+            const generatedObligations: PaymentObligation[] = [];
+            for (let i = 1; i <= 11; i++) {
+              const dueDate = new Date();
+              dueDate.setMonth(dueDate.getMonth() + i);
+              const obId = generateId('obl');
+              await client.query(
+                `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, numero_cuota, total_cuotas)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendiente', $9, 12)`,
+                [obId, acquisitionId, studentRow.id, studentRow.alumno, propertyRow.titulo, 'cuota_alquiler', monthlyRentTotal, dueDate.toISOString(), i + 1]
+              );
+              generatedObligations.push({
+                id: obId,
+                acquisitionId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                propertyTitle: propertyRow.titulo,
+                type: 'cuota_alquiler',
+                amount: monthlyRentTotal,
+                dueDate: dueDate.toISOString(),
+                status: 'pendiente',
+                installmentNumber: i + 1,
+                totalInstallments: 12
+              });
+            }
+
+            // Sync in-memory DB snapshot
+            const db = readDb();
+            const sIdx = db.users.findIndex(u => u.id === studentId);
+            if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+            const pIdx = db.properties.findIndex(p => p.id === propertyId);
+            if (pIdx !== -1) db.properties[pIdx].status = 'rented';
+            const acquisition: PropertyAcquisition = {
+              id: acquisitionId,
+              propertyId: propertyRow.id,
+              propertyTitle: propertyRow.titulo,
+              propertyType: propertyRow.tipo,
+              operation: 'alquiler',
+              studentId: studentRow.id,
+              studentName: studentRow.alumno,
+              surfaceM2: Number(propertyRow.superficie_m2),
+              location: `${propertyRow.direccion}, ${propertyRow.municipio}`,
+              imageUrl: propertyRow.imagen_url,
+              landPercentage: Number(propertyRow.porcentaje_suelo),
+              basePrice: monthlyRentBase,
+              ivaAmount: monthlyIva,
+              totalPrice: monthlyRentTotal,
+              purchaseDate: nowIso,
+              paymentMethod: 'contado',
+              monthlyRent: monthlyRentTotal,
+              nextRentDueDate: nextDueDate.toISOString()
+            };
+            db.acquisitions.unshift(acquisition);
+            db.paymentObligations.push(...generatedObligations);
+            db.transfers.unshift(newTransfer);
+            writeDb(db);
+
+            return {
+              success: true,
+              message: `¡Contrato de alquiler formalizado con éxito! Se han deducido ${formatCurrency(initialPaymentTotal)} de fianza y primer mes de alquiler (IVA incl.).`,
+              acquisition,
+              updatedBalance: newBalance
+            };
+          }
+
+          // --- CASE 2: PURCHASE (COMPRA) ---
+          if (propertyRow.operacion === 'compra') {
+            const config = propertyRow.config_pago_aplazado;
+            const isDeferred = useDeferredPayment && config && config.allowed;
+
+            if (!isDeferred) {
+              // Cash purchase
+              if (studentBalance < totalPrice) {
+                const err: any = new Error(`Saldo insuficiente para la compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`);
+                err.statusCode = 400;
+                throw err;
+              }
+
+              const newBalance = Number((studentBalance - totalPrice).toFixed(2));
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+              await client.query('UPDATE inmuebles SET estado = $1 WHERE id = $2', ['sold', propertyRow.id]);
+
+              const txId = generateId('tx');
+              const nowIso = new Date().toISOString();
+              const newTransfer: Transfer = {
+                id: txId,
+                senderId: studentRow.id,
+                senderName: studentRow.alumno,
+                senderAccount: studentRow.account_number,
+                receiverId: vendorId,
+                receiverName: vendorName,
+                receiverAccount: vendorAccount,
+                amount: totalPrice,
+                concept: `Compra al contado + IVA 21%: ${propertyRow.titulo}`,
+                timestamp: nowIso
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', studentRow.id, totalPrice, nowIso, newTransfer.concept, studentRow.id, studentRow.alumno, studentRow.account_number, vendorId, vendorName, vendorAccount]
+              );
+
+              const acquisitionId = generateId('acq');
+              await client.query(
+                `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, entrada_pagada, saldo_pendiente)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 0)`,
+                [
+                  acquisitionId,
+                  propertyRow.id,
+                  propertyRow.titulo,
+                  propertyRow.tipo,
+                  'compra',
+                  studentRow.id,
+                  studentRow.alumno,
+                  propertyRow.superficie_m2,
+                  `${propertyRow.direccion}, ${propertyRow.municipio}`,
+                  propertyRow.imagen_url,
+                  propertyRow.porcentaje_suelo,
+                  basePrice,
+                  ivaAmount,
+                  totalPrice,
+                  nowIso,
+                  'contado',
+                  totalPrice
+                ]
+              );
+
+              // Update in-memory
+              const db = readDb();
+              const sIdx = db.users.findIndex(u => u.id === studentId);
+              if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+              const pIdx = db.properties.findIndex(p => p.id === propertyId);
+              if (pIdx !== -1) db.properties[pIdx].status = 'sold';
+              const acquisition: PropertyAcquisition = {
+                id: acquisitionId,
+                propertyId: propertyRow.id,
+                propertyTitle: propertyRow.titulo,
+                propertyType: propertyRow.tipo,
+                operation: 'compra',
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                surfaceM2: Number(propertyRow.superficie_m2),
+                location: `${propertyRow.direccion}, ${propertyRow.municipio}`,
+                imageUrl: propertyRow.imagen_url,
+                landPercentage: Number(propertyRow.porcentaje_suelo),
+                basePrice,
+                ivaAmount,
+                totalPrice,
+                purchaseDate: nowIso,
+                paymentMethod: 'contado',
+                downPaymentPaid: totalPrice,
+                pendingBalance: 0
+              };
+              db.acquisitions.unshift(acquisition);
+              db.transfers.unshift(newTransfer);
+              writeDb(db);
+
+              return {
+                success: true,
+                message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${formatCurrency(totalPrice)} (IVA 21% incl.).`,
+                acquisition,
+                updatedBalance: newBalance
+              };
+            } else {
+              // Deferred purchase
+              const downPaymentPercent = config.minDownPaymentPercent || 20;
+              const downPaymentBase = (basePrice * downPaymentPercent) / 100;
+              const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+
+              if (studentBalance < initialCashRequired) {
+                const err: any = new Error(`Saldo insuficiente para la entrada inicial y liquidación de IVA. Se requieren ${formatCurrency(initialCashRequired)} (Entrada ${downPaymentPercent}%: ${formatCurrency(downPaymentBase)} + IVA Total 21%: ${formatCurrency(ivaAmount)})`);
+                err.statusCode = 400;
+                throw err;
+              }
+
+              const pendingBaseBalance = Number((basePrice - downPaymentBase).toFixed(2));
+              const count = config.installmentsCount || 12;
+              const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
+              const newBalance = Number((studentBalance - initialCashRequired).toFixed(2));
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+              await client.query('UPDATE inmuebles SET estado = $1 WHERE id = $2', ['sold', propertyRow.id]);
+
+              const txId = generateId('tx');
+              const nowIso = new Date().toISOString();
+              const newTransfer: Transfer = {
+                id: txId,
+                senderId: studentRow.id,
+                senderName: studentRow.alumno,
+                senderAccount: studentRow.account_number,
+                receiverId: vendorId,
+                receiverName: vendorName,
+                receiverAccount: vendorAccount,
+                amount: initialCashRequired,
+                concept: `Entrada (${downPaymentPercent}%) + Total IVA 21%: ${propertyRow.titulo}`,
+                timestamp: nowIso
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', studentRow.id, initialCashRequired, nowIso, newTransfer.concept, studentRow.id, studentRow.alumno, studentRow.account_number, vendorId, vendorName, vendorAccount]
+              );
+
+              const acquisitionId = generateId('acq');
+              const paymentMethodStr = config.instrument === 'pagare' ? 'aplazado_pagare' : config.instrument === 'letra_cambio' ? 'aplazado_letra' : 'aplazado_cuotas';
+
+              await client.query(
+                `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, entrada_pagada, saldo_pendiente)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+                [
+                  acquisitionId,
+                  propertyRow.id,
+                  propertyRow.titulo,
+                  propertyRow.tipo,
+                  'compra',
+                  studentRow.id,
+                  studentRow.alumno,
+                  propertyRow.superficie_m2,
+                  `${propertyRow.direccion}, ${propertyRow.municipio}`,
+                  propertyRow.imagen_url,
+                  propertyRow.porcentaje_suelo,
+                  basePrice,
+                  ivaAmount,
+                  totalPrice,
+                  nowIso,
+                  paymentMethodStr,
+                  initialCashRequired,
+                  pendingBaseBalance
+                ]
+              );
+
+              const generatedObligations: PaymentObligation[] = [];
+              const oblType = config.instrument === 'pagare' ? 'pagare' : config.instrument === 'letra_cambio' ? 'letra_cambio' : 'cuota_compra';
+              for (let i = 1; i <= count; i++) {
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + (i * 30));
+                const obId = generateId('obl');
+                await client.query(
+                  `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, numero_cuota, total_cuotas)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendiente', $9, $10)`,
+                  [obId, acquisitionId, studentRow.id, studentRow.alumno, propertyRow.titulo, oblType, installmentAmount, dueDate.toISOString(), i, count]
+                );
+                generatedObligations.push({
+                  id: obId,
+                  acquisitionId,
+                  studentId: studentRow.id,
+                  studentName: studentRow.alumno,
+                  propertyTitle: propertyRow.titulo,
+                  type: oblType,
+                  amount: installmentAmount,
+                  dueDate: dueDate.toISOString(),
+                  status: 'pendiente',
+                  installmentNumber: i,
+                  totalInstallments: count
+                });
+              }
+
+              // Update in-memory
+              const db = readDb();
+              const sIdx = db.users.findIndex(u => u.id === studentId);
+              if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+              const pIdx = db.properties.findIndex(p => p.id === propertyId);
+              if (pIdx !== -1) db.properties[pIdx].status = 'sold';
+              const acquisition: PropertyAcquisition = {
+                id: acquisitionId,
+                propertyId: propertyRow.id,
+                propertyTitle: propertyRow.titulo,
+                propertyType: propertyRow.tipo,
+                operation: 'compra',
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                surfaceM2: Number(propertyRow.superficie_m2),
+                location: `${propertyRow.direccion}, ${propertyRow.municipio}`,
+                imageUrl: propertyRow.imagen_url,
+                landPercentage: Number(propertyRow.porcentaje_suelo),
+                basePrice,
+                ivaAmount,
+                totalPrice,
+                purchaseDate: nowIso,
+                paymentMethod: paymentMethodStr,
+                downPaymentPaid: initialCashRequired,
+                pendingBalance: pendingBaseBalance
+              };
+              db.acquisitions.unshift(acquisition);
+              db.paymentObligations.push(...generatedObligations);
+              db.transfers.unshift(newTransfer);
+              writeDb(db);
+
+              const instrumentLabel = config.instrument === 'pagare' ? 'Pagaré' : config.instrument === 'letra_cambio' ? 'Letra de cambio' : 'Cuota Aplazada';
+              return {
+                success: true,
+                message: `¡Compra aplazada formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido ${count} ${instrumentLabel}s de ${formatNumber(installmentAmount)} €/mes.`,
+                acquisition,
+                updatedBalance: newBalance
+              };
+            }
+          }
+
+          const err: any = new Error('Operación no válida.');
+          err.statusCode = 400;
+          throw err;
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const property = db.properties.find(p => p.id === propertyId);
+        if (!property) { const err: any = new Error('Inmueble no encontrado'); err.statusCode = 404; throw err; }
+        if (property.status !== 'available') { const err: any = new Error('Este inmueble ya no se encuentra disponible'); err.statusCode = 400; throw err; }
+        const student = db.users.find(u => u.id === studentId);
+        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
+
+        const vendorName = property.ownerName || 'Inmobiliaria Polígonos de España S.A.';
+        const vendorId = property.ownerId || 'corp-1';
+        const vendorAccount = 'ES210001000299887711';
+        const basePrice = property.price;
+        const ivaAmount = Number((basePrice * property.ivaRate).toFixed(2));
+        const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+
+        if (property.operation === 'alquiler') {
+          const monthlyRentBase = basePrice;
+          const monthlyIva = Number((monthlyRentBase * 0.21).toFixed(2));
+          const monthlyRentTotal = Number((monthlyRentBase + monthlyIva).toFixed(2));
+          const depositAmount = monthlyRentBase * 2;
+          const initialPaymentTotal = Number((depositAmount + monthlyRentTotal).toFixed(2));
+
+          if (student.balance < initialPaymentTotal) {
+            const err: any = new Error(`Saldo insuficiente. Se requieren ${formatCurrency(initialPaymentTotal)}`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          student.balance = Number((student.balance - initialPaymentTotal).toFixed(2));
+          property.status = 'rented';
+          writeDb(db);
+          return { success: true, updatedBalance: student.balance };
+        } else {
+          if (student.balance < totalPrice) {
+            const err: any = new Error(`Saldo insuficiente. Se requieren ${formatCurrency(totalPrice)}`);
+            err.statusCode = 400;
+            throw err;
+          }
+          student.balance = Number((student.balance - totalPrice).toFixed(2));
+          property.status = 'sold';
+          writeDb(db);
+          return { success: true, updatedBalance: student.balance };
+        }
+      }
     });
+
+    return res.json(responseData);
+  } catch (err: any) {
+    console.error('[Buy-Rent Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la operación inmobiliaria' });
   }
-
-  const vendorName = property.ownerName && property.ownerName !== 'Profesor de Contabilidad' 
-    ? property.ownerName 
-    : 'Inmobiliaria Polígonos de España S.A.';
-  const vendorId = property.ownerId && property.ownerId !== 'profesor-1' ? property.ownerId : 'corp-1';
-  const vendorAccount = 'ES210001000299887711';
-
-  const basePrice = property.price;
-  const ivaAmount = Number((basePrice * property.ivaRate).toFixed(2));
-  const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
-
-  // --- CASE 1: RENT (ALQUILER) ---
-  if (property.operation === 'alquiler') {
-    // Alquiler mensual + 21% IVA. Fianza inicial de 2 meses.
-    const monthlyRentBase = basePrice;
-    const monthlyIva = Number((monthlyRentBase * 0.21).toFixed(2));
-    const monthlyRentTotal = Number((monthlyRentBase + monthlyIva).toFixed(2));
-
-    const depositAmount = monthlyRentBase * 2; // Fianza
-    const initialPaymentTotal = Number((depositAmount + monthlyRentTotal).toFixed(2));
-
-    if (student.balance < initialPaymentTotal) {
-      return res.status(400).json({
-        error: `Saldo insuficiente. Se requieren ${formatCurrency(initialPaymentTotal)} (Fianza de 2 meses: ${formatCurrency(depositAmount)} + 1er Mes con IVA: ${formatCurrency(monthlyRentTotal)})`
-      });
-    }
-
-    // Deduct initial rent + deposit from student
-    student.balance = Number((student.balance - initialPaymentTotal).toFixed(2));
-
-    // Record transfer to realistic corporate vendor
-    const newTransfer: Transfer = {
-      id: generateId('tx'),
-      senderId: student.id,
-      senderName: student.name,
-      senderAccount: student.accountNumber,
-      receiverId: vendorId,
-      receiverName: vendorName,
-      receiverAccount: vendorAccount,
-      amount: initialPaymentTotal,
-      concept: `Alquiler e IVA (Fianza 2m + 1er mes): ${property.title}`,
-      timestamp: new Date().toISOString()
-    };
-    db.transfers.unshift(newTransfer);
-
-    // Create Acquisition record
-    const acquisitionId = generateId('acq');
-    const nextDueDate = new Date();
-    nextDueDate.setMonth(nextDueDate.getMonth() + 1);
-
-    const acquisition: PropertyAcquisition = {
-      id: acquisitionId,
-      propertyId: property.id,
-      propertyTitle: property.title,
-      propertyType: property.type,
-      operation: 'alquiler',
-      studentId: student.id,
-      studentName: student.name,
-      surfaceM2: property.surfaceM2,
-      location: `${property.address}, ${property.municipality}`,
-      imageUrl: property.imageUrl,
-      landPercentage: property.landPercentage,
-      basePrice: monthlyRentBase,
-      ivaAmount: monthlyIva,
-      totalPrice: monthlyRentTotal,
-      purchaseDate: new Date().toISOString(),
-      paymentMethod: 'contado',
-      monthlyRent: monthlyRentTotal,
-      nextRentDueDate: nextDueDate.toISOString()
-    };
-    db.acquisitions.unshift(acquisition);
-
-    // Schedule 11 remaining auto-domiciled monthly obligations
-    const generatedObligations: PaymentObligation[] = [];
-    for (let i = 1; i <= 11; i++) {
-      const dueDate = new Date();
-      dueDate.setMonth(dueDate.getMonth() + i);
-
-      const ob: PaymentObligation = {
-        id: generateId('obl'),
-        acquisitionId,
-        studentId: student.id,
-        studentName: student.name,
-        propertyTitle: property.title,
-        type: 'cuota_alquiler',
-        amount: monthlyRentTotal,
-        dueDate: dueDate.toISOString(),
-        status: 'pendiente',
-        installmentNumber: i + 1,
-        totalInstallments: 12
-      };
-      db.paymentObligations.push(ob);
-      generatedObligations.push(ob);
-    }
-
-    property.status = 'rented';
-    writeDb(db);
-
-    // Sync all new data to Supabase
-    try {
-      await Promise.all([
-        syncAccountToSupabase(student.id, student.name, student.balance),
-        syncPropertyToSupabase(property),
-        syncAcquisitionToSupabase(acquisition),
-        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialPaymentTotal, newTransfer.timestamp, newTransfer.concept, newTransfer),
-        ...generatedObligations.map(ob => syncObligationToSupabase(ob))
-      ]);
-    } catch (syncErr) {
-      console.error('[Supabase Sync Error - Property Rent]:', syncErr);
-      return res.status(500).json({ error: 'Error al sincronizar el alquiler con la base de datos central. Por favor, reintenta.' });
-    }
-
-    return res.json({
-      success: true,
-      message: `¡Contrato de alquiler formalizado con éxito! Se han deducido ${formatCurrency(initialPaymentTotal)} de fianza y primer mes de alquiler (IVA incl.).`,
-      acquisition,
-      updatedBalance: student.balance
-    });
-  }
-
-  // --- CASE 2: PURCHASE (COMPRA) ---
-  if (property.operation === 'compra') {
-    const isDeferred = useDeferredPayment && property.deferredPaymentConfig?.allowed;
-
-    if (!isDeferred) {
-      // CASH PURCHASE (AL CONTADO)
-      if (student.balance < totalPrice) {
-        return res.status(400).json({
-          error: `Saldo insuficiente para la compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`
-        });
-      }
-
-      // Deduct full amount
-      student.balance = Number((student.balance - totalPrice).toFixed(2));
-
-      // Record transfer to realistic corporate vendor
-      const newTransfer: Transfer = {
-        id: generateId('tx'),
-        senderId: student.id,
-        senderName: student.name,
-        senderAccount: student.accountNumber,
-        receiverId: vendorId,
-        receiverName: vendorName,
-        receiverAccount: vendorAccount,
-        amount: totalPrice,
-        concept: `Compra al contado + IVA 21%: ${property.title}`,
-        timestamp: new Date().toISOString()
-      };
-      db.transfers.unshift(newTransfer);
-
-      // Create Acquisition record
-      const acquisition: PropertyAcquisition = {
-        id: generateId('acq'),
-        propertyId: property.id,
-        propertyTitle: property.title,
-        propertyType: property.type,
-        operation: 'compra',
-        studentId: student.id,
-        studentName: student.name,
-        surfaceM2: property.surfaceM2,
-        location: `${property.address}, ${property.municipality}`,
-        imageUrl: property.imageUrl,
-        landPercentage: property.landPercentage,
-        basePrice,
-        ivaAmount,
-        totalPrice,
-        purchaseDate: new Date().toISOString(),
-        paymentMethod: 'contado',
-        downPaymentPaid: totalPrice,
-        pendingBalance: 0
-      };
-      db.acquisitions.unshift(acquisition);
-
-      property.status = 'sold';
-      writeDb(db);
-
-      // Sync all new data to Supabase
-      try {
-        await Promise.all([
-          syncAccountToSupabase(student.id, student.name, student.balance),
-          syncPropertyToSupabase(property),
-          syncAcquisitionToSupabase(acquisition),
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer)
-        ]);
-      } catch (syncErr) {
-        console.error('[Supabase Sync Error - Property Buy Cash]:', syncErr);
-        return res.status(500).json({ error: 'Error al sincronizar la compra al contado con la base de datos central. Por favor, reintenta.' });
-      }
-
-      return res.json({
-        success: true,
-        message: `¡Compra al contado completada con éxito! Has adquirido la propiedad por ${formatCurrency(totalPrice)} (IVA 21% incl.).`,
-        acquisition,
-        updatedBalance: student.balance
-      });
-    } else {
-      // DEFERRED PAYMENT (PAGO APLAZADO CON PAGARÉ / LETRA DE CAMBIO / CUOTAS)
-      const config = property.deferredPaymentConfig!;
-      const downPaymentPercent = config.minDownPaymentPercent || 20;
-      const downPaymentBase = (basePrice * downPaymentPercent) / 100;
-      const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
-
-      if (student.balance < initialCashRequired) {
-        return res.status(400).json({
-          error: `Saldo insuficiente para la entrada inicial y liquidación de IVA. Se requieren ${formatCurrency(initialCashRequired)} (Entrada ${downPaymentPercent}%: ${formatCurrency(downPaymentBase)} + IVA Total 21%: ${formatCurrency(ivaAmount)})`
-        });
-      }
-
-      const pendingBaseBalance = Number((basePrice - downPaymentBase).toFixed(2));
-      const count = config.installmentsCount || 12;
-      const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
-
-      // Deduct initial cash payment
-      student.balance = Number((student.balance - initialCashRequired).toFixed(2));
-
-      const instrumentLabel = config.instrument === 'pagare'
-        ? 'Pagaré'
-        : config.instrument === 'letra_cambio'
-        ? 'Letra de cambio'
-        : 'Cuota Aplazada';
-
-      // Record transfer for initial down payment & tax
-      const newTransfer: Transfer = {
-        id: generateId('tx'),
-        senderId: student.id,
-        senderName: student.name,
-        senderAccount: student.accountNumber,
-        receiverId: vendorId,
-        receiverName: vendorName,
-        receiverAccount: vendorAccount,
-        amount: initialCashRequired,
-        concept: `Entrada (${downPaymentPercent}%) + Total IVA 21%: ${property.title}`,
-        timestamp: new Date().toISOString()
-      };
-      db.transfers.unshift(newTransfer);
-
-      // Create Acquisition record
-      const acquisitionId = generateId('acq');
-      const acquisition: PropertyAcquisition = {
-        id: acquisitionId,
-        propertyId: property.id,
-        propertyTitle: property.title,
-        propertyType: property.type,
-        operation: 'compra',
-        studentId: student.id,
-        studentName: student.name,
-        surfaceM2: property.surfaceM2,
-        location: `${property.address}, ${property.municipality}`,
-        imageUrl: property.imageUrl,
-        landPercentage: property.landPercentage,
-        basePrice,
-        ivaAmount,
-        totalPrice,
-        purchaseDate: new Date().toISOString(),
-        paymentMethod: config.instrument === 'pagare' ? 'aplazado_pagare' : config.instrument === 'letra_cambio' ? 'aplazado_letra' : 'aplazado_cuotas',
-        downPaymentPaid: initialCashRequired,
-        pendingBalance: pendingBaseBalance
-      };
-      db.acquisitions.unshift(acquisition);
-
-      // Generate deferred payment obligations
-      const generatedObligations: PaymentObligation[] = [];
-      for (let i = 1; i <= count; i++) {
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + (i * 30));
-
-        const ob: PaymentObligation = {
-          id: generateId('obl'),
-          acquisitionId,
-          studentId: student.id,
-          studentName: student.name,
-          propertyTitle: property.title,
-          type: config.instrument === 'pagare' ? 'pagare' : config.instrument === 'letra_cambio' ? 'letra_cambio' : 'cuota_compra',
-          amount: installmentAmount,
-          dueDate: dueDate.toISOString(),
-          status: 'pendiente',
-          installmentNumber: i,
-          totalInstallments: count
-        };
-        db.paymentObligations.push(ob);
-        generatedObligations.push(ob);
-      }
-
-      property.status = 'sold';
-      writeDb(db);
-
-      // Sync all new data to Supabase
-      try {
-        await Promise.all([
-          syncAccountToSupabase(student.id, student.name, student.balance),
-          syncPropertyToSupabase(property),
-          syncAcquisitionToSupabase(acquisition),
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer),
-          ...generatedObligations.map(ob => syncObligationToSupabase(ob))
-        ]);
-      } catch (syncErr) {
-        console.error('[Supabase Sync Error - Property Buy Deferred]:', syncErr);
-        return res.status(500).json({ error: 'Error al sincronizar la compra aplazada con la base de datos central. Por favor, reintenta.' });
-      }
-
-      return res.json({
-        success: true,
-        message: `¡Compra aplazada formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido ${count} ${instrumentLabel}s de ${formatNumber(installmentAmount)} €/mes.`,
-        acquisition,
-        updatedBalance: student.balance
-      });
-    }
-  }
-
-  return res.status(400).json({ error: 'Operación no válida.' });
 });
 
 // ================= MACHINERY CATALOG & ENDPOINTS =================
@@ -7135,7 +7617,7 @@ app.post('/api/machinery/buy', async (req, res) => {
   }
 
   // Check for automatic payments and overdue debt blocking
-  processStudentAutomaticPayments(db, studentId);
+  await processStudentAutomaticPayments(db, studentId);
   const studentStatus = getStudentPaymentStatus(db, studentId);
   if (studentStatus.isBlocked) {
     return res.status(400).json({
@@ -7212,252 +7694,492 @@ app.post('/api/machinery/buy', async (req, res) => {
 
   const isPowerContracted = elecContract && elecContract.contractedPowerKw >= totalPowerNeeded;
   const initialMachineryStatus = isPowerContracted ? 'montaje' : 'pendiente_energia';
-
-  // Calculate 8-hour assembly finish date if electricity is available
   const assemblyFinishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
 
-  if (paymentMethod === 'contado') {
-    // CASH PURCHASE
-    const basePrice = option.basePrice;
-    const ivaAmount = Number((basePrice * 0.21).toFixed(2));
-    const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
-
-    if (student.balance < totalPrice) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`
-      });
-    }
-
-    // Deduct total cash payment
-    student.balance = Number((student.balance - totalPrice).toFixed(2));
-
-    // Transfer record
-    const newTransfer: Transfer = {
-      id: generateId('tx'),
-      senderId: student.id,
-      senderName: student.name,
-      senderAccount: student.accountNumber,
-      receiverId: 'corp-maquinaria-proveedor',
-      receiverName: vendorName,
-      receiverAccount: vendorAccount,
-      amount: totalPrice,
-      concept: `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`,
-      timestamp: now.toISOString()
-    };
-    db.transfers.unshift(newTransfer);
-
-    // Create Machinery Acquisition Record
-    const machAcq: MachineryAcquisition = {
-      id: generateId('mac-acq'),
-      studentId: student.id,
-      studentName: student.name,
-      machineryId: machinery.id,
-      category: machinery.category,
-      lineTitle: machinery.title,
-      title: machinery.title,
-      optionTitle: option.title,
-      lathesCount: option.lathesCount,
-      productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
-      imageUrl: machinery.imageUrl,
-      basePrice,
-      financedPrice: basePrice,
-      deferredPrice: basePrice,
-      ivaAmount,
-      totalPrice,
-      paymentMethod: 'contado',
-      downPaymentPaid: totalPrice,
-      pendingBalance: 0,
-      totalRequiredM2: machinery.totalRequiredM2,
-      requiredSurfaceM2: machinery.requiredSurfaceM2,
-      installationNaveId: targetAcquisition.id,
-      installedAtNaveId: targetAcquisition.id,
-      installedNaveId: targetAcquisition.id,
-      installationNaveTitle: targetAcquisition.propertyTitle,
-      installedAtNaveTitle: targetAcquisition.propertyTitle,
-      installedNaveTitle: targetAcquisition.propertyTitle,
-      installationSurfaceM2: targetAcquisition.surfaceM2,
-      purchaseDate: now.toISOString(),
-      assemblyDays: 5,
-      assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-      assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-      status: initialMachineryStatus,
-      requiredStaff: machinery.requiredStaff || 2,
-      requiredPowerKW: machinery.requiredPowerKW || 35,
-      powerKw: machinery.requiredPowerKW || 35,
-      equipmentList: machinery.equipmentList || machinery.equipment || [],
-      equipment: machinery.equipmentList || machinery.equipment || []
-    };
-
-    if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
-    db.machineryAcquisitions.unshift(machAcq);
-
-    // Update or create floor plan coherently
-    updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
-
-    writeDb(db);
-
-    // Sync to Supabase
-    try {
-      await Promise.all([
-        syncAccountToSupabase(student.id, student.name, student.balance),
-        syncMachineryToSupabase(machAcq),
-        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', totalPrice, newTransfer.timestamp, newTransfer.concept, newTransfer)
-      ]);
-    } catch (syncErr) {
-      console.error('[Supabase Sync Error - Machinery Buy Cash]:', syncErr);
-      return res.status(500).json({ error: 'Error al sincronizar la adquisición de maquinaria con la base de datos central. Por favor, reintenta.' });
-    }
-
-    const statusMsg = isPowerContracted
-      ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcquisition.propertyTitle}.`
-      : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
-
-    return res.json({
-      success: true,
-      message: statusMsg,
-      machineryAcquisition: machAcq,
-      updatedBalance: student.balance
-    });
-  } else if (paymentMethod === 'aplazado_pagares') {
-    // DEFERRED PAYMENT (+10% surcharge, 40% down payment + 100% IVA, 60% in 24 monthly promissory notes)
-    const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
-    const ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
-    const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
-
-    const downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
-    const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
-    const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2)); // 60% of base
-
-    if (student.balance < initialCashRequired) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`
-      });
-    }
-
-    const count = 24;
-    const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
-
-    // Deduct initial cash payment
-    student.balance = Number((student.balance - initialCashRequired).toFixed(2));
-
-    // Transfer record for down payment
-    const newTransfer: Transfer = {
-      id: generateId('tx'),
-      senderId: student.id,
-      senderName: student.name,
-      senderAccount: student.accountNumber,
-      receiverId: 'corp-maquinaria-proveedor',
-      receiverName: vendorName,
-      receiverAccount: vendorAccount,
-      amount: initialCashRequired,
-      concept: `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`,
-      timestamp: now.toISOString()
-    };
-    db.transfers.unshift(newTransfer);
-
-    // Create Machinery Acquisition Record
-    const machAcqId = generateId('mac-acq');
-    const machAcq: MachineryAcquisition = {
-      id: machAcqId,
-      studentId: student.id,
-      studentName: student.name,
-      machineryId: machinery.id,
-      category: machinery.category,
-      lineTitle: machinery.title,
-      title: machinery.title,
-      optionTitle: option.title,
-      lathesCount: option.lathesCount,
-      productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
-      imageUrl: machinery.imageUrl,
-      basePrice: basePriceWithSurcharge,
-      financedPrice: basePriceWithSurcharge,
-      deferredPrice: basePriceWithSurcharge,
-      ivaAmount,
-      totalPrice: totalPriceWithSurchargeAndIva,
-      paymentMethod: 'aplazado_pagares',
-      downPaymentPaid: initialCashRequired,
-      pendingBalance: pendingBaseBalance,
-      installmentsCount: count,
-      installmentCount: count,
-      installmentMonthlyAmount: installmentAmount,
-      totalRequiredM2: machinery.totalRequiredM2,
-      requiredSurfaceM2: machinery.requiredSurfaceM2,
-      installationNaveId: targetAcquisition.id,
-      installedAtNaveId: targetAcquisition.id,
-      installedNaveId: targetAcquisition.id,
-      installationNaveTitle: targetAcquisition.propertyTitle,
-      installedAtNaveTitle: targetAcquisition.propertyTitle,
-      installedNaveTitle: targetAcquisition.propertyTitle,
-      installationSurfaceM2: targetAcquisition.surfaceM2,
-      purchaseDate: now.toISOString(),
-      assemblyDays: 5,
-      assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-      assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-      status: initialMachineryStatus,
-      requiredStaff: machinery.requiredStaff || 2,
-      requiredPowerKW: machinery.requiredPowerKW || 35,
-      powerKw: machinery.requiredPowerKW || 35,
-      equipmentList: machinery.equipmentList || machinery.equipment || [],
-      equipment: machinery.equipmentList || machinery.equipment || []
-    };
-
-    if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
-    db.machineryAcquisitions.unshift(machAcq);
-
-    // Update or create floor plan coherently
-    updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
-
-    // Generate 24 promissory notes payment obligations
-    const generatedObligations: PaymentObligation[] = [];
-    for (let i = 1; i <= count; i++) {
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + (i * 30));
-
-      const ob: PaymentObligation = {
-        id: generateId('obl'),
-        acquisitionId: machAcqId,
-        studentId: student.id,
-        studentName: student.name,
-        propertyTitle: `${machinery.title} (${option.title})`,
-        type: 'pagare',
-        amount: installmentAmount,
-        dueDate: dueDate.toISOString(),
-        status: 'pendiente',
-        installmentNumber: i,
-        totalInstallments: count
-      };
-      db.paymentObligations.push(ob);
-      generatedObligations.push(ob);
-    }
-
-    writeDb(db);
-
-    // Sync to Supabase
-    try {
-      await Promise.all([
-        syncAccountToSupabase(student.id, student.name, student.balance),
-        syncMachineryToSupabase(machAcq),
-        syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', initialCashRequired, newTransfer.timestamp, newTransfer.concept, newTransfer),
-        ...generatedObligations.map(ob => syncObligationToSupabase(ob))
-      ]);
-    } catch (syncErr) {
-      console.error('[Supabase Sync Error - Machinery Buy Deferred]:', syncErr);
-      return res.status(500).json({ error: 'Error al sincronizar la compra aplazada de maquinaria con la base de datos central. Por favor, reintenta.' });
-    }
-
-    const defStatusMsg = isPowerContracted
-      ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 8 horas ha comenzado en ${targetAcquisition.propertyTitle}.`
-      : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
-
-    return res.json({
-      success: true,
-      message: defStatusMsg,
-      machineryAcquisition: machAcq,
-      updatedBalance: student.balance
-    });
+  if (paymentMethod !== 'contado' && paymentMethod !== 'aplazado_pagares') {
+    return res.status(400).json({ error: 'Forma de pago no válida.' });
   }
 
-  return res.status(400).json({ error: 'Forma de pago no válida.' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `mac_buy_${studentId}_${machineryId}_${optionId}_${paymentMethod}_${targetNaveId}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (paymentMethod === 'contado') {
+        const basePrice = option.basePrice;
+        const ivaAmount = Number((basePrice * 0.21).toFixed(2));
+        const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+
+        if (dbPool) {
+          return await withPostgresTransaction(async (client) => {
+            const studentLock = await client.query(
+              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+              [studentId]
+            );
+            if (!studentLock || studentLock.rows.length === 0) {
+              const err: any = new Error('Estudiante no encontrado en la base de datos');
+              err.statusCode = 404;
+              throw err;
+            }
+            const studentRow = studentLock.rows[0];
+            const currentBal = Number(studentRow.saldo);
+            if (currentBal < totalPrice) {
+              const err: any = new Error(`Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`);
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const newBalance = Number((currentBal - totalPrice).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+
+            const txId = generateId('tx');
+            const nowIso = now.toISOString();
+
+            const newTransfer: Transfer = {
+              id: txId,
+              senderId: studentRow.id,
+              senderName: studentRow.alumno,
+              senderAccount: studentRow.account_number,
+              receiverId: 'corp-maquinaria-proveedor',
+              receiverName: vendorName,
+              receiverAccount: vendorAccount,
+              amount: totalPrice,
+              concept: `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`,
+              timestamp: nowIso
+            };
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                txId + '-out',
+                studentRow.id,
+                totalPrice,
+                nowIso,
+                newTransfer.concept,
+                studentRow.id,
+                studentRow.alumno,
+                studentRow.account_number,
+                'corp-maquinaria-proveedor',
+                vendorName,
+                vendorAccount
+              ]
+            );
+
+            const machAcqId = generateId('mac-acq');
+            const machAcq: MachineryAcquisition = {
+              id: machAcqId,
+              studentId: studentRow.id,
+              studentName: studentRow.alumno,
+              machineryId: machinery.id,
+              category: machinery.category,
+              lineTitle: machinery.title,
+              title: machinery.title,
+              optionTitle: option.title,
+              lathesCount: option.lathesCount,
+              productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+              imageUrl: machinery.imageUrl,
+              basePrice,
+              financedPrice: basePrice,
+              deferredPrice: basePrice,
+              ivaAmount,
+              totalPrice,
+              paymentMethod: 'contado',
+              downPaymentPaid: totalPrice,
+              pendingBalance: 0,
+              totalRequiredM2: machinery.totalRequiredM2,
+              requiredSurfaceM2: machinery.requiredSurfaceM2,
+              installationNaveId: targetAcquisition.id,
+              installedAtNaveId: targetAcquisition.id,
+              installedNaveId: targetAcquisition.id,
+              installationNaveTitle: targetAcquisition.propertyTitle,
+              installedAtNaveTitle: targetAcquisition.propertyTitle,
+              installedNaveTitle: targetAcquisition.propertyTitle,
+              installationSurfaceM2: targetAcquisition.surfaceM2,
+              purchaseDate: nowIso,
+              assemblyDays: 5,
+              assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+              assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+              status: initialMachineryStatus,
+              requiredStaff: machinery.requiredStaff || 2,
+              requiredPowerKW: machinery.requiredPowerKW || 35,
+              powerKw: machinery.requiredPowerKW || 35,
+              equipmentList: machinery.equipmentList || machinery.equipment || [],
+              equipment: machinery.equipmentList || machinery.equipment || []
+            };
+
+            await syncMachineryToSupabase(machAcq, client);
+
+            // Update in-memory local state
+            const currentDb = readDb();
+            const sIdx = currentDb.users.findIndex(u => u.id === studentId);
+            if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
+            currentDb.transfers.unshift(newTransfer);
+            if (!currentDb.machineryAcquisitions) currentDb.machineryAcquisitions = [];
+            currentDb.machineryAcquisitions.unshift(machAcq);
+            updateFloorPlanAfterMachineryAcquisition(currentDb, studentId, targetAcquisition, requiredSurfaceM2);
+            writeDb(currentDb);
+
+            const statusMsg = isPowerContracted
+              ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcquisition.propertyTitle}.`
+              : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
+
+            return {
+              success: true,
+              message: statusMsg,
+              machineryAcquisition: machAcq,
+              updatedBalance: newBalance
+            };
+          }, key);
+        } else {
+          // Fallback in-memory
+          if (student.balance < totalPrice) {
+            const err: any = new Error(`Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`);
+            err.statusCode = 400;
+            throw err;
+          }
+          student.balance = Number((student.balance - totalPrice).toFixed(2));
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'corp-maquinaria-proveedor',
+            receiverName: vendorName,
+            receiverAccount: vendorAccount,
+            amount: totalPrice,
+            concept: `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`,
+            timestamp: now.toISOString()
+          };
+          db.transfers.unshift(newTransfer);
+
+          const machAcq: MachineryAcquisition = {
+            id: generateId('mac-acq'),
+            studentId: student.id,
+            studentName: student.name,
+            machineryId: machinery.id,
+            category: machinery.category,
+            lineTitle: machinery.title,
+            title: machinery.title,
+            optionTitle: option.title,
+            lathesCount: option.lathesCount,
+            productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+            imageUrl: machinery.imageUrl,
+            basePrice,
+            financedPrice: basePrice,
+            deferredPrice: basePrice,
+            ivaAmount,
+            totalPrice,
+            paymentMethod: 'contado',
+            downPaymentPaid: totalPrice,
+            pendingBalance: 0,
+            totalRequiredM2: machinery.totalRequiredM2,
+            requiredSurfaceM2: machinery.requiredSurfaceM2,
+            installationNaveId: targetAcquisition.id,
+            installedAtNaveId: targetAcquisition.id,
+            installedNaveId: targetAcquisition.id,
+            installationNaveTitle: targetAcquisition.propertyTitle,
+            installedAtNaveTitle: targetAcquisition.propertyTitle,
+            installedNaveTitle: targetAcquisition.propertyTitle,
+            installationSurfaceM2: targetAcquisition.surfaceM2,
+            purchaseDate: now.toISOString(),
+            assemblyDays: 5,
+            assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            status: initialMachineryStatus,
+            requiredStaff: machinery.requiredStaff || 2,
+            requiredPowerKW: machinery.requiredPowerKW || 35,
+            powerKw: machinery.requiredPowerKW || 35,
+            equipmentList: machinery.equipmentList || machinery.equipment || [],
+            equipment: machinery.equipmentList || machinery.equipment || []
+          };
+          if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+          db.machineryAcquisitions.unshift(machAcq);
+          updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
+          writeDb(db);
+
+          const statusMsg = isPowerContracted
+            ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcquisition.propertyTitle}.`
+            : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
+
+          return {
+            success: true,
+            message: statusMsg,
+            machineryAcquisition: machAcq,
+            updatedBalance: student.balance
+          };
+        }
+      } else {
+        // aplazado_pagares
+        const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
+        const ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
+        const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
+        const downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
+        const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+        const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2));
+        const count = 24;
+        const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
+
+        if (dbPool) {
+          return await withPostgresTransaction(async (client) => {
+            const studentLock = await client.query(
+              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+              [studentId]
+            );
+            if (!studentLock || studentLock.rows.length === 0) {
+              const err: any = new Error('Estudiante no encontrado en la base de datos');
+              err.statusCode = 404;
+              throw err;
+            }
+            const studentRow = studentLock.rows[0];
+            const currentBal = Number(studentRow.saldo);
+            if (currentBal < initialCashRequired) {
+              const err: any = new Error(`Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`);
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const newBalance = Number((currentBal - initialCashRequired).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+
+            const txId = generateId('tx');
+            const nowIso = now.toISOString();
+
+            const newTransfer: Transfer = {
+              id: txId,
+              senderId: studentRow.id,
+              senderName: studentRow.alumno,
+              senderAccount: studentRow.account_number,
+              receiverId: 'corp-maquinaria-proveedor',
+              receiverName: vendorName,
+              receiverAccount: vendorAccount,
+              amount: initialCashRequired,
+              concept: `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`,
+              timestamp: nowIso
+            };
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                txId + '-out',
+                studentRow.id,
+                initialCashRequired,
+                nowIso,
+                newTransfer.concept,
+                studentRow.id,
+                studentRow.alumno,
+                studentRow.account_number,
+                'corp-maquinaria-proveedor',
+                vendorName,
+                vendorAccount
+              ]
+            );
+
+            const machAcqId = generateId('mac-acq');
+            const machAcq: MachineryAcquisition = {
+              id: machAcqId,
+              studentId: studentRow.id,
+              studentName: studentRow.alumno,
+              machineryId: machinery.id,
+              category: machinery.category,
+              lineTitle: machinery.title,
+              title: machinery.title,
+              optionTitle: option.title,
+              lathesCount: option.lathesCount,
+              productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+              imageUrl: machinery.imageUrl,
+              basePrice: basePriceWithSurcharge,
+              financedPrice: basePriceWithSurcharge,
+              deferredPrice: basePriceWithSurcharge,
+              ivaAmount,
+              totalPrice: totalPriceWithSurchargeAndIva,
+              paymentMethod: 'aplazado_pagares',
+              downPaymentPaid: initialCashRequired,
+              pendingBalance: pendingBaseBalance,
+              installmentsCount: count,
+              installmentCount: count,
+              installmentMonthlyAmount: installmentAmount,
+              totalRequiredM2: machinery.totalRequiredM2,
+              requiredSurfaceM2: machinery.requiredSurfaceM2,
+              installationNaveId: targetAcquisition.id,
+              installedAtNaveId: targetAcquisition.id,
+              installedNaveId: targetAcquisition.id,
+              installationNaveTitle: targetAcquisition.propertyTitle,
+              installedAtNaveTitle: targetAcquisition.propertyTitle,
+              installedNaveTitle: targetAcquisition.propertyTitle,
+              installationSurfaceM2: targetAcquisition.surfaceM2,
+              purchaseDate: nowIso,
+              assemblyDays: 5,
+              assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+              assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+              status: initialMachineryStatus,
+              requiredStaff: machinery.requiredStaff || 2,
+              requiredPowerKW: machinery.requiredPowerKW || 35,
+              powerKw: machinery.requiredPowerKW || 35,
+              equipmentList: machinery.equipmentList || machinery.equipment || [],
+              equipment: machinery.equipmentList || machinery.equipment || []
+            };
+
+            await syncMachineryToSupabase(machAcq, client);
+
+            const generatedObligations: PaymentObligation[] = [];
+            for (let i = 1; i <= count; i++) {
+              const dueDate = new Date();
+              dueDate.setDate(dueDate.getDate() + (i * 30));
+
+              const ob: PaymentObligation = {
+                id: generateId('obl'),
+                acquisitionId: machAcqId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                propertyTitle: `${machinery.title} (${option.title})`,
+                type: 'pagare',
+                amount: installmentAmount,
+                dueDate: dueDate.toISOString(),
+                status: 'pendiente',
+                installmentNumber: i,
+                totalInstallments: count
+              };
+              generatedObligations.push(ob);
+              await syncObligationToSupabase(ob, client);
+            }
+
+            // Update in-memory local state
+            const currentDb = readDb();
+            const sIdx = currentDb.users.findIndex(u => u.id === studentId);
+            if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
+            currentDb.transfers.unshift(newTransfer);
+            if (!currentDb.machineryAcquisitions) currentDb.machineryAcquisitions = [];
+            currentDb.machineryAcquisitions.unshift(machAcq);
+            updateFloorPlanAfterMachineryAcquisition(currentDb, studentId, targetAcquisition, requiredSurfaceM2);
+            if (!currentDb.paymentObligations) currentDb.paymentObligations = [];
+            currentDb.paymentObligations.push(...generatedObligations);
+            writeDb(currentDb);
+
+            const defStatusMsg = isPowerContracted
+              ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 8 horas ha comenzado en ${targetAcquisition.propertyTitle}.`
+              : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
+
+            return {
+              success: true,
+              message: defStatusMsg,
+              machineryAcquisition: machAcq,
+              updatedBalance: newBalance
+            };
+          }, key);
+        } else {
+          // Fallback in-memory
+          if (student.balance < initialCashRequired) {
+            const err: any = new Error(`Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          student.balance = Number((student.balance - initialCashRequired).toFixed(2));
+          const newTransfer: Transfer = {
+            id: generateId('tx'),
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'corp-maquinaria-proveedor',
+            receiverName: vendorName,
+            receiverAccount: vendorAccount,
+            amount: initialCashRequired,
+            concept: `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`,
+            timestamp: now.toISOString()
+          };
+          db.transfers.unshift(newTransfer);
+
+          const machAcqId = generateId('mac-acq');
+          const machAcq: MachineryAcquisition = {
+            id: machAcqId,
+            studentId: student.id,
+            studentName: student.name,
+            machineryId: machinery.id,
+            category: machinery.category,
+            lineTitle: machinery.title,
+            title: machinery.title,
+            optionTitle: option.title,
+            lathesCount: option.lathesCount,
+            productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+            imageUrl: machinery.imageUrl,
+            basePrice: basePriceWithSurcharge,
+            financedPrice: basePriceWithSurcharge,
+            deferredPrice: basePriceWithSurcharge,
+            ivaAmount,
+            totalPrice: totalPriceWithSurchargeAndIva,
+            paymentMethod: 'aplazado_pagares',
+            downPaymentPaid: initialCashRequired,
+            pendingBalance: pendingBaseBalance,
+            installmentsCount: count,
+            installmentCount: count,
+            installmentMonthlyAmount: installmentAmount,
+            totalRequiredM2: machinery.totalRequiredM2,
+            requiredSurfaceM2: machinery.requiredSurfaceM2,
+            installationNaveId: targetAcquisition.id,
+            installedAtNaveId: targetAcquisition.id,
+            installedNaveId: targetAcquisition.id,
+            installationNaveTitle: targetAcquisition.propertyTitle,
+            installedAtNaveTitle: targetAcquisition.propertyTitle,
+            installedNaveTitle: targetAcquisition.propertyTitle,
+            installationSurfaceM2: targetAcquisition.surfaceM2,
+            purchaseDate: now.toISOString(),
+            assemblyDays: 5,
+            assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            status: initialMachineryStatus,
+            requiredStaff: machinery.requiredStaff || 2,
+            requiredPowerKW: machinery.requiredPowerKW || 35,
+            powerKw: machinery.requiredPowerKW || 35,
+            equipmentList: machinery.equipmentList || machinery.equipment || [],
+            equipment: machinery.equipmentList || machinery.equipment || []
+          };
+          if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+          db.machineryAcquisitions.unshift(machAcq);
+          updateFloorPlanAfterMachineryAcquisition(db, student.id, targetAcquisition, requiredSurfaceM2);
+
+          const generatedObligations: PaymentObligation[] = [];
+          for (let i = 1; i <= count; i++) {
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + (i * 30));
+            const ob: PaymentObligation = {
+              id: generateId('obl'),
+              acquisitionId: machAcqId,
+              studentId: student.id,
+              studentName: student.name,
+              propertyTitle: `${machinery.title} (${option.title})`,
+              type: 'pagare',
+              amount: installmentAmount,
+              dueDate: dueDate.toISOString(),
+              status: 'pendiente',
+              installmentNumber: i,
+              totalInstallments: count
+            };
+            db.paymentObligations.push(ob);
+            generatedObligations.push(ob);
+          }
+          writeDb(db);
+
+          const defStatusMsg = isPowerContracted
+            ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 8 horas ha comenzado en ${targetAcquisition.propertyTitle}.`
+            : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
+
+          return {
+            success: true,
+            message: defStatusMsg,
+            machineryAcquisition: machAcq,
+            updatedBalance: student.balance
+          };
+        }
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Machinery Buy Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar la compra de maquinaria' });
+  }
 });
 
 // Relocate Machinery Endpoint (5 days disassembly + 5 days reassembly = 10 days total)
@@ -7780,177 +8502,293 @@ app.get('/api/company/:studentId', async (req, res) => {
 // Pay due obligation (Promissory note / Bill of exchange / Rent installment)
 app.post('/api/obligations/pay', async (req, res) => {
   const { obligationId, studentId } = req.body;
-  const db = readDb();
 
-  const obligation = db.paymentObligations.find(o => o.id === obligationId && o.studentId === studentId);
-  if (!obligation) {
-    return res.status(404).json({ error: 'Obligación de pago no encontrada' });
+  if (!obligationId || !studentId) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos (obligationId, studentId)' });
   }
 
-  if (obligation.status === 'pagado') {
-    return res.status(400).json({ error: 'Esta obligación ya ha sido abonada anteriormente' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `obl_pay_${studentId}_${obligationId}_${Math.floor(Date.now() / 4000)}`;
 
-  const isDueDateReached = new Date(obligation.dueDate) <= new Date();
-  if (!isDueDateReached && obligation.status !== 'vencido') {
-    return res.status(400).json({ error: 'No está permitido abonar pagos aplazados antes de su fecha de vencimiento.' });
-  }
-
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Estudiante no encontrado' });
-  }
-
-  if (student.balance < obligation.amount) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para atender el vencimiento. Saldo actual: ${formatCurrency(student.balance)}, Vencimiento: ${formatCurrency(obligation.amount)}`
-    });
-  }
-
-  // Deduct from bank balance
-  student.balance = Number((student.balance - obligation.amount).toFixed(2));
-
-  // Instrument type name
-  const instrumentName = obligation.type === 'pagare'
-    ? 'Pagaré'
-    : obligation.type === 'letra_cambio'
-    ? 'Letra de cambio'
-    : 'Cuota / Alquiler';
-
-  // Create Transfer record
-  const newTransfer: Transfer = {
-    id: generateId('tx'),
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'corp-tenedor-efectos',
-    receiverName: 'Tenedor de Efectos Comerciales S.A.',
-    receiverAccount: 'ES210001000299887755',
-    amount: obligation.amount,
-    concept: `Atención a vencimiento de ${instrumentName} (${obligation.installmentNumber || 1}/${obligation.totalInstallments || 1}): ${obligation.propertyTitle}`,
-    timestamp: new Date().toISOString()
-  };
-  db.transfers.unshift(newTransfer);
-
-  // Mark obligation as paid
-  obligation.status = 'pagado';
-  obligation.paidDate = new Date().toISOString();
-
-  // Update acquisition pending balance if applicable
-  const acq = db.acquisitions.find(a => a.id === obligation.acquisitionId);
-  if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
-    acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - obligation.amount).toFixed(2)));
-  }
-
-  const machAcq = (db.machineryAcquisitions || []).find(m => m.id === obligation.acquisitionId);
-  if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
-    machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - obligation.amount).toFixed(2)));
-  }
-
-  writeDb(db);
-
-  // Sync to Supabase
   try {
-    const syncPromises: Promise<any>[] = [
-      syncAccountToSupabase(student.id, student.name, student.balance),
-      syncObligationToSupabase(obligation),
-      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', obligation.amount, newTransfer.timestamp, newTransfer.concept, newTransfer)
-    ];
-    if (acq) {
-      syncPromises.push(syncAcquisitionToSupabase(acq));
-    }
-    if (machAcq) {
-      syncPromises.push(syncMachineryToSupabase(machAcq));
-    }
-    await Promise.all(syncPromises);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Obligation Pay]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar el pago de la obligación con la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock student account and obligation row atomically
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-  res.json({
-    success: true,
-    message: `¡Atención al vencimiento completada con éxito! Se han abonado ${formatCurrency(obligation.amount)} correspondiente al ${instrumentName}.`,
-    updatedBalance: student.balance,
-    paidObligation: obligation
-  });
+          const oblLock = await client.query(
+            'SELECT id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas FROM obligaciones_pago WHERE id = $1 FOR UPDATE',
+            [obligationId]
+          );
+          if (!oblLock || oblLock.rows.length === 0) {
+            const err: any = new Error('Obligación de pago no encontrada');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const oblRow = oblLock.rows[0];
+
+          if (oblRow.estado === 'pagado') {
+            const err: any = new Error('Esta obligación ya ha sido abonada anteriormente');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const isDueDateReached = new Date(oblRow.fecha_vencimiento) <= new Date();
+          if (!isDueDateReached && oblRow.estado !== 'vencido') {
+            const err: any = new Error('No está permitido abonar pagos aplazados antes de su fecha de vencimiento.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const oblAmount = Number(oblRow.importe);
+          const studentBalance = Number(studentRow.saldo);
+
+          if (studentBalance < oblAmount) {
+            const err: any = new Error(`Saldo insuficiente para atender el vencimiento. Saldo actual: ${formatCurrency(studentBalance)}, Vencimiento: ${formatCurrency(oblAmount)}`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Number((studentBalance - oblAmount).toFixed(2));
+          const nowIso = new Date().toISOString();
+
+          // Deduct balance and mark obligation paid
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+          await client.query('UPDATE obligaciones_pago SET estado = $1, fecha_pago = $2 WHERE id = $3', ['pagado', nowIso, oblRow.id]);
+
+          // Update acquisition pending balance if applicable
+          if (oblRow.adquisicion_id) {
+            await client.query(
+              'UPDATE adquisiciones SET saldo_pendiente = GREATEST(0, COALESCE(saldo_pendiente, 0) - $1) WHERE id = $2',
+              [oblAmount, oblRow.adquisicion_id]
+            );
+          }
+
+          const instrumentName = oblRow.tipo === 'pagare'
+            ? 'Pagaré'
+            : oblRow.tipo === 'letra_cambio'
+            ? 'Letra de cambio'
+            : 'Cuota / Alquiler';
+
+          const txId = generateId('tx');
+          const concept = `Atención a vencimiento de ${instrumentName} (${oblRow.numero_cuota || 1}/${oblRow.total_cuotas || 1}): ${oblRow.inmueble_titulo}`;
+
+          const newTransfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'corp-tenedor-efectos',
+            receiverName: 'Tenedor de Efectos Comerciales S.A.',
+            receiverAccount: 'ES210001000299887755',
+            amount: oblAmount,
+            concept,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [txId + '-out', studentRow.id, oblAmount, nowIso, concept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+          );
+
+          // Update in-memory DB snapshot
+          const db = readDb();
+          const sIdx = db.users.findIndex(u => u.id === studentId);
+          if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+          const oIdx = db.paymentObligations.findIndex(o => o.id === obligationId);
+          let paidObligation = null;
+          if (oIdx !== -1) {
+            db.paymentObligations[oIdx].status = 'pagado';
+            db.paymentObligations[oIdx].paidDate = nowIso;
+            paidObligation = db.paymentObligations[oIdx];
+          }
+          const acq = db.acquisitions.find(a => a.id === oblRow.adquisicion_id);
+          if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+            acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - oblAmount).toFixed(2)));
+          }
+          db.transfers.unshift(newTransfer);
+          writeDb(db);
+
+          return {
+            success: true,
+            message: `¡Atención al vencimiento completada con éxito! Se han abonado ${formatCurrency(oblAmount)} correspondiente al ${instrumentName}.`,
+            updatedBalance: newBalance,
+            paidObligation: paidObligation || { ...oblRow, status: 'pagado', paidDate: nowIso }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const obligation = db.paymentObligations.find(o => o.id === obligationId && o.studentId === studentId);
+        if (!obligation) { const err: any = new Error('Obligación de pago no encontrada'); err.statusCode = 404; throw err; }
+        if (obligation.status === 'pagado') { const err: any = new Error('Esta obligación ya ha sido abonada anteriormente'); err.statusCode = 400; throw err; }
+        const student = db.users.find(u => u.id === studentId);
+        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
+        if (student.balance < obligation.amount) { const err: any = new Error('Saldo insuficiente para atender el vencimiento'); err.statusCode = 400; throw err; }
+
+        student.balance = Number((student.balance - obligation.amount).toFixed(2));
+        obligation.status = 'pagado';
+        obligation.paidDate = new Date().toISOString();
+        writeDb(db);
+        return { success: true, updatedBalance: student.balance, paidObligation: obligation };
+      }
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Obligation Pay Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al abonar la obligación de pago' });
+  }
 });
 
 // Pay due tax obligation (IRPF or Social Security)
 app.post('/api/taxes/pay', async (req, res) => {
   const { taxId, studentId } = req.body;
-  const db = readDb();
 
-  if (!db.taxObligations) db.taxObligations = [];
-  const tax = db.taxObligations.find(t => t.id === taxId && t.studentId === studentId);
-  if (!tax) {
-    return res.status(404).json({ error: 'Obligación fiscal no encontrada' });
+  if (!taxId || !studentId) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos (taxId, studentId)' });
   }
 
-  if (tax.status === 'pagado') {
-    return res.status(400).json({ error: 'Esta obligación fiscal ya ha sido liquidada' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `tax_pay_${studentId}_${taxId}_${Math.floor(Date.now() / 4000)}`;
 
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Estudiante no encontrado' });
-  }
-
-  if (student.balance < tax.amount) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para liquidar este impuesto. Saldo actual: ${formatCurrency(student.balance)}, Importe a ingresar: ${formatCurrency(tax.amount)}`
-    });
-  }
-
-  // Deduct from bank balance
-  student.balance = Number((student.balance - tax.amount).toFixed(2));
-
-  const receiverName = tax.type === 'irpf' 
-    ? 'Agencia Tributaria - Hacienda (AEAT)' 
-    : 'Tesorería General de la Seguridad Social (TGSS)';
-  const receiverAccount = tax.type === 'irpf' 
-    ? 'ES00 0000 AEAT 0000 0000 0000' 
-    : 'ES00 0000 TGSS 0000 0000 0000';
-
-  // Create Transfer record
-  const newTransfer: Transfer = {
-    id: generateId('tx'),
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'organismo-oficial',
-    receiverName,
-    receiverAccount,
-    amount: tax.amount,
-    concept: `Liquidación tributaria / SS: ${tax.concept}`,
-    timestamp: new Date().toISOString()
-  };
-  db.transfers.unshift(newTransfer);
-
-  // Mark tax obligation as paid
-  tax.status = 'pagado';
-  tax.paidDate = new Date().toISOString();
-
-  writeDb(db);
-
-  // Sync to Supabase
   try {
-    await Promise.all([
-      syncAccountToSupabase(student.id, student.name, student.balance),
-      syncTaxObligationToSupabase(tax),
-      syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', tax.amount, newTransfer.timestamp, newTransfer.concept, newTransfer)
-    ]);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Tax Pay]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la liquidación tributaria con la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock student account and tax obligation row atomically
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-  return res.json({
-    success: true,
-    message: `¡Liquidación tributaria completada con éxito! Se han abonado ${formatCurrency(tax.amount)} a ${receiverName}.`,
-    tax,
-    updatedBalance: student.balance
-  });
+          const taxLock = await client.query(
+            'SELECT id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, fecha_pago, nomina_id FROM obligaciones_fiscales WHERE id = $1 FOR UPDATE',
+            [taxId]
+          );
+          if (!taxLock || taxLock.rows.length === 0) {
+            const err: any = new Error('Obligación fiscal no encontrada en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const taxRow = taxLock.rows[0];
+
+          if (taxRow.estado === 'pagado') {
+            const err: any = new Error('Esta obligación fiscal ya ha sido liquidada');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const taxAmount = Number(taxRow.importe);
+          const studentBalance = Number(studentRow.saldo);
+
+          if (studentBalance < taxAmount) {
+            const err: any = new Error(`Saldo insuficiente para liquidar este impuesto. Saldo actual: ${formatCurrency(studentBalance)}, Importe a ingresar: ${formatCurrency(taxAmount)}`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Number((studentBalance - taxAmount).toFixed(2));
+          const nowIso = new Date().toISOString();
+
+          // Deduct from bank balance and mark paid in PostgreSQL
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+          await client.query('UPDATE obligaciones_fiscales SET estado = $1, fecha_pago = $2 WHERE id = $3', ['pagado', nowIso, taxRow.id]);
+
+          const receiverName = taxRow.tipo === 'irpf' 
+            ? 'Agencia Tributaria - Hacienda (AEAT)' 
+            : 'Tesorería General de la Seguridad Social (TGSS)';
+          const receiverAccount = taxRow.tipo === 'irpf' 
+            ? 'ES00 0000 AEAT 0000 0000 0000' 
+            : 'ES00 0000 TGSS 0000 0000 0000';
+
+          const txId = generateId('tx');
+          const concept = `Liquidación tributaria / SS: ${taxRow.concepto}`;
+
+          const newTransfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'organismo-oficial',
+            receiverName,
+            receiverAccount,
+            amount: taxAmount,
+            concept,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [txId + '-out', studentRow.id, taxAmount, nowIso, concept, studentRow.id, studentRow.alumno, studentRow.account_number, 'organismo-oficial', receiverName, receiverAccount]
+          );
+
+          // Update in-memory DB snapshot
+          const db = readDb();
+          const sIdx = db.users.findIndex(u => u.id === studentId);
+          if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+          if (!db.taxObligations) db.taxObligations = [];
+          const tIdx = db.taxObligations.findIndex(t => t.id === taxId);
+          let paidTax = null;
+          if (tIdx !== -1) {
+            db.taxObligations[tIdx].status = 'pagado';
+            db.taxObligations[tIdx].paidDate = nowIso;
+            paidTax = db.taxObligations[tIdx];
+          }
+          db.transfers.unshift(newTransfer);
+          writeDb(db);
+
+          return {
+            success: true,
+            message: `¡Liquidación tributaria completada con éxito! Se han abonado ${formatCurrency(taxAmount)} a ${receiverName}.`,
+            tax: paidTax || { ...taxRow, status: 'pagado', paidDate: nowIso },
+            updatedBalance: newBalance
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        if (!db.taxObligations) db.taxObligations = [];
+        const tax = db.taxObligations.find(t => t.id === taxId && t.studentId === studentId);
+        if (!tax) { const err: any = new Error('Obligación fiscal no encontrada'); err.statusCode = 404; throw err; }
+        if (tax.status === 'pagado') { const err: any = new Error('Esta obligación fiscal ya ha sido liquidada'); err.statusCode = 400; throw err; }
+        const student = db.users.find(u => u.id === studentId);
+        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
+        if (student.balance < tax.amount) { const err: any = new Error('Saldo insuficiente para liquidar este impuesto'); err.statusCode = 400; throw err; }
+
+        student.balance = Number((student.balance - tax.amount).toFixed(2));
+        tax.status = 'pagado';
+        tax.paidDate = new Date().toISOString();
+        writeDb(db);
+        return { success: true, tax, updatedBalance: student.balance };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Tax Pay Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al liquidar la obligación fiscal' });
+  }
 });
 
 // ---------------- LOAN MANAGEMENT SYSTEM ----------------
@@ -8022,7 +8860,7 @@ function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date | stri
 }
 
 // Automatic processing for discounted promissory notes when due date arrives
-function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
+async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): Promise<boolean> {
   if (!db.marketMessages || db.marketMessages.length === 0) return false;
   let modified = false;
   const now = new Date();
@@ -8063,320 +8901,653 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
           const isDiscountedNote = pn.status === 'descontado';
           const isCollectionNote = pn.status === 'gestion_cobro';
 
-          // Case A: Debtor/buyer has sufficient funds to pay the note at maturity
-          if (payer.balance >= amount) {
-            payer.balance = Number((payer.balance - amount).toFixed(2));
-            const txId = generateId('tx');
+          if (dbPool) {
+            try {
+              await withPostgresTransaction(async (client) => {
+                // Lock payer and beneficiary accounts in alphabetical order to avoid deadlocks
+                const idsToLock = [payer.id, beneficiary.id].sort();
+                const accountsResult = await client.query(
+                  `SELECT id, alumno, saldo, usuario, password, account_number, role, level 
+                   FROM cuentas 
+                   WHERE id = ANY($1) 
+                   ORDER BY id ASC 
+                   FOR UPDATE`,
+                  [idsToLock]
+                );
 
-            if (isDiscountedNote) {
-              // Note was previously discounted: seller already received cash in advance.
-              // Debtor pays the bank which financed the advance.
-              const transferConcept = `Liquidación al vencimiento de pagaré descontado ${pn.promissoryNoteNumber} - Librador: ${payer.name}`;
+                const payerRow = accountsResult.rows.find(r => r.id === payer.id);
+                const beneficiaryRow = accountsResult.rows.find(r => r.id === beneficiary.id);
 
-              const payTransfer: Transfer = {
-                id: txId,
-                senderId: payer.id,
-                senderName: payer.name,
-                senderAccount: payer.accountNumber || pn.bankIban,
-                receiverId: 'corp-banco-central',
-                receiverName: 'Banco Central Mercantil (Liquidación de descuento)',
-                receiverAccount: 'ES210001000299887700',
-                amount: amount,
-                concept: transferConcept,
-                timestamp: now.toISOString()
-              };
+                if (!payerRow || !beneficiaryRow) {
+                  throw new Error(`Cuentas no encontradas para liquidación de pagaré ${pn.promissoryNoteNumber}`);
+                }
 
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift(payTransfer);
+                const currentPayerBalance = Number(payerRow.saldo);
+                const currentBeneficiaryBalance = Number(beneficiaryRow.saldo);
+                const nowIso = new Date().toISOString();
+                const txId = generateId('tx');
 
-              pn.status = 'pagado';
-              pn.maturityProcessed = true;
-              pn.paidAt = now.toISOString();
-              pn.paidTransferId = txId;
-              modified = true;
+                if (currentPayerBalance >= amount) {
+                  // Case A: Debtor has sufficient funds
+                  const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+                  await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
 
-              // Notification to seller: no further charges
-              addNotification(
-                db,
-                beneficiary.id,
-                'Pagaré descontado atendido al vencimiento',
-                `El deudor ${payer.name} ha liquidado correctamente al vencimiento el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € que habías descontado. Operación concluida con éxito sin costes adicionales.`,
-                'transfer_received',
-                txId
-              );
+                  if (isDiscountedNote) {
+                    const transferConcept = `Liquidación al vencimiento de pagaré descontado ${pn.promissoryNoteNumber} - Librador: ${payer.name}`;
+                    const payTransfer: Transfer = {
+                      id: txId,
+                      senderId: payer.id,
+                      senderName: payer.name,
+                      senderAccount: payer.accountNumber || pn.bankIban,
+                      receiverId: 'corp-banco-central',
+                      receiverName: 'Banco Central Mercantil (Liquidación de descuento)',
+                      receiverAccount: 'ES210001000299887700',
+                      amount: amount,
+                      concept: transferConcept,
+                      timestamp: nowIso
+                    };
 
-              // Notification to buyer
-              addNotification(
-                db,
-                payer.id,
-                'Cargo de pagaré al vencimiento',
-                `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} emitido a favor de ${beneficiary.name}.`,
-                'transfer_received',
-                txId
-              );
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txId + '-out', payerRow.id, amount, nowIso, transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, 'corp-banco-central', 'Banco Central Mercantil (Liquidación de descuento)', 'ES210001000299887700']
+                    );
 
-              // Chat message in direct message thread
-              const successMaturityMsg: MarketMessage = {
-                id: generateId('msg'),
-                chatId: msg.chatId,
-                senderId: payer.id,
-                senderName: payer.name,
-                recipientId: beneficiary.id,
-                recipientName: beneficiary.name,
-                content: `🏦 Pagaré descontado liquidado al vencimiento: El deudor ${payer.name} ha atendido el cargo del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco confirma la liquidación definitiva. No procede ningún cargo adicional para el vendedor acreedor.`,
-                timestamp: now.toISOString(),
-                read: false,
-                type: 'text'
-              };
-              db.marketMessages.push(successMaturityMsg);
+                    // Update memory and write to db.json
+                    const currentDb = readDb();
+                    const targetMsg = (currentDb.marketMessages || []).find(m => m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                    if (targetMsg && targetMsg.promissoryNoteData) {
+                      targetMsg.promissoryNoteData.status = 'pagado';
+                      targetMsg.promissoryNoteData.maturityProcessed = true;
+                      targetMsg.promissoryNoteData.paidAt = nowIso;
+                      targetMsg.promissoryNoteData.paidTransferId = txId;
+                    }
+                    const pUser = (currentDb.users || []).find(u => u.id === payer.id);
+                    if (pUser) pUser.balance = newPayerBal;
+                    if (!currentDb.transfers) currentDb.transfers = [];
+                    currentDb.transfers.unshift(payTransfer);
 
-              // Sync to Supabase
-              if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
-              syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, payTransfer).catch(e => console.error(e));
-              syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-              syncMarketMessageToSupabase(successMaturityMsg).catch(e => console.error(e));
-            } else if (isCollectionNote) {
-              // Note was placed in collection management (gestión de cobro):
-              // Seller pays zero at maturity and automatically receives the full nominal amount.
-              beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
+                    addNotification(
+                      currentDb,
+                      beneficiary.id,
+                      'Pagaré descontado atendido al vencimiento',
+                      `El deudor ${payer.name} ha liquidado correctamente al vencimiento el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € que habías descontado. Operación concluida con éxito sin costes adicionales.`,
+                      'transfer_received',
+                      txId
+                    );
 
-              const transferConcept = `Cobro automático al vencimiento por gestión de cobro de pagaré ${pn.promissoryNoteNumber} - Librador: ${payer.name} -> Beneficiario: ${beneficiary.name}`;
+                    addNotification(
+                      currentDb,
+                      payer.id,
+                      'Cargo de pagaré al vencimiento',
+                      `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} emitido a favor de ${beneficiary.name}.`,
+                      'transfer_received',
+                      txId
+                    );
 
-              const collectionPayTransfer: Transfer = {
-                id: txId,
-                senderId: payer.id,
-                senderName: payer.name,
-                senderAccount: payer.accountNumber || pn.bankIban,
-                receiverId: beneficiary.id,
-                receiverName: beneficiary.name,
-                receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-                amount: amount,
-                concept: transferConcept,
-                timestamp: now.toISOString()
-              };
+                    const successMaturityMsg: MarketMessage = {
+                      id: generateId('msg'),
+                      chatId: msg.chatId,
+                      senderId: payer.id,
+                      senderName: payer.name,
+                      recipientId: beneficiary.id,
+                      recipientName: beneficiary.name,
+                      content: `🏦 Pagaré descontado liquidado al vencimiento: El deudor ${payer.name} ha atendido el cargo del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco confirma la liquidación definitiva. No procede ningún cargo adicional para el vendedor acreedor.`,
+                      timestamp: nowIso,
+                      read: false,
+                      type: 'text'
+                    };
+                    currentDb.marketMessages.push(successMaturityMsg);
 
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift(collectionPayTransfer);
+                    writeDb(currentDb);
+                    syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+                    syncMarketMessageToSupabase(successMaturityMsg).catch(e => console.error(e));
+                    modified = true;
+                  } else if (isCollectionNote) {
+                    const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
+                    await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
 
-              pn.status = 'pagado';
-              pn.maturityProcessed = true;
-              pn.paidAt = now.toISOString();
-              pn.paidTransferId = txId;
-              pn.collectionAutoCollectedAt = now.toISOString();
-              modified = true;
+                    const transferConcept = `Cobro automático al vencimiento por gestión de cobro de pagaré ${pn.promissoryNoteNumber} - Librador: ${payer.name} -> Beneficiario: ${beneficiary.name}`;
+                    const collectionPayTransfer: Transfer = {
+                      id: txId,
+                      senderId: payer.id,
+                      senderName: payer.name,
+                      senderAccount: payer.accountNumber || pn.bankIban,
+                      receiverId: beneficiary.id,
+                      receiverName: beneficiary.name,
+                      receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                      amount: amount,
+                      concept: transferConcept,
+                      timestamp: nowIso
+                    };
 
-              // Notification to seller
-              addNotification(
-                db,
-                beneficiary.id,
-                'Pagaré en gestión de cobro cobrado con éxito',
-                `El pagaré oficial ${pn.promissoryNoteNumber} emitido por ${payer.name} ha vencido hoy y el banco ha tramitado el cobro automático. Se han ingresado +${formatNumber(amount)} € en tu cuenta corriente sin necesidad de ninguna acción adicional.`,
-                'transfer_received',
-                txId
-              );
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txId + '-out', payerRow.id, amount, nowIso, transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+                    );
 
-              // Notification to buyer
-              addNotification(
-                db,
-                payer.id,
-                'Cargo de pagaré al vencimiento (gestión de cobro)',
-                `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} presentado en gestión de cobro por ${beneficiary.name}.`,
-                'transfer_received',
-                txId
-              );
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txId + '-in', beneficiaryRow.id, amount, nowIso, transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+                    );
 
-              // Chat message in direct message thread
-              const successCollectionMsg: MarketMessage = {
-                id: generateId('msg'),
-                chatId: msg.chatId,
-                senderId: payer.id,
-                senderName: payer.name,
-                recipientId: beneficiary.id,
-                recipientName: beneficiary.name,
-                content: `🏛️ PAGARÉ EN GESTIÓN DE COBRO LIQUIDADO AUTOMÁTICAMENTE: El banco ha tramitado con éxito el cobro automático al vencimiento del pagaré ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} € en la cuenta del comprador deudor (${payer.name}) y se han abonado íntegramente +${formatNumber(amount)} € en la cuenta del vendedor acreedor (${beneficiary.name}).`,
-                timestamp: now.toISOString(),
-                read: false,
-                type: 'text'
-              };
-              db.marketMessages.push(successCollectionMsg);
+                    // Update memory and write to db.json
+                    const currentDb = readDb();
+                    const targetMsg = (currentDb.marketMessages || []).find(m => m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                    if (targetMsg && targetMsg.promissoryNoteData) {
+                      targetMsg.promissoryNoteData.status = 'pagado';
+                      targetMsg.promissoryNoteData.maturityProcessed = true;
+                      targetMsg.promissoryNoteData.paidAt = nowIso;
+                      targetMsg.promissoryNoteData.paidTransferId = txId;
+                      targetMsg.promissoryNoteData.collectionAutoCollectedAt = nowIso;
+                    }
+                    const pUser = (currentDb.users || []).find(u => u.id === payer.id);
+                    if (pUser) pUser.balance = newPayerBal;
+                    const bUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+                    if (bUser) bUser.balance = newBeneficiaryBal;
 
-              // Sync to Supabase
-              if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
-              if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-              syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, collectionPayTransfer).catch(e => console.error(e));
-              syncMovimientoToSupabase(txId + '-in', beneficiary.id, 'TRANSFER_IN', amount, now.toISOString(), transferConcept, collectionPayTransfer).catch(e => console.error(e));
-              syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-              syncMarketMessageToSupabase(successCollectionMsg).catch(e => console.error(e));
+                    if (!currentDb.transfers) currentDb.transfers = [];
+                    currentDb.transfers.unshift(collectionPayTransfer);
+
+                    addNotification(
+                      currentDb,
+                      beneficiary.id,
+                      'Pagaré en gestión de cobro cobrado con éxito',
+                      `El pagaré oficial ${pn.promissoryNoteNumber} emitido por ${payer.name} ha vencido hoy y el banco ha tramitado el cobro automático. Se han ingresado +${formatNumber(amount)} € en tu cuenta corriente sin necesidad de ninguna acción adicional.`,
+                      'transfer_received',
+                      txId
+                    );
+
+                    addNotification(
+                      currentDb,
+                      payer.id,
+                      'Cargo de pagaré al vencimiento (gestión de cobro)',
+                      `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} presentado en gestión de cobro por ${beneficiary.name}.`,
+                      'transfer_received',
+                      txId
+                    );
+
+                    const successCollectionMsg: MarketMessage = {
+                      id: generateId('msg'),
+                      chatId: msg.chatId,
+                      senderId: payer.id,
+                      senderName: payer.name,
+                      recipientId: beneficiary.id,
+                      recipientName: beneficiary.name,
+                      content: `🏛️ PAGARÉ EN GESTIÓN DE COBRO LIQUIDADO AUTOMÁTICAMENTE: El banco ha tramitado con éxito el cobro automático al vencimiento del pagaré ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} € en la cuenta del comprador deudor (${payer.name}) y se han abonado íntegramente +${formatNumber(amount)} € en la cuenta del vendedor acreedor (${beneficiary.name}).`,
+                      timestamp: nowIso,
+                      read: false,
+                      type: 'text'
+                    };
+                    currentDb.marketMessages.push(successCollectionMsg);
+
+                    writeDb(currentDb);
+                    syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+                    syncMarketMessageToSupabase(successCollectionMsg).catch(e => console.error(e));
+                    modified = true;
+                  }
+                } else {
+                  // Case B: Debtor does NOT have sufficient funds -> Return unpaid
+                  if (isDiscountedNote) {
+                    const unpaidCommission = Number((amount * 0.01).toFixed(2));
+                    const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
+                    const newBeneficiaryBal = Number((currentBeneficiaryBalance - totalDebitVendor).toFixed(2));
+
+                    await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
+
+                    const txNominalId = generateId('tx');
+                    const txFeeId = generateId('tx');
+
+                    const nominalReturnConcept = `Reintegro del nominal de pagaré descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${payer.name}) - Devolución de anticipo bancario: -${formatNumber(amount)} €`;
+                    const feeReturnConcept = `Comisión bancaria por devolución de pagaré descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} €) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} €`;
+
+                    const nominalReturnTransfer: Transfer = {
+                      id: txNominalId,
+                      senderId: beneficiary.id,
+                      senderName: beneficiary.name,
+                      senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                      receiverId: 'corp-banco-central',
+                      receiverName: 'Banco Central Mercantil (Reintegro nominal de descuento impagado)',
+                      receiverAccount: 'ES210001000299887700',
+                      amount: amount,
+                      concept: nominalReturnConcept,
+                      timestamp: nowIso
+                    };
+
+                    const feeReturnTransfer: Transfer = {
+                      id: txFeeId,
+                      senderId: beneficiary.id,
+                      senderName: beneficiary.name,
+                      senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                      receiverId: 'corp-banco-central',
+                      receiverName: 'Banco Central Mercantil (Comisión de devolución de efectos)',
+                      receiverAccount: 'ES210001000299887700',
+                      amount: unpaidCommission,
+                      concept: feeReturnConcept,
+                      timestamp: new Date(now.getTime() + 1000).toISOString()
+                    };
+
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txNominalId + '-out', beneficiaryRow.id, amount, nowIso, nominalReturnConcept, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Reintegro nominal de descuento impagado)', 'ES210001000299887700']
+                    );
+
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txFeeId + '-out', beneficiaryRow.id, unpaidCommission, new Date(now.getTime() + 1000).toISOString(), feeReturnConcept, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Comisión de devolución de efectos)', 'ES210001000299887700']
+                    );
+
+                    // Update memory and write to db.json
+                    const currentDb = readDb();
+                    const targetMsg = (currentDb.marketMessages || []).find(m => m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                    if (targetMsg && targetMsg.promissoryNoteData) {
+                      targetMsg.promissoryNoteData.status = 'impagado';
+                      targetMsg.promissoryNoteData.maturityProcessed = true;
+                      targetMsg.promissoryNoteData.unpaidReturnedAt = nowIso;
+                      targetMsg.promissoryNoteData.unpaidFeeRate = 1;
+                      targetMsg.promissoryNoteData.unpaidFeeAmount = unpaidCommission;
+                      targetMsg.promissoryNoteData.unpaidNominalReimbursed = amount;
+                      targetMsg.promissoryNoteData.unpaidTotalDebited = totalDebitVendor;
+                      targetMsg.promissoryNoteData.unpaidReturnTransferId = txNominalId;
+                      targetMsg.promissoryNoteData.unpaidFeeTransferId = txFeeId;
+                    }
+                    const bUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+                    if (bUser) bUser.balance = newBeneficiaryBal;
+
+                    if (!currentDb.transfers) currentDb.transfers = [];
+                    currentDb.transfers.unshift(feeReturnTransfer);
+                    currentDb.transfers.unshift(nominalReturnTransfer);
+
+                    addNotification(
+                      currentDb,
+                      beneficiary.id,
+                      'Pagaré descontado devuelto por impago (cargo de nominal + comisión)',
+                      `El deudor ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} €; 2) Comisión de devolución (1%): -${formatNumber(unpaidCommission)} €. Total cargado: -${formatNumber(totalDebitVendor)} €. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                      'transfer_received',
+                      txNominalId
+                    );
+
+                    addNotification(
+                      currentDb,
+                      payer.id,
+                      'Pagaré devuelto impagado al tenedor',
+                      `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas judiciales.`,
+                      'transfer_received',
+                      txNominalId
+                    );
+
+                    const protestMaturityMsg: MarketMessage = {
+                      id: generateId('msg'),
+                      chatId: msg.chatId,
+                      senderId: beneficiary.id,
+                      senderName: beneficiary.name,
+                      recipientId: payer.id,
+                      recipientName: payer.name,
+                      content: `❌ Pagaré descontado devuelto por impago: El librador ${payer.name} no disponía de fondos suficientes para atender el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${beneficiary.name}):\n• Reintegro del nominal anticipado: -${formatNumber(amount)} €\n• Comisión bancaria por devolución (1%): -${formatNumber(unpaidCommission)} €\n• Total adeudado: -${formatNumber(totalDebitVendor)} €\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
+                      timestamp: nowIso,
+                      read: false,
+                      type: 'text'
+                    };
+                    currentDb.marketMessages.push(protestMaturityMsg);
+
+                    writeDb(currentDb);
+                    syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+                    syncMarketMessageToSupabase(protestMaturityMsg).catch(e => console.error(e));
+                    modified = true;
+                  } else if (isCollectionNote) {
+                    const unpaidCommission = 40.00;
+                    const newBeneficiaryBal = Number((currentBeneficiaryBalance - unpaidCommission).toFixed(2));
+
+                    await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
+
+                    const returnConcept = `Comisión por devolución de pagaré impagado en gestión de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${payer.name}) - Tarifa bancaria fija: -40,00 €`;
+                    const returnTransfer: Transfer = {
+                      id: txId,
+                      senderId: beneficiary.id,
+                      senderName: beneficiary.name,
+                      senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                      receiverId: 'corp-banco-central',
+                      receiverName: 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)',
+                      receiverAccount: 'ES210001000299887700',
+                      amount: unpaidCommission,
+                      concept: returnConcept,
+                      timestamp: nowIso
+                    };
+
+                    await client.query(
+                      `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                       VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                      [txId + '-out', beneficiaryRow.id, unpaidCommission, nowIso, returnConcept, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)', 'ES210001000299887700']
+                    );
+
+                    // Update memory and write to db.json
+                    const currentDb = readDb();
+                    const targetMsg = (currentDb.marketMessages || []).find(m => m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                    if (targetMsg && targetMsg.promissoryNoteData) {
+                      targetMsg.promissoryNoteData.status = 'impagado';
+                      targetMsg.promissoryNoteData.maturityProcessed = true;
+                      targetMsg.promissoryNoteData.unpaidReturnedAt = nowIso;
+                      targetMsg.promissoryNoteData.collectionUnpaidFeeAmount = unpaidCommission;
+                      targetMsg.promissoryNoteData.unpaidReturnTransferId = txId;
+                    }
+                    const bUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+                    if (bUser) bUser.balance = newBeneficiaryBal;
+
+                    if (!currentDb.transfers) currentDb.transfers = [];
+                    currentDb.transfers.unshift(returnTransfer);
+
+                    addNotification(
+                      currentDb,
+                      beneficiary.id,
+                      'Pagaré en gestión de cobro devuelto por impago',
+                      `El librador ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 € por comisión de devolución. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                      'transfer_received',
+                      txId
+                    );
+
+                    addNotification(
+                      currentDb,
+                      payer.id,
+                      'Pagaré Devuelto Impagado al Tenedor',
+                      `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas en los Tribunales.`,
+                      'transfer_received',
+                      txId
+                    );
+
+                    const protestCollectionMsg: MarketMessage = {
+                      id: generateId('msg'),
+                      chatId: msg.chatId,
+                      senderId: beneficiary.id,
+                      senderName: beneficiary.name,
+                      recipientId: payer.id,
+                      recipientName: payer.name,
+                      content: `❌ PAGARÉ EN GESTIÓN DE COBRO DEVUELTO POR IMPAGO: El deudor ${payer.name} no disponía de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco ha devuelto el pagaré al vendedor acreedor (${beneficiary.name}) como IMPAGADO con un cargo de 40,00 € en concepto de comisión por efecto devuelto. El pagaré conserva plena fuerza ejecutiva cambiaria para su reclamación judicial.`,
+                      timestamp: nowIso,
+                      read: false,
+                      type: 'text'
+                    };
+                    currentDb.marketMessages.push(protestCollectionMsg);
+
+                    writeDb(currentDb);
+                    syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+                    syncMarketMessageToSupabase(protestCollectionMsg).catch(e => console.error(e));
+                    modified = true;
+                  }
+                }
+              });
+            } catch (err) {
+              console.error(`[Promissory Maturity Concurrency Error] Error processing note ${pn.promissoryNoteNumber}:`, err);
             }
           } else {
-            // Case B: Debtor/buyer DOES NOT have sufficient funds -> Return note to seller as unpaid
-            const txId = generateId('tx');
+            // Fallback in-memory
+            if (payer.balance >= amount) {
+              payer.balance = Number((payer.balance - amount).toFixed(2));
+              const txId = generateId('tx');
 
-            if (isDiscountedNote) {
-              // Discounted note returned: seller repays nominal (advanced earlier by bank) + 1% return commission
-              const unpaidCommission = Number((amount * 0.01).toFixed(2));
-              const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
+              if (isDiscountedNote) {
+                const transferConcept = `Liquidación al vencimiento de pagaré descontado ${pn.promissoryNoteNumber} - Librador: ${payer.name}`;
+                const payTransfer: Transfer = {
+                  id: txId,
+                  senderId: payer.id,
+                  senderName: payer.name,
+                  senderAccount: payer.accountNumber || pn.bankIban,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Mercantil (Liquidación de descuento)',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: amount,
+                  concept: transferConcept,
+                  timestamp: now.toISOString()
+                };
 
-              beneficiary.balance = Number((beneficiary.balance - totalDebitVendor).toFixed(2));
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(payTransfer);
 
-              const txNominalId = generateId('tx');
-              const txFeeId = generateId('tx');
+                pn.status = 'pagado';
+                pn.maturityProcessed = true;
+                pn.paidAt = now.toISOString();
+                pn.paidTransferId = txId;
+                modified = true;
 
-              const nominalReturnConcept = `Reintegro del nominal de pagaré descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${payer.name}) - Devolución de anticipo bancario: -${formatNumber(amount)} €`;
-              const feeReturnConcept = `Comisión bancaria por devolución de pagaré descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} €) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} €`;
+                addNotification(
+                  db,
+                  beneficiary.id,
+                  'Pagaré descontado atendido al vencimiento',
+                  `El deudor ${payer.name} ha liquidado correctamente al vencimiento el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € que habías descontado. Operación concluida con éxito sin costes adicionales.`,
+                  'transfer_received',
+                  txId
+                );
 
-              const nominalReturnTransfer: Transfer = {
-                id: txNominalId,
-                senderId: beneficiary.id,
-                senderName: beneficiary.name,
-                senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-                receiverId: 'corp-banco-central',
-                receiverName: 'Banco Central Mercantil (Reintegro nominal de descuento impagado)',
-                receiverAccount: 'ES210001000299887700',
-                amount: amount,
-                concept: nominalReturnConcept,
-                timestamp: now.toISOString()
-              };
+                addNotification(
+                  db,
+                  payer.id,
+                  'Cargo de pagaré al vencimiento',
+                  `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} emitido a favor de ${beneficiary.name}.`,
+                  'transfer_received',
+                  txId
+                );
 
-              const feeReturnTransfer: Transfer = {
-                id: txFeeId,
-                senderId: beneficiary.id,
-                senderName: beneficiary.name,
-                senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-                receiverId: 'corp-banco-central',
-                receiverName: 'Banco Central Mercantil (Comisión de devolución de efectos)',
-                receiverAccount: 'ES210001000299887700',
-                amount: unpaidCommission,
-                concept: feeReturnConcept,
-                timestamp: new Date(now.getTime() + 1000).toISOString()
-              };
+                const successMaturityMsg: MarketMessage = {
+                  id: generateId('msg'),
+                  chatId: msg.chatId,
+                  senderId: payer.id,
+                  senderName: payer.name,
+                  recipientId: beneficiary.id,
+                  recipientName: beneficiary.name,
+                  content: `🏦 Pagaré descontado liquidado al vencimiento: El deudor ${payer.name} ha atendido el cargo del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco confirma la liquidación definitiva. No procede ningún cargo adicional para el vendedor acreedor.`,
+                  timestamp: now.toISOString(),
+                  read: false,
+                  type: 'text'
+                };
+                db.marketMessages.push(successMaturityMsg);
+              } else if (isCollectionNote) {
+                beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
+                const transferConcept = `Cobro automático al vencimiento por gestión de cobro de pagaré ${pn.promissoryNoteNumber} - Librador: ${payer.name} -> Beneficiario: ${beneficiary.name}`;
 
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift(feeReturnTransfer);
-              db.transfers.unshift(nominalReturnTransfer);
+                const collectionPayTransfer: Transfer = {
+                  id: txId,
+                  senderId: payer.id,
+                  senderName: payer.name,
+                  senderAccount: payer.accountNumber || pn.bankIban,
+                  receiverId: beneficiary.id,
+                  receiverName: beneficiary.name,
+                  receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                  amount: amount,
+                  concept: transferConcept,
+                  timestamp: now.toISOString()
+                };
 
-              pn.status = 'impagado';
-              pn.maturityProcessed = true;
-              pn.unpaidReturnedAt = now.toISOString();
-              pn.unpaidFeeRate = 1;
-              pn.unpaidFeeAmount = unpaidCommission;
-              pn.unpaidNominalReimbursed = amount;
-              pn.unpaidTotalDebited = totalDebitVendor;
-              pn.unpaidReturnTransferId = txNominalId;
-              pn.unpaidFeeTransferId = txFeeId;
-              modified = true;
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(collectionPayTransfer);
 
-              // Notification to seller
-              addNotification(
-                db,
-                beneficiary.id,
-                'Pagaré descontado devuelto por impago (cargo de nominal + comisión)',
-                `El deudor ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} €; 2) Comisión de devolución (1%): -${formatNumber(unpaidCommission)} €. Total cargado: -${formatNumber(totalDebitVendor)} €. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`,
-                'transfer_received',
-                txNominalId
-              );
+                pn.status = 'pagado';
+                pn.maturityProcessed = true;
+                pn.paidAt = now.toISOString();
+                pn.paidTransferId = txId;
+                pn.collectionAutoCollectedAt = now.toISOString();
+                modified = true;
 
-              // Notification to buyer
-              addNotification(
-                db,
-                payer.id,
-                'Pagaré devuelto impagado al tenedor',
-                `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas judiciales.`,
-                'transfer_received',
-                txNominalId
-              );
+                addNotification(
+                  db,
+                  beneficiary.id,
+                  'Pagaré en gestión de cobro cobrado con éxito',
+                  `El pagaré oficial ${pn.promissoryNoteNumber} emitido por ${payer.name} ha vencido hoy y el banco ha tramitado el cobro automático. Se han ingresado +${formatNumber(amount)} € en tu cuenta corriente sin necesidad de ninguna acción adicional.`,
+                  'transfer_received',
+                  txId
+                );
 
-              // Chat message in direct message thread
-              const protestMaturityMsg: MarketMessage = {
-                id: generateId('msg'),
-                chatId: msg.chatId,
-                senderId: beneficiary.id,
-                senderName: beneficiary.name,
-                recipientId: payer.id,
-                recipientName: payer.name,
-                content: `❌ Pagaré descontado devuelto por impago: El librador ${payer.name} no disponía de fondos suficientes para atender el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${beneficiary.name}):\n• Reintegro del nominal anticipado: -${formatNumber(amount)} €\n• Comisión bancaria por devolución (1%): -${formatNumber(unpaidCommission)} €\n• Total adeudado: -${formatNumber(totalDebitVendor)} €\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
-                timestamp: now.toISOString(),
-                read: false,
-                type: 'text'
-              };
-              db.marketMessages.push(protestMaturityMsg);
+                addNotification(
+                  db,
+                  payer.id,
+                  'Cargo de pagaré al vencimiento (gestión de cobro)',
+                  `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} presentado en gestión de cobro por ${beneficiary.name}.`,
+                  'transfer_received',
+                  txId
+                );
 
-              // Sync to Supabase
-              if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-              syncMovimientoToSupabase(txNominalId + '-out', beneficiary.id, 'TRANSFER_OUT', amount, now.toISOString(), nominalReturnConcept, nominalReturnTransfer).catch(e => console.error(e));
-              syncMovimientoToSupabase(txFeeId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, new Date(now.getTime() + 1000).toISOString(), feeReturnConcept, feeReturnTransfer).catch(e => console.error(e));
-              syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-              syncMarketMessageToSupabase(protestMaturityMsg).catch(e => console.error(e));
-            } else if (isCollectionNote) {
-              // Collection management note returned: seller charged 40 € fixed unpaid return commission
-              const unpaidCommission = 40.00;
+                const successCollectionMsg: MarketMessage = {
+                  id: generateId('msg'),
+                  chatId: msg.chatId,
+                  senderId: payer.id,
+                  senderName: payer.name,
+                  recipientId: beneficiary.id,
+                  recipientName: beneficiary.name,
+                  content: `🏛️ PAGARÉ EN GESTIÓN DE COBRO LIQUIDADO AUTOMÁTICAMENTE: El banco ha tramitado con éxito el cobro automático al vencimiento del pagaré ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} € en la cuenta del comprador deudor (${payer.name}) y se han abonado íntegramente +${formatNumber(amount)} € en la cuenta del vendedor acreedor (${beneficiary.name}).`,
+                  timestamp: now.toISOString(),
+                  read: false,
+                  type: 'text'
+                };
+                db.marketMessages.push(successCollectionMsg);
+              }
+            } else {
+              // Debtor does not have sufficient funds
+              const txId = generateId('tx');
+              if (isDiscountedNote) {
+                const unpaidCommission = Number((amount * 0.01).toFixed(2));
+                const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
+                beneficiary.balance = Number((beneficiary.balance - totalDebitVendor).toFixed(2));
 
-              beneficiary.balance = Number((beneficiary.balance - unpaidCommission).toFixed(2));
-              const returnConcept = `Comisión por devolución de pagaré impagado en gestión de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${payer.name}) - Tarifa bancaria fija: -40,00 €`;
+                const txNominalId = generateId('tx');
+                const txFeeId = generateId('tx');
 
-              const returnTransfer: Transfer = {
-                id: txId,
-                senderId: beneficiary.id,
-                senderName: beneficiary.name,
-                senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-                receiverId: 'corp-banco-central',
-                receiverName: 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)',
-                receiverAccount: 'ES210001000299887700',
-                amount: unpaidCommission,
-                concept: returnConcept,
-                timestamp: now.toISOString()
-              };
+                const nominalReturnConcept = `Reintegro del nominal de pagaré descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${payer.name}) - Devolución de anticipo bancario: -${formatNumber(amount)} €`;
+                const feeReturnConcept = `Comisión bancaria por devolución de pagaré descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} €) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} €`;
 
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift(returnTransfer);
+                const nominalReturnTransfer: Transfer = {
+                  id: txNominalId,
+                  senderId: beneficiary.id,
+                  senderName: beneficiary.name,
+                  senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Mercantil (Reintegro nominal de descuento impagado)',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: amount,
+                  concept: nominalReturnConcept,
+                  timestamp: now.toISOString()
+                };
 
-              pn.status = 'impagado';
-              pn.maturityProcessed = true;
-              pn.unpaidReturnedAt = now.toISOString();
-              pn.collectionUnpaidFeeAmount = unpaidCommission;
-              pn.unpaidReturnTransferId = txId;
-              modified = true;
+                const feeReturnTransfer: Transfer = {
+                  id: txFeeId,
+                  senderId: beneficiary.id,
+                  senderName: beneficiary.name,
+                  senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Mercantil (Comisión de devolución de efectos)',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: unpaidCommission,
+                  concept: feeReturnConcept,
+                  timestamp: new Date(now.getTime() + 1000).toISOString()
+                };
 
-              // Notification to seller
-              addNotification(
-                db,
-                beneficiary.id,
-                'Pagaré en gestión de cobro devuelto por impago',
-                `El librador ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 € por comisión de devolución. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`,
-                'transfer_received',
-                txId
-              );
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(feeReturnTransfer);
+                db.transfers.unshift(nominalReturnTransfer);
 
-              // Notification to buyer
-              addNotification(
-                db,
-                payer.id,
-                'Pagaré Devuelto Impagado al Tenedor',
-                `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas en los Tribunales.`,
-                'transfer_received',
-                txId
-              );
+                pn.status = 'impagado';
+                pn.maturityProcessed = true;
+                pn.unpaidReturnedAt = now.toISOString();
+                pn.unpaidFeeRate = 1;
+                pn.unpaidFeeAmount = unpaidCommission;
+                pn.unpaidNominalReimbursed = amount;
+                pn.unpaidTotalDebited = totalDebitVendor;
+                pn.unpaidReturnTransferId = txNominalId;
+                pn.unpaidFeeTransferId = txFeeId;
+                modified = true;
 
-              // Chat message in direct message thread
-              const protestCollectionMsg: MarketMessage = {
-                id: generateId('msg'),
-                chatId: msg.chatId,
-                senderId: beneficiary.id,
-                senderName: beneficiary.name,
-                recipientId: payer.id,
-                recipientName: payer.name,
-                content: `❌ PAGARÉ EN GESTIÓN DE COBRO DEVUELTO POR IMPAGO: El deudor ${payer.name} no disponía de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco ha devuelto el pagaré al vendedor acreedor (${beneficiary.name}) como IMPAGADO con un cargo de 40,00 € en concepto de comisión por efecto devuelto. El pagaré conserva plena fuerza ejecutiva cambiaria para su reclamación judicial.`,
-                timestamp: now.toISOString(),
-                read: false,
-                type: 'text'
-              };
-              db.marketMessages.push(protestCollectionMsg);
+                addNotification(
+                  db,
+                  beneficiary.id,
+                  'Pagaré descontado devuelto por impago (cargo de nominal + comisión)',
+                  `El deudor ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} €; 2) Comisión de devolución (1%): -${formatNumber(unpaidCommission)} €. Total cargado: -${formatNumber(totalDebitVendor)} €. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                  'transfer_received',
+                  txNominalId
+                );
 
-              // Sync to Supabase
-              if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-              syncMovimientoToSupabase(txId + '-out', beneficiary.id, 'TRANSFER_OUT', unpaidCommission, now.toISOString(), returnConcept, returnTransfer).catch(e => console.error(e));
-              syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-              syncMarketMessageToSupabase(protestCollectionMsg).catch(e => console.error(e));
+                addNotification(
+                  db,
+                  payer.id,
+                  'Pagaré devuelto impagado al tenedor',
+                  `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas judiciales.`,
+                  'transfer_received',
+                  txNominalId
+                );
+
+                const protestMaturityMsg: MarketMessage = {
+                  id: generateId('msg'),
+                  chatId: msg.chatId,
+                  senderId: beneficiary.id,
+                  senderName: beneficiary.name,
+                  recipientId: payer.id,
+                  recipientName: payer.name,
+                  content: `❌ Pagaré descontado devuelto por impago: El librador ${payer.name} no disponía de fondos suficientes para atender el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${beneficiary.name}):\n• Reintegro del nominal anticipado: -${formatNumber(amount)} €\n• Comisión bancaria por devolución (1%): -${formatNumber(unpaidCommission)} €\n• Total adeudado: -${formatNumber(totalDebitVendor)} €\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
+                  timestamp: now.toISOString(),
+                  read: false,
+                  type: 'text'
+                };
+                db.marketMessages.push(protestMaturityMsg);
+              } else if (isCollectionNote) {
+                const unpaidCommission = 40.00;
+                beneficiary.balance = Number((beneficiary.balance - unpaidCommission).toFixed(2));
+                const returnConcept = `Comisión por devolución de pagaré impagado en gestión de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${payer.name}) - Tarifa bancaria fija: -40,00 €`;
+
+                const returnTransfer: Transfer = {
+                  id: txId,
+                  senderId: beneficiary.id,
+                  senderName: beneficiary.name,
+                  senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: unpaidCommission,
+                  concept: returnConcept,
+                  timestamp: now.toISOString()
+                };
+
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(returnTransfer);
+
+                pn.status = 'impagado';
+                pn.maturityProcessed = true;
+                pn.unpaidReturnedAt = now.toISOString();
+                pn.collectionUnpaidFeeAmount = unpaidCommission;
+                pn.unpaidReturnTransferId = txId;
+                modified = true;
+
+                addNotification(
+                  db,
+                  beneficiary.id,
+                  'Pagaré en gestión de cobro devuelto por impago',
+                  `El librador ${payer.name} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 € por comisión de devolución. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`,
+                  'transfer_received',
+                  txId
+                );
+
+                addNotification(
+                  db,
+                  payer.id,
+                  'Pagaré Devuelto Impagado al Tenedor',
+                  `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${beneficiary.name}, quien podrá iniciar acciones ejecutivas en los Tribunales.`,
+                  'transfer_received',
+                  txId
+                );
+
+                const protestCollectionMsg: MarketMessage = {
+                  id: generateId('msg'),
+                  chatId: msg.chatId,
+                  senderId: beneficiary.id,
+                  senderName: beneficiary.name,
+                  recipientId: payer.id,
+                  recipientName: payer.name,
+                  content: `❌ PAGARÉ EN GESTIÓN DE COBRO DEVUELTO POR IMPAGO: El deudor ${payer.name} no disponía de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco ha devuelto el pagaré al vendedor acreedor (${beneficiary.name}) como IMPAGADO con un cargo de 40,00 € en concepto de comisión por efecto devuelto. El pagaré conserva plena fuerza ejecutiva cambiaria para su reclamación judicial.`,
+                  timestamp: now.toISOString(),
+                  read: false,
+                  type: 'text'
+                };
+                db.marketMessages.push(protestCollectionMsg);
+              }
             }
           }
         }
@@ -8387,11 +9558,11 @@ function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): boolean {
   return modified;
 }
 
-function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: string) {
+async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: string): Promise<boolean> {
   const now = new Date();
   let modified = false;
 
-  if (processDiscountedPromissoryNotesMaturity(db)) {
+  if (await processDiscountedPromissoryNotesMaturity(db)) {
     modified = true;
   }
 
@@ -8507,133 +9678,303 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
     pendingItems.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
 
     for (const item of pendingItems) {
-      if (student.balance >= item.principal) {
-        // 1. Pay the principal amount (exact amortization row or obligation amount)
-        student.balance = Number((student.balance - item.principal).toFixed(2));
-        modified = true;
+      if (dbPool) {
+        try {
+          const itemProcessed = await withPostgresTransaction(async (client) => {
+            // Lock student account in PostgreSQL
+            const lockRes = await client.query(
+              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+              [student.id]
+            );
+            if (!lockRes || lockRes.rows.length === 0) return false;
 
-        if (item.sourceType === 'obligation' && item.obligationRef) {
-          const ob = item.obligationRef;
-          ob.status = 'pagado';
-          ob.paidDate = new Date().toISOString();
-          ob.penaltyInterest = 0;
-          ob.totalOverdueAmount = 0;
+            const studentRow = lockRes.rows[0];
+            const currentBalance = Number(studentRow.saldo);
 
-          const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
-          if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
-            acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
-            syncAcquisitionToSupabase(acq).catch(e => console.error(e));
-          }
+            if (currentBalance < item.principal) {
+              // Insufficient balance in PostgreSQL
+              return false;
+            }
 
-          const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
-          if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
-            machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
-            syncMachineryToSupabase(machAcq).catch(e => console.error(e));
-          }
+            const nowIso = new Date().toISOString();
+            const txId = generateId('tx');
 
-          const newTransfer: Transfer = {
-            id: generateId('tx'),
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: 'corp-tenedor-efectos',
-            receiverName: 'Tenedor de Efectos Comerciales S.A.',
-            receiverAccount: 'ES210001000299887755',
-            amount: item.principal,
-            concept: item.concept,
-            timestamp: new Date().toISOString()
-          };
-          db.transfers.unshift(newTransfer);
+            // Check if overdue penalty can also be paid
+            const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= Number((item.principal + item.penaltyInterest).toFixed(2));
+            const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
+            const totalDeduction = Number((item.principal + penaltyPaid).toFixed(2));
+            const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
 
-          syncObligationToSupabase(ob).catch(e => console.error(e));
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.principal, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+            // Update balance directly in PostgreSQL
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, student.id]);
 
-          // 2. If there were overdue penalty interest, process in a SEPARATE movement
-          if (item.penaltyInterest > 0) {
-            if (student.balance >= item.penaltyInterest) {
-              student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
-              const penaltyTx: Transfer = {
-                id: generateId('tx'),
+            if (item.sourceType === 'obligation' && item.obligationRef) {
+              const ob = item.obligationRef;
+              const newTransfer: Transfer = {
+                id: txId,
                 senderId: student.id,
                 senderName: student.name,
                 senderAccount: student.accountNumber,
                 receiverId: 'corp-tenedor-efectos',
                 receiverName: 'Tenedor de Efectos Comerciales S.A.',
                 receiverAccount: 'ES210001000299887755',
-                amount: item.penaltyInterest,
-                concept: `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`,
-                timestamp: new Date(Date.now() + 100).toISOString()
+                amount: item.principal,
+                concept: item.concept,
+                timestamp: nowIso
               };
-              db.transfers.unshift(penaltyTx);
-              syncMovimientoToSupabase(penaltyTx.id + '-out', student.id, 'TRANSFER_OUT', item.penaltyInterest, penaltyTx.timestamp, penaltyTx.concept, penaltyTx).catch(e => console.error(e));
-            }
-          }
-        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-          const loan = item.loanRef;
-          const row = loan.schedule[item.loanRowIndex];
-          row.paid = true;
-          row.paidDate = new Date().toISOString();
-          row.isOverdue = false;
-          row.penaltyInterest = 0;
 
-          // Main transfer for the loan installment (strictly the exact amount from amortization schedule)
-          const newTransfer: Transfer = {
-            id: generateId('tx'),
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: 'corp-banco-central',
-            receiverName: 'Banco Central Hipotecario S.A.',
-            receiverAccount: 'ES210001000299887700',
-            amount: item.principal,
-            concept: item.concept,
-            timestamp: new Date().toISOString()
-          };
-          db.transfers.unshift(newTransfer);
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', student.id, item.principal, nowIso, item.concept, student.id, student.name, student.accountNumber, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+              );
 
-          if (loan.schedule.every(r => r.paid)) {
-            loan.status = 'paid_off';
-          }
+              let penaltyTx: Transfer | null = null;
+              if (penaltyPaid > 0) {
+                const penaltyTxId = generateId('tx');
+                const penaltyConcept = `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`;
+                penaltyTx = {
+                  id: penaltyTxId,
+                  senderId: student.id,
+                  senderName: student.name,
+                  senderAccount: student.accountNumber,
+                  receiverId: 'corp-tenedor-efectos',
+                  receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                  receiverAccount: 'ES210001000299887755',
+                  amount: penaltyPaid,
+                  concept: penaltyConcept,
+                  timestamp: new Date(Date.now() + 100).toISOString()
+                };
 
-          syncLoanToSupabase(loan).catch(e => console.error(e));
-          syncMovimientoToSupabase(newTransfer.id + '-out', student.id, 'TRANSFER_OUT', item.principal, newTransfer.timestamp, newTransfer.concept, newTransfer).catch(e => console.error(e));
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [penaltyTxId + '-out', student.id, penaltyPaid, penaltyTx.timestamp, penaltyConcept, student.id, student.name, student.accountNumber, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+                );
+              }
 
-          // 2. If there were overdue penalty interest, process in a SEPARATE movement
-          if (item.penaltyInterest > 0) {
-            if (student.balance >= item.penaltyInterest) {
-              student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
-              const penaltyTx: Transfer = {
-                id: generateId('tx'),
+              // Update in-memory
+              ob.status = 'pagado';
+              ob.paidDate = nowIso;
+              ob.penaltyInterest = 0;
+              ob.totalOverdueAmount = 0;
+
+              const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
+              if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+                acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+                syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+              }
+
+              const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
+              if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
+                machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
+                syncMachineryToSupabase(machAcq).catch(e => console.error(e));
+              }
+
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift(newTransfer);
+              if (penaltyTx) db.transfers.unshift(penaltyTx);
+
+              syncObligationToSupabase(ob).catch(e => console.error(e));
+            } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+              const loan = item.loanRef;
+              const row = loan.schedule[item.loanRowIndex];
+              row.paid = true;
+              row.paidDate = nowIso;
+              row.isOverdue = false;
+              row.penaltyInterest = 0;
+
+              const newTransfer: Transfer = {
+                id: txId,
                 senderId: student.id,
                 senderName: student.name,
                 senderAccount: student.accountNumber,
                 receiverId: 'corp-banco-central',
                 receiverName: 'Banco Central Hipotecario S.A.',
                 receiverAccount: 'ES210001000299887700',
-                amount: item.penaltyInterest,
-                concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`,
-                timestamp: new Date(Date.now() + 100).toISOString()
+                amount: item.principal,
+                concept: item.concept,
+                timestamp: nowIso
               };
-              db.transfers.unshift(penaltyTx);
-              syncMovimientoToSupabase(penaltyTx.id + '-out', student.id, 'TRANSFER_OUT', item.penaltyInterest, penaltyTx.timestamp, penaltyTx.concept, penaltyTx).catch(e => console.error(e));
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', student.id, item.principal, nowIso, item.concept, student.id, student.name, student.accountNumber, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700']
+              );
+
+              let penaltyTx: Transfer | null = null;
+              if (penaltyPaid > 0) {
+                const penaltyTxId = generateId('tx');
+                const penaltyConcept = `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`;
+                penaltyTx = {
+                  id: penaltyTxId,
+                  senderId: student.id,
+                  senderName: student.name,
+                  senderAccount: student.accountNumber,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Hipotecario S.A.',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: penaltyPaid,
+                  concept: penaltyConcept,
+                  timestamp: new Date(Date.now() + 100).toISOString()
+                };
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [penaltyTxId + '-out', student.id, penaltyPaid, penaltyTx.timestamp, penaltyConcept, student.id, student.name, student.accountNumber, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700']
+                );
+              }
+
+              if (loan.schedule.every(r => r.paid)) {
+                loan.status = 'paid_off';
+              }
+
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift(newTransfer);
+              if (penaltyTx) db.transfers.unshift(penaltyTx);
+
+              syncLoanToSupabase(loan).catch(e => console.error(e));
+            }
+
+            // Sync student in-memory balance to match DB
+            student.balance = newBalance;
+            modified = true;
+            return true;
+          });
+
+          if (!itemProcessed) {
+            // Insufficient balance -> mark overdue with default interest
+            if (item.sourceType === 'obligation' && item.obligationRef) {
+              item.obligationRef.status = 'vencido';
+              item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+              item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
+              modified = true;
+            } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+              item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
+              item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+              modified = true;
+            }
+            break;
+          }
+        } catch (err) {
+          console.error(`[Automatic Payment Concurrency Error] Error processing item ${item.id}:`, err);
+          break;
+        }
+      } else {
+        // Fallback in-memory
+        if (student.balance >= item.principal) {
+          student.balance = Number((student.balance - item.principal).toFixed(2));
+          modified = true;
+
+          if (item.sourceType === 'obligation' && item.obligationRef) {
+            const ob = item.obligationRef;
+            ob.status = 'pagado';
+            ob.paidDate = new Date().toISOString();
+            ob.penaltyInterest = 0;
+            ob.totalOverdueAmount = 0;
+
+            const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
+            if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+              acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+            }
+
+            const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
+            if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
+              machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
+            }
+
+            const newTransfer: Transfer = {
+              id: generateId('tx'),
+              senderId: student.id,
+              senderName: student.name,
+              senderAccount: student.accountNumber,
+              receiverId: 'corp-tenedor-efectos',
+              receiverName: 'Tenedor de Efectos Comerciales S.A.',
+              receiverAccount: 'ES210001000299887755',
+              amount: item.principal,
+              concept: item.concept,
+              timestamp: new Date().toISOString()
+            };
+            db.transfers.unshift(newTransfer);
+
+            if (item.penaltyInterest > 0) {
+              if (student.balance >= item.penaltyInterest) {
+                student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+                const penaltyTx: Transfer = {
+                  id: generateId('tx'),
+                  senderId: student.id,
+                  senderName: student.name,
+                  senderAccount: student.accountNumber,
+                  receiverId: 'corp-tenedor-efectos',
+                  receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                  receiverAccount: 'ES210001000299887755',
+                  amount: item.penaltyInterest,
+                  concept: `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`,
+                  timestamp: new Date(Date.now() + 100).toISOString()
+                };
+                db.transfers.unshift(penaltyTx);
+              }
+            }
+          } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+            const loan = item.loanRef;
+            const row = loan.schedule[item.loanRowIndex];
+            row.paid = true;
+            row.paidDate = new Date().toISOString();
+            row.isOverdue = false;
+            row.penaltyInterest = 0;
+
+            const newTransfer: Transfer = {
+              id: generateId('tx'),
+              senderId: student.id,
+              senderName: student.name,
+              senderAccount: student.accountNumber,
+              receiverId: 'corp-banco-central',
+              receiverName: 'Banco Central Hipotecario S.A.',
+              receiverAccount: 'ES210001000299887700',
+              amount: item.principal,
+              concept: item.concept,
+              timestamp: new Date().toISOString()
+            };
+            db.transfers.unshift(newTransfer);
+
+            if (loan.schedule.every(r => r.paid)) {
+              loan.status = 'paid_off';
+            }
+
+            if (item.penaltyInterest > 0) {
+              if (student.balance >= item.penaltyInterest) {
+                student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+                const penaltyTx: Transfer = {
+                  id: generateId('tx'),
+                  senderId: student.id,
+                  senderName: student.name,
+                  senderAccount: student.accountNumber,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Hipotecario S.A.',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: item.penaltyInterest,
+                  concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`,
+                  timestamp: new Date(Date.now() + 100).toISOString()
+                };
+                db.transfers.unshift(penaltyTx);
+              }
             }
           }
+        } else {
+          if (item.sourceType === 'obligation' && item.obligationRef) {
+            item.obligationRef.status = 'vencido';
+            item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+            item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
+            modified = true;
+          } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
+            item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
+            item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+            modified = true;
+          }
+          break;
         }
-
-        syncAccountToSupabase(student.id, student.name, student.balance).catch(e => console.error(e));
-      } else {
-        // Insufficient balance -> mark overdue with default interest
-        if (item.sourceType === 'obligation' && item.obligationRef) {
-          item.obligationRef.status = 'vencido';
-          item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-          item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
-          modified = true;
-        } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-          item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
-          item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-          modified = true;
-        }
-        break;
       }
     }
   }
@@ -8641,10 +9982,11 @@ function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: s
   if (modified) {
     writeDb(db);
   }
+  return modified;
 }
 
-function processLoanPayments(db: DatabaseSchema) {
-  processStudentAutomaticPayments(db);
+async function processLoanPayments(db: DatabaseSchema) {
+  await processStudentAutomaticPayments(db);
 }
 
 function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
@@ -9849,7 +11191,6 @@ app.get('/api/student/deferred-payments-audit', (req, res) => {
   }
 
   const db = readDb();
-  processStudentAutomaticPayments(db, studentId);
   const audit = buildDeferredPaymentsAuditReport(db, studentId);
 
   res.json({
@@ -9859,15 +11200,16 @@ app.get('/api/student/deferred-payments-audit', (req, res) => {
 });
 
 // POST verify and reconcile payments live
-app.post('/api/student/verify-payments', (req, res) => {
+app.post('/api/student/verify-payments', async (req, res) => {
   const { studentId } = req.body;
   if (!studentId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
 
   const db = readDb();
-  processStudentAutomaticPayments(db, String(studentId));
-  const audit = buildDeferredPaymentsAuditReport(db, String(studentId));
+  await processStudentAutomaticPayments(db, String(studentId));
+  const updatedDb = readDb();
+  const audit = buildDeferredPaymentsAuditReport(updatedDb, String(studentId));
 
   res.json({
     success: true,
@@ -9879,7 +11221,6 @@ app.post('/api/student/verify-payments', (req, res) => {
 // GET global audit for teacher across all students
 app.get('/api/teacher/deferred-payments-audit', (req, res) => {
   const db = readDb();
-  processStudentAutomaticPayments(db);
 
   const students = (db.users || []).filter(u => u.role === 'student');
   const studentReports: DeferredPaymentsAuditReport[] = [];
@@ -9922,7 +11263,6 @@ app.get('/api/student/upcoming-payments', (req, res) => {
   }
 
   const db = readDb();
-  processStudentAutomaticPayments(db, studentId);
   const status = getStudentPaymentStatus(db, studentId);
 
   res.json({
@@ -9935,7 +11275,6 @@ app.get('/api/student/upcoming-payments', (req, res) => {
 app.get('/api/loans', (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  processStudentAutomaticPayments(db, studentId ? String(studentId) : undefined);
 
   let loans = db.loans || [];
   if (studentId) {
@@ -10060,86 +11399,159 @@ app.post('/api/loans/request', async (req, res) => {
 app.post('/api/loans/:id/accept', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
-  const db = readDb();
 
-  const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
-  if (!loan) {
-    return res.status(404).json({ error: 'Préstamo no encontrado' });
+  if (!id || !studentId) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos (id, studentId)' });
   }
 
-  if (loan.status !== 'offered' && loan.status !== 'teacher_offered') {
-    return res.status(400).json({ error: 'Este préstamo no se encuentra pendiente de aceptación' });
-  }
-
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Estudiante no encontrado' });
-  }
-
-  if (student.balance < loan.openingFee) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${formatCurrency(loan.openingFee)}). Saldo disponible actual: ${formatCurrency(student.balance)}.`
-    });
-  }
-
-  student.balance = Number((student.balance - loan.openingFee).toFixed(2));
-  student.balance = Number((student.balance + loan.offeredAmount).toFixed(2));
-
-  loan.approvedAmount = loan.offeredAmount;
-  loan.status = 'active';
-  loan.acceptedAt = new Date().toISOString();
-
-  const feeTransfer: Transfer = {
-    id: generateId('tx'),
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'corp-banco-central',
-    receiverName: 'Banco Central Hipotecario S.A. - Comisión Apertura (1‰)',
-    receiverAccount: 'ES210001000299887700',
-    amount: loan.openingFee,
-    concept: `Comisión de apertura de préstamo hipotecario (1‰): Ref. ${loan.id}`,
-    timestamp: new Date().toISOString()
-  };
-
-  const loanDisbursementTransfer: Transfer = {
-    id: generateId('tx'),
-    senderId: 'corp-banco-central',
-    senderName: 'Banco Central Hipotecario S.A.',
-    senderAccount: 'ES210001000299887700',
-    receiverId: student.id,
-    receiverName: student.name,
-    receiverAccount: student.accountNumber,
-    amount: loan.offeredAmount,
-    concept: `Concesión e ingreso de préstamo hipotecario: Ref. ${loan.id}`,
-    timestamp: new Date().toISOString()
-  };
-
-  db.transfers.unshift(feeTransfer);
-  db.transfers.unshift(loanDisbursementTransfer);
-
-  processLoanPayments(db);
-
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `loan_accept_${studentId}_${id}_${Math.floor(Date.now() / 5000)}`;
 
   try {
-    await Promise.all([
-      syncAccountToSupabase(student.id, student.name, student.balance),
-      syncLoanToSupabase(loan),
-      syncMovimientoToSupabase(feeTransfer.id + '-out', student.id, 'TRANSFER_OUT', loan.openingFee, feeTransfer.timestamp, feeTransfer.concept, feeTransfer),
-      syncMovimientoToSupabase(loanDisbursementTransfer.id + '-in', student.id, 'TRANSFER_IN', loan.offeredAmount, loanDisbursementTransfer.timestamp, loanDisbursementTransfer.concept, loanDisbursementTransfer)
-    ]);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Loan Accept]:', syncErr);
-    return res.status(500).json({ error: 'Error al formalizar el préstamo en la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock student account and loan row atomically
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-  res.json({
-    success: true,
-    message: `¡Préstamo de ${formatCurrency(loan.offeredAmount)} formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${formatCurrency(loan.openingFee)} de comisión de apertura (1‰).`,
-    updatedBalance: student.balance,
-    loan
-  });
+          const loanLock = await client.query(
+            'SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion FROM prestamos WHERE id = $1 AND alumno_id = $2 FOR UPDATE',
+            [id, studentId]
+          );
+          if (!loanLock || loanLock.rows.length === 0) {
+            const err: any = new Error('Préstamo no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const loanRow = loanLock.rows[0];
+
+          if (loanRow.estado !== 'offered' && loanRow.estado !== 'teacher_offered') {
+            const err: any = new Error('Este préstamo no se encuentra pendiente de aceptación');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const openingFee = Number(loanRow.comision_apertura);
+          const offeredAmount = Number(loanRow.importe_ofrecido);
+          const studentBalance = Number(studentRow.saldo);
+
+          if (studentBalance < openingFee) {
+            const err: any = new Error(`Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${formatCurrency(openingFee)}). Saldo disponible actual: ${formatCurrency(studentBalance)}.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Number((studentBalance - openingFee + offeredAmount).toFixed(2));
+          const nowIso = new Date().toISOString();
+
+          // Update student balance and loan status atomically
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+          await client.query(
+            'UPDATE prestamos SET estado = $1, importe_concedido = $2, fecha_aceptacion = $3 WHERE id = $4',
+            ['active', offeredAmount, nowIso, loanRow.id]
+          );
+
+          const feeTxId = generateId('tx');
+          const disbTxId = generateId('tx');
+
+          const feeTransfer: Transfer = {
+            id: feeTxId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'corp-banco-central',
+            receiverName: 'Banco Central Hipotecario S.A. - Comisión Apertura (1‰)',
+            receiverAccount: 'ES210001000299887700',
+            amount: openingFee,
+            concept: `Comisión de apertura de préstamo hipotecario (1‰): Ref. ${loanRow.id}`,
+            timestamp: nowIso
+          };
+
+          const loanDisbursementTransfer: Transfer = {
+            id: disbTxId,
+            senderId: 'corp-banco-central',
+            senderName: 'Banco Central Hipotecario S.A.',
+            senderAccount: 'ES210001000299887700',
+            receiverId: studentRow.id,
+            receiverName: studentRow.alumno,
+            receiverAccount: studentRow.account_number,
+            amount: offeredAmount,
+            concept: `Concesión e ingreso de préstamo hipotecario: Ref. ${loanRow.id}`,
+            timestamp: nowIso
+          };
+
+          // Record fee and disbursement movements
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [feeTxId + '-out', studentRow.id, openingFee, nowIso, feeTransfer.concept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-banco-central', 'Banco Central Hipotecario S.A. - Comisión Apertura (1‰)', 'ES210001000299887700']
+          );
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [disbTxId + '-in', studentRow.id, offeredAmount, nowIso, loanDisbursementTransfer.concept, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700', studentRow.id, studentRow.alumno, studentRow.account_number]
+          );
+
+          // Update in-memory DB snapshot
+          const db = readDb();
+          const sIdx = db.users.findIndex(u => u.id === studentId);
+          if (sIdx !== -1) db.users[sIdx].balance = newBalance;
+          const lIdx = (db.loans || []).findIndex(l => l.id === id);
+          let updatedLoan = null;
+          if (lIdx !== -1) {
+            db.loans[lIdx].status = 'active';
+            db.loans[lIdx].approvedAmount = offeredAmount;
+            db.loans[lIdx].acceptedAt = nowIso;
+            updatedLoan = db.loans[lIdx];
+          }
+          db.transfers.unshift(feeTransfer);
+          db.transfers.unshift(loanDisbursementTransfer);
+          writeDb(db);
+
+          return {
+            success: true,
+            message: `¡Préstamo de ${formatCurrency(offeredAmount)} formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${formatCurrency(openingFee)} de comisión de apertura (1‰).`,
+            updatedBalance: newBalance,
+            loan: updatedLoan || { ...loanRow, status: 'active', approvedAmount: offeredAmount, acceptedAt: nowIso }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+        if (!loan) { const err: any = new Error('Préstamo no encontrado'); err.statusCode = 404; throw err; }
+        if (loan.status !== 'offered' && loan.status !== 'teacher_offered') {
+          const err: any = new Error('Este préstamo no se encuentra pendiente de aceptación'); err.statusCode = 400; throw err;
+        }
+        const student = db.users.find(u => u.id === studentId);
+        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
+        if (student.balance < loan.openingFee) { const err: any = new Error('Saldo insuficiente para abonar la comisión de apertura'); err.statusCode = 400; throw err; }
+
+        student.balance = Number((student.balance - loan.openingFee + loan.offeredAmount).toFixed(2));
+        loan.approvedAmount = loan.offeredAmount;
+        loan.status = 'active';
+        loan.acceptedAt = new Date().toISOString();
+        writeDb(db);
+        return { success: true, updatedBalance: student.balance, loan };
+      }
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Loan Accept Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al formalizar el préstamo' });
+  }
 });
 
 // Student rejects loan offer
@@ -10375,87 +11787,201 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
 
-  const db = readDb();
-  if (!db.jobListings) db.jobListings = [];
-  if (!db.hiredEmployees) db.hiredEmployees = [];
-
-  // Sync latest from Supabase so all instances have real-time state
-  await syncEmployeesFromSupabase(db);
-  await syncJobListingsFromSupabase(db);
-
-  const job = db.jobListings.find(j => j.id === id);
-  if (!job) return res.status(404).json({ error: 'Oferta de empleo no encontrada' });
-  if (job.status !== 'disponible') return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
-
-  // Guard against duplicate hire
-  const alreadyHired = db.hiredEmployees.some(e => e.jobListingId === id || (e.employeeName && e.employeeName.toLowerCase().trim() === job.employeeName.toLowerCase().trim()));
-  if (alreadyHired) {
-    job.status = 'contratado';
-    db.jobListings = (db.jobListings || []).filter(j => j.id !== id && j.employeeName !== job.employeeName);
-    writeDb(db);
-    return res.status(400).json({ error: 'Esta oferta de empleo ya ha sido contratada' });
+  if (!id) {
+    return res.status(400).json({ error: 'ID de oferta de empleo no proporcionado' });
+  }
+  if (!studentId) {
+    return res.status(400).json({ error: 'studentId es obligatorio para contratar' });
   }
 
-  const student = db.users.find(u => u.id === studentId && u.role === 'student');
-  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `hire_${id}_${studentId}_${Math.floor(Date.now() / 3000)}`;
 
-  const now = new Date().toISOString();
-
-  job.status = 'contratado';
-  job.hiredByStudentId = student.id;
-  job.hiredByStudentName = student.name;
-  job.hiredAtDate = now;
-
-  const newHired: HiredEmployee = {
-    id: generateId('emp'),
-    jobListingId: job.id,
-    studentId: student.id,
-    studentName: student.name,
-    employeeName: job.employeeName,
-    role: job.role || (job.title && (job.title.toLowerCase().includes('mozo') || job.title.toLowerCase().includes('almacen') || job.title.toLowerCase().includes('almacén')) ? 'mozo_almacen' : job.title && job.title.toLowerCase().includes('camionero') ? 'camionero' : job.title && job.title.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario'),
-    gender: job.gender,
-    grossSalaryMonthly: job.grossSalaryMonthly,
-    age: job.age,
-    hireDate: now,
-    avatarUrl: job.avatarUrl
-  };
-
-  db.hiredEmployees.push(newHired);
-
-  // CRITICAL: When an employee has been hired, their candidate profile MUST disappear immediately
-  db.jobListings = (db.jobListings || []).filter(j => j.id !== job.id && j.employeeName !== job.employeeName);
-
-  // Sync hired employee to Supabase
   try {
-    await syncHiredEmployeeToSupabase(newHired);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Hire Employee]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la contratación con la base de datos central.' });
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloqueo pesimista de la oferta en PostgreSQL
+          const jobRes = await client.query(
+            `SELECT id, titulo, puesto, nombre_empleado, genero, sueldo_bruto_mensual, edad, estado, alumno_id, alumno_nombre, fecha_contratacion, avatar_url
+             FROM ofertas_empleo
+             WHERE id = $1
+             FOR UPDATE`,
+            [id]
+          );
+
+          if (!jobRes || jobRes.rows.length === 0) {
+            // Verificar si ya fue contratada previamente en empleados_contratados
+            const alreadyHiredCheck = await client.query(
+              'SELECT id FROM empleados_contratados WHERE oferta_id = $1 LIMIT 1',
+              [id]
+            );
+            if (alreadyHiredCheck && alreadyHiredCheck.rows.length > 0) {
+              const err: any = new Error('Esta oferta de empleo ya ha sido contratada');
+              err.statusCode = 400;
+              throw err;
+            }
+            const err: any = new Error('Oferta de empleo no encontrada');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const jobRow = jobRes.rows[0];
+          if (jobRow.estado !== 'disponible') {
+            const err: any = new Error('Esta oferta de empleo ya ha sido contratada');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 2. Guard adicional en empleados_contratados
+          const existingHire = await client.query(
+            'SELECT id FROM empleados_contratados WHERE oferta_id = $1 LIMIT 1',
+            [id]
+          );
+          if (existingHire && existingHire.rows.length > 0) {
+            const err: any = new Error('Esta oferta de empleo ya ha sido contratada');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. Comprobar alumno en PostgreSQL (con fallback a db.users si fuera necesario)
+          const studentRes = await client.query(
+            'SELECT id, alumno, role FROM cuentas WHERE id = $1',
+            [studentId]
+          );
+          const studentRow = studentRes.rows[0];
+          const dbStudent = readDb().users?.find(u => u.id === studentId && u.role === 'student');
+          if (!studentRow && !dbStudent) {
+            const err: any = new Error('Alumno no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const student = {
+            id: studentRow ? studentRow.id : dbStudent!.id,
+            name: studentRow ? studentRow.alumno : dbStudent!.name
+          };
+
+          const now = new Date().toISOString();
+          const jobTitle = jobRow.titulo || '';
+          const roleCandidate = jobRow.puesto || (jobTitle && (jobTitle.toLowerCase().includes('mozo') || jobTitle.toLowerCase().includes('almacen') || jobTitle.toLowerCase().includes('almacén')) ? 'mozo_almacen' : jobTitle && jobTitle.toLowerCase().includes('camionero') ? 'camionero' : jobTitle && jobTitle.toLowerCase().includes('carretillero') ? 'carretillero' : 'operario');
+
+          const newHired: HiredEmployee = {
+            id: generateId('emp'),
+            jobListingId: jobRow.id,
+            studentId: student.id,
+            studentName: student.name,
+            employeeName: jobRow.nombre_empleado,
+            role: roleCandidate,
+            gender: jobRow.genero,
+            grossSalaryMonthly: Number(jobRow.sueldo_bruto_mensual),
+            age: Number(jobRow.edad),
+            hireDate: now,
+            avatarUrl: jobRow.avatar_url || null
+          };
+
+          // 4. Crear registro en empleados_contratados con el cliente transaccional
+          await syncHiredEmployeeToSupabase(newHired, client);
+
+          // 5. Retirar la oferta de ofertas_empleo en la misma transacción usando exclusivamente su id
+          await client.query('DELETE FROM ofertas_empleo WHERE id = $1', [jobRow.id]);
+
+          const jobListingSnapshot: JobListing = {
+            id: jobRow.id,
+            title: jobRow.titulo,
+            role: roleCandidate,
+            employeeName: jobRow.nombre_empleado,
+            gender: jobRow.genero,
+            grossSalaryMonthly: Number(jobRow.sueldo_bruto_mensual),
+            age: Number(jobRow.edad),
+            status: 'contratado',
+            hiredByStudentId: student.id,
+            hiredByStudentName: student.name,
+            hiredAtDate: now,
+            avatarUrl: jobRow.avatar_url || null
+          };
+
+          // 6. Actualizar estado local en memoria para retrocompatibilidad
+          try {
+            const db = readDb();
+            if (!db.hiredEmployees) db.hiredEmployees = [];
+            db.hiredEmployees.push(newHired);
+            db.jobListings = (db.jobListings || []).filter(j => j.id !== jobRow.id);
+            if (!db.systemLogs) db.systemLogs = [];
+            db.systemLogs.unshift({
+              id: generateId('log'),
+              action: 'HIRE_EMPLOYEE',
+              details: `El alumno ${student.name} ha contratado a ${jobRow.nombre_empleado} (Sueldo bruto: ${jobRow.sueldo_bruto_mensual}€/mes, Edad: ${jobRow.edad})`,
+              timestamp: now,
+              studentId: student.id,
+              studentName: student.name
+            });
+            writeDb(db);
+          } catch (memErr) {
+            console.warn('[Hire] Warning updating in-memory cache:', memErr);
+          }
+
+          return {
+            success: true,
+            employee: newHired,
+            hiredEmployee: newHired,
+            jobListing: jobListingSnapshot,
+            job: jobListingSnapshot
+          };
+        }, key);
+      } else {
+        // Fallback en memoria únicamente si dbPool no está activo
+        const db = readDb();
+        if (!db.jobListings) db.jobListings = [];
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+
+        const job = db.jobListings.find(j => j.id === id);
+        if (!job) {
+          const err: any = new Error('Oferta de empleo no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (job.status !== 'disponible') {
+          const err: any = new Error('Esta oferta de empleo ya ha sido contratada');
+          err.statusCode = 400;
+          throw err;
+        }
+        const student = db.users?.find(u => u.id === studentId && u.role === 'student');
+        if (!student) {
+          const err: any = new Error('Alumno no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const now = new Date().toISOString();
+        job.status = 'contratado';
+        job.hiredByStudentId = student.id;
+        job.hiredByStudentName = student.name;
+        job.hiredAtDate = now;
+
+        const newHired: HiredEmployee = {
+          id: generateId('emp'),
+          jobListingId: job.id,
+          studentId: student.id,
+          studentName: student.name,
+          employeeName: job.employeeName,
+          role: job.role || 'operario',
+          gender: job.gender,
+          grossSalaryMonthly: job.grossSalaryMonthly,
+          age: job.age,
+          hireDate: now,
+          avatarUrl: job.avatarUrl
+        };
+        db.hiredEmployees.push(newHired);
+        db.jobListings = (db.jobListings || []).filter(j => j.id !== job.id);
+        writeDb(db);
+        return { success: true, employee: newHired, hiredEmployee: newHired, jobListing: job, job };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Hire Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la contratación' });
   }
-
-  // Delete candidate profile from Supabase ofertas_empleo so it disappears across all environments (Render and local)
-  if (dbPool) {
-    try {
-      await safeDbQuery(
-        'DELETE FROM ofertas_empleo WHERE id = $1 OR nombre_empleado = $2',
-        [job.id, job.employeeName]
-      );
-    } catch (e) {
-      console.error('[Supabase DB] Error removing hired candidate from ofertas_empleo:', e);
-    }
-  }
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'HIRE_EMPLOYEE',
-    details: `El alumno ${student.name} ha contratado a ${job.employeeName} (Sueldo bruto: ${job.grossSalaryMonthly}€/mes, Edad: ${job.age})`,
-    timestamp: now,
-    studentId: student.id,
-    studentName: student.name
-  });
-
-  writeDb(db);
-  res.json({ success: true, employee: newHired, hiredEmployee: newHired, jobListing: job, job });
 });
 
 app.get('/api/student/employees', async (req, res) => {
@@ -10469,151 +11995,427 @@ app.get('/api/student/employees', async (req, res) => {
 app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
   const { id } = req.params;
   const { machineryId, shift } = req.body;
+  const reqStudentId = req.body?.studentId || (req.query?.studentId as string);
 
-  const db = readDb();
-  if (!db.hiredEmployees) db.hiredEmployees = [];
-
-  let emp = db.hiredEmployees.find(e => e.id === id);
-  if (!emp && dbPool) {
-    await syncEmployeesFromSupabase(db);
-    emp = db.hiredEmployees.find(e => e.id === id);
-  }
-  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
-
-  if (machineryId && machineryId !== 'unassign' && machineryId !== '') {
-    const mac = (db.machineryAcquisitions || []).find(m => m.id === machineryId || m.machineryId === machineryId);
-    emp.assignedMachineryId = mac ? mac.id : machineryId;
-    emp.assignedMachineryTitle = mac ? (mac.title || mac.lineTitle) : undefined;
-  } else {
-    emp.assignedMachineryId = undefined;
-    emp.assignedMachineryTitle = undefined;
+  if (!id) {
+    return res.status(400).json({ error: 'ID de empleado no especificado' });
   }
 
-  if (shift !== undefined && shift !== null) {
-    emp.shift = Number(shift) || 1;
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `assign_mac_${id}_${machineryId || 'none'}_${shift || 'none'}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  writeDb(db);
-  if (dbPool) {
-    syncHiredEmployeeToSupabase(emp).catch(e => console.error('[Supabase Assign Error]:', e));
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloquear el empleado con SELECT ... FOR UPDATE
+          const empRes = await client.query(
+            `SELECT * FROM empleados_contratados WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          if (!empRes || empRes.rows.length === 0) {
+            const err: any = new Error('Empleado no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const empRow = empRes.rows[0];
+
+          // 2. Verificar pertenencia del empleado al studentId recibido si se proporcionó
+          if (reqStudentId && String(empRow.alumno_id) !== String(reqStudentId)) {
+            const err: any = new Error('El empleado no pertenece al alumno especificado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          const studentOwnerId = empRow.alumno_id;
+          let targetMacId: string | null = null;
+          let targetMacTitle: string | null = null;
+
+          const isAssigning = machineryId && machineryId !== 'unassign' && machineryId !== '';
+
+          if (isAssigning) {
+            // 3. Bloquear la maquinaria correspondiente con FOR UPDATE
+            const macRes = await client.query(
+              `SELECT id, maquinaria_id, linea_titulo, alumno_id, estado 
+               FROM maquinaria_adquisiciones 
+               WHERE id = $1 OR maquinaria_id = $1
+               FOR UPDATE`,
+              [machineryId]
+            );
+
+            if (!macRes || macRes.rows.length === 0) {
+              const err: any = new Error('Maquinaria no encontrada');
+              err.statusCode = 404;
+              throw err;
+            }
+
+            const macForStudent = macRes.rows.find(m => String(m.alumno_id) === String(studentOwnerId));
+            if (!macForStudent) {
+              const err: any = new Error('La maquinaria no pertenece a este alumno');
+              err.statusCode = 403;
+              throw err;
+            }
+
+            targetMacId = macForStudent.id;
+            targetMacTitle = macForStudent.linea_titulo;
+          }
+
+          // 4. Determinar turno (shift)
+          let newShift = empRow.turno !== null && empRow.turno !== undefined ? Number(empRow.turno) : 1;
+          if (shift !== undefined && shift !== null) {
+            newShift = Number(shift) || 1;
+          }
+
+          // 5. Actualizar la asignación del empleado en empleados_contratados
+          const updateRes = await client.query(
+            `UPDATE empleados_contratados
+             SET
+               maquinaria_asignada_id = $1,
+               maquinaria_asignada_titulo = $2,
+               turno = $3
+             WHERE id = $4
+             RETURNING *`,
+            [targetMacId, targetMacTitle, newShift, empRow.id]
+          );
+
+          const updatedRow = updateRes.rows[0];
+          const updatedEmployee: HiredEmployee = {
+            id: updatedRow.id,
+            jobListingId: updatedRow.oferta_id,
+            studentId: updatedRow.alumno_id,
+            studentName: updatedRow.alumno_nombre,
+            employeeName: updatedRow.nombre_empleado,
+            role: updatedRow.puesto || 'operario',
+            gender: updatedRow.genero,
+            grossSalaryMonthly: Number(updatedRow.sueldo_bruto_mensual),
+            age: Number(updatedRow.edad),
+            hireDate: updatedRow.fecha_contratacion ? new Date(updatedRow.fecha_contratacion).toISOString() : new Date().toISOString(),
+            assignedMachineryId: updatedRow.maquinaria_asignada_id || undefined,
+            assignedMachineryTitle: updatedRow.maquinaria_asignada_titulo || undefined,
+            assignedVehicleId: updatedRow.vehiculo_asignado_id || undefined,
+            assignedVehicleTitle: updatedRow.vehiculo_asignado_titulo || undefined,
+            assignedWarehouseIndex: updatedRow.almacen_asignado_index !== null && updatedRow.almacen_asignado_index !== undefined ? Number(updatedRow.almacen_asignado_index) : undefined,
+            shift: updatedRow.turno !== null && updatedRow.turno !== undefined ? Number(updatedRow.turno) : 1,
+            avatarUrl: updatedRow.avatar_url || undefined
+          };
+
+          // Actualizar estado local en memoria únicamente después del commit
+          try {
+            const currentDb = readDb();
+            if (!currentDb.hiredEmployees) currentDb.hiredEmployees = [];
+            const idx = currentDb.hiredEmployees.findIndex(e => e.id === updatedEmployee.id);
+            if (idx !== -1) {
+              currentDb.hiredEmployees[idx] = updatedEmployee;
+            } else {
+              currentDb.hiredEmployees.push(updatedEmployee);
+            }
+            writeDb(currentDb);
+          } catch (memErr) {
+            console.warn('[Assign Machinery] Warning updating in-memory cache:', memErr);
+          }
+
+          return { success: true, employee: updatedEmployee };
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+        let emp = db.hiredEmployees.find(e => e.id === id);
+        if (!emp) {
+          const err: any = new Error('Empleado no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (reqStudentId && String(emp.studentId) !== String(reqStudentId)) {
+          const err: any = new Error('El empleado no pertenece al alumno especificado');
+          err.statusCode = 403;
+          throw err;
+        }
+        if (machineryId && machineryId !== 'unassign' && machineryId !== '') {
+          const mac = (db.machineryAcquisitions || []).find(m => m.id === machineryId || m.machineryId === machineryId);
+          if (!mac) {
+            const err: any = new Error('Maquinaria no encontrada');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (String(mac.studentId) !== String(emp.studentId)) {
+            const err: any = new Error('La maquinaria no pertenece a este alumno');
+            err.statusCode = 403;
+            throw err;
+          }
+          emp.assignedMachineryId = mac.id;
+          emp.assignedMachineryTitle = mac.title || mac.lineTitle;
+        } else {
+          emp.assignedMachineryId = undefined;
+          emp.assignedMachineryTitle = undefined;
+        }
+        if (shift !== undefined && shift !== null) {
+          emp.shift = Number(shift) || 1;
+        }
+        writeDb(db);
+        return { success: true, employee: emp };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Assign Machinery Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar asignación de maquinaria' });
   }
-  res.json({ success: true, employee: emp });
 });
 
 app.post('/api/student/employees/auto-assign-all', async (req, res) => {
-  const { studentId } = req.body;
+  const studentId = req.body?.studentId || (req.query?.studentId as string);
   if (!studentId) return res.status(400).json({ error: 'Falta studentId' });
 
-  const db = readDb();
-  if (!db.hiredEmployees) db.hiredEmployees = [];
-  if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `auto_assign_${studentId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  const studentMachines = db.machineryAcquisitions.filter(m => String(m.studentId) === String(studentId));
-  const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId) && (e.role === 'operario' || !e.role));
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloquear los empleados del alumno en orden determinista (id ASC) con FOR UPDATE
+          const empRes = await client.query(
+            `SELECT * FROM empleados_contratados 
+             WHERE alumno_id = $1 
+             ORDER BY id ASC 
+             FOR UPDATE`,
+            [studentId]
+          );
 
-  if (studentMachines.length === 0) {
-    return res.status(400).json({ error: 'No tienes maquinaria industrial adquirida' });
+          // 2. Obtener la maquinaria del alumno en orden determinista
+          const macRes = await client.query(
+            `SELECT id, maquinaria_id, linea_titulo 
+             FROM maquinaria_adquisiciones 
+             WHERE alumno_id = $1 
+             ORDER BY id ASC`,
+            [studentId]
+          );
+
+          const studentMachines = macRes.rows;
+          if (studentMachines.length === 0) {
+            const err: any = new Error('No tienes maquinaria industrial adquirida');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. Filtrar operarios (puesto = 'operario' o nulo/vacío)
+          const allEmpRows = empRes.rows;
+          const studentEmps = allEmpRows.filter(e => !e.puesto || e.puesto === 'operario');
+
+          // 4. Crear slots: Por cada máquina, 3 turnos, 2 operarios por turno = 6 slots por máquina
+          const slots: { machineId: string; machineTitle: string; shift: number }[] = [];
+          studentMachines.forEach((mac, mIndex) => {
+            const title = mac.linea_titulo || `Línea de producción #${mIndex + 1}`;
+            for (let shift = 1; shift <= 3; shift++) {
+              slots.push({ machineId: mac.id, machineTitle: title, shift });
+              slots.push({ machineId: mac.id, machineTitle: title, shift });
+            }
+          });
+
+          let assignedCount = 0;
+          let mappedEmployees: HiredEmployee[] = [];
+
+          if (studentEmps.length > 0) {
+            const valueClauses: string[] = [];
+            const params: any[] = [];
+            let paramIdx = 1;
+
+            studentEmps.forEach((emp, index) => {
+              let targetMacId: string | null = null;
+              let targetMacTitle: string | null = null;
+              let targetShift: number = emp.turno !== null && emp.turno !== undefined ? Number(emp.turno) : 1;
+
+              if (index < slots.length) {
+                const slot = slots[index];
+                targetMacId = slot.machineId;
+                targetMacTitle = slot.machineTitle;
+                targetShift = slot.shift;
+                assignedCount++;
+              } else {
+                targetMacId = null;
+                targetMacTitle = null;
+              }
+
+              valueClauses.push(`($${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::int)`);
+              params.push(emp.id, targetMacId, targetMacTitle, targetShift);
+            });
+
+            const updateSql = `
+              UPDATE empleados_contratados AS e
+              SET 
+                maquinaria_asignada_id = v.mac_id,
+                maquinaria_asignada_titulo = v.mac_title,
+                turno = v.shift
+              FROM (VALUES ${valueClauses.join(', ')}) AS v(id, mac_id, mac_title, shift)
+              WHERE e.id = v.id
+              RETURNING e.*
+            `;
+            const updateRes = await client.query(updateSql, params);
+            const sortedRows = (updateRes.rows || []).sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+            mappedEmployees = sortedRows.map(mapHiredEmployeeRow);
+          }
+
+          // Actualizar memoria local únicamente después del commit exitoso
+          try {
+            const currentDb = readDb();
+            if (!currentDb.hiredEmployees) currentDb.hiredEmployees = [];
+            mappedEmployees.forEach(updatedEmp => {
+              const idx = currentDb.hiredEmployees.findIndex(e => e.id === updatedEmp.id);
+              if (idx !== -1) {
+                currentDb.hiredEmployees[idx] = updatedEmp;
+              } else {
+                currentDb.hiredEmployees.push(updatedEmp);
+              }
+            });
+            writeDb(currentDb);
+          } catch (memErr) {
+            console.warn('[Auto-assign] Warning updating in-memory cache:', memErr);
+          }
+
+          return {
+            success: true,
+            message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
+            assignedCount,
+            employees: mappedEmployees
+          };
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+        if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+
+        const studentMachines = db.machineryAcquisitions.filter(m => String(m.studentId) === String(studentId));
+        const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId) && (e.role === 'operario' || !e.role));
+
+        if (studentMachines.length === 0) {
+          const err: any = new Error('No tienes maquinaria industrial adquirida');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const slots: { machineId: string; machineTitle: string; shift: number }[] = [];
+        studentMachines.forEach((mac, mIndex) => {
+          const title = mac.title || mac.lineTitle || `Línea de producción #${mIndex + 1}`;
+          for (let shift = 1; shift <= 3; shift++) {
+            slots.push({ machineId: mac.id, machineTitle: title, shift });
+            slots.push({ machineId: mac.id, machineTitle: title, shift });
+          }
+        });
+
+        let assignedCount = 0;
+        studentEmps.forEach((emp, index) => {
+          if (index < slots.length) {
+            const slot = slots[index];
+            emp.assignedMachineryId = slot.machineId;
+            emp.assignedMachineryTitle = slot.machineTitle;
+            emp.shift = slot.shift;
+            assignedCount++;
+          } else {
+            emp.assignedMachineryId = undefined;
+            emp.assignedMachineryTitle = undefined;
+          }
+        });
+
+        writeDb(db);
+        return {
+          success: true,
+          message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
+          assignedCount,
+          employees: studentEmps
+        };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Auto-assign Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar autoasignación de operarios' });
   }
-
-  // Create slot queue: For each machine, 3 shifts, 2 operators per shift = 6 slots per machine
-  const slots: { machineId: string; machineTitle: string; shift: number }[] = [];
-  studentMachines.forEach((mac, mIndex) => {
-    const title = mac.title || mac.lineTitle || `Línea de producción #${mIndex + 1}`;
-    for (let shift = 1; shift <= 3; shift++) {
-      slots.push({ machineId: mac.id, machineTitle: title, shift });
-      slots.push({ machineId: mac.id, machineTitle: title, shift });
-    }
-  });
-
-  let assignedCount = 0;
-  studentEmps.forEach((emp, index) => {
-    if (index < slots.length) {
-      const slot = slots[index];
-      emp.assignedMachineryId = slot.machineId;
-      emp.assignedMachineryTitle = slot.machineTitle;
-      emp.shift = slot.shift;
-      assignedCount++;
-    } else {
-      emp.assignedMachineryId = undefined;
-      emp.assignedMachineryTitle = undefined;
-    }
-  });
-
-  // Write local state immediately
-  writeDb(db);
-
-  // Sync to Supabase in a single atomic batch query
-  if (dbPool && studentEmps.length > 0) {
-    try {
-      const valueClauses: string[] = [];
-      const params: any[] = [];
-      let paramIdx = 1;
-
-      studentEmps.forEach((emp) => {
-        valueClauses.push(`($${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::text, $${paramIdx++}::int)`);
-        params.push(
-          emp.id,
-          emp.assignedMachineryId || null,
-          emp.assignedMachineryTitle || null,
-          Number(emp.shift) || 1
-        );
-      });
-
-      const sql = `
-        UPDATE empleados_contratados AS e
-        SET 
-          maquinaria_asignada_id = v.mac_id,
-          maquinaria_asignada_titulo = v.mac_title,
-          turno = v.shift
-        FROM (VALUES ${valueClauses.join(', ')}) AS v(id, mac_id, mac_title, shift)
-        WHERE e.id = v.id
-      `;
-
-      await safeDbQuery(sql, params);
-    } catch (e) {
-      console.error('[Supabase Auto-Assign Error]:', e);
-    }
-  }
-
-  res.json({
-    success: true,
-    message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
-    assignedCount,
-    employees: studentEmps
-  });
 });
 
 app.post('/api/student/employees/unassign-all', async (req, res) => {
-  const { studentId } = req.body;
+  const studentId = req.body?.studentId || (req.query?.studentId as string);
   if (!studentId) return res.status(400).json({ error: 'Falta studentId' });
 
-  const db = readDb();
-  if (!db.hiredEmployees) db.hiredEmployees = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `unassign_all_${studentId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId));
-  studentEmps.forEach(emp => {
-    emp.assignedMachineryId = undefined;
-    emp.assignedMachineryTitle = undefined;
-  });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloquear los empleados del alumno en orden determinista (id ASC) con FOR UPDATE
+          const empRes = await client.query(
+            `SELECT * FROM empleados_contratados 
+             WHERE alumno_id = $1 
+             ORDER BY id ASC 
+             FOR UPDATE`,
+            [studentId]
+          );
 
-  writeDb(db);
+          // 2. Limpiar las asignaciones de maquinaria exactamente como hace actualmente el endpoint
+          // Conserva exactamente el comportamiento actual: modifica únicamente maquinaria_asignada_id y maquinaria_asignada_titulo
+          const updateRes = await client.query(
+            `UPDATE empleados_contratados 
+             SET maquinaria_asignada_id = NULL, maquinaria_asignada_titulo = NULL 
+             WHERE alumno_id = $1 
+             RETURNING *`,
+            [studentId]
+          );
 
-  if (dbPool) {
-    try {
-      await safeDbQuery(
-        'UPDATE empleados_contratados SET maquinaria_asignada_id = NULL, maquinaria_asignada_titulo = NULL WHERE alumno_id = $1',
-        [studentId]
-      );
-    } catch (e) {
-      console.error('[Supabase Unassign All Error]:', e);
-    }
+          const updatedEmployees = (updateRes.rows || [])
+            .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)))
+            .map(mapHiredEmployeeRow);
+
+          // Actualizar memoria local únicamente después del commit exitoso
+          try {
+            const currentDb = readDb();
+            if (!currentDb.hiredEmployees) currentDb.hiredEmployees = [];
+            currentDb.hiredEmployees.forEach(e => {
+              if (String(e.studentId) === String(studentId)) {
+                e.assignedMachineryId = undefined;
+                e.assignedMachineryTitle = undefined;
+              }
+            });
+            writeDb(currentDb);
+          } catch (memErr) {
+            console.warn('[Unassign-all] Warning updating in-memory cache:', memErr);
+          }
+
+          return {
+            success: true,
+            message: 'Se han desvinculado todos los operarios de la maquinaria.',
+            employees: updatedEmployees
+          };
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+
+        const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId));
+        studentEmps.forEach(emp => {
+          emp.assignedMachineryId = undefined;
+          emp.assignedMachineryTitle = undefined;
+        });
+
+        writeDb(db);
+        return {
+          success: true,
+          message: 'Se han desvinculado todos los operarios de la maquinaria.',
+          employees: studentEmps
+        };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Unassign-all Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar desvinculación masiva de operarios' });
   }
-
-  res.json({
-    success: true,
-    message: 'Se han desvinculado todos los operarios de la maquinaria.',
-    employees: studentEmps
-  });
 });
 
 // ================= TEACHER ASSET ADMINISTRATION & DELETES =================
@@ -11116,7 +12918,7 @@ app.get('/api/office-store/orders', (req, res) => {
   res.json({ success: true, orders });
 });
 
-app.post('/api/office-store/checkout', (req, res) => {
+app.post('/api/office-store/checkout', async (req, res) => {
   const { studentId, cartItems } = req.body;
   const db = readDb();
 
@@ -11156,66 +12958,164 @@ app.post('/api/office-store/checkout', (req, res) => {
   const ivaAmount = Math.round((subtotal * 0.21) * 100) / 100;
   const totalAmount = Math.round((subtotal + ivaAmount) * 100) / 100;
 
-  if (student.balance < totalAmount) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para realizar el pedido. Total pedido: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${student.balance.toFixed(2)} €.`
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `off_chk_${studentId}_${cartItems.length}_${totalAmount}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const orderNumber = `OFF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(10000 + Math.random() * 90000)}`;
+      const orderId = generateId('off_ord');
+      const txId = generateId('tx');
+
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Alumno no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+          const studentRow = studentLock.rows[0];
+          const currentBal = Number(studentRow.saldo);
+          if (currentBal < totalAmount) {
+            const err: any = new Error(`Saldo insuficiente para realizar el pedido. Total pedido: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${currentBal.toFixed(2)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Math.round((currentBal - totalAmount) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+
+          const order: OfficePurchaseOrder = {
+            id: orderId,
+            orderNumber,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno,
+            companyName: studentRow.alumno,
+            nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+            purchaseDate: nowIso,
+            items: detailedItems,
+            subtotal,
+            ivaRate: 21,
+            ivaAmount,
+            totalAmount,
+            status: 'completado_pagado',
+            paymentMethod: 'banco'
+          };
+
+          await syncOfficeOrderToSupabase(order, client);
+
+          const transfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'ofimatica-suministros',
+            receiverName: 'Suministros OfiTech S.L.',
+            receiverAccount: 'ES910002000588776655',
+            amount: totalAmount,
+            concept: `Compra de mobiliario/informática - Pedido Nº ${orderNumber}`,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              studentRow.id,
+              totalAmount,
+              nowIso,
+              transfer.concept,
+              studentRow.id,
+              studentRow.alumno,
+              studentRow.account_number,
+              'ofimatica-suministros',
+              'Suministros OfiTech S.L.',
+              'ES910002000588776655'
+            ]
+          );
+
+          // Update in-memory local state
+          const currentDb = readDb();
+          const sIdx = currentDb.users.findIndex((u: any) => u.id === studentId || String(u.id) === String(studentId));
+          if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
+          if (!currentDb.officeOrders) currentDb.officeOrders = [];
+          currentDb.officeOrders.unshift(order);
+          currentDb.transfers.unshift(transfer);
+          writeDb(currentDb);
+
+          return {
+            success: true,
+            order,
+            newBalance,
+            message: `Pedido Nº ${orderNumber} realizado con éxito. Cargados ${totalAmount.toFixed(2)} € (IVA incl.) en cuenta.`
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        if (student.balance < totalAmount) {
+          const err: any = new Error(`Saldo insuficiente para realizar el pedido. Total pedido: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${student.balance.toFixed(2)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const order: OfficePurchaseOrder = {
+          id: orderId,
+          orderNumber,
+          studentId: student.id,
+          studentName: student.name,
+          companyName: student.name,
+          nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
+          purchaseDate: nowIso,
+          items: detailedItems,
+          subtotal,
+          ivaRate: 21,
+          ivaAmount,
+          totalAmount,
+          status: 'completado_pagado',
+          paymentMethod: 'banco'
+        };
+
+        if (!db.officeOrders) db.officeOrders = [];
+        db.officeOrders.unshift(order);
+
+        student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'ofimatica-suministros',
+          receiverName: 'Suministros OfiTech S.L.',
+          receiverAccount: 'ES910002000588776655',
+          amount: totalAmount,
+          concept: `Compra de mobiliario/informática - Pedido Nº ${orderNumber}`,
+          timestamp: nowIso
+        };
+        db.transfers.unshift(transfer);
+        writeDb(db);
+
+        return {
+          success: true,
+          order,
+          newBalance: student.balance,
+          message: `Pedido Nº ${orderNumber} realizado con éxito. Cargados ${totalAmount.toFixed(2)} € (IVA incl.) en cuenta.`
+        };
+      }
     });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Office Store Checkout Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar el pedido de ofimática' });
   }
-
-  if (!db.officeOrders) db.officeOrders = [];
-
-  const now = new Date();
-  const orderNumber = `OFF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(10000 + Math.random() * 90000)}`;
-
-  const order: OfficePurchaseOrder = {
-    id: generateId('off_ord'),
-    orderNumber,
-    studentId: student.id,
-    studentName: student.name,
-    companyName: student.name,
-    nifCif: 'B-' + Math.floor(10000000 + Math.random() * 90000000),
-    purchaseDate: now.toISOString(),
-    items: detailedItems,
-    subtotal,
-    ivaRate: 21,
-    ivaAmount,
-    totalAmount,
-    status: 'completado_pagado',
-    paymentMethod: 'banco'
-  };
-
-  db.officeOrders.unshift(order);
-
-  syncOfficeOrderToSupabase(order).catch(e => console.error(e));
-
-  // Deduct from student balance
-  student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'ofimatica-suministros',
-    receiverName: 'Suministros OfiTech S.L.',
-    receiverAccount: 'ES910002000588776655',
-    amount: totalAmount,
-    concept: `Compra de mobiliario/informática - Pedido Nº ${orderNumber}`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    order,
-    newBalance: student.balance,
-    message: `Pedido Nº ${orderNumber} realizado con éxito. Cargados ${totalAmount.toFixed(2)} € (IVA incl.) en cuenta.`
-  });
 });
 
 function autoAssignForkliftsForStudent(db: any, studentId: string) {
@@ -11273,7 +13173,7 @@ app.get('/api/student/vehicles', (req, res) => {
   res.json({ success: true, vehicles: list });
 });
 
-app.post('/api/vehicles/buy', (req, res) => {
+app.post('/api/vehicles/buy', async (req, res) => {
   const { studentId, vehicleType, title, basePrice, paymentMethod } = req.body;
   const db = readDb();
 
@@ -11286,78 +13186,184 @@ app.post('/api/vehicles/buy', (req, res) => {
   const ivaAmount = Math.round((bPrice * 0.21) * 100) / 100;
   const totalPrice = Math.round((bPrice + ivaAmount) * 100) / 100;
 
-  if (student.balance < totalPrice) {
-    return res.status(400).json({
-      error: `Saldo insuficiente. Total con IVA (21%): ${totalPrice.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `veh_buy_${studentId}_${vehicleType}_${bPrice}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      let img = '/images/vehicles/carretilla_elevadora.jpg';
+      if (vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
+      if (vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
+
+      const vehId = generateId('veh');
+      const txId = generateId('tx');
+      const nowIso = now.toISOString();
+
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Alumno no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+          const studentRow = studentLock.rows[0];
+          const currentBal = Number(studentRow.saldo);
+          if (currentBal < totalPrice) {
+            const err: any = new Error(`Saldo insuficiente. Total con IVA (21%): ${totalPrice.toFixed(2)} €, Saldo disponible: ${currentBal.toFixed(2)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Math.round((currentBal - totalPrice) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+
+          const transfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'concesionario-vehiculos',
+            receiverName: 'Concesionario Industrial AutoCorp S.L.',
+            receiverAccount: 'ES880004000998877661',
+            amount: totalPrice,
+            concept: `Adquisición de vehículo (${title || 'Vehículo Corporativo'}) - Pago al contado`,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              studentRow.id,
+              totalPrice,
+              nowIso,
+              transfer.concept,
+              studentRow.id,
+              studentRow.alumno,
+              studentRow.account_number,
+              'concesionario-vehiculos',
+              'Concesionario Industrial AutoCorp S.L.',
+              'ES880004000998877661'
+            ]
+          );
+
+          const vehicle: any = {
+            id: vehId,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno,
+            vehicleType: vehicleType || 'carretilla_elevadora',
+            title: title || 'Vehículo Corporativo',
+            basePrice: bPrice,
+            ivaAmount,
+            totalPrice,
+            paymentMethod: paymentMethod || 'contado',
+            purchaseDate: nowIso,
+            status: 'activo',
+            imageUrl: img
+          };
+
+          await syncVehicleToSupabase(vehicle, client);
+
+          // Update in-memory local state
+          const currentDb = readDb();
+          const sIdx = currentDb.users.findIndex(u => u.id === studentId);
+          if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
+          if (!currentDb.purchasedVehicles) currentDb.purchasedVehicles = [];
+          currentDb.purchasedVehicles.unshift(vehicle);
+          autoAssignForkliftsForStudent(currentDb, studentId);
+          currentDb.transfers.unshift(transfer);
+          if (!currentDb.systemLogs) currentDb.systemLogs = [];
+          currentDb.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'BUY_VEHICLE',
+            details: `El alumno ${studentRow.alumno} ha comprado un vehículo "${title}" por ${totalPrice.toFixed(2)}€ (IVA incl.)`,
+            timestamp: nowIso,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno
+          });
+          writeDb(currentDb);
+
+          return {
+            success: true,
+            vehicle,
+            newBalance,
+            message: `Vehículo "${title}" adquirido con éxito por ${totalPrice.toFixed(2)} € (IVA incl.).`
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        if (student.balance < totalPrice) {
+          const err: any = new Error(`Saldo insuficiente. Total con IVA (21%): ${totalPrice.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        student.balance = Math.round((student.balance - totalPrice) * 100) / 100;
+        const vehicle: any = {
+          id: vehId,
+          studentId: student.id,
+          studentName: student.name,
+          vehicleType: vehicleType || 'carretilla_elevadora',
+          title: title || 'Vehículo Corporativo',
+          basePrice: bPrice,
+          ivaAmount,
+          totalPrice,
+          paymentMethod: paymentMethod || 'contado',
+          purchaseDate: nowIso,
+          status: 'activo',
+          imageUrl: img
+        };
+        if (!db.purchasedVehicles) db.purchasedVehicles = [];
+        db.purchasedVehicles.unshift(vehicle);
+        autoAssignForkliftsForStudent(db, student.id);
+
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'concesionario-vehiculos',
+          receiverName: 'Concesionario Industrial AutoCorp S.L.',
+          receiverAccount: 'ES880004000998877661',
+          amount: totalPrice,
+          concept: `Adquisición de vehículo (${title}) - Pago al contado`,
+          timestamp: nowIso
+        };
+        db.transfers.unshift(transfer);
+        if (!db.systemLogs) db.systemLogs = [];
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'BUY_VEHICLE',
+          details: `El alumno ${student.name} ha comprado un vehículo "${title}" por ${totalPrice.toFixed(2)}€ (IVA incl.)`,
+          timestamp: nowIso,
+          studentId: student.id,
+          studentName: student.name
+        });
+        writeDb(db);
+
+        return {
+          success: true,
+          vehicle,
+          newBalance: student.balance,
+          message: `Vehículo "${title}" adquirido con éxito por ${totalPrice.toFixed(2)} € (IVA incl.).`
+        };
+      }
     });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Buy Vehicle Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al comprar vehículo' });
   }
-
-  if (!db.purchasedVehicles) db.purchasedVehicles = [];
-
-  const now = new Date();
-  let img = '/images/vehicles/carretilla_elevadora.jpg';
-  if (vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
-  if (vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
-
-  const vehicle: any = {
-    id: generateId('veh'),
-    studentId: student.id,
-    studentName: student.name,
-    vehicleType: vehicleType || 'carretilla_elevadora',
-    title: title || 'Vehículo Corporativo',
-    basePrice: bPrice,
-    ivaAmount,
-    totalPrice,
-    paymentMethod: paymentMethod || 'contado',
-    purchaseDate: now.toISOString(),
-    status: 'activo',
-    imageUrl: img
-  };
-
-  db.purchasedVehicles.unshift(vehicle);
-  autoAssignForkliftsForStudent(db, student.id);
-  syncVehicleToSupabase(vehicle).catch(e => console.error(e));
-
-  // Deduct balance
-  student.balance = Math.round((student.balance - totalPrice) * 100) / 100;
-  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'concesionario-vehiculos',
-    receiverName: 'Concesionario Industrial AutoCorp S.L.',
-    receiverAccount: 'ES880004000998877661',
-    amount: totalPrice,
-    concept: `Adquisición de vehículo (${title}) - Pago al contado`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalPrice, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'BUY_VEHICLE',
-    details: `El alumno ${student.name} ha comprado un vehículo "${title}" por ${totalPrice.toFixed(2)}€ (IVA incl.)`,
-    timestamp: now.toISOString(),
-    studentId: student.id,
-    studentName: student.name
-  });
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    vehicle,
-    newBalance: student.balance,
-    message: `Vehículo "${title}" adquirido con éxito por ${totalPrice.toFixed(2)} € (IVA incl.).`
-  });
 });
 
-app.post('/api/vehicles/buy-cart', (req, res) => {
+app.post('/api/vehicles/buy-cart', async (req, res) => {
   const { studentId, cartItems } = req.body;
   if (!studentId || !Array.isArray(cartItems) || cartItems.length === 0) {
     return res.status(400).json({ error: 'Parámetros inválidos para la compra de la cesta de vehículos.' });
@@ -11378,89 +13384,208 @@ app.post('/api/vehicles/buy-cart', (req, res) => {
   const totalIva = Math.round((totalBasePrice * 0.21) * 100) / 100;
   const grandTotal = Math.round((totalBasePrice + totalIva) * 100) / 100;
 
-  if (student.balance < grandTotal) {
-    return res.status(400).json({
-      error: `Saldo insuficiente. Total con IVA (21%): ${grandTotal.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `veh_cart_${studentId}_${cartItems.length}_${grandTotal}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const txId = generateId('tx');
+
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Alumno no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+          const studentRow = studentLock.rows[0];
+          const currentBal = Number(studentRow.saldo);
+          if (currentBal < grandTotal) {
+            const err: any = new Error(`Saldo insuficiente. Total con IVA (21%): ${grandTotal.toFixed(2)} €, Saldo disponible: ${currentBal.toFixed(2)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Math.round((currentBal - grandTotal) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+
+          const transfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'concesionario-vehiculos',
+            receiverName: 'Concesionario Industrial AutoCorp S.L.',
+            receiverAccount: 'ES880004000998877661',
+            amount: grandTotal,
+            concept: `Compra combinada de vehículos en la cesta`,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              studentRow.id,
+              grandTotal,
+              nowIso,
+              transfer.concept,
+              studentRow.id,
+              studentRow.alumno,
+              studentRow.account_number,
+              'concesionario-vehiculos',
+              'Concesionario Industrial AutoCorp S.L.',
+              'ES880004000998877661'
+            ]
+          );
+
+          const createdVehicles: PurchasedVehicle[] = [];
+          for (const item of cartItems) {
+            const qty = Math.max(1, Number(item.quantity) || 1);
+            const bPrice = Number(item.basePrice) || 0;
+            const itemIva = Math.round((bPrice * 0.21) * 100) / 100;
+            const itemTotal = Math.round((bPrice + itemIva) * 100) / 100;
+
+            let img = '/images/vehicles/carretilla_elevadora.jpg';
+            if (item.vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
+            if (item.vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
+
+            for (let i = 0; i < qty; i++) {
+              const veh: PurchasedVehicle = {
+                id: generateId('veh'),
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                vehicleType: item.vehicleType || 'carretilla_elevadora',
+                title: item.title || 'Vehículo Corporativo',
+                basePrice: bPrice,
+                ivaAmount: itemIva,
+                totalPrice: itemTotal,
+                paymentMethod: 'contado',
+                purchaseDate: nowIso,
+                status: 'activo',
+                imageUrl: img
+              };
+              createdVehicles.push(veh);
+              await syncVehicleToSupabase(veh, client);
+            }
+          }
+
+          // Update local memory
+          const currentDb = readDb();
+          const sIdx = currentDb.users.findIndex(u => u.id === studentId);
+          if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
+          if (!currentDb.purchasedVehicles) currentDb.purchasedVehicles = [];
+          currentDb.purchasedVehicles.unshift(...createdVehicles);
+          autoAssignForkliftsForStudent(currentDb, studentId);
+          currentDb.transfers.unshift(transfer);
+          if (!currentDb.systemLogs) currentDb.systemLogs = [];
+          currentDb.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'BUY_VEHICLES_CART',
+            details: `El alumno ${studentRow.alumno} ha comprado ${createdVehicles.length} vehículo(s) en cesta por un total de ${grandTotal.toFixed(2)}€ (IVA incl.)`,
+            timestamp: nowIso,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno
+          });
+          writeDb(currentDb);
+
+          return {
+            success: true,
+            createdCount: createdVehicles.length,
+            vehicles: createdVehicles,
+            newBalance,
+            message: `Adquisición en cesta completada exitosamente. ${createdVehicles.length} vehículo(s) añadidos a tu flota corporativa.`
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        if (student.balance < grandTotal) {
+          const err: any = new Error(`Saldo insuficiente. Total con IVA (21%): ${grandTotal.toFixed(2)} €, Saldo disponible: ${student.balance.toFixed(2)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const createdVehicles: PurchasedVehicle[] = [];
+        for (const item of cartItems) {
+          const qty = Math.max(1, Number(item.quantity) || 1);
+          const bPrice = Number(item.basePrice) || 0;
+          const itemIva = Math.round((bPrice * 0.21) * 100) / 100;
+          const itemTotal = Math.round((bPrice + itemIva) * 100) / 100;
+
+          let img = '/images/vehicles/carretilla_elevadora.jpg';
+          if (item.vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
+          if (item.vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
+
+          for (let i = 0; i < qty; i++) {
+            const veh: PurchasedVehicle = {
+              id: generateId('veh'),
+              studentId: student.id,
+              studentName: student.name,
+              vehicleType: item.vehicleType || 'carretilla_elevadora',
+              title: item.title || 'Vehículo Corporativo',
+              basePrice: bPrice,
+              ivaAmount: itemIva,
+              totalPrice: itemTotal,
+              paymentMethod: 'contado',
+              purchaseDate: nowIso,
+              status: 'activo',
+              imageUrl: img
+            };
+            if (!db.purchasedVehicles) db.purchasedVehicles = [];
+            db.purchasedVehicles.unshift(veh);
+            createdVehicles.push(veh);
+          }
+        }
+
+        autoAssignForkliftsForStudent(db, student.id);
+        student.balance = Math.round((student.balance - grandTotal) * 100) / 100;
+
+        const transfer: Transfer = {
+          id: txId,
+          senderId: student.id,
+          senderName: student.name,
+          senderAccount: student.accountNumber,
+          receiverId: 'concesionario-vehiculos',
+          receiverName: 'Concesionario Industrial AutoCorp S.L.',
+          receiverAccount: 'ES880004000998877661',
+          amount: grandTotal,
+          concept: `Compra combinada de ${createdVehicles.length} vehículo(s) en la cesta`,
+          timestamp: nowIso
+        };
+        db.transfers.unshift(transfer);
+        if (!db.systemLogs) db.systemLogs = [];
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'BUY_VEHICLES_CART',
+          details: `El alumno ${student.name} ha comprado ${createdVehicles.length} vehículo(s) en cesta por un total de ${grandTotal.toFixed(2)}€ (IVA incl.)`,
+          timestamp: nowIso,
+          studentId: student.id,
+          studentName: student.name
+        });
+        writeDb(db);
+
+        return {
+          success: true,
+          createdCount: createdVehicles.length,
+          vehicles: createdVehicles,
+          newBalance: student.balance,
+          message: `Adquisición en cesta completada exitosamente. ${createdVehicles.length} vehículo(s) añadidos a tu flota corporativa.`
+        };
+      }
     });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Buy Vehicles Cart Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar compra de vehículos' });
   }
-
-  if (!db.purchasedVehicles) db.purchasedVehicles = [];
-
-  const now = new Date();
-  const createdVehicles: PurchasedVehicle[] = [];
-
-  for (const item of cartItems) {
-    const qty = Math.max(1, Number(item.quantity) || 1);
-    const bPrice = Number(item.basePrice) || 0;
-    const itemIva = Math.round((bPrice * 0.21) * 100) / 100;
-    const itemTotal = Math.round((bPrice + itemIva) * 100) / 100;
-
-    let img = '/images/vehicles/carretilla_elevadora.jpg';
-    if (item.vehicleType === 'camion_trailer') img = '/images/vehicles/camion_trailer.jpg';
-    if (item.vehicleType === 'coche_empresa') img = '/images/vehicles/coche_empresa.jpg';
-
-    for (let i = 0; i < qty; i++) {
-      const veh: PurchasedVehicle = {
-        id: generateId('veh'),
-        studentId: student.id,
-        studentName: student.name,
-        vehicleType: item.vehicleType || 'carretilla_elevadora',
-        title: item.title || 'Vehículo Corporativo',
-        basePrice: bPrice,
-        ivaAmount: itemIva,
-        totalPrice: itemTotal,
-        paymentMethod: 'contado',
-        purchaseDate: now.toISOString(),
-        status: 'activo',
-        imageUrl: img
-      };
-
-      db.purchasedVehicles.unshift(veh);
-      createdVehicles.push(veh);
-      syncVehicleToSupabase(veh).catch(e => console.error(e));
-    }
-  }
-
-  autoAssignForkliftsForStudent(db, student.id);
-
-  // Deduct balance
-  student.balance = Math.round((student.balance - grandTotal) * 100) / 100;
-  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: student.id,
-    senderName: student.name,
-    senderAccount: student.accountNumber,
-    receiverId: 'concesionario-vehiculos',
-    receiverName: 'Concesionario Industrial AutoCorp S.L.',
-    receiverAccount: 'ES880004000998877661',
-    amount: grandTotal,
-    concept: `Compra combinada de ${createdVehicles.length} vehículo(s) en la cesta`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', grandTotal, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'BUY_VEHICLES_CART',
-    details: `El alumno ${student.name} ha comprado ${createdVehicles.length} vehículo(s) en cesta por un total de ${grandTotal.toFixed(2)}€ (IVA incl.)`,
-    timestamp: now.toISOString(),
-    studentId: student.id,
-    studentName: student.name
-  });
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    createdCount: createdVehicles.length,
-    vehicles: createdVehicles,
-    newBalance: student.balance,
-    message: `Adquisición en cesta completada exitosamente. ${createdVehicles.length} vehículo(s) añadidos a tu flota corporativa.`
-  });
 });
 
 app.put('/api/student/vehicles/:id/assign-warehouse', (req, res) => {
@@ -11491,38 +13616,262 @@ app.put('/api/student/vehicles/:id/assign-warehouse', (req, res) => {
 app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
   const { id } = req.params;
   const { vehicleId, warehouseIndex, shift } = req.body;
+  const reqStudentId = req.body?.studentId || (req.query?.studentId as string);
 
-  const db = readDb();
-  if (!db.hiredEmployees) db.hiredEmployees = [];
-
-  let emp = db.hiredEmployees.find(e => e.id === id);
-  if (!emp && dbPool) {
-    await syncEmployeesFromSupabase(db);
-    emp = db.hiredEmployees.find(e => e.id === id);
-  }
-  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
-
-  if (vehicleId) {
-    const veh = (db.purchasedVehicles || []).find(v => v.id === vehicleId);
-    emp.assignedVehicleId = veh ? veh.id : vehicleId;
-    emp.assignedVehicleTitle = veh ? veh.title : undefined;
-  } else {
-    emp.assignedVehicleId = undefined;
-    emp.assignedVehicleTitle = undefined;
+  if (!id) {
+    return res.status(400).json({ error: 'ID de empleado no especificado' });
   }
 
-  if (warehouseIndex !== undefined) {
-    emp.assignedWarehouseIndex = Number(warehouseIndex) || undefined;
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `assign_veh_${id}_${vehicleId || 'none'}_${warehouseIndex ?? 'none'}_${shift || 'none'}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloquear el empleado con FOR UPDATE
+          const empRes = await client.query(
+            `SELECT * FROM empleados_contratados WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          if (!empRes || empRes.rows.length === 0) {
+            const err: any = new Error('Empleado no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const empRow = empRes.rows[0];
+
+          // 2. Verificar que pertenece al studentId recibido si se proporcionó
+          if (reqStudentId && String(empRow.alumno_id) !== String(reqStudentId)) {
+            const err: any = new Error('El empleado no pertenece al alumno especificado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          const studentOwnerId = empRow.alumno_id;
+          const previousVehicleId = empRow.vehiculo_asignado_id;
+          const isAssigning = vehicleId && vehicleId !== 'unassign' && vehicleId !== '';
+
+          let targetVehId: string | null = null;
+          let targetVehTitle: string | null = null;
+
+          // Determinar nuevo turno y nuevo índice de almacén
+          let newShift = empRow.turno !== null && empRow.turno !== undefined ? Number(empRow.turno) : 1;
+          if (shift !== undefined && shift !== null) {
+            newShift = Number(shift) || 1;
+          }
+
+          let newWarehouseIndex: number | null = empRow.almacen_asignado_index !== null && empRow.almacen_asignado_index !== undefined ? Number(empRow.almacen_asignado_index) : null;
+          if (warehouseIndex !== undefined && warehouseIndex !== null) {
+            newWarehouseIndex = Number(warehouseIndex);
+            if (isNaN(newWarehouseIndex)) newWarehouseIndex = null;
+          }
+
+          if (isAssigning) {
+            // 3. Bloquear el vehículo con FOR UPDATE
+            const vehRes = await client.query(
+              `SELECT * FROM vehiculos_comprados WHERE id = $1 FOR UPDATE`,
+              [vehicleId]
+            );
+            if (!vehRes || vehRes.rows.length === 0) {
+              const err: any = new Error('Vehículo no encontrado');
+              err.statusCode = 404;
+              throw err;
+            }
+            const vehRow = vehRes.rows[0];
+
+            // 4. Verificar que pertenece al mismo alumno
+            if (String(vehRow.alumno_id) !== String(studentOwnerId)) {
+              const err: any = new Error('El vehículo no pertenece al mismo alumno');
+              err.statusCode = 403;
+              throw err;
+            }
+
+            targetVehId = vehRow.id;
+            targetVehTitle = vehRow.titulo;
+
+            // Si no se proporcionó warehouseIndex expresamente, heredar el del vehículo si existía
+            if ((warehouseIndex === undefined || warehouseIndex === null) && vehRow.almacen_asignado_index !== null && vehRow.almacen_asignado_index !== undefined) {
+              newWarehouseIndex = Number(vehRow.almacen_asignado_index);
+            }
+
+            // 5. Si el empleado tenía previamente otro vehículo asignado, limpiar ese vehículo anterior
+            if (previousVehicleId && previousVehicleId !== targetVehId) {
+              await client.query(
+                `UPDATE vehiculos_comprados
+                 SET conductor_asignado_id = NULL, conductor_asignado_nombre = NULL, turno_asignado = NULL
+                 WHERE id = $1 AND conductor_asignado_id = $2`,
+                [previousVehicleId, empRow.id]
+              );
+            }
+
+            // 6. Si el vehículo ya tenía asignado a otro empleado, limpiar la asignación de ese otro empleado
+            if (vehRow.conductor_asignado_id && String(vehRow.conductor_asignado_id) !== String(empRow.id)) {
+              await client.query(
+                `UPDATE empleados_contratados
+                 SET vehiculo_asignado_id = NULL, vehiculo_asignado_titulo = NULL
+                 WHERE id = $1`,
+                [vehRow.conductor_asignado_id]
+              );
+            }
+
+            // 7. Actualizar el vehículo en vehiculos_comprados
+            await client.query(
+              `UPDATE vehiculos_comprados
+               SET
+                 conductor_asignado_id = $1,
+                 conductor_asignado_nombre = $2,
+                 turno_asignado = $3,
+                 almacen_asignado_index = $4
+               WHERE id = $5`,
+              [empRow.id, empRow.nombre_empleado, newShift, newWarehouseIndex, targetVehId]
+            );
+          } else {
+            // Desasignar vehículo: si el empleado tenía vehículo asignado, limpiarlo en vehiculos_comprados
+            if (previousVehicleId) {
+              await client.query(
+                `UPDATE vehiculos_comprados
+                 SET conductor_asignado_id = NULL, conductor_asignado_nombre = NULL, turno_asignado = NULL
+                 WHERE id = $1 AND conductor_asignado_id = $2`,
+                [previousVehicleId, empRow.id]
+              );
+            }
+          }
+
+          // 8. Actualizar el empleado en empleados_contratados
+          const updateEmpRes = await client.query(
+            `UPDATE empleados_contratados
+             SET
+               vehiculo_asignado_id = $1,
+               vehiculo_asignado_titulo = $2,
+               almacen_asignado_index = $3,
+               turno = $4
+             WHERE id = $5
+             RETURNING *`,
+            [targetVehId, targetVehTitle, newWarehouseIndex, newShift, empRow.id]
+          );
+
+          const updatedRow = updateEmpRes.rows[0];
+          const updatedEmployee: HiredEmployee = {
+            id: updatedRow.id,
+            jobListingId: updatedRow.oferta_id,
+            studentId: updatedRow.alumno_id,
+            studentName: updatedRow.alumno_nombre,
+            employeeName: updatedRow.nombre_empleado,
+            role: updatedRow.puesto || 'operario',
+            gender: updatedRow.genero,
+            grossSalaryMonthly: Number(updatedRow.sueldo_bruto_mensual),
+            age: Number(updatedRow.edad),
+            hireDate: updatedRow.fecha_contratacion ? new Date(updatedRow.fecha_contratacion).toISOString() : new Date().toISOString(),
+            assignedMachineryId: updatedRow.maquinaria_asignada_id || undefined,
+            assignedMachineryTitle: updatedRow.maquinaria_asignada_titulo || undefined,
+            assignedVehicleId: updatedRow.vehiculo_asignado_id || undefined,
+            assignedVehicleTitle: updatedRow.vehiculo_asignado_titulo || undefined,
+            assignedWarehouseIndex: updatedRow.almacen_asignado_index !== null && updatedRow.almacen_asignado_index !== undefined ? Number(updatedRow.almacen_asignado_index) : undefined,
+            shift: updatedRow.turno !== null && updatedRow.turno !== undefined ? Number(updatedRow.turno) : 1,
+            avatarUrl: updatedRow.avatar_url || undefined
+          };
+
+          // Actualizar estado local en memoria únicamente después del commit
+          try {
+            const currentDb = readDb();
+            if (currentDb.purchasedVehicles) {
+              if (targetVehId) {
+                const v = currentDb.purchasedVehicles.find(v => v.id === targetVehId);
+                if (v) {
+                  v.assignedDriverId = empRow.id;
+                  v.assignedDriverName = empRow.nombre_empleado;
+                  v.assignedShift = newShift;
+                  v.assignedWarehouseIndex = newWarehouseIndex !== null ? newWarehouseIndex : undefined;
+                }
+              }
+              if (previousVehicleId && previousVehicleId !== targetVehId) {
+                const prevV = currentDb.purchasedVehicles.find(v => v.id === previousVehicleId);
+                if (prevV && prevV.assignedDriverId === empRow.id) {
+                  prevV.assignedDriverId = undefined;
+                  prevV.assignedDriverName = undefined;
+                  prevV.assignedShift = undefined;
+                }
+              }
+            }
+            if (!currentDb.hiredEmployees) currentDb.hiredEmployees = [];
+            const idx = currentDb.hiredEmployees.findIndex(e => e.id === updatedEmployee.id);
+            if (idx !== -1) {
+              currentDb.hiredEmployees[idx] = updatedEmployee;
+            } else {
+              currentDb.hiredEmployees.push(updatedEmployee);
+            }
+            writeDb(currentDb);
+          } catch (memErr) {
+            console.warn('[Assign Vehicle] Warning updating in-memory cache:', memErr);
+          }
+
+          return { success: true, employee: updatedEmployee };
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+        let emp = db.hiredEmployees.find(e => e.id === id);
+        if (!emp) {
+          const err: any = new Error('Empleado no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (reqStudentId && String(emp.studentId) !== String(reqStudentId)) {
+          const err: any = new Error('El empleado no pertenece al alumno especificado');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        const isAssigning = vehicleId && vehicleId !== 'unassign' && vehicleId !== '';
+        if (isAssigning) {
+          const veh = (db.purchasedVehicles || []).find(v => v.id === vehicleId);
+          if (!veh) {
+            const err: any = new Error('Vehículo no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (String(veh.studentId) !== String(emp.studentId)) {
+            const err: any = new Error('El vehículo no pertenece al mismo alumno');
+            err.statusCode = 403;
+            throw err;
+          }
+          emp.assignedVehicleId = veh.id;
+          emp.assignedVehicleTitle = veh.title;
+          veh.assignedDriverId = emp.id;
+          veh.assignedDriverName = emp.employeeName;
+          if (shift !== undefined && shift !== null) veh.assignedShift = Number(shift) || 1;
+        } else {
+          if (emp.assignedVehicleId) {
+            const prevVeh = (db.purchasedVehicles || []).find(v => v.id === emp.assignedVehicleId);
+            if (prevVeh && prevVeh.assignedDriverId === emp.id) {
+              prevVeh.assignedDriverId = undefined;
+              prevVeh.assignedDriverName = undefined;
+              prevVeh.assignedShift = undefined;
+            }
+          }
+          emp.assignedVehicleId = undefined;
+          emp.assignedVehicleTitle = undefined;
+        }
+
+        if (warehouseIndex !== undefined && warehouseIndex !== null) {
+          emp.assignedWarehouseIndex = Number(warehouseIndex) || undefined;
+        }
+        if (shift !== undefined && shift !== null) {
+          emp.shift = Number(shift) || 1;
+        }
+
+        writeDb(db);
+        return { success: true, employee: emp };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Assign Vehicle Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar asignación de vehículo' });
   }
-
-  if (shift !== undefined) {
-    emp.shift = Number(shift) || 1;
-  }
-
-  await syncHiredEmployeeToSupabase(emp);
-
-  writeDb(db);
-  res.json({ success: true, employee: emp });
 });
 
 // RAW MATERIALS & STUDENT LEVEL API ENDPOINTS
@@ -12362,7 +14711,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
 
   // --- SELLER STOCK CHECK (If seller is a student) ---
   const isStudentSeller = sellerId && sellerId !== 'proveedor-materia-prima' && sellerId !== 'profesor-1';
-  if (isStudentSeller) {
+  if (isStudentSeller && !dbPool) {
     const sellerInv = checkAndCalculateProduction(db, sellerId);
     const requestedUnits = itemsToProcess.reduce((sum, i) => sum + i.quantity, 0);
     if (primaryAnn.materialType === 'producto_final') {
@@ -12589,346 +14938,849 @@ app.post('/api/raw-materials/orders', async (req, res) => {
   const isTeacherSeller = sellerId === 'proveedor-materia-prima' || sellerId === 'profesor-1' || sellerLevel === 'official' || primaryAnn.sellerId === 'profesor-1' || primaryAnn.sellerId === 'proveedor-materia-prima';
   const isAutoApproved = (isTeacherSeller && (!isTeacher || buyerLevel === 1)) || (isTeacherBuyer && isStudentSeller);
 
-  if (isAutoApproved) {
-    if (buyer.balance < totalAmount && !isTeacherBuyer) {
-      return res.status(400).json({
-        error: `Saldo insuficiente en tu cuenta bancaria (${buyer.balance.toFixed(2)} € disponible) para realizar esta compra por importe de ${totalAmount.toFixed(2)} €.`
-      });
-    }
-    if (!isTeacherBuyer) {
-      buyer.balance = Math.round((buyer.balance - totalAmount) * 100) / 100;
-      pendingSyncPromises.push(syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role));
-    }
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_ord_${buyer.id}_${generateId('idem')}`;
 
-  const now = new Date();
-  const summaryTitle = orderItems.length === 1
-    ? orderItems[0].materialTitle
-    : orderItems.map(i => `${i.materialTitle} (${i.quantity} u.)`).join(', ');
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const summaryTitle = orderItems.length === 1
+        ? orderItems[0].materialTitle
+        : orderItems.map(i => `${i.materialTitle} (${i.quantity} u.)`).join(', ');
 
-  const totalUnits = orderItems.reduce((sum, i) => sum + i.quantity, 0);
+      const totalUnits = orderItems.reduce((sum, i) => sum + i.quantity, 0);
 
-  const initialNegotiation: NegotiationHistoryEntry = {
-    id: generateId('neg'),
-    authorId: buyer.id,
-    authorName: buyerName,
-    timestamp: now.toISOString(),
-    action: 'propuesta_inicial',
-    quantity: totalUnits,
-    pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
-    discountPercentage,
-    insuranceFee,
-    transportCost,
-    distanceKm,
-    chargedPallets,
-    transportMethod,
-    totalAmount,
-    note: note || 'Solicitud inicial de compra realizada'
-  };
+      const initialNegotiation: NegotiationHistoryEntry = {
+        id: generateId('neg'),
+        authorId: buyer.id,
+        authorName: buyerName,
+        timestamp: now.toISOString(),
+        action: 'propuesta_inicial',
+        quantity: totalUnits,
+        pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
+        discountPercentage,
+        insuranceFee,
+        transportCost,
+        distanceKm,
+        chargedPallets,
+        transportMethod,
+        totalAmount,
+        note: note || 'Solicitud inicial de compra realizada'
+      };
 
-  const order: RawMaterialOrder = {
-    id: generateId('rmord'),
-    studentId: buyer.id,
-    studentName: buyerName,
-    buyerLevel,
-    sellerId,
-    sellerName,
-    sellerLevel,
-    announcementId: orderItems[0].announcementId,
-    materialType: orderItems[0].materialType,
-    materialTitle: summaryTitle,
-    quantity: totalUnits,
-    unitWeightKg: totalUnits > 0 ? Math.round(totalKg / totalUnits) : 0,
-    totalKg,
-    basePrice,
-    subtotalAmount: basePrice,
-    unitPrice: orderItems.length === 1 ? orderItems[0].unitPrice : (totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice),
-    discountPercentage,
-    discountAmount,
-    insuranceFee,
-    hasInsurance: insuranceFee > 0,
-    ivaAmount,
-    transportCost,
-    distanceKm,
-    chargedPallets,
-    transportMethod,
-    totalAmount,
-    needsTransport: transportMethod === 'vendedor_envio',
-    deliveryAddress: deliveryAddressStr,
-    destinationNaveId: finalDestinationNaveId,
-    pickupVehicleId: pickupVehicleId || undefined,
-    status: isAutoApproved ? 'entregado' : 'pendiente',
-    requestedAt: now.toISOString(),
-    approvedAt: isAutoApproved ? now.toISOString() : undefined,
-    deliveredAt: isAutoApproved ? now.toISOString() : undefined,
-    estimatedDeliveryDays: isAutoApproved ? 0 : undefined,
-    estimatedDeliveryAt: isAutoApproved ? now.toISOString() : undefined,
-    items: orderItems,
-    lastTurnUserId: buyer.id,
-    negotiationHistory: [initialNegotiation]
-  };
+      const order: RawMaterialOrder = {
+        id: generateId('rmord'),
+        studentId: buyer.id,
+        studentName: buyerName,
+        buyerLevel,
+        sellerId,
+        sellerName,
+        sellerLevel,
+        announcementId: orderItems[0].announcementId,
+        materialType: orderItems[0].materialType,
+        materialTitle: summaryTitle,
+        quantity: totalUnits,
+        unitWeightKg: totalUnits > 0 ? Math.round(totalKg / totalUnits) : 0,
+        totalKg,
+        basePrice,
+        subtotalAmount: basePrice,
+        unitPrice: orderItems.length === 1 ? orderItems[0].unitPrice : (totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice),
+        discountPercentage,
+        discountAmount,
+        insuranceFee,
+        hasInsurance: insuranceFee > 0,
+        ivaAmount,
+        transportCost,
+        distanceKm,
+        chargedPallets,
+        transportMethod,
+        totalAmount,
+        needsTransport: transportMethod === 'vendedor_envio',
+        deliveryAddress: deliveryAddressStr,
+        destinationNaveId: finalDestinationNaveId,
+        pickupVehicleId: pickupVehicleId || undefined,
+        status: isAutoApproved ? 'entregado' : 'pendiente',
+        inventoryCredited: isAutoApproved,
+        requestedAt: now.toISOString(),
+        approvedAt: isAutoApproved ? now.toISOString() : undefined,
+        deliveredAt: isAutoApproved ? now.toISOString() : undefined,
+        estimatedDeliveryDays: isAutoApproved ? 0 : undefined,
+        estimatedDeliveryAt: isAutoApproved ? now.toISOString() : undefined,
+        items: orderItems,
+        lastTurnUserId: buyer.id,
+        negotiationHistory: [initialNegotiation]
+      };
 
-  if (isAutoApproved) {
-    order.negotiationHistory.push({
-      id: generateId('neg'),
-      authorId: sellerId,
-      authorName: sellerName,
-      timestamp: now.toISOString(),
-      action: 'aceptado',
-      quantity: totalUnits,
-      pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
-      discountPercentage,
-      insuranceFee,
-      transportCost,
-      transportMethod,
-      totalAmount,
-      note: 'Compra aceptada y entregada de forma inmediata'
-    });
+      if (isAutoApproved) {
+        order.negotiationHistory.push({
+          id: generateId('neg'),
+          authorId: sellerId,
+          authorName: sellerName,
+          timestamp: now.toISOString(),
+          action: 'aceptado',
+          quantity: totalUnits,
+          pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
+          discountPercentage,
+          insuranceFee,
+          transportCost,
+          transportMethod,
+          totalAmount,
+          note: 'Compra aceptada y entregada de forma inmediata'
+        });
 
-    // Process inventory and announcement stock deductions
-    processStockDeductionForOrder(db, order);
-
-    // If teacher is buying from student seller (Level 3 sale)
-    if (isTeacherBuyer && isStudentSeller) {
-      const sellerUser = db.users.find(u => u.id === sellerId);
-      if (sellerUser) {
-        // 1. Credit sale amount (totalAmount = subtotal + IVA) to seller
-        sellerUser.balance = Math.round((sellerUser.balance + totalAmount) * 100) / 100;
-
-        const txPayment = generateId('tx');
-        const transferPayment: Transfer = {
-          id: txPayment,
-          senderId: buyer.id,
-          senderName: buyerName,
-          senderAccount: buyer.accountNumber || 'ES990001000988776655',
-          receiverId: sellerUser.id,
-          receiverName: sellerUser.name,
-          receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
-          amount: totalAmount,
-          concept: `Venta El Des-Tornillo: ${summaryTitle}`,
-          timestamp: now.toISOString()
-        };
-        db.transfers.unshift(transferPayment);
-
-        // 2. Transport charge check on Seller
-        const sellerHasTruck = (db.purchasedVehicles || []).some(
-          v => String(v.studentId) === String(sellerId) &&
-          ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
-        );
-        const sellerHasDriver = (db.hiredEmployees || []).some(
-          e => String(e.studentId) === String(sellerId) &&
-          ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
-        );
-
+        // Calculate transport on seller if teacher is buying from student
         let transportExpense = 0;
         let transportConcept = '';
         let transportNote = '';
         let baseTransportFee = 0;
         let ivaTransportFee = 0;
+        let transportInvoiceOrder: RawMaterialOrder | null = null;
+        let txPaymentId = generateId('tx');
+        let txTransportId = generateId('tx');
 
-        if (sellerHasTruck && sellerHasDriver) {
-          transportExpense = Math.min(transportCost, Math.round((15 + totalUnits * 0.50) * 100) / 100);
-          baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
-          ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
-          transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${totalUnits} u.)`;
-          transportNote = `Se han descontado ${transportExpense.toFixed(2)} € por suministro de gasolina (al disponer de camión y camionero en plantilla).`;
-        } else {
-          baseTransportFee = transportCost;
-          ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
-          transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
-          transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${totalUnits} u.)`;
-          transportNote = `Se han descontado ${transportExpense.toFixed(2)} € (${baseTransportFee.toFixed(2)} € base + ${ivaTransportFee.toFixed(2)} € IVA 21%) por servicio de transporte y logística externa.`;
-        }
+        if (isTeacherBuyer && isStudentSeller) {
+          const sellerHasTruck = (db.purchasedVehicles || []).some(
+            v => String(v.studentId) === String(sellerId) &&
+            ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+          );
+          const sellerHasDriver = (db.hiredEmployees || []).some(
+            e => String(e.studentId) === String(sellerId) &&
+            ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
+          );
 
-        if (transportExpense > 0) {
-          sellerUser.balance = Math.round((sellerUser.balance - transportExpense) * 100) / 100;
-          pendingSyncPromises.push(syncAccountToSupabase(sellerUser.id, sellerUser.name, sellerUser.balance, sellerUser.username, sellerUser.password, sellerUser.accountNumber, sellerUser.role));
+          if (sellerHasTruck && sellerHasDriver) {
+            transportExpense = Math.min(transportCost, Math.round((15 + totalUnits * 0.50) * 100) / 100);
+            baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
+            ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
+            transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${totalUnits} u.)`;
+            transportNote = `Se han descontado ${transportExpense.toFixed(2)} € por suministro de gasolina (al disponer de camión y camionero en plantilla).`;
+          } else {
+            baseTransportFee = transportCost;
+            ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
+            transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
+            transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${totalUnits} u.)`;
+            transportNote = `Se han descontado ${transportExpense.toFixed(2)} € (${baseTransportFee.toFixed(2)} € base + ${ivaTransportFee.toFixed(2)} € IVA 21%) por servicio de transporte y logística externa.`;
+          }
 
-          const txTransport = generateId('tx');
-          const transferTransport: Transfer = {
-            id: txTransport,
-            senderId: sellerUser.id,
-            senderName: sellerUser.name,
-            senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
-            receiverId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-            receiverName: sellerHasTruck && sellerHasDriver ? 'Suministros de Gasolina y Combustible S.A.' : 'Agencia de Logística y Transportes Express S.A.',
-            receiverAccount: 'ES990001000988771122',
-            amount: transportExpense,
-            concept: transportConcept,
-            timestamp: now.toISOString()
-          };
-          db.transfers.unshift(transferTransport);
-
-          const transportInvoiceOrder: RawMaterialOrder = {
-            id: `rmord_trans_${txTransport}`,
-            studentId: sellerUser.id,
-            studentName: sellerUser.name,
-            buyerLevel: sellerUser.level || 1,
-            sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-            sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-            sellerLevel: 'official',
-            announcementId: `trans-inv-${txTransport}`,
-            materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
-            materialTitle: transportConcept,
-            quantity: 1,
-            unitWeightKg: totalUnits,
-            totalKg: totalUnits,
-            basePrice: baseTransportFee,
-            subtotalAmount: baseTransportFee,
-            unitPrice: baseTransportFee,
-            discountPercentage: 0,
-            discountAmount: 0,
-            insuranceFee: 0,
-            hasInsurance: false,
-            ivaAmount: ivaTransportFee,
-            vatAmount: ivaTransportFee,
-            vatRate: 21,
-            transportCost: 0,
-            transportMethod: 'vendedor_envio',
-            totalAmount: transportExpense,
-            needsTransport: false,
-            deliveryAddress: deliveryAddressStr || 'Dirección comercial registrada',
-            status: 'facturado',
-            invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-            requestedAt: now.toISOString(),
-            approvedAt: now.toISOString(),
-            deliveredAt: now.toISOString(),
-            invoicedAt: now.toISOString(),
-            items: [{
-              announcementId: `trans-inv-${txTransport}`,
+          if (transportExpense > 0) {
+            transportInvoiceOrder = {
+              id: `rmord_trans_${txTransportId}`,
+              studentId: sellerId,
+              studentName: sellerName,
+              buyerLevel: 1,
+              sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+              sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+              sellerLevel: 'official',
+              announcementId: `trans-inv-${txTransportId}`,
               materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
               materialTitle: transportConcept,
-              title: transportConcept,
               quantity: 1,
+              unitWeightKg: totalUnits,
+              totalKg: totalUnits,
+              basePrice: baseTransportFee,
+              subtotalAmount: baseTransportFee,
               unitPrice: baseTransportFee,
-              subtotal: baseTransportFee,
-              totalCost: baseTransportFee
-            }],
-            lastTurnUserId: sellerUser.id,
-            negotiationHistory: [{
-              id: generateId('neg'),
-              authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-              authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-              timestamp: now.toISOString(),
-              action: 'propuesta_inicial',
-              quantity: 1,
-              pricePerUnit: baseTransportFee,
               discountPercentage: 0,
+              discountAmount: 0,
               insuranceFee: 0,
+              hasInsurance: false,
+              ivaAmount: ivaTransportFee,
+              vatAmount: ivaTransportFee,
+              vatRate: 21,
               transportCost: 0,
               transportMethod: 'vendedor_envio',
               totalAmount: transportExpense,
-              note: `Factura por ${transportConcept}`
-            }]
-          };
-
-          if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-          db.rawMaterialOrders.unshift(transportInvoiceOrder);
-          pendingSyncPromises.push(syncRawMaterialOrderToSupabase(transportInvoiceOrder));
+              needsTransport: false,
+              deliveryAddress: deliveryAddressStr || 'Dirección comercial registrada',
+              status: 'facturado',
+              invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+              requestedAt: now.toISOString(),
+              approvedAt: now.toISOString(),
+              deliveredAt: now.toISOString(),
+              invoicedAt: now.toISOString(),
+              items: [{
+                announcementId: `trans-inv-${txTransportId}`,
+                materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
+                materialTitle: transportConcept,
+                title: transportConcept,
+                quantity: 1,
+                unitPrice: baseTransportFee,
+                subtotal: baseTransportFee,
+                totalCost: baseTransportFee
+              }],
+              lastTurnUserId: sellerId,
+              negotiationHistory: [{
+                id: generateId('neg'),
+                authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                timestamp: now.toISOString(),
+                action: 'propuesta_inicial',
+                quantity: 1,
+                pricePerUnit: baseTransportFee,
+                discountPercentage: 0,
+                insuranceFee: 0,
+                transportCost: 0,
+                transportMethod: 'vendedor_envio',
+                totalAmount: transportExpense,
+                note: `Factura por ${transportConcept}`
+              }]
+            };
+          }
         }
 
-        addNotification(
-          db,
-          sellerUser.id,
-          '¡Venta en El Des-Tornillo!',
-          `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
-          'order_approved',
-          order.id
-        );
+        let savedBuyerInv: RawMaterialInventory | null = null;
+        let savedSellerInv: RawMaterialInventory | null = null;
+
+        if (dbPool) {
+          await withPostgresTransaction(async (client) => {
+            // 1. DETERMINISTIC LOCKING OF ANNOUNCEMENTS
+            const annIdsToLock = Array.from(new Set(itemsToProcess.map(i => i.announcementId))).sort();
+            let annRes = await client.query(
+              `SELECT * FROM anuncios_materia_prima WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+              [annIdsToLock]
+            );
+
+            if (annRes.rows.length < annIdsToLock.length) {
+              const foundIds = new Set(annRes.rows.map((r: any) => r.id));
+              const missingIds = annIdsToLock.filter(id => !foundIds.has(id));
+              for (const mId of missingIds) {
+                const memAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === mId);
+                if (memAnn) {
+                  await syncRawMaterialAnnouncementToSupabase(memAnn, client);
+                }
+              }
+              annRes = await client.query(
+                `SELECT * FROM anuncios_materia_prima WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+                [annIdsToLock]
+              );
+            }
+
+            if (annRes.rows.length < annIdsToLock.length) {
+              const err: any = new Error('Uno o más anuncios de materia prima no fueron encontrados en la base de datos.');
+              err.statusCode = 404;
+              throw err;
+            }
+
+            const lockedAnns = annRes.rows;
+
+            // Verify stock for each requested item
+            for (const itemInput of itemsToProcess) {
+              const lockedAnn = lockedAnns.find((a: any) => a.id === itemInput.announcementId);
+              if (!lockedAnn) {
+                const err: any = new Error(`Anuncio no encontrado: ${itemInput.announcementId}`);
+                err.statusCode = 404;
+                throw err;
+              }
+              const isAnnActive = lockedAnn.active === true || lockedAnn.active === 'true';
+              if (!isAnnActive && lockedAnn.stock !== 'ilimitado' && Number(lockedAnn.stock) <= 0) {
+                const err: any = new Error(`El anuncio "${lockedAnn.title}" ya no está disponible o está agotado.`);
+                err.statusCode = 400;
+                throw err;
+              }
+              if (lockedAnn.stock !== 'ilimitado' && lockedAnn.stock !== null && lockedAnn.stock !== undefined) {
+                const currentAnnStock = Number(lockedAnn.stock);
+                if (isNaN(currentAnnStock) || currentAnnStock < itemInput.quantity) {
+                  const avail = isNaN(currentAnnStock) ? 0 : currentAnnStock;
+                  const err: any = new Error(`Stock insuficiente en el anuncio "${lockedAnn.title}": Dispone de ${avail} unidades pero se solicitaron ${itemInput.quantity}.`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              }
+            }
+
+            // 2. CHECK AND DEDUCT SELLER STUDENT INVENTORY (IF SELLER IS STUDENT)
+            if (isStudentSeller) {
+              await client.query(
+                `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+                 VALUES ($1, $2, '{}'::jsonb)
+                 ON CONFLICT (alumno_id) DO NOTHING`,
+                [sellerId, sellerName]
+              );
+              const sellerInvRes = await client.query(
+                `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+                [sellerId]
+              );
+              if (!sellerInvRes || sellerInvRes.rows.length === 0) {
+                const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${sellerId}`);
+                err.statusCode = 404;
+                throw err;
+              }
+              savedSellerInv = parseInventoryRow(sellerInvRes.rows[0]);
+
+              // Check availability in PostgreSQL
+              for (const item of itemsToProcess) {
+                const ann = lockedAnns.find((a: any) => a.id === item.announcementId);
+                const itemTitle = (ann?.title || '').toLowerCase();
+                const mType = ann?.material_type;
+                const isScrewdriver = mType === 'producto_final' || itemTitle.includes('destornillador');
+                const isRods = itemTitle.includes('varilla') || mType === 'varilla';
+
+                if (isScrewdriver) {
+                  const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                  const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                  const avail = isPlana
+                    ? (savedSellerInv.flatScrewdriversUnits || savedSellerInv.metalScrewdriversUnits || 0)
+                    : (isEstrella ? (savedSellerInv.starScrewdriversUnits || savedSellerInv.ironScrewdriversUnits || 0) : (savedSellerInv.producedScrewdriversUnits || 0));
+                  if (avail < item.quantity) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} unidades de producto terminado, pero solicitas ${item.quantity} unidades.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                } else if (isRods) {
+                  const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                  const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                  const avail = isPlana
+                    ? (savedSellerInv.producedFlatRodsUnits || savedSellerInv.producedMetalRodsUnits || 0)
+                    : (isEstrella ? (savedSellerInv.producedStarRodsUnits || savedSellerInv.producedIronRodsUnits || 0) : (savedSellerInv.producedRodsUnits || 0));
+                  if (avail < item.quantity) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} unidades de varillas, pero solicitas ${item.quantity} unidades.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                } else if (mType) {
+                  let avail = 0;
+                  if (mType === 'hierro') avail = savedSellerInv.ironKg || 0;
+                  else if (mType === 'metal') avail = savedSellerInv.metalKg || 0;
+                  else if (mType === 'plastico') avail = savedSellerInv.plasticKg || 0;
+                  else if (mType === 'epoxi') avail = savedSellerInv.epoxiKg || 0;
+                  const reqKg = (Number(ann?.unit_weight_kg) || 1000) * item.quantity;
+                  if (avail < reqKg) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} kg de materia prima, pero solicitas ${reqKg} kg.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                }
+              }
+
+              // Deduct from seller inventory if auto-approved
+              for (const item of itemsToProcess) {
+                const ann = lockedAnns.find((a: any) => a.id === item.announcementId);
+                const itemTitle = (ann?.title || '').toLowerCase();
+                const mType = ann?.material_type;
+                const isScrewdriver = mType === 'producto_final' || itemTitle.includes('destornillador');
+                const isRods = itemTitle.includes('varilla') || mType === 'varilla';
+
+                if (isRods) {
+                  deductRodsFromSellerInv(savedSellerInv, item.quantity, ann?.title);
+                } else if (isScrewdriver) {
+                  deductScrewdriversFromSellerInv(savedSellerInv, item.quantity, ann?.title);
+                } else if (mType) {
+                  deductRawMaterialFromSellerInv(savedSellerInv, mType, (Number(ann?.unit_weight_kg) || 1000) * item.quantity);
+                }
+              }
+              recalculateTotalInventory(savedSellerInv);
+              savedSellerInv.updatedAt = now.toISOString();
+              await syncInventoryToSupabase(savedSellerInv, sellerName, client);
+            }
+
+            // 3. DEDUCT ANNOUNCEMENT STOCK IN POSTGRESQL & TRANSFER FUNDS
+            for (const itemInput of itemsToProcess) {
+              await client.query(
+                `UPDATE anuncios_materia_prima
+                 SET stock = CASE
+                   WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' THEN GREATEST(0, (stock::numeric - $1))::text
+                   ELSE stock
+                 END,
+                 active = CASE
+                   WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' AND (stock::numeric - $1) <= 0 THEN false
+                   ELSE active
+                 END,
+                 updated_at = NOW()
+                 WHERE id = $2`,
+                [itemInput.quantity, itemInput.announcementId]
+              );
+            }
+
+            // Lock relevant accounts in deterministic sorted order
+            const accountsToLock: string[] = [];
+            if (!isTeacherBuyer) accountsToLock.push(buyer.id);
+            if (isTeacherBuyer && isStudentSeller) accountsToLock.push(sellerId);
+            accountsToLock.sort();
+
+            let buyerRow: any = null;
+            let sellerRow: any = null;
+
+            if (accountsToLock.length > 0) {
+              const lockRes = await client.query(
+                `SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+                [accountsToLock]
+              );
+              for (const r of lockRes.rows) {
+                if (r.id === buyer.id) buyerRow = r;
+                if (r.id === sellerId) sellerRow = r;
+              }
+            }
+
+            if (!isTeacherBuyer) {
+              if (!buyerRow) {
+                const err: any = new Error('Cuenta del comprador no encontrada en la base de datos');
+                err.statusCode = 404;
+                throw err;
+              }
+              const currentBuyerBal = Number(buyerRow.saldo);
+              if (currentBuyerBal < totalAmount) {
+                const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${currentBuyerBal.toFixed(2)} € disponible) para realizar esta compra por importe de ${totalAmount.toFixed(2)} €.`);
+                err.statusCode = 400;
+                throw err;
+              }
+              const newBuyerBal = Math.round((currentBuyerBal - totalAmount) * 100) / 100;
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBuyerBal, buyer.id]);
+
+              const txId = generateId('tx');
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txId + '-out',
+                  buyer.id,
+                  totalAmount,
+                  now.toISOString(),
+                  `Compra Mercado: ${summaryTitle}`,
+                  buyer.id,
+                  buyerName,
+                  buyerRow.account_number,
+                  sellerId,
+                  sellerName,
+                  'ES990001000988776655'
+                ]
+              );
+            }
+
+            if (isTeacherBuyer && isStudentSeller && sellerRow) {
+              const currentSellerBal = Number(sellerRow.saldo);
+              const newSellerBal = Math.round((currentSellerBal + totalAmount - transportExpense) * 100) / 100;
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSellerBal, sellerId]);
+
+              // Movement for sale credit
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txPaymentId + '-in',
+                  sellerId,
+                  totalAmount,
+                  now.toISOString(),
+                  `Venta El Des-Tornillo: ${summaryTitle}`,
+                  buyer.id,
+                  buyerName,
+                  buyer.accountNumber || 'ES990001000988776655',
+                  sellerId,
+                  sellerRow.alumno,
+                  sellerRow.account_number
+                ]
+              );
+
+              // Movement for transport debit if applicable
+              if (transportExpense > 0) {
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [
+                    txTransportId + '-out',
+                    sellerId,
+                    transportExpense,
+                    now.toISOString(),
+                    transportConcept,
+                    sellerId,
+                    sellerRow.alumno,
+                    sellerRow.account_number,
+                    'LOGISTICA_EXTERIOR',
+                    'Agencia de Logística y Transportes',
+                    'ES990001000988771122'
+                  ]
+                );
+              }
+            }
+
+            // Credit buyer inventory directly in PostgreSQL
+            await client.query(
+              `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+               VALUES ($1, $2, '{}'::jsonb)
+               ON CONFLICT (alumno_id) DO NOTHING`,
+              [buyer.id, buyerName]
+            );
+            const buyerInvRes = await client.query(
+              `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+              [buyer.id]
+            );
+            if (!buyerInvRes || buyerInvRes.rows.length === 0) {
+              const err: any = new Error(`Inventario no encontrado para el alumno comprador ${buyer.id}`);
+              err.statusCode = 404;
+              throw err;
+            }
+            const buyerInv = parseInventoryRow(buyerInvRes.rows[0]);
+            creditOrderMaterialsToInventory(buyerInv, order, order.destinationNaveId);
+            buyerInv.updatedAt = now.toISOString();
+            await syncInventoryToSupabase(buyerInv, buyerName, client);
+            savedBuyerInv = buyerInv;
+
+            // 4. SYNC ORDER INTO POSTGRESQL WITHIN TRANSACTION
+            await syncRawMaterialOrderToSupabase(order, client);
+
+            if (transportInvoiceOrder) {
+              await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
+            }
+          }, key);
+        } else {
+          // Fallback if dbPool is not configured
+          processStockDeductionForOrder(db, order);
+
+          if (!isTeacherBuyer) {
+            buyer.balance = Math.round((buyer.balance - totalAmount) * 100) / 100;
+            const txId = generateId('tx');
+            const transfer: Transfer = {
+              id: txId,
+              senderId: buyer.id,
+              senderName: buyerName,
+              senderAccount: buyer.accountNumber,
+              receiverId: sellerId,
+              receiverName: sellerName,
+              receiverAccount: 'ES990001000988776655',
+              amount: totalAmount,
+              concept: `Compra Mercado: ${summaryTitle}`,
+              timestamp: now.toISOString()
+            };
+            if (!db.transfers) db.transfers = [];
+            db.transfers.unshift(transfer);
+          }
+
+          if (isTeacherBuyer && isStudentSeller) {
+            const sellerUser = db.users.find(u => u.id === sellerId);
+            if (sellerUser) {
+              sellerUser.balance = Math.round((sellerUser.balance + totalAmount - transportExpense) * 100) / 100;
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift({
+                id: txPaymentId,
+                senderId: buyer.id,
+                senderName: buyerName,
+                senderAccount: buyer.accountNumber || 'ES990001000988776655',
+                receiverId: sellerUser.id,
+                receiverName: sellerUser.name,
+                receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
+                amount: totalAmount,
+                concept: `Venta El Des-Tornillo: ${summaryTitle}`,
+                timestamp: now.toISOString()
+              });
+
+              if (transportInvoiceOrder) {
+                if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+                db.rawMaterialOrders.unshift(transportInvoiceOrder);
+                db.transfers.unshift({
+                  id: txTransportId,
+                  senderId: sellerUser.id,
+                  senderName: sellerUser.name,
+                  senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
+                  receiverId: 'LOGISTICA_EXTERIOR',
+                  receiverName: 'Agencia de Logística y Transportes',
+                  receiverAccount: 'ES990001000988771122',
+                  amount: transportExpense,
+                  concept: transportConcept,
+                  timestamp: now.toISOString()
+                });
+              }
+            }
+          }
+          const inv = checkAndCalculateProduction(db, buyer.id);
+          creditOrderMaterialsToInventory(inv, order, order.destinationNaveId);
+        }
+
+        // Post-commit local cache update (fresh read to prevent stale overwrites)
+        try {
+          const freshDb = readDb();
+          if (!freshDb.rawMaterialOrders) freshDb.rawMaterialOrders = [];
+          freshDb.rawMaterialOrders.unshift(order);
+
+          if (!isTeacherBuyer) {
+            const freshBuyer = freshDb.users.find(u => u.id === buyer.id);
+            if (freshBuyer) {
+              freshBuyer.balance = Math.round((freshBuyer.balance - totalAmount) * 100) / 100;
+            }
+            if (!freshDb.transfers) freshDb.transfers = [];
+            freshDb.transfers.unshift({
+              id: generateId('tx'),
+              senderId: buyer.id,
+              senderName: buyerName,
+              senderAccount: buyer.accountNumber,
+              receiverId: sellerId,
+              receiverName: sellerName,
+              receiverAccount: 'ES990001000988776655',
+              amount: totalAmount,
+              concept: `Compra Mercado: ${summaryTitle}`,
+              timestamp: now.toISOString()
+            });
+          }
+
+          if (isTeacherBuyer && isStudentSeller) {
+            const freshSeller = freshDb.users.find(u => u.id === sellerId);
+            if (freshSeller) {
+              freshSeller.balance = Math.round((freshSeller.balance + totalAmount - transportExpense) * 100) / 100;
+            }
+            if (!freshDb.transfers) freshDb.transfers = [];
+            freshDb.transfers.unshift({
+              id: txPaymentId,
+              senderId: buyer.id,
+              senderName: buyerName,
+              senderAccount: buyer.accountNumber || 'ES990001000988776655',
+              receiverId: sellerId,
+              receiverName: sellerName,
+              receiverAccount: 'ES990001000988770000',
+              amount: totalAmount,
+              concept: `Venta El Des-Tornillo: ${summaryTitle}`,
+              timestamp: now.toISOString()
+            });
+
+            if (transportInvoiceOrder) {
+              freshDb.rawMaterialOrders.unshift(transportInvoiceOrder);
+              freshDb.transfers.unshift({
+                id: txTransportId,
+                senderId: sellerId,
+                senderName: sellerName,
+                senderAccount: 'ES990001000988770000',
+                receiverId: 'LOGISTICA_EXTERIOR',
+                receiverName: 'Agencia de Logística y Transportes',
+                receiverAccount: 'ES990001000988771122',
+                amount: transportExpense,
+                concept: transportConcept,
+                timestamp: now.toISOString()
+              });
+            }
+
+            addNotification(
+              freshDb,
+              sellerId,
+              '¡Venta en El Des-Tornillo!',
+              `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
+              'order_approved',
+              order.id
+            );
+          }
+
+          if (!freshDb.rawMaterialInventories) freshDb.rawMaterialInventories = [];
+          if (savedBuyerInv) {
+            const bIdx = freshDb.rawMaterialInventories.findIndex(i => i.studentId === buyer.id);
+            if (bIdx >= 0) freshDb.rawMaterialInventories[bIdx] = { ...savedBuyerInv };
+            else freshDb.rawMaterialInventories.push({ ...savedBuyerInv });
+          }
+          if (savedSellerInv && isStudentSeller) {
+            const sIdx = freshDb.rawMaterialInventories.findIndex(i => i.studentId === sellerId);
+            if (sIdx >= 0) freshDb.rawMaterialInventories[sIdx] = { ...savedSellerInv };
+            else freshDb.rawMaterialInventories.push({ ...savedSellerInv });
+          }
+
+          if (freshDb.rawMaterialAnnouncements) {
+            for (const it of itemsToProcess) {
+              const ann = freshDb.rawMaterialAnnouncements.find(a => a.id === it.announcementId);
+              if (ann && ann.stock !== undefined && ann.stock !== null && ann.stock !== 'ilimitado') {
+                const cur = Number(ann.stock);
+                if (!isNaN(cur)) {
+                  ann.stock = Math.max(0, cur - it.quantity);
+                  if (ann.stock <= 0) ann.active = false;
+                  ann.updatedAt = now.toISOString();
+                }
+              }
+            }
+          }
+
+          addNotification(
+            freshDb,
+            buyer.id,
+            'Materia prima recibida',
+            `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € ha sido aprobada y entregada de forma inmediata a tu almacén.`,
+            'order_approved',
+            order.id
+          );
+
+          freshDb.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'COMPRA_MERCADO_DIRECTA',
+            details: `${buyerName} ha comprado y recibido directamente "${summaryTitle}" de ${sellerName} por ${totalAmount.toFixed(2)} €.`,
+            timestamp: now.toISOString(),
+            studentId: buyer.id,
+            studentName: buyerName
+          });
+
+          writeDb(freshDb);
+        } catch (cacheErr) {
+          console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+        }
+
+        return {
+          success: true,
+          order,
+          message: `¡Compra realizada con éxito! Se han descontado ${totalAmount.toFixed(2)} € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén.`
+        };
+      } else {
+        // Not auto-approved (negotiation / review pending)
+        let savedSellerInv: RawMaterialInventory | null = null;
+
+        if (dbPool) {
+          await withPostgresTransaction(async (client) => {
+            // 1. DETERMINISTIC LOCKING OF ANNOUNCEMENTS
+            const annIdsToLock = Array.from(new Set(itemsToProcess.map(i => i.announcementId))).sort();
+            let annRes = await client.query(
+              `SELECT * FROM anuncios_materia_prima WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+              [annIdsToLock]
+            );
+
+            if (annRes.rows.length < annIdsToLock.length) {
+              const foundIds = new Set(annRes.rows.map((r: any) => r.id));
+              const missingIds = annIdsToLock.filter(id => !foundIds.has(id));
+              for (const mId of missingIds) {
+                const memAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === mId);
+                if (memAnn) {
+                  await syncRawMaterialAnnouncementToSupabase(memAnn, client);
+                }
+              }
+              annRes = await client.query(
+                `SELECT * FROM anuncios_materia_prima WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+                [annIdsToLock]
+              );
+            }
+
+            if (annRes.rows.length < annIdsToLock.length) {
+              const err: any = new Error('Uno o más anuncios de materia prima no fueron encontrados en la base de datos.');
+              err.statusCode = 404;
+              throw err;
+            }
+
+            const lockedAnns = annRes.rows;
+
+            // Verify stock for each requested item
+            for (const itemInput of itemsToProcess) {
+              const lockedAnn = lockedAnns.find((a: any) => a.id === itemInput.announcementId);
+              if (!lockedAnn) {
+                const err: any = new Error(`Anuncio no encontrado: ${itemInput.announcementId}`);
+                err.statusCode = 404;
+                throw err;
+              }
+              const isAnnActive = lockedAnn.active === true || lockedAnn.active === 'true';
+              if (!isAnnActive && lockedAnn.stock !== 'ilimitado' && Number(lockedAnn.stock) <= 0) {
+                const err: any = new Error(`El anuncio "${lockedAnn.title}" ya no está disponible o está agotado.`);
+                err.statusCode = 400;
+                throw err;
+              }
+              if (lockedAnn.stock !== 'ilimitado' && lockedAnn.stock !== null && lockedAnn.stock !== undefined) {
+                const currentAnnStock = Number(lockedAnn.stock);
+                if (isNaN(currentAnnStock) || currentAnnStock < itemInput.quantity) {
+                  const avail = isNaN(currentAnnStock) ? 0 : currentAnnStock;
+                  const err: any = new Error(`Stock insuficiente en el anuncio "${lockedAnn.title}": Dispone de ${avail} unidades pero se solicitaron ${itemInput.quantity}.`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              }
+            }
+
+            // 2. CHECK SELLER STUDENT INVENTORY IF SELLER IS STUDENT
+            if (isStudentSeller) {
+              await client.query(
+                `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+                 VALUES ($1, $2, '{}'::jsonb)
+                 ON CONFLICT (alumno_id) DO NOTHING`,
+                [sellerId, sellerName]
+              );
+              const sellerInvRes = await client.query(
+                `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+                [sellerId]
+              );
+              if (!sellerInvRes || sellerInvRes.rows.length === 0) {
+                const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${sellerId}`);
+                err.statusCode = 404;
+                throw err;
+              }
+              savedSellerInv = parseInventoryRow(sellerInvRes.rows[0]);
+
+              for (const item of itemsToProcess) {
+                const ann = lockedAnns.find((a: any) => a.id === item.announcementId);
+                const itemTitle = (ann?.title || '').toLowerCase();
+                const mType = ann?.material_type;
+                const isScrewdriver = mType === 'producto_final' || itemTitle.includes('destornillador');
+                const isRods = itemTitle.includes('varilla') || mType === 'varilla';
+
+                if (isScrewdriver) {
+                  const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                  const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                  const avail = isPlana
+                    ? (savedSellerInv.flatScrewdriversUnits || savedSellerInv.metalScrewdriversUnits || 0)
+                    : (isEstrella ? (savedSellerInv.starScrewdriversUnits || savedSellerInv.ironScrewdriversUnits || 0) : (savedSellerInv.producedScrewdriversUnits || 0));
+                  if (avail < item.quantity) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} unidades de producto terminado, pero solicitas ${item.quantity} unidades.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                } else if (isRods) {
+                  const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                  const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                  const avail = isPlana
+                    ? (savedSellerInv.producedFlatRodsUnits || savedSellerInv.producedMetalRodsUnits || 0)
+                    : (isEstrella ? (savedSellerInv.producedStarRodsUnits || savedSellerInv.producedIronRodsUnits || 0) : (savedSellerInv.producedRodsUnits || 0));
+                  if (avail < item.quantity) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} unidades de varillas, pero solicitas ${item.quantity} unidades.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                } else if (mType) {
+                  let avail = 0;
+                  if (mType === 'hierro') avail = savedSellerInv.ironKg || 0;
+                  else if (mType === 'metal') avail = savedSellerInv.metalKg || 0;
+                  else if (mType === 'plastico') avail = savedSellerInv.plasticKg || 0;
+                  else if (mType === 'epoxi') avail = savedSellerInv.epoxiKg || 0;
+                  const reqKg = (Number(ann?.unit_weight_kg) || 1000) * item.quantity;
+                  if (avail < reqKg) {
+                    const err: any = new Error(`Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${avail} kg de materia prima, pero solicitas ${reqKg} kg.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                }
+              }
+            }
+
+            // 3. PERSIST ORDER DIRECTLY TO POSTGRESQL
+            await syncRawMaterialOrderToSupabase(order, client);
+          }, key);
+        }
+
+        // Post-commit local cache update (fresh read to prevent stale overwrites)
+        try {
+          const freshDb = readDb();
+          if (!freshDb.rawMaterialOrders) freshDb.rawMaterialOrders = [];
+          freshDb.rawMaterialOrders.unshift(order);
+
+          addNotification(
+            freshDb,
+            sellerId,
+            'Nueva solicitud de compra',
+            `${buyerName} ha enviado una solicitud de compra para "${summaryTitle}" por un importe total de ${totalAmount.toFixed(2)} €.`,
+            'order_received',
+            order.id
+          );
+
+          freshDb.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'SOLICITUD_COMPRA_MERCADO',
+            details: `${buyerName} ha solicitado una compra a ${sellerName} (${summaryTitle}) por ${totalAmount.toFixed(2)} €.`,
+            timestamp: now.toISOString(),
+            studentId: buyer.id,
+            studentName: buyerName
+          });
+
+          writeDb(freshDb);
+        } catch (cacheErr) {
+          console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+        }
+
+        return {
+          success: true,
+          order,
+          message: `Solicitud de compra enviada con éxito. Pendiente de revisión por ${sellerName}.`
+        };
       }
-    } else {
-      const txId = generateId('tx');
-      const transfer: Transfer = {
-        id: txId,
-        senderId: buyer.id,
-        senderName: buyerName,
-        senderAccount: buyer.accountNumber,
-        receiverId: sellerId,
-        receiverName: sellerName,
-        receiverAccount: 'ES990001000988776655',
-        amount: totalAmount,
-        concept: `Compra Mercado: ${summaryTitle}`,
-        timestamp: now.toISOString()
-      };
-      db.transfers.unshift(transfer);
-      pendingSyncPromises.push(syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', totalAmount, now.toISOString(), transfer.concept, transfer));
-    }
-  }
-
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  db.rawMaterialOrders.unshift(order);
-  pendingSyncPromises.push(syncRawMaterialOrderToSupabase(order));
-
-  if (isAutoApproved) {
-    const inv = checkAndCalculateProduction(db, buyer.id);
-    pendingSyncPromises.push(syncInventoryToSupabase(inv, buyer.name));
-
-    addNotification(
-      db,
-      buyer.id,
-      'Materia prima recibida',
-      `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € ha sido aprobada y entregada de forma inmediata a tu almacén.`,
-      'order_approved',
-      order.id
-    );
-
-    db.systemLogs.unshift({
-      id: generateId('log'),
-      action: 'COMPRA_MERCADO_DIRECTA',
-      details: `${buyerName} ha comprado y recibido directamente "${summaryTitle}" de ${sellerName} por ${totalAmount.toFixed(2)} €.`,
-      timestamp: now.toISOString(),
-      studentId: buyer.id,
-      studentName: buyerName
     });
 
-    writeDb(db);
-
-    try {
-      await Promise.all(pendingSyncPromises);
-    } catch (syncErr) {
-      console.error('[Supabase Sync Error - Raw Materials Order Direct]:', syncErr);
-      return res.status(500).json({ error: 'Error al sincronizar el pedido de materias primas con la base de datos central. Por favor, reintenta.' });
-    }
-
-    return res.json({
-      success: true,
-      order,
-      message: `¡Compra realizada con éxito! Se han descontado ${totalAmount.toFixed(2)} € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén.`
-    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Raw Material Order Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar el pedido de materias primas' });
   }
-
-  addNotification(
-    db,
-    sellerId,
-    'Nueva solicitud de compra',
-    `${buyerName} ha enviado una solicitud de compra para "${summaryTitle}" por un importe total de ${totalAmount.toFixed(2)} €.`,
-    'order_received',
-    order.id
-  );
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'SOLICITUD_COMPRA_MERCADO',
-    details: `${buyerName} ha solicitado una compra a ${sellerName} (${summaryTitle}) por ${totalAmount.toFixed(2)} €.`,
-    timestamp: now.toISOString(),
-    studentId: buyer.id,
-    studentName: buyerName
-  });
-
-  writeDb(db);
-
-  try {
-    await Promise.all(pendingSyncPromises);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Raw Materials Order Request]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la solicitud de compra con la base de datos central. Por favor, reintenta.' });
-  }
-
-  res.json({
-    success: true,
-    order,
-    message: `Solicitud de compra enviada con éxito. Pendiente de revisión por ${sellerName}.`
-  });
 });
 
 app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
@@ -12941,417 +15793,1240 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
     pricePerUnit: rawPricePerUnit,
     quantity: rawQty,
     note
-  } = req.body;
-  const db = readDb();
+  } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_neg_${id}`;
 
-  const user = db.users.find(u => u.id === userId);
-  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. ATOMIC LOCK ON ORDER IN POSTGRESQL
+        let orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
 
-  const isTeacher = user.role === 'teacher' || user.id === 'profesor-1';
-  const authorName = isTeacher ? 'BricoMaster Distribuciones, S.A.' : user.name;
+        // If not in PostgreSQL yet, check in-memory cache and seed it into PostgreSQL before locking
+        if (orderRes.rows.length === 0) {
+          const dbForSeed = readDb();
+          const memOrder = (dbForSeed.rawMaterialOrders || []).find(o => o.id === id);
+          if (memOrder) {
+            await syncRawMaterialOrderToSupabase(memOrder, client);
+            orderRes = await client.query(
+              `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
 
-  const newQty = Math.max(1, Number(rawQty) || order.quantity);
-  const newPricePerUnit = Math.max(0, Number(rawPricePerUnit) || (order.basePrice / order.quantity));
-  const newDiscount = Math.min(50, Math.max(0, Number(rawDiscount) || 0));
-  const newInsurance = Math.max(0, Number(rawInsuranceFee) || 0);
-  const transportMethod: 'vendedor_envio' | 'comprador_recogida' =
-    rawTransportMethod === 'comprador_recogida' ? 'comprador_recogida' : 'vendedor_envio';
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
 
-  if (transportMethod === 'comprador_recogida') {
-    const buyerId = order.studentId;
-    const hasTruckDriver = (db.hiredEmployees || []).some(e => e.studentId === buyerId && e.role === 'camionero');
-    const hasTruck = (db.purchasedVehicles || []).some(v => v.studentId === buyerId && v.vehicleType === 'camion_trailer');
-    if (!hasTruckDriver || !hasTruck) {
-      return res.status(400).json({
-        error: 'Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un camión tráiler en la flota y un empleado contratado como Camionero.'
-      });
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // 2. VALIDATE ORDER STATE (ONLY 'pendiente' OR 'en_negociacion' ALLOWED)
+        if (order.status !== 'pendiente' && order.status !== 'en_negociacion') {
+          const err: any = new Error(`No se puede negociar un pedido en estado "${order.status}". Solo se pueden negociar pedidos en estado pendiente o en negociación.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 3. USER VALIDATION
+        const dbSnapshot = readDb();
+        const user = (dbSnapshot.users || []).find(u => u.id === userId);
+        if (!user) {
+          const err: any = new Error('Usuario no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const isTeacher = user.role === 'teacher' || user.id === 'profesor-1';
+        const authorName = isTeacher ? 'BricoMaster Distribuciones, S.A.' : user.name;
+
+        // 4. PARTICIPANT VALIDATION (ONLY BUYER OR SELLER CAN NEGOTIATE)
+        const isBuyer = user.id === order.studentId;
+        const isSeller = user.id === order.sellerId || (isTeacher && (order.sellerId === 'proveedor-materia-prima' || order.sellerId === 'profesor-1' || !order.sellerId));
+
+        if (!isBuyer && !isSeller) {
+          const err: any = new Error('Solo los participantes del pedido (comprador o vendedor) pueden negociar.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 5. TURN VALIDATION (CANNOT NEGOTIATE TWICE IN A ROW)
+        const hasLastTurn = order.lastTurnUserId === user.id ||
+          (isTeacher && (order.lastTurnUserId === 'profesor-1' || order.lastTurnUserId === order.sellerId));
+        if (hasLastTurn) {
+          const err: any = new Error('No es tu turno para negociar. Debes esperar a que la otra parte responda o envíe una contraoferta.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 6. NEGOTIATION VALUES & TRANSPORT REQUIREMENTS
+        const newQty = Math.max(1, Number(rawQty) || order.quantity);
+        const newPricePerUnit = Math.max(0, Number(rawPricePerUnit) || (order.basePrice / order.quantity));
+        const newDiscount = Math.min(50, Math.max(0, Number(rawDiscount) || 0));
+        const newInsurance = Math.max(0, Number(rawInsuranceFee) || 0);
+        const transportMethod: 'vendedor_envio' | 'comprador_recogida' =
+          rawTransportMethod === 'comprador_recogida' ? 'comprador_recogida' : 'vendedor_envio';
+
+        if (transportMethod === 'comprador_recogida') {
+          const buyerId = order.studentId;
+          const hasTruckDriver = (dbSnapshot.hiredEmployees || []).some(e => e.studentId === buyerId && e.role === 'camionero');
+          const hasTruck = (dbSnapshot.purchasedVehicles || []).some(v => v.studentId === buyerId && v.vehicleType === 'camion_trailer');
+          if (!hasTruckDriver || !hasTruck) {
+            const err: any = new Error('Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un camión tráiler en la flota y un empleado contratado como Camionero.');
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        // 7. FINANCIAL CALCULATIONS
+        const newBasePrice = Math.round((newPricePerUnit * newQty) * 100) / 100;
+        const newDiscountAmount = Math.round((newBasePrice * (newDiscount / 100)) * 100) / 100;
+        const taxableBase = newBasePrice - newDiscountAmount;
+
+        const isFinalProduct = order.materialType === 'producto_final';
+        const itemTotalKg = order.totalKg || (order.unitWeightKg * newQty);
+        const calculatedPallets = isFinalProduct ? (newQty / 10000) : (itemTotalKg / 1000);
+        const chargedPallets = Math.max(1, Math.ceil(calculatedPallets));
+        const buyerLoc = (dbSnapshot.acquisitions || []).find(a => String(a.studentId) === String(order.studentId)) || order.studentName || order.studentId;
+        const sellerLoc = (dbSnapshot.acquisitions || []).find(a => String(a.studentId) === String(order.sellerId)) || order.sellerName || order.sellerId;
+        const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
+
+        let newTransportCost = 0;
+        if (transportMethod === 'vendedor_envio') {
+          newTransportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+        }
+
+        const newIvaAmount = Math.round(((taxableBase + newTransportCost) * 0.21) * 100) / 100;
+        const newTotalAmount = Math.round((taxableBase + newTransportCost + newInsurance + newIvaAmount) * 100) / 100;
+
+        order.quantity = newQty;
+        order.basePrice = newBasePrice;
+        order.discountPercentage = newDiscount;
+        order.discountAmount = newDiscountAmount;
+        order.insuranceFee = newInsurance;
+        order.hasInsurance = newInsurance > 0;
+        order.transportCost = newTransportCost;
+        order.distanceKm = distanceKm;
+        order.chargedPallets = chargedPallets;
+        order.transportMethod = transportMethod;
+        order.needsTransport = transportMethod === 'vendedor_envio';
+        order.ivaAmount = newIvaAmount;
+        order.totalAmount = newTotalAmount;
+        order.status = 'en_negociacion';
+        order.lastTurnUserId = user.id;
+
+        const now = new Date();
+        const entry: NegotiationHistoryEntry = {
+          id: generateId('neg'),
+          authorId: user.id,
+          authorName,
+          timestamp: now.toISOString(),
+          action: 'contraoferta',
+          quantity: newQty,
+          pricePerUnit: newPricePerUnit,
+          discountPercentage: newDiscount,
+          insuranceFee: newInsurance,
+          transportCost: newTransportCost,
+          transportMethod,
+          totalAmount: newTotalAmount,
+          note: note || 'Contraoferta enviada'
+        };
+
+        if (!order.negotiationHistory) order.negotiationHistory = [];
+        order.negotiationHistory.push(entry);
+
+        if (order.items && order.items.length === 1) {
+          order.items[0].quantity = newQty;
+          order.items[0].unitPrice = newPricePerUnit;
+          (order.items[0] as any).pricePerUnit = newPricePerUnit;
+          order.items[0].subtotal = newBasePrice;
+          order.items[0].totalKg = itemTotalKg;
+        }
+
+        const historyJson = JSON.stringify(order.negotiationHistory);
+        const itemsJson = order.items && order.items.length > 0 ? JSON.stringify(order.items) : null;
+        const newTotalKg = itemTotalKg || 0;
+        order.totalKg = newTotalKg;
+
+        // 8. UPDATE materias_primas_pedidos IN POSTGRESQL WITHIN TRANSACTION
+        await client.query(
+          `UPDATE materias_primas_pedidos
+           SET estado = 'en_negociacion',
+               cantidad = $1,
+               precio_base = $2,
+               importe_iva = $3,
+               coste_transporte = $4,
+               importe_total = $5,
+               discount_percentage = $6,
+               insurance_fee = $7,
+               transport_method = $8,
+               necesita_transporte = $9,
+               last_turn_user_id = $10,
+               negotiation_history = $11,
+               items = $12,
+               peso_total_kg = $13
+           WHERE id = $14`,
+          [
+            newQty,
+            newBasePrice,
+            newIvaAmount,
+            newTransportCost,
+            newTotalAmount,
+            newDiscount,
+            newInsurance,
+            transportMethod,
+            transportMethod === 'vendedor_envio',
+            user.id,
+            historyJson,
+            itemsJson,
+            newTotalKg,
+            order.id
+          ]
+        );
+
+        const responseBody = {
+          success: true,
+          order,
+          message: 'Contraoferta enviada correctamente.'
+        };
+
+        await client.query(
+          `UPDATE operaciones_idempotencia
+           SET respuesta = $1
+           WHERE clave = $2`,
+          [JSON.stringify(responseBody), key]
+        );
+
+        return responseBody;
+      }, key);
+    });
+
+    // 9. POST-COMMIT CACHE UPDATE (DB.JSON & NOTIFICATIONS)
+    // ONLY executed after transaction commit
+    try {
+      const db = readDb();
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      const memOrderIdx = db.rawMaterialOrders.findIndex(o => o.id === id);
+      if (memOrderIdx >= 0) {
+        db.rawMaterialOrders[memOrderIdx] = { ...result.order };
+      } else {
+        db.rawMaterialOrders.push(result.order);
+      }
+      const recipientId = userId === result.order.studentId ? (result.order.sellerId || 'profesor-1') : result.order.studentId;
+      const authorName = (result.order.negotiationHistory && result.order.negotiationHistory.length > 0)
+        ? result.order.negotiationHistory[result.order.negotiationHistory.length - 1].authorName
+        : 'Usuario';
+      addNotification(
+        db,
+        recipientId,
+        'Contraoferta recibida',
+        `${authorName} ha enviado una contraoferta para "${result.order.materialTitle}" por un total de ${Number(result.order.totalAmount).toFixed(2)} €.`,
+        'order_negotiating',
+        result.order.id
+      );
+      writeDb(db);
+    } catch (cacheErr) {
+      console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    console.error('[Error in Order Negotiate]:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      error: error.message || 'Error al procesar la contraoferta'
+    });
+  }
+});
+
+function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
+  let itemsParsed: RawMaterialOrderItem[] | undefined = undefined;
+  if (row.items) {
+    if (typeof row.items === 'string') {
+      try {
+        itemsParsed = JSON.parse(row.items);
+      } catch (e) {
+        itemsParsed = undefined;
+      }
+    } else if (Array.isArray(row.items)) {
+      itemsParsed = row.items;
     }
   }
 
-  const newBasePrice = Math.round((newPricePerUnit * newQty) * 100) / 100;
-  const newDiscountAmount = Math.round((newBasePrice * (newDiscount / 100)) * 100) / 100;
-  const taxableBase = newBasePrice - newDiscountAmount;
-
-  // Unified Transport Calculation: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
-  // Partial pallets are charged as full pallets (Math.ceil)
-  const isFinalProduct = order.materialType === 'producto_final';
-  const itemTotalKg = order.totalKg || (order.unitWeightKg * newQty);
-  const calculatedPallets = isFinalProduct ? (newQty / 10000) : (itemTotalKg / 1000);
-  const chargedPallets = Math.max(1, Math.ceil(calculatedPallets));
-  const buyerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(order.studentId)) || order.studentName || order.studentId;
-  const sellerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(order.sellerId)) || order.sellerName || order.sellerId;
-  const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
-
-  let newTransportCost = 0;
-  if (transportMethod === 'vendedor_envio') {
-    newTransportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+  let historyParsed: NegotiationHistoryEntry[] | undefined = undefined;
+  if (row.negotiation_history) {
+    if (typeof row.negotiation_history === 'string') {
+      try {
+        historyParsed = JSON.parse(row.negotiation_history);
+      } catch (e) {
+        historyParsed = undefined;
+      }
+    } else if (Array.isArray(row.negotiation_history)) {
+      historyParsed = row.negotiation_history;
+    }
   }
 
-  // Insurance is not subject to VAT (exempt)
-  const newIvaAmount = Math.round(((taxableBase + newTransportCost) * 0.21) * 100) / 100;
-  const newTotalAmount = Math.round((taxableBase + newTransportCost + newInsurance + newIvaAmount) * 100) / 100;
-
-  order.quantity = newQty;
-  order.basePrice = newBasePrice;
-  order.discountPercentage = newDiscount;
-  order.discountAmount = newDiscountAmount;
-  order.insuranceFee = newInsurance;
-  order.hasInsurance = newInsurance > 0;
-  order.transportCost = newTransportCost;
-  order.distanceKm = distanceKm;
-  order.chargedPallets = chargedPallets;
-  order.transportMethod = transportMethod;
-  order.needsTransport = transportMethod === 'vendedor_envio';
-  order.ivaAmount = newIvaAmount;
-  order.totalAmount = newTotalAmount;
-  order.status = 'en_negociacion';
-  order.lastTurnUserId = user.id;
-
-  const now = new Date();
-  const entry: NegotiationHistoryEntry = {
-    id: generateId('neg'),
-    authorId: user.id,
-    authorName,
-    timestamp: now.toISOString(),
-    action: 'contraoferta',
-    quantity: newQty,
-    pricePerUnit: newPricePerUnit,
-    discountPercentage: newDiscount,
-    insuranceFee: newInsurance,
-    transportCost: newTransportCost,
-    transportMethod,
-    totalAmount: newTotalAmount,
-    note: note || 'Contraoferta enviada'
+  return {
+    id: String(row.id),
+    studentId: String(row.alumno_id),
+    studentName: String(row.alumno_nombre || ''),
+    announcementId: String(row.announcement_id || ''),
+    materialType: String(row.materia_tipo || 'hierro') as any,
+    materialTitle: String(row.materia_titulo || ''),
+    quantity: Number(row.cantidad || 0),
+    unitWeightKg: Number(row.peso_unitario_kg || 0),
+    totalKg: Number(row.peso_total_kg || 0),
+    basePrice: Number(row.precio_base || 0),
+    ivaAmount: Number(row.importe_iva || 0),
+    transportCost: Number(row.coste_transporte || 0),
+    totalAmount: Number(row.importe_total || 0),
+    needsTransport: Boolean(row.necesita_transporte),
+    deliveryAddress: String(row.direccion_entrega || ''),
+    pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+    status: String(row.estado) as any,
+    requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
+    approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+    shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+    estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+    deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+    invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
+    invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
+    items: itemsParsed,
+    sellerId: row.seller_id ? String(row.seller_id) : undefined,
+    sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
+    buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
+    discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
+    insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
+    transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
+    lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
+    negotiationHistory: historyParsed,
+    inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
+    destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined
   };
-
-  if (!order.negotiationHistory) order.negotiationHistory = [];
-  order.negotiationHistory.push(entry);
-
-  const recipientId = user.id === order.studentId ? (order.sellerId || 'profesor-1') : order.studentId;
-  addNotification(
-    db,
-    recipientId,
-    'Contraoferta recibida',
-    `${authorName} ha enviado una contraoferta para "${order.materialTitle}" por un total de ${newTotalAmount.toFixed(2)} €.`,
-    'order_negotiating',
-    order.id
-  );
-
-  writeDb(db);
-
-  try {
-    await syncRawMaterialOrderToSupabase(order);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Order Negotiate]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la negociación con la base de datos central.' });
-  }
-
-  res.json({
-    success: true,
-    order,
-    message: 'Contraoferta enviada correctamente.'
-  });
-});
+}
 
 app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
-  const db = readDb();
-  const pendingSyncPromises: Promise<any>[] = [];
+  const { userId } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
-
-  if (order.status === 'aprobado' || order.status === 'entregado') {
-    return res.status(400).json({ error: `La solicitud ya está aprobada.` });
-  }
-
-  const buyer = db.users.find(u => u.id === order.studentId);
-  if (!buyer) return res.status(404).json({ error: 'Comprador no encontrado' });
-
-  const buyerIsTeacher = buyer.role === 'teacher' || buyer.id === 'profesor-1';
-  const buyerDisplayName = buyerIsTeacher ? 'BricoMaster Distribuciones, S.A.' : buyer.name;
-
-  if (buyer.balance < order.totalAmount) {
-    return res.status(400).json({
-      error: `El comprador ${buyerDisplayName} no dispone de saldo suficiente (${buyer.balance.toFixed(2)} €) para cubrir el coste de ${order.totalAmount.toFixed(2)} €.`
-    });
-  }
-
-  // --- STOCK DEDUCTION (Seller inventory and announcement stock) ---
-  processStockDeductionForOrder(db, order);
-
-  buyer.balance = Math.round((buyer.balance - order.totalAmount) * 100) / 100;
-  pendingSyncPromises.push(syncAccountToSupabase(buyer.id, buyer.name, buyer.balance, buyer.username, buyer.password, buyer.accountNumber, buyer.role));
-
-  const seller = db.users.find(u => u.id === order.sellerId);
-  if (seller && seller.role !== 'teacher') {
-    seller.balance = Math.round((seller.balance + order.totalAmount) * 100) / 100;
-
-    // Transport charge check on Seller
-    const sellerHasTruck = (db.purchasedVehicles || []).some(
-      v => String(v.studentId) === String(seller.id) &&
-      ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
-    );
-    const sellerHasDriver = (db.hiredEmployees || []).some(
-      e => String(e.studentId) === String(seller.id) &&
-      ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
-    );
-
-    let transportExpense = 0;
-    let transportConcept = '';
-    let baseTransportFee = 0;
-    let ivaTransportFee = 0;
-
-    if (sellerHasTruck && sellerHasDriver) {
-      transportExpense = Math.min(order.transportCost || 0, Math.round((15 + order.quantity * 0.50) * 100) / 100);
-      baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
-      ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
-      transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${order.quantity} u.)`;
-    } else {
-      baseTransportFee = order.transportCost || 0;
-      ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
-      transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
-      transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${order.quantity} u.)`;
-    }
-
-    if (transportExpense > 0) {
-      seller.balance = Math.round((seller.balance - transportExpense) * 100) / 100;
-      const txTransport = generateId('tx');
-      const transferTransport: Transfer = {
-        id: txTransport,
-        senderId: seller.id,
-        senderName: seller.name,
-        senderAccount: seller.accountNumber || 'ES990001000988770000',
-        receiverId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-        receiverName: sellerHasTruck && sellerHasDriver ? 'Suministros de Gasolina y Combustible S.A.' : 'Agencia de Logística y Transportes Express S.A.',
-        receiverAccount: 'ES990001000988771122',
-        amount: transportExpense,
-        concept: transportConcept,
-        timestamp: new Date().toISOString()
-      };
-      db.transfers.unshift(transferTransport);
-
-      const transportInvoiceOrder: RawMaterialOrder = {
-        id: `rmord_trans_${txTransport}`,
-        studentId: seller.id,
-        studentName: seller.name,
-        buyerLevel: seller.level || 1,
-        sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-        sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-        sellerLevel: 'official',
-        announcementId: `trans-inv-${txTransport}`,
-        materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
-        materialTitle: transportConcept,
-        quantity: 1,
-        unitWeightKg: order.quantity,
-        totalKg: order.quantity,
-        basePrice: baseTransportFee,
-        subtotalAmount: baseTransportFee,
-        unitPrice: baseTransportFee,
-        discountPercentage: 0,
-        discountAmount: 0,
-        insuranceFee: 0,
-        hasInsurance: false,
-        ivaAmount: ivaTransportFee,
-        vatAmount: ivaTransportFee,
-        vatRate: 21,
-        transportCost: 0,
-        transportMethod: 'vendedor_envio',
-        totalAmount: transportExpense,
-        needsTransport: false,
-        deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
-        status: 'facturado',
-        invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-        requestedAt: new Date().toISOString(),
-        approvedAt: new Date().toISOString(),
-        deliveredAt: new Date().toISOString(),
-        invoicedAt: new Date().toISOString(),
-        items: [{
-          announcementId: `trans-inv-${txTransport}`,
-          materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
-          materialTitle: transportConcept,
-          title: transportConcept,
-          quantity: 1,
-          unitPrice: baseTransportFee,
-          subtotal: baseTransportFee,
-          totalCost: baseTransportFee
-        }],
-        lastTurnUserId: seller.id,
-        negotiationHistory: [{
-          id: generateId('neg'),
-          authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-          authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-          timestamp: new Date().toISOString(),
-          action: 'propuesta_inicial',
-          quantity: 1,
-          pricePerUnit: baseTransportFee,
-          discountPercentage: 0,
-          insuranceFee: 0,
-          transportCost: 0,
-          transportMethod: 'vendedor_envio',
-          totalAmount: transportExpense,
-          note: `Factura por ${transportConcept}`
-        }]
-      };
-
-      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-      db.rawMaterialOrders.unshift(transportInvoiceOrder);
-      pendingSyncPromises.push(syncRawMaterialOrderToSupabase(transportInvoiceOrder));
-    }
-
-    pendingSyncPromises.push(syncAccountToSupabase(seller.id, seller.name, seller.balance, seller.username, seller.password, seller.accountNumber, seller.role));
-  }
-
-  const now = new Date();
-  const buyerLevel = buyer.level || 1;
-  const isRawMaterialOrder = ['hierro', 'metal', 'plastico', 'epoxi'].includes(order.materialType) ||
-    (order.items && order.items.some(i => ['hierro', 'metal', 'plastico', 'epoxi'].includes(i.materialType)));
-  const isL1Raw = buyerLevel === 1 && isRawMaterialOrder;
-
-  const deliveryDays = isL1Raw ? 0 : ((order.needsTransport && (order.quantity > 3 || (order.items && order.items.length > 1))) ? 2 : 1);
-  order.status = isL1Raw ? 'entregado' : 'aprobado';
-  order.approvedAt = now.toISOString();
-  if (isL1Raw) {
-    order.deliveredAt = now.toISOString();
-  }
-  order.estimatedDeliveryDays = deliveryDays;
-  order.estimatedDeliveryAt = isL1Raw ? now.toISOString() : new Date(now.getTime() + deliveryDays * 24 * 60 * 60 * 1000).toISOString();
-
-  const inv = checkAndCalculateProduction(db, order.studentId);
-  pendingSyncPromises.push(syncInventoryToSupabase(inv, buyer.name));
-
-  if (!order.negotiationHistory) order.negotiationHistory = [];
-  order.negotiationHistory.push({
-    id: generateId('neg'),
-    authorId: userId || buyer.id,
-    authorName: userId ? (db.users.find(u => u.id === userId)?.name || buyerDisplayName) : buyerDisplayName,
-    timestamp: now.toISOString(),
-    action: 'aceptado',
-    quantity: order.quantity,
-    pricePerUnit: order.basePrice / order.quantity,
-    discountPercentage: order.discountPercentage || 0,
-    insuranceFee: order.insuranceFee || 0,
-    transportCost: order.transportCost,
-    transportMethod: order.transportMethod || 'vendedor_envio',
-    totalAmount: order.totalAmount,
-    note: 'Solicitud aceptada y operación formalizada'
-  });
-
-  pendingSyncPromises.push(syncRawMaterialOrderToSupabase(order));
-
-  const txId = generateId('tx');
-  const transfer: Transfer = {
-    id: txId,
-    senderId: buyer.id,
-    senderName: buyerDisplayName,
-    senderAccount: buyer.accountNumber,
-    receiverId: order.sellerId || 'proveedor-materia-prima',
-    receiverName: order.sellerName || 'Suministros Industriales S.A.',
-    receiverAccount: 'ES990001000988776655',
-    amount: order.totalAmount,
-    concept: `Compra Mercado: ${order.materialTitle}`,
-    timestamp: now.toISOString()
-  };
-  db.transfers.unshift(transfer);
-  pendingSyncPromises.push(syncMovimientoToSupabase(txId + '-out', buyer.id, 'TRANSFER_OUT', order.totalAmount, now.toISOString(), transfer.concept, transfer));
-
-  addNotification(
-    db,
-    buyer.id,
-    isL1Raw ? 'Materia prima recibida' : 'Compra formalizada',
-    isL1Raw
-      ? `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} € ha sido aceptada por el profesor y entregada inmediatamente a tu almacén (Existencias).`
-      : `Tu solicitud de compra para "${order.materialTitle}" por ${order.totalAmount.toFixed(2)} € ha sido aceptada y formalizada.`,
-    'order_approved',
-    order.id
-  );
-
-  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
-    addNotification(
-      db,
-      order.sellerId,
-      'Venta aceptada',
-      `Se ha formalizado la venta de "${order.materialTitle}" a ${buyerDisplayName} por ${order.totalAmount.toFixed(2)} €.`,
-      'order_approved',
-      order.id
-    );
-  }
-
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'APROBAR_SOLICITUD_MERCADO',
-    details: `Operación aceptada entre ${buyerDisplayName} y ${order.sellerName} por "${order.materialTitle}" (${order.totalAmount.toFixed(2)} €).`,
-    timestamp: now.toISOString(),
-    studentId: buyer.id,
-    studentName: buyerDisplayName
-  });
-
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_appr_${id}`;
 
   try {
-    await Promise.all(pendingSyncPromises);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Raw Materials Order Approve]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la aprobación de la orden con la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. ATOMIC LOCK ON ORDER IN POSTGRESQL
+        let orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
 
-  res.json({
-    success: true,
-    order,
-    message: isL1Raw
-      ? 'Solicitud aceptada. Las materias primas han sido entregadas inmediatamente al almacén del alumno.'
-      : `Operación aceptada con éxito. Envío estimado en ${deliveryDays} día(s).`
-  });
+        // If not in PostgreSQL yet, check in-memory cache and seed it into PostgreSQL before locking
+        if (orderRes.rows.length === 0) {
+          const dbForSeed = readDb();
+          const memOrder = (dbForSeed.rawMaterialOrders || []).find(o => o.id === id);
+          if (memOrder) {
+            await syncRawMaterialOrderToSupabase(memOrder, client);
+            orderRes = await client.query(
+              `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
+
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // Validate state strictly on the locked PostgreSQL row
+        if (order.status === 'aprobado' || order.status === 'entregado' || order.status === 'finalizado' || order.status === 'facturado') {
+          const err: any = new Error('La solicitud ya está aprobada.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (order.status === 'rechazado') {
+          const err: any = new Error('La solicitud ha sido rechazada y no puede ser aprobada.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const now = new Date();
+        const buyerId = order.studentId;
+        const sellerId = order.sellerId;
+
+        // Determine buyer details
+        const dbSnapshot = readDb();
+        const buyerUser = (dbSnapshot.users || []).find(u => u.id === buyerId);
+        const buyerLevel = order.buyerLevel || buyerUser?.level || 1;
+        const buyerIsTeacher = buyerUser ? (buyerUser.role === 'teacher' || buyerUser.id === 'profesor-1') : false;
+        const buyerDisplayName = buyerIsTeacher ? 'BricoMaster Distribuciones, S.A.' : (buyerUser?.name || order.studentName);
+
+        const isRawMaterialOrder = ['hierro', 'metal', 'plastico', 'epoxi'].includes(order.materialType) ||
+          (order.items && order.items.some(i => ['hierro', 'metal', 'plastico', 'epoxi'].includes(i.materialType)));
+        const isL1Raw = buyerLevel === 1 && isRawMaterialOrder;
+
+        const deliveryDays = isL1Raw ? 0 : ((order.needsTransport && (order.quantity > 3 || (order.items && order.items.length > 1))) ? 2 : 1);
+
+        const sellerUser = (dbSnapshot.users || []).find(u => u.id === sellerId);
+        const isStudentSeller = sellerId && sellerId !== 'proveedor-materia-prima' && sellerId !== 'profesor-1' && order.sellerLevel !== 'official' && (sellerUser ? sellerUser.role !== 'teacher' : true);
+
+        // 2. DETERMINISTIC LOCKING: INVENTORIES FIRST, THEN ACCOUNTS
+        const studentsInvToLock: string[] = [];
+        if (isStudentSeller && sellerId) {
+          studentsInvToLock.push(sellerId);
+        }
+        if (isL1Raw && buyerId) {
+          if (!studentsInvToLock.includes(buyerId)) {
+            studentsInvToLock.push(buyerId);
+          }
+        }
+        studentsInvToLock.sort();
+
+        const invMap = new Map<string, RawMaterialInventory>();
+        for (const sid of studentsInvToLock) {
+          const uObj = (dbSnapshot.users || []).find(u => u.id === sid);
+          await client.query(
+            `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+             VALUES ($1, $2, '{}'::jsonb)
+             ON CONFLICT (alumno_id) DO NOTHING`,
+            [sid, uObj?.name || (sid === buyerId ? buyerDisplayName : (order.sellerName || 'Estudiante'))]
+          );
+
+          const invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [sid]
+          );
+          if (invRes.rows.length > 0) {
+            invMap.set(sid, parseInventoryRow(invRes.rows[0]));
+          }
+        }
+
+        // Validate seller stock in PostgreSQL before modifying anything
+        let sellerInv: RawMaterialInventory | null = null;
+        if (isStudentSeller && sellerId) {
+          sellerInv = invMap.get(sellerId) || null;
+          if (!sellerInv) {
+            const err: any = new Error(`Inventario del vendedor (${order.sellerName}) no encontrado en PostgreSQL.`);
+            err.statusCode = 404;
+            throw err;
+          }
+
+          // Verify that seller has sufficient stock in PostgreSQL
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+              const reqQty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+              const reqKg = item.totalKg || item.quantity || 0;
+
+              if (itemTitle.includes('varilla')) {
+                const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                const avail = isPlana
+                  ? (sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0)
+                  : (isEstrella ? (sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0) : sellerInv.producedRodsUnits || 0);
+                if (avail < reqQty) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes varillas (${avail} u. disponibles, se requieren ${reqQty} u.).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+                const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                const avail = isPlana
+                  ? (sellerInv.flatScrewdriversUnits || sellerInv.metalScrewdriversUnits || 0)
+                  : (isEstrella ? (sellerInv.starScrewdriversUnits || sellerInv.ironScrewdriversUnits || 0) : sellerInv.producedScrewdriversUnits || 0);
+                if (avail < reqQty) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes destornilladores (${avail} u. disponibles, se requieren ${reqQty} u.).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              } else {
+                const mType = item.materialType;
+                let avail = 0;
+                if (mType === 'hierro') avail = sellerInv.ironKg || 0;
+                else if (mType === 'metal') avail = sellerInv.metalKg || 0;
+                else if (mType === 'plastico') avail = sellerInv.plasticKg || 0;
+                else if (mType === 'epoxi') avail = sellerInv.epoxiKg || 0;
+                if (avail < reqKg) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficiente materia prima (${avail} kg disponibles, se requieren ${reqKg} kg).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              }
+            }
+          } else {
+            const orderQty = order.quantity || 1;
+            const orderKg = order.totalKg || orderQty;
+            const orderTitle = (order.materialTitle || '').toLowerCase();
+
+            if (orderTitle.includes('varilla')) {
+              const isPlana = orderTitle.includes('plana') || orderTitle.includes('metal');
+              const isEstrella = orderTitle.includes('estrella') || orderTitle.includes('hierro');
+              const avail = isPlana
+                ? (sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0)
+                : (isEstrella ? (sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0) : sellerInv.producedRodsUnits || 0);
+              if (avail < orderQty) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes varillas (${avail} u. disponibles, se requieren ${orderQty} u.).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+              const isPlana = orderTitle.includes('plana') || orderTitle.includes('metal');
+              const isEstrella = orderTitle.includes('estrella') || orderTitle.includes('hierro');
+              const avail = isPlana
+                ? (sellerInv.flatScrewdriversUnits || sellerInv.metalScrewdriversUnits || 0)
+                : (isEstrella ? (sellerInv.starScrewdriversUnits || sellerInv.ironScrewdriversUnits || 0) : sellerInv.producedScrewdriversUnits || 0);
+              if (avail < orderQty) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes destornilladores (${avail} u. disponibles, se requieren ${orderQty} u.).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            } else {
+              const mType = order.materialType;
+              let avail = 0;
+              if (mType === 'hierro') avail = sellerInv.ironKg || 0;
+              else if (mType === 'metal') avail = sellerInv.metalKg || 0;
+              else if (mType === 'plastico') avail = sellerInv.plasticKg || 0;
+              else if (mType === 'epoxi') avail = sellerInv.epoxiKg || 0;
+              if (avail < orderKg) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficiente materia prima (${avail} kg disponibles, se requieren ${orderKg} kg).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            }
+          }
+        }
+
+        // 3. DETERMINISTIC LOCK ON ACCOUNTS IN POSTGRESQL
+        const accountsToLock: string[] = [buyerId];
+        if (isStudentSeller && sellerId) {
+          accountsToLock.push(sellerId);
+        }
+        accountsToLock.sort();
+
+        // Ensure accounts exist in PostgreSQL
+        for (const aid of accountsToLock) {
+          const u = (dbSnapshot.users || []).find(usr => usr.id === aid);
+          if (u) {
+            await client.query(
+              `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (id) DO NOTHING`,
+              [u.id, u.name, u.balance || 0, u.username, u.password, u.accountNumber, u.role, u.level]
+            );
+          }
+        }
+
+        const lockAccRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+          [accountsToLock]
+        );
+
+        let buyerRow: any = null;
+        let sellerRow: any = null;
+        for (const r of lockAccRes.rows) {
+          if (r.id === buyerId) buyerRow = r;
+          if (isStudentSeller && r.id === sellerId) sellerRow = r;
+        }
+
+        if (!buyerRow) {
+          const err: any = new Error('Cuenta del comprador no encontrada en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const currentBuyerBal = Number(buyerRow.saldo);
+        if (currentBuyerBal < order.totalAmount) {
+          const err: any = new Error(`El comprador ${buyerDisplayName} no dispone de saldo suficiente (${currentBuyerBal.toFixed(2)} €) para cubrir el coste de ${order.totalAmount.toFixed(2)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 4. TRANSPORT EXPENSES CALCULATION FOR STUDENT SELLER
+        let transportExpense = 0;
+        let transportConcept = '';
+        let baseTransportFee = 0;
+        let ivaTransportFee = 0;
+        let transportInvoiceOrder: RawMaterialOrder | null = null;
+        const txTransportId = generateId('tx');
+        const txMainId = generateId('tx');
+
+        if (isStudentSeller && sellerUser) {
+          const sellerHasTruck = (dbSnapshot.purchasedVehicles || []).some(
+            v => String(v.studentId) === String(sellerUser.id) &&
+            ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+          );
+          const sellerHasDriver = (dbSnapshot.hiredEmployees || []).some(
+            e => String(e.studentId) === String(sellerUser.id) &&
+            ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
+          );
+
+          if (sellerHasTruck && sellerHasDriver) {
+            transportExpense = Math.min(order.transportCost || 0, Math.round((15 + order.quantity * 0.50) * 100) / 100);
+            baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
+            ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
+            transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${order.quantity} u.)`;
+          } else {
+            baseTransportFee = order.transportCost || 0;
+            ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
+            transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
+            transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${order.quantity} u.)`;
+          }
+
+          if (transportExpense > 0) {
+            transportInvoiceOrder = {
+              id: `rmord_trans_${txTransportId}`,
+              studentId: sellerUser.id,
+              studentName: sellerUser.name,
+              buyerLevel: sellerUser.level || 1,
+              sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+              sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+              sellerLevel: 'official',
+              announcementId: `trans-inv-${txTransportId}`,
+              materialType: (sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte') as any,
+              materialTitle: transportConcept,
+              quantity: 1,
+              unitWeightKg: order.quantity,
+              totalKg: order.quantity,
+              basePrice: baseTransportFee,
+              subtotalAmount: baseTransportFee,
+              unitPrice: baseTransportFee,
+              discountPercentage: 0,
+              discountAmount: 0,
+              insuranceFee: 0,
+              hasInsurance: false,
+              ivaAmount: ivaTransportFee,
+              vatAmount: ivaTransportFee,
+              vatRate: 21,
+              transportCost: 0,
+              transportMethod: 'vendedor_envio',
+              totalAmount: transportExpense,
+              needsTransport: false,
+              deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
+              status: 'facturado',
+              invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+              requestedAt: now.toISOString(),
+              approvedAt: now.toISOString(),
+              deliveredAt: now.toISOString(),
+              invoicedAt: now.toISOString(),
+              items: [{
+                announcementId: `trans-inv-${txTransportId}`,
+                materialType: (sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte') as any,
+                materialTitle: transportConcept,
+                title: transportConcept,
+                quantity: 1,
+                unitPrice: baseTransportFee,
+                subtotal: baseTransportFee,
+                totalCost: baseTransportFee
+              }],
+              lastTurnUserId: sellerUser.id,
+              negotiationHistory: [{
+                id: generateId('neg'),
+                authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                timestamp: now.toISOString(),
+                action: 'propuesta_inicial',
+                quantity: 1,
+                pricePerUnit: baseTransportFee,
+                discountPercentage: 0,
+                insuranceFee: 0,
+                transportCost: 0,
+                transportMethod: 'vendedor_envio',
+                totalAmount: transportExpense,
+                note: `Factura por ${transportConcept}`
+              }]
+            };
+          }
+        }
+
+        // 5. UPDATE INVENTORIES IN POSTGRESQL WITHIN THE TRANSACTION
+        // Deduct from seller inventory
+        if (isStudentSeller && sellerInv) {
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+              if (itemTitle.includes('varilla')) {
+                deductRodsFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+                deductScrewdriversFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else {
+                deductRawMaterialFromSellerInv(sellerInv, item.materialType, item.totalKg || item.quantity);
+              }
+            }
+          } else {
+            const orderQty = order.quantity || 1;
+            const orderTitle = (order.materialTitle || '').toLowerCase();
+            if (orderTitle.includes('varilla')) {
+              deductRodsFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+              deductScrewdriversFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else {
+              deductRawMaterialFromSellerInv(sellerInv, order.materialType, order.totalKg || orderQty);
+            }
+          }
+          recalculateTotalInventory(sellerInv);
+          sellerInv.updatedAt = now.toISOString();
+          await syncInventoryToSupabase(sellerInv, sellerUser?.name || order.sellerName, client);
+        }
+
+        // Credit to buyer inventory if isL1Raw
+        let buyerInv: RawMaterialInventory | null = null;
+        if (isL1Raw && buyerId) {
+          buyerInv = invMap.get(buyerId) || null;
+          if (buyerInv) {
+            const destNaveId = (order as any).destinationNaveId || (order as any).targetNaveId || ((buyerUser as any)?.naves?.[0]?.id) || 'nave_principal';
+            if (!buyerInv.naveInventories) buyerInv.naveInventories = {};
+            if (!buyerInv.naveInventories[destNaveId]) {
+              buyerInv.naveInventories[destNaveId] = {
+                ironKg: 0,
+                metalKg: 0,
+                plasticKg: 0,
+                epoxiKg: 0,
+                producedRodsUnits: 0,
+                producedStarRodsUnits: 0,
+                producedFlatRodsUnits: 0,
+                producedScrewdriversUnits: 0,
+                starScrewdriversUnits: 0,
+                flatScrewdriversUnits: 0,
+                ironScrewdriversUnits: 0,
+                metalScrewdriversUnits: 0
+              };
+            }
+            const targetNaveInv = buyerInv.naveInventories[destNaveId];
+
+            if (order.items && order.items.length > 0) {
+              for (const item of order.items) {
+                const mType = item.materialType || order.materialType;
+                const itemTitleLower = (item.materialTitle || order.materialTitle || '').toLowerCase();
+                const isRods = itemTitleLower.includes('varilla') || (mType as string) === 'varilla';
+                const isScrewdriver = itemTitleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+                if (isRods) {
+                  const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+                  if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+                    (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+                    (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
+                  } else {
+                    (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+                    (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
+                  }
+                  targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+                } else if (isScrewdriver) {
+                  const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+                  if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+                    (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+                    (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+                  } else {
+                    (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+                    (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+                  }
+                  targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
+                } else if (mType === 'hierro' || itemTitleLower.includes('hierro')) {
+                  targetNaveInv.ironKg = Math.round(((targetNaveInv.ironKg || 0) + (item.totalKg || 0)) * 1000) / 1000;
+                } else if (mType === 'metal' || itemTitleLower.includes('metal')) {
+                  targetNaveInv.metalKg = Math.round(((targetNaveInv.metalKg || 0) + (item.totalKg || 0)) * 1000) / 1000;
+                } else if (mType === 'plastico' || itemTitleLower.includes('plástico') || itemTitleLower.includes('plastico')) {
+                  targetNaveInv.plasticKg = Math.round(((targetNaveInv.plasticKg || 0) + (item.totalKg || 0)) * 1000) / 1000;
+                } else if (mType === 'epoxi' || itemTitleLower.includes('epoxi')) {
+                  targetNaveInv.epoxiKg = Math.round(((targetNaveInv.epoxiKg || 0) + (item.totalKg || 0)) * 1000) / 1000;
+                }
+              }
+            } else {
+              const mType = order.materialType;
+              const titleLower = (order.materialTitle || '').toLowerCase();
+              const isRods = titleLower.includes('varilla') || (mType as string) === 'varilla';
+              const isScrewdriver = titleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+              if (isRods) {
+                const qty = order.quantity || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0;
+                if (titleLower.includes('plana') || titleLower.includes('metal')) {
+                  (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+                  (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
+                } else {
+                  (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+                  (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
+                }
+                targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+              } else if (isScrewdriver) {
+                const qty = order.quantity || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0;
+                if (titleLower.includes('plana') || titleLower.includes('metal')) {
+                  (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+                  (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+                } else {
+                  (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+                  (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+                }
+                targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
+              } else if (mType === 'hierro' || titleLower.includes('hierro')) {
+                targetNaveInv.ironKg = Math.round(((targetNaveInv.ironKg || 0) + (order.totalKg || 0)) * 1000) / 1000;
+              } else if (mType === 'metal' || titleLower.includes('metal')) {
+                targetNaveInv.metalKg = Math.round(((targetNaveInv.metalKg || 0) + (order.totalKg || 0)) * 1000) / 1000;
+              } else if (mType === 'plastico' || titleLower.includes('plástico') || titleLower.includes('plastico')) {
+                targetNaveInv.plasticKg = Math.round(((targetNaveInv.plasticKg || 0) + (order.totalKg || 0)) * 1000) / 1000;
+              } else if (mType === 'epoxi' || titleLower.includes('epoxi')) {
+                targetNaveInv.epoxiKg = Math.round(((targetNaveInv.epoxiKg || 0) + (order.totalKg || 0)) * 1000) / 1000;
+              }
+            }
+
+            recalculateTotalInventory(buyerInv);
+            buyerInv.updatedAt = now.toISOString();
+            await syncInventoryToSupabase(buyerInv, buyerDisplayName, client);
+          }
+        }
+
+        // Deduct from announcement in PostgreSQL
+        const itemsToDeductAnn: Array<{ announcementId?: string; quantity: number }> = [];
+        if (order.items && order.items.length > 0) {
+          for (const item of order.items) {
+            if (item.announcementId) itemsToDeductAnn.push({ announcementId: item.announcementId, quantity: item.quantity || 1 });
+          }
+        } else if (order.announcementId) {
+          itemsToDeductAnn.push({ announcementId: order.announcementId, quantity: order.quantity || 1 });
+        }
+
+        for (const annItem of itemsToDeductAnn) {
+          await client.query(
+            `UPDATE anuncios_materia_prima
+             SET stock = CASE
+               WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' THEN GREATEST(0, (stock::numeric - $1))::text
+               ELSE stock
+             END,
+             active = CASE
+               WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' AND (stock::numeric - $1) <= 0 THEN false
+               ELSE active
+             END,
+             updated_at = NOW()
+             WHERE id = $2`,
+            [annItem.quantity, annItem.announcementId]
+          );
+        }
+
+        // 6. EXECUTE FINANCIAL MOVEMENTS IN POSTGRESQL
+        const newBuyerBal = Math.round((currentBuyerBal - order.totalAmount) * 100) / 100;
+        await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBuyerBal, buyerId]);
+
+        await client.query(
+          `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+           VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txMainId + '-out',
+            buyerId,
+            order.totalAmount,
+            now.toISOString(),
+            `Compra Mercado: ${order.materialTitle}`,
+            buyerId,
+            buyerDisplayName,
+            buyerRow.account_number,
+            order.sellerId || 'proveedor-materia-prima',
+            order.sellerName || 'Suministros Industriales S.A.',
+            'ES990001000988776655'
+          ]
+        );
+
+        if (isStudentSeller && sellerRow) {
+          const currentSellerBal = Number(sellerRow.saldo);
+          const newSellerBal = Math.round((currentSellerBal + order.totalAmount - transportExpense) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSellerBal, sellerRow.id]);
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txMainId + '-in',
+              sellerRow.id,
+              order.totalAmount,
+              now.toISOString(),
+              `Venta Mercado: ${order.materialTitle}`,
+              buyerId,
+              buyerDisplayName,
+              buyerRow.account_number,
+              sellerRow.id,
+              sellerRow.alumno,
+              sellerRow.account_number
+            ]
+          );
+
+          if (transportExpense > 0) {
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                txTransportId + '-out',
+                sellerRow.id,
+                transportExpense,
+                now.toISOString(),
+                transportConcept,
+                sellerRow.id,
+                sellerRow.alumno,
+                sellerRow.account_number,
+                'LOGISTICA_EXTERIOR',
+                'Agencia de Logística y Transportes',
+                'ES990001000988771122'
+              ]
+            );
+          }
+        }
+
+        // 7. UPDATE ORDER STATE IN POSTGRESQL
+        order.status = isL1Raw ? 'entregado' : 'aprobado';
+        order.approvedAt = now.toISOString();
+        if (isL1Raw) {
+          order.deliveredAt = now.toISOString();
+          order.inventoryCredited = true;
+        }
+        order.estimatedDeliveryDays = deliveryDays;
+        order.estimatedDeliveryAt = isL1Raw ? now.toISOString() : new Date(now.getTime() + deliveryDays * 24 * 60 * 60 * 1000).toISOString();
+
+        if (!order.negotiationHistory) order.negotiationHistory = [];
+        order.negotiationHistory.push({
+          id: generateId('neg'),
+          authorId: userId || buyerId,
+          authorName: userId ? ((dbSnapshot.users || []).find(u => u.id === userId)?.name || buyerDisplayName) : buyerDisplayName,
+          timestamp: now.toISOString(),
+          action: 'aceptado',
+          quantity: order.quantity,
+          pricePerUnit: order.quantity > 0 ? (order.basePrice / order.quantity) : order.basePrice,
+          discountPercentage: order.discountPercentage || 0,
+          insuranceFee: order.insuranceFee || 0,
+          transportCost: order.transportCost,
+          transportMethod: order.transportMethod || 'vendedor_envio',
+          totalAmount: order.totalAmount,
+          note: 'Solicitud aceptada y operación formalizada'
+        });
+
+        await syncRawMaterialOrderToSupabase(order, client);
+
+        if (transportInvoiceOrder) {
+          await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
+        }
+
+        // Return context for in-memory cache update after COMMIT
+        return {
+          order,
+          transportInvoiceOrder,
+          buyerDisplayName,
+          isL1Raw,
+          deliveryDays,
+          transportExpense,
+          transportConcept,
+          txMainId,
+          txTransportId,
+          newBuyerBal,
+          newSellerBal: isStudentSeller && sellerRow ? Math.round((Number(sellerRow.saldo) + order.totalAmount - transportExpense) * 100) / 100 : null,
+          sellerInv,
+          buyerInv
+        };
+      });
+    });
+
+    // 8. POST-COMMIT IN-MEMORY STATE UPDATE (PASSIVE CACHE ONLY)
+    const db = readDb();
+    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+    const idx = db.rawMaterialOrders.findIndex(o => o.id === result.order.id);
+    if (idx !== -1) {
+      db.rawMaterialOrders[idx] = result.order;
+    } else {
+      db.rawMaterialOrders.unshift(result.order);
+    }
+
+    if (result.transportInvoiceOrder) {
+      db.rawMaterialOrders.unshift(result.transportInvoiceOrder);
+    }
+
+    const memBuyer = (db.users || []).find(u => u.id === result.order.studentId);
+    if (memBuyer && result.newBuyerBal !== null && result.newBuyerBal !== undefined) {
+      memBuyer.balance = result.newBuyerBal;
+    }
+
+    const memSeller = (db.users || []).find(u => u.id === result.order.sellerId);
+    if (memSeller && result.newSellerBal !== null && result.newSellerBal !== undefined) {
+      memSeller.balance = result.newSellerBal;
+    }
+
+    if (!db.transfers) db.transfers = [];
+    db.transfers.unshift({
+      id: result.txMainId,
+      senderId: result.order.studentId,
+      senderName: result.buyerDisplayName,
+      senderAccount: memBuyer?.accountNumber,
+      receiverId: result.order.sellerId || 'proveedor-materia-prima',
+      receiverName: result.order.sellerName || 'Suministros Industriales S.A.',
+      receiverAccount: 'ES990001000988776655',
+      amount: result.order.totalAmount,
+      concept: `Compra Mercado: ${result.order.materialTitle}`,
+      timestamp: new Date().toISOString()
+    });
+
+    if (result.transportExpense > 0 && result.transportInvoiceOrder && memSeller) {
+      db.transfers.unshift({
+        id: result.txTransportId,
+        senderId: memSeller.id,
+        senderName: memSeller.name,
+        senderAccount: memSeller.accountNumber || 'ES990001000988770000',
+        receiverId: 'LOGISTICA_EXTERIOR',
+        receiverName: 'Agencia de Logística y Transportes Express S.A.',
+        receiverAccount: 'ES990001000988771122',
+        amount: result.transportExpense,
+        concept: result.transportConcept,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Sync in-memory inventory caches if updated
+    if (result.sellerInv && db.rawMaterialInventories) {
+      const sIdx = db.rawMaterialInventories.findIndex(i => i.studentId === result.sellerInv!.studentId);
+      if (sIdx !== -1) db.rawMaterialInventories[sIdx] = result.sellerInv;
+    }
+    if (result.buyerInv && db.rawMaterialInventories) {
+      const bIdx = db.rawMaterialInventories.findIndex(i => i.studentId === result.buyerInv!.studentId);
+      if (bIdx !== -1) db.rawMaterialInventories[bIdx] = result.buyerInv;
+    }
+
+    // Deduct stock in db.rawMaterialAnnouncements
+    if (db.rawMaterialAnnouncements) {
+      const itemsToDeductAnn: Array<{ announcementId?: string; quantity: number }> = [];
+      if (result.order.items && result.order.items.length > 0) {
+        for (const item of result.order.items) {
+          if (item.announcementId) itemsToDeductAnn.push({ announcementId: item.announcementId, quantity: item.quantity || 1 });
+        }
+      } else if (result.order.announcementId) {
+        itemsToDeductAnn.push({ announcementId: result.order.announcementId, quantity: result.order.quantity || 1 });
+      }
+
+      for (const annItem of itemsToDeductAnn) {
+        const ann = db.rawMaterialAnnouncements.find(a => a.id === annItem.announcementId);
+        if (ann && ann.stock !== undefined && ann.stock !== null && ann.stock !== 'ilimitado') {
+          const cur = Number(ann.stock);
+          if (!isNaN(cur)) {
+            const next = Math.max(0, cur - annItem.quantity);
+            ann.stock = next;
+            if (next <= 0) ann.active = false;
+          }
+        }
+      }
+    }
+
+    addNotification(
+      db,
+      result.order.studentId,
+      result.isL1Raw ? 'Materia prima recibida' : 'Compra formalizada',
+      result.isL1Raw
+        ? `Tu solicitud de compra para "${result.order.materialTitle}" por ${result.order.totalAmount.toFixed(2)} € ha sido aceptada por el profesor y entregada inmediatamente a tu almacén (Existencias).`
+        : `Tu solicitud de compra para "${result.order.materialTitle}" por ${result.order.totalAmount.toFixed(2)} € ha sido aceptada y formalizada.`,
+      'order_approved',
+      result.order.id
+    );
+
+    if (result.order.sellerId && result.order.sellerId !== 'proveedor-materia-prima') {
+      addNotification(
+        db,
+        result.order.sellerId,
+        'Venta aceptada',
+        `Se ha formalizado la venta de "${result.order.materialTitle}" a ${result.buyerDisplayName} por ${result.order.totalAmount.toFixed(2)} €.`,
+        'order_approved',
+        result.order.id
+      );
+    }
+
+    db.systemLogs.unshift({
+      id: generateId('log'),
+      action: 'APROBAR_SOLICITUD_MERCADO',
+      details: `Operación aceptada entre ${result.buyerDisplayName} y ${result.order.sellerName} por "${result.order.materialTitle}" (${result.order.totalAmount.toFixed(2)} €).`,
+      timestamp: new Date().toISOString(),
+      studentId: result.order.studentId,
+      studentName: result.buyerDisplayName
+    });
+
+    writeDb(db);
+
+    return res.json({
+      success: true,
+      order: result.order,
+      message: result.isL1Raw
+        ? 'Solicitud aceptada. Las materias primas han sido entregadas inmediatamente al almacén del alumno.'
+        : `Operación aceptada con éxito. Envío estimado en ${result.deliveryDays} día(s).`
+    });
+  } catch (err: any) {
+    console.error('[Raw Material Order Approve Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al aprobar la solicitud de materias primas' });
+  }
 });
 
 app.post('/api/raw-materials/orders/:id/reject', async (req, res) => {
   const { id } = req.params;
-  const { rejectionReason, userId } = req.body;
-  const db = readDb();
+  const { rejectionReason, userId } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
-
-  order.status = 'rechazado';
-  if (rejectionReason) {
-    order.rejectionReason = rejectionReason;
-  }
-
-  const now = new Date();
-  if (!order.negotiationHistory) order.negotiationHistory = [];
-  order.negotiationHistory.push({
-    id: generateId('neg'),
-    authorId: userId || 'profesor-1',
-    authorName: userId ? (db.users.find(u => u.id === userId)?.name || 'Profesor') : 'Profesor',
-    timestamp: now.toISOString(),
-    action: 'rechazado',
-    quantity: order.quantity,
-    pricePerUnit: order.basePrice / order.quantity,
-    discountPercentage: order.discountPercentage || 0,
-    insuranceFee: order.insuranceFee || 0,
-    transportCost: order.transportCost,
-    transportMethod: order.transportMethod || 'vendedor_envio',
-    totalAmount: order.totalAmount,
-    note: `Operación rechazada: ${rejectionReason || 'No especificado'}`
-  });
-
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_rej_${id}`;
 
   try {
-    await syncRawMaterialOrderToSupabase(order);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Raw Materials Order Reject]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar el rechazo del pedido con la base de datos central.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. ATOMIC LOCK ON ORDER IN POSTGRESQL
+        const orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
 
-  res.json({ success: true, order, message: 'Solicitud rechazada.' });
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // 2. VALIDATE ORDER STATE (ONLY 'pendiente' OR 'en_negociacion' ALLOWED)
+        if (order.status !== 'pendiente' && order.status !== 'en_negociacion') {
+          const err: any = new Error(`No se puede rechazar un pedido en estado "${order.status}". Solo se pueden rechazar pedidos en estado pendiente o en negociación.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 3. USER & ROLE VALIDATION
+        const effectiveUserId = userId || 'profesor-1';
+        const dbSnapshot = readDb();
+        const user = (dbSnapshot.users || []).find(u => u.id === effectiveUserId);
+        if (!user && effectiveUserId !== 'profesor-1') {
+          const err: any = new Error('Usuario no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const isTeacher = (user && (user.role === 'teacher' || user.id === 'profesor-1')) || effectiveUserId === 'profesor-1';
+        const isBuyer = user ? user.id === order.studentId : false;
+        const isSeller = user ? (user.id === order.sellerId || (isTeacher && (order.sellerId === 'proveedor-materia-prima' || order.sellerId === 'profesor-1' || !order.sellerId))) : isTeacher;
+
+        if (!isBuyer && !isSeller && !isTeacher) {
+          const err: any = new Error('No tienes permisos para rechazar este pedido. Solo los participantes o el profesor pueden rechazarlo.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        const authorName = isTeacher ? 'Profesor' : (user?.name || 'Usuario');
+        const reasonText = typeof rejectionReason === 'string' && rejectionReason.trim() ? rejectionReason.trim() : (order.rejectionReason || null);
+
+        // 4. PREPARE REJECTION & NEGOTIATION ENTRY
+        order.status = 'rechazado';
+        if (reasonText) {
+          order.rejectionReason = reasonText;
+        }
+
+        const now = new Date();
+        const entry: NegotiationHistoryEntry = {
+          id: generateId('neg'),
+          authorId: user?.id || effectiveUserId,
+          authorName,
+          timestamp: now.toISOString(),
+          action: 'rechazado',
+          quantity: order.quantity,
+          pricePerUnit: order.quantity > 0 ? (order.basePrice / order.quantity) : order.basePrice,
+          discountPercentage: order.discountPercentage || 0,
+          insuranceFee: order.insuranceFee || 0,
+          transportCost: order.transportCost || 0,
+          transportMethod: order.transportMethod || 'vendedor_envio',
+          totalAmount: order.totalAmount,
+          note: `Operación rechazada: ${reasonText || 'No especificado'}`
+        };
+
+        if (!order.negotiationHistory) order.negotiationHistory = [];
+        order.negotiationHistory.push(entry);
+
+        const historyJson = JSON.stringify(order.negotiationHistory);
+
+        // 5. UPDATE materias_primas_pedidos IN POSTGRESQL DIRECTLY
+        await client.query(
+          `UPDATE materias_primas_pedidos
+           SET estado = 'rechazado',
+               rejection_reason = $1,
+               negotiation_history = $2
+           WHERE id = $3`,
+          [
+            reasonText,
+            historyJson,
+            order.id
+          ]
+        );
+
+        const responseBody = {
+          success: true,
+          order,
+          message: 'Solicitud rechazada.'
+        };
+
+        await client.query(
+          `UPDATE operaciones_idempotencia
+           SET respuesta = $1
+           WHERE clave = $2`,
+          [JSON.stringify(responseBody), key]
+        );
+
+        return responseBody;
+      }, key);
+    });
+
+    // 6. POST-COMMIT CACHE UPDATE (DB.JSON, NOTIFICATIONS & LOGS)
+    try {
+      const db = readDb();
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      const memOrderIdx = db.rawMaterialOrders.findIndex(o => o.id === id);
+      if (memOrderIdx >= 0) {
+        db.rawMaterialOrders[memOrderIdx] = { ...result.order };
+      } else {
+        db.rawMaterialOrders.push(result.order);
+      }
+
+      const activeUserId = userId || 'profesor-1';
+      const recipientId = activeUserId === result.order.studentId
+        ? (result.order.sellerId || 'profesor-1')
+        : result.order.studentId;
+
+      addNotification(
+        db,
+        recipientId,
+        'Solicitud rechazada',
+        `El pedido para "${result.order.materialTitle}" ha sido rechazado: ${result.order.rejectionReason || 'Sin motivo especificado'}.`,
+        'order_rejected',
+        result.order.id
+      );
+
+      if (!db.systemLogs) db.systemLogs = [];
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        action: 'RECHAZAR_SOLICITUD_MERCADO',
+        details: `Solicitud rechazada para "${result.order.materialTitle}" (Motivo: ${result.order.rejectionReason || 'No especificado'}).`,
+        timestamp: new Date().toISOString(),
+        studentId: activeUserId,
+        studentName: activeUserId === 'profesor-1' ? 'Profesor' : ((db.users || []).find(u => u.id === activeUserId)?.name || 'Usuario')
+      });
+
+      writeDb(db);
+    } catch (cacheErr) {
+      console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    console.error('[Error in Order Reject]:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      error: error.message || 'Error al rechazar la solicitud'
+    });
+  }
 });
 
 // Helper to check trade permission between two users/roles
@@ -13394,136 +17069,894 @@ function canTradeUsers(
 }
 
 // Shipping endpoint (Vendedor envía mercancía y se descuenta de su stock)
-app.post('/api/raw-materials/orders/:id/ship', (req, res) => {
+app.post('/api/raw-materials/orders/:id/ship', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
-  const db = readDb();
+  const { userId } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_ship_${id}`;
 
-  if (order.status !== 'aprobado') {
-    return res.status(400).json({ error: `No se puede enviar un pedido en estado "${order.status}". Debe estar previamente aprobado.` });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        // Fallback for non-PostgreSQL environment
+        const db = readDb();
+        if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+        const order = db.rawMaterialOrders.find(o => o.id === id);
+        if (!order) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (order.status !== 'aprobado') {
+          const err: any = new Error(`No se puede enviar un pedido en estado "${order.status}". Debe estar previamente aprobado.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+        if (isStudentSeller) {
+          if (userId && userId !== order.sellerId && userId !== 'profesor-1') {
+            const err: any = new Error('Solo el alumno vendedor puede autorizar el envío de la mercancía.');
+            err.statusCode = 403;
+            throw err;
+          }
+        }
+        processStockDeductionForOrder(db, order);
+        const now = new Date();
+        order.status = 'en_transito';
+        order.shippedAt = now.toISOString();
+        writeDb(db);
+        return {
+          status: 200,
+          body: {
+            success: true,
+            order,
+            message: 'Mercancía expedida correctamente. Se ha descontado de tu stock y la orden ha pasado a "En tránsito".'
+          }
+        };
+      }
+
+      return await withPostgresTransaction(async (client) => {
+        // 1. IDEMPOTENCY RECORDING AND LOCK WITHIN POSTGRESQL
+        await client.query(
+          `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha)
+           VALUES ($1, '{"__status":"pending"}'::jsonb, CURRENT_TIMESTAMP)
+           ON CONFLICT (clave) DO NOTHING`,
+          [key]
+        );
+
+        const existingIdem = await client.query(
+          `SELECT respuesta FROM operaciones_idempotencia WHERE clave = $1 FOR UPDATE`,
+          [key]
+        );
+
+        if (existingIdem.rows.length > 0 && existingIdem.rows[0].respuesta) {
+          const resp = existingIdem.rows[0].respuesta;
+          if (resp && resp.__status && resp.__status !== 'pending') {
+            return {
+              status: 200,
+              body: resp
+            };
+          }
+        }
+
+        // 2. ATOMIC LOCK ON ORDER IN POSTGRESQL
+        let orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+
+        // If not in PostgreSQL yet, check in-memory cache and seed it into PostgreSQL before locking
+        if (orderRes.rows.length === 0) {
+          const dbForSeed = readDb();
+          const memOrder = (dbForSeed.rawMaterialOrders || []).find(o => o.id === id);
+          if (memOrder) {
+            await syncRawMaterialOrderToSupabase(memOrder, client);
+            orderRes = await client.query(
+              `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
+
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // Validate state strictly on the locked PostgreSQL row
+        if (order.status !== 'aprobado') {
+          const err: any = new Error(`No se puede enviar un pedido en estado "${order.status}". Debe estar previamente aprobado.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 3. AUTHORIZATION VALIDATION
+        const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+        if (isStudentSeller) {
+          if (userId && userId !== order.sellerId && userId !== 'profesor-1') {
+            const err: any = new Error('Solo el alumno vendedor puede autorizar el envío de la mercancía.');
+            err.statusCode = 403;
+            throw err;
+          }
+        }
+
+        const now = new Date();
+        let sellerInv: RawMaterialInventory | null = null;
+
+        // 4. DETERMINISTIC LOCK AND STOCK DEDUCTION ON SELLER INVENTORY IN POSTGRESQL
+        if (isStudentSeller && order.sellerId) {
+          await client.query(
+            `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+             VALUES ($1, $2, '{}'::jsonb)
+             ON CONFLICT (alumno_id) DO NOTHING`,
+            [order.sellerId, order.sellerName || 'Vendedor']
+          );
+
+          const invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [order.sellerId]
+          );
+
+          if (!invRes || invRes.rows.length === 0) {
+            const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${order.sellerId}`);
+            err.statusCode = 404;
+            throw err;
+          }
+
+          sellerInv = parseInventoryRow(invRes.rows[0]);
+
+          // Validate stock availability strictly against PostgreSQL locked data
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+              const reqQty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+              const reqKg = item.totalKg || item.quantity || 0;
+              if (itemTitle.includes('varilla')) {
+                const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                const avail = isPlana
+                  ? (sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0)
+                  : (isEstrella ? (sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0) : sellerInv.producedRodsUnits || 0);
+                if (avail < reqQty) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes varillas (${avail} u. disponibles, se requieren ${reqQty} u.).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+                const isPlana = itemTitle.includes('plana') || itemTitle.includes('metal');
+                const isEstrella = itemTitle.includes('estrella') || itemTitle.includes('hierro');
+                const avail = isPlana
+                  ? (sellerInv.flatScrewdriversUnits || sellerInv.metalScrewdriversUnits || 0)
+                  : (isEstrella ? (sellerInv.starScrewdriversUnits || sellerInv.ironScrewdriversUnits || 0) : sellerInv.producedScrewdriversUnits || 0);
+                if (avail < reqQty) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes destornilladores (${avail} u. disponibles, se requieren ${reqQty} u.).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              } else {
+                const mType = item.materialType;
+                let avail = 0;
+                if (mType === 'hierro') avail = sellerInv.ironKg || 0;
+                else if (mType === 'metal') avail = sellerInv.metalKg || 0;
+                else if (mType === 'plastico') avail = sellerInv.plasticKg || 0;
+                else if (mType === 'epoxi') avail = sellerInv.epoxiKg || 0;
+                if (avail < reqKg) {
+                  const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficiente materia prima (${avail} kg disponibles, se requieren ${reqKg} kg).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+              }
+            }
+          } else {
+            const orderQty = order.quantity || 1;
+            const orderKg = order.totalKg || orderQty;
+            const orderTitle = (order.materialTitle || '').toLowerCase();
+
+            if (orderTitle.includes('varilla')) {
+              const isPlana = orderTitle.includes('plana') || orderTitle.includes('metal');
+              const isEstrella = orderTitle.includes('estrella') || orderTitle.includes('hierro');
+              const avail = isPlana
+                ? (sellerInv.producedFlatRodsUnits || sellerInv.producedMetalRodsUnits || 0)
+                : (isEstrella ? (sellerInv.producedStarRodsUnits || sellerInv.producedIronRodsUnits || 0) : sellerInv.producedRodsUnits || 0);
+              if (avail < orderQty) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes varillas (${avail} u. disponibles, se requieren ${orderQty} u.).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+              const isPlana = orderTitle.includes('plana') || orderTitle.includes('metal');
+              const isEstrella = orderTitle.includes('estrella') || orderTitle.includes('hierro');
+              const avail = isPlana
+                ? (sellerInv.flatScrewdriversUnits || sellerInv.metalScrewdriversUnits || 0)
+                : (isEstrella ? (sellerInv.starScrewdriversUnits || sellerInv.ironScrewdriversUnits || 0) : sellerInv.producedScrewdriversUnits || 0);
+              if (avail < orderQty) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficientes destornilladores (${avail} u. disponibles, se requieren ${orderQty} u.).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            } else {
+              const mType = order.materialType;
+              let avail = 0;
+              if (mType === 'hierro') avail = sellerInv.ironKg || 0;
+              else if (mType === 'metal') avail = sellerInv.metalKg || 0;
+              else if (mType === 'plastico') avail = sellerInv.plasticKg || 0;
+              else if (mType === 'epoxi') avail = sellerInv.epoxiKg || 0;
+              if (avail < orderKg) {
+                const err: any = new Error(`Stock insuficiente: El vendedor no dispone de suficiente materia prima (${avail} kg disponibles, se requieren ${orderKg} kg).`);
+                err.statusCode = 400;
+                throw err;
+              }
+            }
+          }
+
+          // Execute stock deduction on seller inventory
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+              if (itemTitle.includes('varilla')) {
+                deductRodsFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+                deductScrewdriversFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else {
+                deductRawMaterialFromSellerInv(sellerInv, item.materialType, item.totalKg || item.quantity);
+              }
+            }
+          } else {
+            const orderQty = order.quantity || 1;
+            const orderTitle = (order.materialTitle || '').toLowerCase();
+            if (orderTitle.includes('varilla')) {
+              deductRodsFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+              deductScrewdriversFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else {
+              deductRawMaterialFromSellerInv(sellerInv, order.materialType, order.totalKg || orderQty);
+            }
+          }
+
+          recalculateTotalInventory(sellerInv);
+          sellerInv.updatedAt = now.toISOString();
+          await syncInventoryToSupabase(sellerInv, order.sellerName, client);
+        }
+
+        // 5. DEDUCT ANNOUNCEMENT STOCK IN POSTGRESQL (IF APPLICABLE)
+        const itemsToDeductAnn: Array<{ announcementId?: string; quantity: number }> = [];
+        if (order.items && order.items.length > 0) {
+          for (const item of order.items) {
+            if (item.announcementId) itemsToDeductAnn.push({ announcementId: item.announcementId, quantity: item.quantity || 1 });
+          }
+        } else if (order.announcementId) {
+          itemsToDeductAnn.push({ announcementId: order.announcementId, quantity: order.quantity || 1 });
+        }
+
+        for (const annItem of itemsToDeductAnn) {
+          await client.query(
+            `UPDATE anuncios_materia_prima
+             SET stock = CASE
+               WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' THEN GREATEST(0, (stock::numeric - $1))::text
+               ELSE stock
+             END,
+             active = CASE
+               WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' AND (stock::numeric - $1) <= 0 THEN false
+               ELSE active
+             END,
+             updated_at = NOW()
+             WHERE id = $2`,
+            [annItem.quantity, annItem.announcementId]
+          );
+        }
+
+        // 6. UPDATE ORDER IN POSTGRESQL
+        order.status = 'en_transito';
+        order.shippedAt = now.toISOString();
+
+        await client.query(
+          `UPDATE materias_primas_pedidos
+           SET estado = 'en_transito',
+               shipped_at = $2
+           WHERE id = $1`,
+          [order.id, order.shippedAt]
+        );
+
+        // 7. RECORD IDEMPOTENCY SUCCESS IN POSTGRESQL
+        const responseBody = {
+          success: true,
+          order,
+          message: 'Mercancía expedida correctamente. Se ha descontado de tu stock y la orden ha pasado a "En tránsito".'
+        };
+
+        await client.query(
+          `UPDATE operaciones_idempotencia
+           SET respuesta = $1
+           WHERE clave = $2`,
+          [JSON.stringify(responseBody), key]
+        );
+
+        return {
+          status: 200,
+          body: responseBody,
+          order,
+          sellerInv,
+          itemsToDeductAnn
+        };
+      });
+    });
+
+    // 8. POST-COMMIT IN-MEMORY CACHE UPDATE (PASSIVE CACHE ONLY)
+    if (result && result.order) {
+      const db = readDb();
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      const idx = db.rawMaterialOrders.findIndex(o => o.id === result.order.id);
+      if (idx !== -1) {
+        db.rawMaterialOrders[idx] = { ...db.rawMaterialOrders[idx], ...result.order };
+        (db.rawMaterialOrders[idx] as any).stockDeducted = true;
+      } else {
+        db.rawMaterialOrders.unshift(result.order);
+        (db.rawMaterialOrders[0] as any).stockDeducted = true;
+      }
+
+      if (result.sellerInv && result.order.sellerId) {
+        if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+        const sIdx = db.rawMaterialInventories.findIndex(i => i.studentId === result.order.sellerId);
+        if (sIdx !== -1) {
+          db.rawMaterialInventories[sIdx] = result.sellerInv;
+        } else {
+          db.rawMaterialInventories.push(result.sellerInv);
+        }
+      }
+
+      if (db.rawMaterialAnnouncements && result.itemsToDeductAnn && result.itemsToDeductAnn.length > 0) {
+        for (const item of result.itemsToDeductAnn) {
+          const ann = db.rawMaterialAnnouncements.find(a => a.id === item.announcementId);
+          if (ann && ann.stock !== undefined && ann.stock !== null && ann.stock !== 'ilimitado') {
+            const curr = Number(ann.stock);
+            if (!isNaN(curr)) {
+              ann.stock = Math.max(0, curr - item.quantity);
+              if (ann.stock <= 0) ann.active = false;
+              ann.updatedAt = new Date().toISOString();
+            }
+          }
+        }
+      }
+
+      addNotification(
+        db,
+        result.order.studentId,
+        'Mercancía enviada (en tránsito)',
+        `El vendedor ${result.order.sellerName || 'Suministrador'} ha realizado la expedición de "${result.order.materialTitle}". La mercancía está en tránsito hacia tu almacén.`,
+        'order_approved',
+        result.order.id
+      );
+
+      writeDb(db);
+    }
+
+    return res.status(result.status || 200).json(result.body);
+  } catch (error: any) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      error: error.message || 'Error al expedir el pedido de materias primas'
+    });
+  }
+});
+
+function creditOrderMaterialsToInventory(inv: RawMaterialInventory, order: any, targetNaveId?: string) {
+  if (!inv) return;
+  if (!inv.naveInventories) {
+    inv.naveInventories = {};
+  }
+  const existingNavesCount = Object.keys(inv.naveInventories).length;
+  let naveKey = targetNaveId || order.destinationNaveId || order.targetNaveId;
+  if (!naveKey) {
+    const existingKeys = Object.keys(inv.naveInventories);
+    naveKey = existingKeys.length > 0 ? existingKeys[0] : 'default_nave';
   }
 
-  const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+  if (!inv.naveInventories[naveKey]) {
+    // If this is the first warehouse, seed it with the student's existing top-level inventory balances
+    const seedWithTopLevel = existingNavesCount === 0;
+    inv.naveInventories[naveKey] = {
+      ironKg: seedWithTopLevel ? (inv.ironKg || 0) : 0,
+      metalKg: seedWithTopLevel ? (inv.metalKg || 0) : 0,
+      plasticKg: seedWithTopLevel ? (inv.plasticKg || 0) : 0,
+      epoxiKg: seedWithTopLevel ? (inv.epoxiKg || 0) : 0,
+      producedRodsUnits: seedWithTopLevel ? (inv.producedRodsUnits || 0) : 0,
+      producedStarRodsUnits: seedWithTopLevel ? (inv.producedStarRodsUnits || 0) : 0,
+      producedFlatRodsUnits: seedWithTopLevel ? (inv.producedFlatRodsUnits || 0) : 0,
+      producedScrewdriversUnits: seedWithTopLevel ? (inv.producedScrewdriversUnits || 0) : 0,
+      starScrewdriversUnits: seedWithTopLevel ? (inv.starScrewdriversUnits || 0) : 0,
+      flatScrewdriversUnits: seedWithTopLevel ? (inv.flatScrewdriversUnits || 0) : 0,
+      ironScrewdriversUnits: seedWithTopLevel ? (inv.starScrewdriversUnits || 0) : 0,
+      metalScrewdriversUnits: seedWithTopLevel ? (inv.flatScrewdriversUnits || 0) : 0
+    };
+  }
+  const targetNaveInv = inv.naveInventories[naveKey];
 
-  if (isStudentSeller) {
-    if (userId && userId !== order.sellerId && userId !== 'profesor-1') {
-      return res.status(403).json({ error: 'Solo el alumno vendedor puede autorizar el envío de la mercancía.' });
+  if (order.items && order.items.length > 0) {
+    for (const item of order.items) {
+      const mType = item.materialType || order.materialType;
+      const itemTitleLower = (item.materialTitle || order.materialTitle || '').toLowerCase();
+      const isRods = itemTitleLower.includes('varilla') || (mType as string) === 'varilla';
+      const isScrewdriver = itemTitleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+      if (isRods) {
+        const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+        if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+          (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+          (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
+        } else {
+          (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+          (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
+        }
+        targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+      } else if (isScrewdriver) {
+        const qty = item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0;
+        if (itemTitleLower.includes('plana') || itemTitleLower.includes('metal')) {
+          (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+          (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+        } else {
+          (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+          (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+        }
+        targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
+      } else if (mType === 'hierro' || itemTitleLower.includes('hierro')) {
+        targetNaveInv.ironKg = (targetNaveInv.ironKg || 0) + (item.totalKg || 0);
+      } else if (mType === 'metal' || itemTitleLower.includes('metal')) {
+        targetNaveInv.metalKg = (targetNaveInv.metalKg || 0) + (item.totalKg || 0);
+      } else if (mType === 'plastico' || itemTitleLower.includes('plástico') || itemTitleLower.includes('plastico')) {
+        targetNaveInv.plasticKg = (targetNaveInv.plasticKg || 0) + (item.totalKg || 0);
+      } else if (mType === 'epoxi' || itemTitleLower.includes('epoxi')) {
+        targetNaveInv.epoxiKg = (targetNaveInv.epoxiKg || 0) + (item.totalKg || 0);
+      }
+    }
+  } else {
+    const mType = order.materialType;
+    const titleLower = (order.materialTitle || '').toLowerCase();
+    const isRods = titleLower.includes('varilla') || (mType as string) === 'varilla';
+    const isScrewdriver = titleLower.includes('destornillador') || (!isRods && mType === 'producto_final');
+
+    if (isRods) {
+      const qty = order.quantity || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0;
+      if (titleLower.includes('plana') || titleLower.includes('metal')) {
+        (targetNaveInv as any).producedFlatRodsUnits = ((targetNaveInv as any).producedFlatRodsUnits || 0) + qty;
+        (targetNaveInv as any).producedMetalRodsUnits = ((targetNaveInv as any).producedMetalRodsUnits || 0) + qty;
+      } else {
+        (targetNaveInv as any).producedStarRodsUnits = ((targetNaveInv as any).producedStarRodsUnits || 0) + qty;
+        (targetNaveInv as any).producedIronRodsUnits = ((targetNaveInv as any).producedIronRodsUnits || 0) + qty;
+      }
+      targetNaveInv.producedRodsUnits = (targetNaveInv.producedRodsUnits || 0) + qty;
+    } else if (isScrewdriver) {
+      const qty = order.quantity || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0;
+      if (titleLower.includes('plana') || titleLower.includes('metal')) {
+        (targetNaveInv as any).flatScrewdriversUnits = ((targetNaveInv as any).flatScrewdriversUnits || 0) + qty;
+        (targetNaveInv as any).metalScrewdriversUnits = ((targetNaveInv as any).metalScrewdriversUnits || 0) + qty;
+      } else {
+        (targetNaveInv as any).starScrewdriversUnits = ((targetNaveInv as any).starScrewdriversUnits || 0) + qty;
+        (targetNaveInv as any).ironScrewdriversUnits = ((targetNaveInv as any).ironScrewdriversUnits || 0) + qty;
+      }
+      targetNaveInv.producedScrewdriversUnits = (targetNaveInv.producedScrewdriversUnits || 0) + qty;
+    } else if (mType === 'hierro' || titleLower.includes('hierro')) {
+      targetNaveInv.ironKg = (targetNaveInv.ironKg || 0) + (order.totalKg || 0);
+    } else if (mType === 'metal' || titleLower.includes('metal')) {
+      targetNaveInv.metalKg = (targetNaveInv.metalKg || 0) + (order.totalKg || 0);
+    } else if (mType === 'plastico' || titleLower.includes('plástico') || titleLower.includes('plastico')) {
+      targetNaveInv.plasticKg = (targetNaveInv.plasticKg || 0) + (order.totalKg || 0);
+    } else if (mType === 'epoxi' || titleLower.includes('epoxi')) {
+      targetNaveInv.epoxiKg = (targetNaveInv.epoxiKg || 0) + (order.totalKg || 0);
     }
   }
 
-  // Ensure stock is deducted from seller inventory and announcement
-  processStockDeductionForOrder(db, order);
+  recalculateTotalInventory(inv);
+}
 
-  const now = new Date();
-  order.status = 'en_transito';
-  order.shippedAt = now.toISOString();
-
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
-  addNotification(
-    db,
-    order.studentId,
-    'Mercancía enviada (en tránsito)',
-    `El vendedor ${order.sellerName || 'Suministrador'} ha realizado la expedición de "${order.materialTitle}". La mercancía está en tránsito hacia tu almacén.`,
-    'order_approved',
-    order.id
-  );
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    order,
-    message: 'Mercancía expedida correctamente. Se ha descontado de tu stock y la orden ha pasado a "En tránsito".'
-  });
-});
-
-// Confirm Receipt / Deliver endpoint (Comprador confirma recepción)
-app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:id/confirm-receipt'], (req, res) => {
+// Confirm Receipt / Deliver endpoint (Comprador confirma recepción) - ACID Transactional
+app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:id/confirm-receipt'], async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const { userId } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idempotencyKey = rawIdemKey || `deliver_${id}_${Date.now()}`;
 
-  if (order.status === 'entregado' || order.status === 'finalizado' || order.status === 'facturado') {
-    return res.status(400).json({ error: 'El pedido ya ha sido entregado previamente.' });
+  try {
+    const result = await executeWithIdempotency(idempotencyKey, async () => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. LOCK ORDER IN POSTGRESQL (READ YOUR OWN WRITES / SOURCE OF TRUTH)
+        let orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+
+        // If not in PostgreSQL yet, check in-memory cache and seed it into PostgreSQL before locking
+        if (orderRes.rows.length === 0) {
+          const dbForSeed = readDb();
+          const memOrder = (dbForSeed.rawMaterialOrders || []).find(o => o.id === id);
+          if (memOrder) {
+            await syncRawMaterialOrderToSupabase(memOrder, client);
+            orderRes = await client.query(
+              `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
+
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // 2. VALIDATE STATE AND INVENTORY_CREDITED STRICTLY ON THE LOCKED POSTGRESQL ROW
+        if (order.status === 'entregado' || order.status === 'finalizado' || order.status === 'facturado' || order.inventoryCredited) {
+          const err: any = new Error('El pedido ya ha sido entregado previamente.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (order.status !== 'aprobado' && order.status !== 'en_transito') {
+          const err: any = new Error(`No se puede entregar un pedido en estado "${order.status}". Solo pedidos aprobados o en tránsito pueden ser recibidos.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 3. AUTHORIZATION VALIDATION (Optional: only if userId is explicitly provided)
+        if (userId && userId !== order.studentId && userId !== 'profesor-1') {
+          const err: any = new Error('Solo el alumno comprador puede confirmar la recepción del pedido.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        const now = new Date();
+
+        // 4. CHECK IF SELLER STOCK DEDUCTION IS NEEDED (if student seller and not shipped yet)
+        const isStudentSeller = order.sellerId && order.sellerId !== 'proveedor-materia-prima' && order.sellerId !== 'profesor-1';
+        const sellerDeductionNeeded = isStudentSeller && !order.shippedAt;
+
+        // 5. DETERMINISTIC LOCKING OF INVOLVED INVENTORIES
+        // Order of locks: sort studentIds lexicographically to avoid deadlocks
+        const studentIdsToLock: string[] = [];
+        studentIdsToLock.push(order.studentId);
+        if (sellerDeductionNeeded && order.sellerId && order.sellerId !== order.studentId) {
+          studentIdsToLock.push(order.sellerId);
+        }
+        studentIdsToLock.sort();
+
+        // Ensure inventory rows exist in PostgreSQL before locking
+        for (const sId of studentIdsToLock) {
+          const sName = sId === order.studentId ? (order.studentName || 'Comprador') : (order.sellerName || 'Vendedor');
+          await client.query(
+            `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+             VALUES ($1, $2, '{}'::jsonb)
+             ON CONFLICT (alumno_id) DO NOTHING`,
+            [sId, sName]
+          );
+        }
+
+        const lockedInvs: Record<string, RawMaterialInventory> = {};
+        for (const sId of studentIdsToLock) {
+          const invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [sId]
+          );
+          if (!invRes || invRes.rows.length === 0) {
+            const err: any = new Error(`Inventario no encontrado para el alumno ${sId}`);
+            err.statusCode = 404;
+            throw err;
+          }
+          lockedInvs[sId] = parseInventoryRow(invRes.rows[0]);
+        }
+
+        // 6. DEDUCT FROM SELLER IF NOT PREVIOUSLY DEDUCTED
+        if (sellerDeductionNeeded && order.sellerId && lockedInvs[order.sellerId]) {
+          const sellerInv = lockedInvs[order.sellerId];
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              const itemTitle = (item.materialTitle || order.materialTitle || '').toLowerCase();
+              if (itemTitle.includes('varilla')) {
+                deductRodsFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else if (item.materialType === 'producto_final' || itemTitle.includes('destornillador')) {
+                deductScrewdriversFromSellerInv(sellerInv, item.quantity || (item.totalKg ? Math.round(item.totalKg / 0.1) : 0) || 0, item.materialTitle || order.materialTitle);
+              } else {
+                deductRawMaterialFromSellerInv(sellerInv, item.materialType, item.totalKg || item.quantity);
+              }
+            }
+          } else {
+            const orderQty = order.quantity || 1;
+            const orderTitle = (order.materialTitle || '').toLowerCase();
+            if (orderTitle.includes('varilla')) {
+              deductRodsFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else if (order.materialType === 'producto_final' || orderTitle.includes('destornillador')) {
+              deductScrewdriversFromSellerInv(sellerInv, orderQty || (order.totalKg ? Math.round(order.totalKg / 0.1) : 0) || 0, order.materialTitle);
+            } else {
+              deductRawMaterialFromSellerInv(sellerInv, order.materialType, order.totalKg || orderQty);
+            }
+          }
+          recalculateTotalInventory(sellerInv);
+          sellerInv.updatedAt = now.toISOString();
+          await syncInventoryToSupabase(sellerInv, order.sellerName, client);
+
+          // Deduct from announcements if applicable
+          const itemsToDeductAnn: Array<{ announcementId?: string; quantity: number }> = [];
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              if (item.announcementId) itemsToDeductAnn.push({ announcementId: item.announcementId, quantity: item.quantity || 1 });
+            }
+          } else if (order.announcementId) {
+            itemsToDeductAnn.push({ announcementId: order.announcementId, quantity: order.quantity || 1 });
+          }
+
+          for (const annItem of itemsToDeductAnn) {
+            await client.query(
+              `UPDATE anuncios_materia_prima
+               SET stock = CASE
+                 WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' THEN GREATEST(0, (stock::numeric - $1))::text
+                 ELSE stock
+               END,
+               active = CASE
+                 WHEN stock != 'ilimitado' AND stock ~ '^[0-9]+$' AND (stock::numeric - $1) <= 0 THEN false
+                 ELSE active
+               END,
+               updated_at = NOW()
+               WHERE id = $2`,
+              [annItem.quantity, annItem.announcementId]
+            );
+          }
+        }
+
+        // 7. CREDIT INVENTORY TO BUYER IN POSTGRESQL
+        const buyerInv = lockedInvs[order.studentId];
+        creditOrderMaterialsToInventory(buyerInv, order, order.destinationNaveId);
+        buyerInv.updatedAt = now.toISOString();
+        await syncInventoryToSupabase(buyerInv, order.studentName, client);
+
+        // 8. UPDATE ORDER IN POSTGRESQL
+        order.status = 'entregado';
+        order.deliveredAt = now.toISOString();
+        order.inventoryCredited = true;
+
+        await client.query(
+          `UPDATE materias_primas_pedidos
+           SET estado = 'entregado',
+               fecha_entrega = $2,
+               inventory_credited = TRUE
+           WHERE id = $1`,
+          [order.id, order.deliveredAt]
+        );
+
+        // 9. RESPONSE BODY
+        const responseBody = {
+          success: true,
+          order,
+          inventory: buyerInv,
+          message: 'Mercancía recibida y registrada en tu almacén.'
+        };
+
+        return responseBody;
+      });
+    });
+
+    // 10. POST-COMMIT CACHE UPDATE (DB.JSON & NOTIFICATIONS)
+    // ONLY executed after PostgreSQL transaction has successfully committed
+    try {
+      const db = readDb();
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      const memOrderIdx = db.rawMaterialOrders.findIndex(o => o.id === id);
+      if (memOrderIdx >= 0) {
+        db.rawMaterialOrders[memOrderIdx].status = 'entregado';
+        db.rawMaterialOrders[memOrderIdx].deliveredAt = result.order.deliveredAt;
+        db.rawMaterialOrders[memOrderIdx].inventoryCredited = true;
+      } else {
+        db.rawMaterialOrders.push(result.order);
+      }
+
+      if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+      const buyerInvIdx = db.rawMaterialInventories.findIndex(i => i.studentId === result.order.studentId);
+      if (buyerInvIdx >= 0) {
+        db.rawMaterialInventories[buyerInvIdx] = { ...result.inventory };
+      } else {
+        db.rawMaterialInventories.push({ ...result.inventory });
+      }
+
+      if (result.order.sellerId && result.order.sellerId !== 'proveedor-materia-prima') {
+        addNotification(
+          db,
+          result.order.sellerId,
+          'Recepción confirmada por el comprador',
+          `${result.order.studentName} ha recibido la mercancía de "${result.order.materialTitle}" y ha sido agregada a su inventario.`,
+          'order_approved',
+          result.order.id
+        );
+      }
+
+      writeDb(db);
+    } catch (cacheErr) {
+      console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      error: error.message || 'Error al confirmar la recepción del pedido.'
+    });
   }
-
-  const now = new Date();
-  order.status = 'entregado';
-  order.deliveredAt = now.toISOString();
-
-  // Deduct from seller stock/announcement if not already done
-  processStockDeductionForOrder(db, order);
-
-  const inv = checkAndCalculateProduction(db, order.studentId);
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-  syncInventoryToSupabase(inv, db.users.find(u => u.id === order.studentId)?.name).catch(e => console.error(e));
-
-  if (order.sellerId && order.sellerId !== 'proveedor-materia-prima') {
-    addNotification(
-      db,
-      order.sellerId,
-      'Recepción confirmada por el comprador',
-      `${order.studentName} ha recibido la mercancía de "${order.materialTitle}" y ha sido agregada a su inventario.`,
-      'order_approved',
-      order.id
-    );
-  }
-
-  writeDb(db);
-
-  res.json({ success: true, order, inventory: inv, message: 'Mercancía recibida y registrada en tu almacén.' });
 });
 
 // Manual Invoice Endpoint ("Enviar factura")
-app.post('/api/raw-materials/orders/:id/send-invoice', (req, res) => {
+app.post('/api/raw-materials/orders/:id/send-invoice', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
-  const db = readDb();
+  const { userId } = req.body || {};
 
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  const order = db.rawMaterialOrders.find(o => o.id === id);
-  if (!order) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rm_inv_${id}`;
 
-  if (order.status !== 'entregado' && order.status !== 'aprobado' && order.status !== 'en_transito' && order.status !== 'finalizado') {
-    return res.status(400).json({ error: `No se puede facturar un pedido en estado "${order.status}".` });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. ATOMIC LOCK ON ORDER IN POSTGRESQL
+        const orderRes = await client.query(
+          `SELECT * FROM materias_primas_pedidos WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+
+        if (orderRes.rows.length === 0) {
+          const err: any = new Error('Solicitud no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const order = parseRawMaterialOrderRow(orderRes.rows[0]);
+
+        // 2. AUTHORIZATION CHECK
+        const effectiveUserId = userId || 'profesor-1';
+        const dbSnapshot = readDb();
+        const user = (dbSnapshot.users || []).find(u => u.id === effectiveUserId);
+        if (!user && effectiveUserId !== 'profesor-1') {
+          const err: any = new Error('Usuario no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const isTeacher = (user && (user.role === 'teacher' || user.id === 'profesor-1')) || effectiveUserId === 'profesor-1';
+        const isSeller = user
+          ? (user.id === order.sellerId || (isTeacher && (order.sellerId === 'proveedor-materia-prima' || order.sellerId === 'profesor-1' || !order.sellerId)))
+          : isTeacher;
+
+        if (!isSeller && !isTeacher) {
+          const err: any = new Error('Solo el vendedor del pedido o el profesor pueden emitir y enviar la factura.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 3. IDEMPOTENCY / PREVENT DOUBLE BILLING: IF ALREADY INVOICED, RETURN EXISTING INVOICE
+        if (order.status === 'facturado' || (order.invoiceNumber && order.invoicedAt)) {
+          const responseBody = {
+            success: true,
+            order,
+            invoiceNumber: order.invoiceNumber,
+            message: `Factura ${order.invoiceNumber} ya fue emitida y notificada previamente.`
+          };
+
+          await client.query(
+            `UPDATE operaciones_idempotencia
+             SET respuesta = $1
+             WHERE clave = $2`,
+            [JSON.stringify(responseBody), key]
+          );
+
+          return responseBody;
+        }
+
+        // 4. STATE VALIDATION
+        // Commercial invoices can only be issued once goods have been received/delivered.
+        // Earlier states ('pendiente', 'en_negociacion', 'aprobado', 'en_transito') or terminal 'rechazado' cannot be invoiced.
+        if (order.status !== 'entregado' && order.status !== 'finalizado') {
+          const err: any = new Error(`No se puede facturar un pedido en estado "${order.status}". El pedido debe haber sido entregado previamente.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 5. ATOMIC GENERATION OF UNIQUE INVOICE NUMBER
+        const now = new Date();
+        const year = now.getFullYear();
+        let invoiceNum = order.invoiceNumber;
+
+        if (!invoiceNum) {
+          const countRes = await client.query(
+            `SELECT COUNT(*) as total FROM materias_primas_pedidos WHERE invoice_number LIKE $1`,
+            [`FACT-${year}-%`]
+          );
+          let nextSeq = 1001 + parseInt(countRes.rows[0]?.total || '0', 10);
+          let candidate = `FACT-${year}-${nextSeq}`;
+
+          let exists = await client.query(
+            `SELECT 1 FROM materias_primas_pedidos WHERE invoice_number = $1`,
+            [candidate]
+          );
+          while (exists.rows.length > 0) {
+            nextSeq++;
+            candidate = `FACT-${year}-${nextSeq}`;
+            exists = await client.query(
+              `SELECT 1 FROM materias_primas_pedidos WHERE invoice_number = $1`,
+              [candidate]
+            );
+          }
+          invoiceNum = candidate;
+        }
+
+        const invoicedAtIso = now.toISOString();
+        order.status = 'facturado';
+        order.invoiceNumber = invoiceNum;
+        order.invoicedAt = invoicedAtIso;
+
+        // 6. UPDATE materias_primas_pedidos DIRECTLY IN POSTGRESQL (NO syncRawMaterialOrderToSupabase)
+        await client.query(
+          `UPDATE materias_primas_pedidos
+           SET estado = 'facturado',
+               invoice_number = $2,
+               invoiced_at = $3
+           WHERE id = $1`,
+          [order.id, invoiceNum, invoicedAtIso]
+        );
+
+        const responseBody = {
+          success: true,
+          order,
+          invoiceNumber: invoiceNum,
+          message: `Factura ${invoiceNum} emitida y notificada al comprador.`
+        };
+
+        await client.query(
+          `UPDATE operaciones_idempotencia
+           SET respuesta = $1
+           WHERE clave = $2`,
+          [JSON.stringify(responseBody), key]
+        );
+
+        return responseBody;
+      }, key);
+    });
+
+    // 7. POST-COMMIT CACHE UPDATE (DB.JSON & NOTIFICATIONS)
+    // ONLY executed after PostgreSQL transaction has successfully committed
+    try {
+      const db = readDb();
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      const memOrderIdx = db.rawMaterialOrders.findIndex(o => o.id === id);
+      if (memOrderIdx >= 0) {
+        db.rawMaterialOrders[memOrderIdx].status = 'facturado';
+        db.rawMaterialOrders[memOrderIdx].invoiceNumber = result.invoiceNumber;
+        db.rawMaterialOrders[memOrderIdx].invoicedAt = result.order.invoicedAt;
+      } else {
+        db.rawMaterialOrders.push(result.order);
+      }
+
+      addNotification(
+        db,
+        result.order.studentId,
+        'Factura comercial recibida',
+        `El vendedor ${result.order.sellerName || 'Profesor'} ha emitido y enviado la factura oficial ${result.invoiceNumber} por ${Number(result.order.totalAmount).toFixed(2)} €.`,
+        'order_approved',
+        result.order.id
+      );
+
+      writeDb(db);
+    } catch (cacheErr) {
+      console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    console.error('[Error in Order Send-Invoice]:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      error: error.message || 'Error al emitir y enviar la factura'
+    });
   }
-
-  const now = new Date();
-  const year = now.getFullYear();
-  const randomNum = Math.floor(1000 + Math.random() * 9000);
-  const invoiceNum = order.invoiceNumber || `FACT-${year}-${randomNum}`;
-
-  order.status = 'facturado';
-  order.invoiceNumber = invoiceNum;
-  order.invoicedAt = now.toISOString();
-
-  syncRawMaterialOrderToSupabase(order).catch(e => console.error(e));
-
-  addNotification(
-    db,
-    order.studentId,
-    'Factura comercial recibida',
-    `El vendedor ${order.sellerName || 'Profesor'} ha emitido y enviado la factura oficial ${invoiceNum} por ${order.totalAmount.toFixed(2)} €.`,
-    'order_approved',
-    order.id
-  );
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    order,
-    invoiceNumber: invoiceNum,
-    message: `Factura ${invoiceNum} emitida y notificada al comprador.`
-  });
 });
 
 // Company Profiles Endpoints
@@ -13670,7 +18103,56 @@ app.get('/api/students-list', (req, res) => {
 });
 
 // Inventory Stock Transfer Endpoint
-app.post('/api/inventory/transfer-stock', (req, res) => {
+function parseInventoryRow(row: any): RawMaterialInventory {
+  let starRods = row.varillas_punta_estrella !== undefined && row.varillas_punta_estrella !== null ? Number(row.varillas_punta_estrella) : Number(row.varillas_hierro_punta || 0);
+  let flatRods = row.varillas_punta_plana !== undefined && row.varillas_punta_plana !== null ? Number(row.varillas_punta_plana) : Number(row.varillas_metal_punta || 0);
+  const totalRods = Number(row.varillas_punta || (starRods + flatRods));
+  if (starRods === 0 && flatRods === 0 && totalRods > 0) {
+    starRods = totalRods;
+  }
+
+  let starScrewdrivers = row.destornilladores_punta_estrella !== undefined && row.destornilladores_punta_estrella !== null ? Number(row.destornilladores_punta_estrella) : Number(row.destornilladores_hierro || 0);
+  let flatScrewdrivers = row.destornilladores_punta_plana !== undefined && row.destornilladores_punta_plana !== null ? Number(row.destornilladores_punta_plana) : Number(row.destornilladores_metal || 0);
+  const totalScrewdrivers = Number(row.productos_ensamblados || (starScrewdrivers + flatScrewdrivers));
+  if (starScrewdrivers === 0 && flatScrewdrivers === 0 && totalScrewdrivers > 0) {
+    starScrewdrivers = totalScrewdrivers;
+  }
+
+  let naveInventories: Record<string, any> = {};
+  if (row.desglose_almacenes) {
+    try {
+      naveInventories = typeof row.desglose_almacenes === 'string' ? JSON.parse(row.desglose_almacenes) : { ...row.desglose_almacenes };
+    } catch (e) {
+      naveInventories = {};
+    }
+  }
+
+  return {
+    studentId: String(row.alumno_id),
+    ironKg: Number(row.fragmentos_hierro_kg || 0),
+    metalKg: Number(row.fragmentos_metal_kg || 0),
+    plasticKg: Number(row.pellets_plastico_kg || 0),
+    epoxiKg: Number(row.pegamento_epoxi_kg || 0),
+    rodProductionMode: row.rod_production_mode || null,
+    producedRodsUnits: totalRods,
+    producedStarRodsUnits: starRods,
+    producedFlatRodsUnits: flatRods,
+    producedIronRodsUnits: starRods,
+    producedMetalRodsUnits: flatRods,
+    producedScrewdriversUnits: totalScrewdrivers,
+    starScrewdriversUnits: starScrewdrivers,
+    flatScrewdriversUnits: flatScrewdrivers,
+    ironScrewdriversUnits: starScrewdrivers,
+    metalScrewdriversUnits: flatScrewdrivers,
+    line1PendingHours: Number(row.line1_pending_hours || 0),
+    line2PendingHours: Number(row.line2_pending_hours || 0),
+    naveInventories,
+    lastCalculatedAt: row.ultima_calculada ? new Date(row.ultima_calculada).toISOString() : new Date().toISOString(),
+    updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+  };
+}
+
+app.post('/api/inventory/transfer-stock', async (req, res) => {
   const { senderId, recipientId, itemKey, quantity, transportMethod, destinationNaveId, fromNaveId } = req.body;
   const qty = Number(quantity);
 
@@ -13682,583 +18164,759 @@ app.post('/api/inventory/transfer-stock', (req, res) => {
     return res.status(400).json({ error: 'No puedes enviarte existencias a ti mismo.' });
   }
 
-  const db = readDb();
-  const sender = db.users.find(u => u.id === senderId);
-  const recipient = db.users.find(u => u.id === recipientId);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `transfer_stock_${senderId}_${recipientId}_${itemKey}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  if (!sender || !recipient) {
-    return res.status(404).json({ error: 'Remitente o destinatario no encontrado.' });
-  }
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
+      }
 
-  // Find sender warehouses
-  const senderNaves = (db.acquisitions || []).filter(a =>
-    String(a.studentId) === String(senderId) &&
-    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-  );
+      return await withPostgresTransaction(async (client) => {
+        const db = readDb();
+        const sender = db.users.find(u => u.id === senderId);
+        const recipient = db.users.find(u => u.id === recipientId);
 
-  if (senderNaves.length > 1 && !fromNaveId) {
-    return res.status(400).json({
-      error: 'Dispones de más de un inmueble con almacén. Debes seleccionar el almacén desde el que envías las existencias.'
+        if (!sender || !recipient) {
+          const err: any = new Error('Remitente o destinatario no encontrado.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // Find sender warehouses
+        const senderNaves = (db.acquisitions || []).filter(a =>
+          String(a.studentId) === String(senderId) &&
+          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        );
+
+        if (senderNaves.length > 1 && !fromNaveId) {
+          const err: any = new Error('Dispones de más de un inmueble con almacén. Debes seleccionar el almacén desde el que envías las existencias.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const selectedSenderNave = senderNaves.find(n => String(n.id) === String(fromNaveId)) || senderNaves[0];
+        const targetSenderNaveId = selectedSenderNave ? selectedSenderNave.id : (fromNaveId || 'default_nave');
+
+        // Verify forklift in sender warehouse
+        if (selectedSenderNave) {
+          const senderTargetNaveIdStr = String(selectedSenderNave.id || selectedSenderNave.propertyId);
+          const hasForkliftLocal = (db.purchasedVehicles || []).some(v =>
+            String(v.studentId) === String(senderId) &&
+            v.vehicleType === 'carretilla_elevadora' &&
+            (
+              String(v.assignedPropertyId) === senderTargetNaveIdStr ||
+              (senderNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+            )
+          );
+
+          let hasForkliftDb = false;
+          try {
+            const fRes = await client.query(
+              `SELECT id FROM vehiculos_comprados 
+               WHERE alumno_id = $1 AND vehiculo_tipo = 'carretilla_elevadora' AND (
+                 propiedad_asignada_id = $2 OR ($3 = 1 AND almacen_asignado_index IS NOT NULL)
+               ) LIMIT 1`,
+              [senderId, senderTargetNaveIdStr, senderNaves.length]
+            );
+            hasForkliftDb = fRes.rows.length > 0;
+          } catch (e) {
+            // fallback
+          }
+
+          if (!hasForkliftLocal && !hasForkliftDb) {
+            const naveName = selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen';
+            const err: any = new Error(`Operación rechazada: No tienes asignada ninguna carretilla elevadora contrapesada a tu almacén de origen "${naveName}". Para poder expedir y cargar existencias desde esta ubicación, debes disponer de una carretilla elevadora asignada.`);
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        // Recipient warehouses
+        const recipientNaves = (db.acquisitions || []).filter(a =>
+          String(a.studentId) === String(recipientId) &&
+          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        );
+
+        if (recipientNaves.length > 1 && !destinationNaveId) {
+          const err: any = new Error('El alumno destinatario dispone de más de un inmueble con almacén. Debes especificar a qué inmueble deben enviarse las existencias.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const selectedRecipientNave = recipientNaves.find(n => String(n.id) === String(destinationNaveId)) || recipientNaves[0];
+        const targetRecipientNaveId = selectedRecipientNave ? selectedRecipientNave.id : (destinationNaveId || 'default_nave');
+
+        if (selectedRecipientNave) {
+          const recipientTargetNaveIdStr = String(selectedRecipientNave.id || selectedRecipientNave.propertyId);
+          const hasForkliftLocal = (db.purchasedVehicles || []).some(v =>
+            String(v.studentId) === String(recipientId) &&
+            v.vehicleType === 'carretilla_elevadora' &&
+            (
+              String(v.assignedPropertyId) === recipientTargetNaveIdStr ||
+              (recipientNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+            )
+          );
+
+          let hasForkliftDb = false;
+          try {
+            const fRes = await client.query(
+              `SELECT id FROM vehiculos_comprados 
+               WHERE alumno_id = $1 AND vehiculo_tipo = 'carretilla_elevadora' AND (
+                 propiedad_asignada_id = $2 OR ($3 = 1 AND almacen_asignado_index IS NOT NULL)
+               ) LIMIT 1`,
+              [recipientId, recipientTargetNaveIdStr, recipientNaves.length]
+            );
+            hasForkliftDb = fRes.rows.length > 0;
+          } catch (e) {
+            // fallback
+          }
+
+          if (!hasForkliftLocal && !hasForkliftDb) {
+            const naveName = selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén';
+            const recipientUser = (db.users || []).find((u: any) => String(u.id) === String(recipientId));
+            const err: any = new Error(`Operación rechazada: El alumno destinatario (${recipientUser?.name || 'Destinatario'}) no tiene asignada ninguna carretilla elevadora contrapesada al inmueble de destino "${naveName}". Para poder recibir existencias en esa ubicación, debe disponer de una carretilla elevadora asignada a ese inmueble.`);
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        // Validate transport method
+        let transportFee = 0;
+        let fuelExpense = 0;
+        let distanceKm = 0;
+        let fuelMovId = '';
+        let transMovId = '';
+
+        if (transportMethod === 'propio') {
+          const hasTruck = (db.purchasedVehicles || []).some(
+            v => v.studentId === senderId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+          );
+          const hasTruckDriver = (db.hiredEmployees || []).some(
+            e => e.studentId === senderId && (e.role === 'camionero' || (e.role as string) === 'conductor')
+          );
+          if (!hasTruck || !hasTruckDriver) {
+            const err: any = new Error('Para realizar el envío con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const senderLoc = selectedSenderNave || sender;
+          const recipientLoc = selectedRecipientNave || recipient;
+          distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
+          fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+        } else if (transportMethod === 'exterior') {
+          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+          const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+          const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+
+          const senderLoc = selectedSenderNave || sender;
+          const recipientLoc = selectedRecipientNave || recipient;
+          distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
+
+          transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+        }
+
+        // 1. DETERMINISTIC LOCK ORDER FOR INVENTORIES
+        const sortedStudentIds = [senderId, recipientId].sort();
+        const invMap = new Map<string, RawMaterialInventory>();
+
+        for (const sid of sortedStudentIds) {
+          const userObj = sid === senderId ? sender : recipient;
+          await client.query(
+            `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+             VALUES ($1, $2, '{}'::jsonb)
+             ON CONFLICT (alumno_id) DO NOTHING`,
+            [sid, userObj?.name || 'Estudiante']
+          );
+
+          const invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [sid]
+          );
+          if (!invRes || invRes.rows.length === 0) {
+            const err: any = new Error(`Inventario no encontrado para el alumno ${sid}`);
+            err.statusCode = 404;
+            throw err;
+          }
+          invMap.set(sid, parseInventoryRow(invRes.rows[0]));
+        }
+
+        const senderInv = invMap.get(senderId)!;
+        const recipientInv = invMap.get(recipientId)!;
+
+        // 2. FINANCIAL DEDUCTION ON CUENTAS FOR SENDER (IF ANY)
+        let newSenderBalance = sender.balance;
+        const expense = transportMethod === 'propio' ? fuelExpense : transportFee;
+
+        if (expense > 0) {
+          await client.query(
+            `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (id) DO NOTHING`,
+            [sender.id, sender.name, sender.balance || 0, sender.username, sender.password, sender.accountNumber, sender.role, sender.level]
+          );
+
+          const accRes = await client.query(
+            `SELECT id, alumno, saldo, account_number FROM cuentas WHERE id = $1 FOR UPDATE`,
+            [senderId]
+          );
+          if (!accRes || accRes.rows.length === 0) {
+            const err: any = new Error('Cuenta corriente del remitente no encontrada.');
+            err.statusCode = 404;
+            throw err;
+          }
+          const accountRow = accRes.rows[0];
+          const currentBalance = Number(accountRow.saldo) || 0;
+
+          if (currentBalance < expense) {
+            if (transportMethod === 'propio') {
+              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
+              err.statusCode = 400;
+              throw err;
+            } else {
+              const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+              const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+              const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
+              err.statusCode = 400;
+              throw err;
+            }
+          }
+
+          newSenderBalance = Math.round((currentBalance - expense) * 100) / 100;
+          await client.query(`UPDATE cuentas SET saldo = $1 WHERE id = $2`, [newSenderBalance, senderId]);
+
+          const nowIso = new Date().toISOString();
+          if (transportMethod === 'propio') {
+            fuelMovId = generateId('mov');
+            const concept = `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`;
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [fuelMovId, sender.id, fuelExpense, nowIso, concept, sender.id, sender.name, sender.accountNumber, 'SUMINISTROS_ESTACION_SERVICIO', 'Estación de servicio - suministro de combustible', 'ES00-0000-0000-0000-GASO']
+            );
+          } else if (transportMethod === 'exterior') {
+            transMovId = generateId('mov');
+            const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+            const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+            const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+            const concept = `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`;
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [transMovId, sender.id, transportFee, nowIso, concept, sender.id, sender.name, sender.accountNumber, 'LOGISTICA_EXTERIOR', 'Servicio exterior de transporte', 'ES00-0000-0000-0000-LOGI']
+            );
+          }
+        }
+
+        // 3. INVENTORY STOCK TRANSFER VALIDATION & UPDATE
+        if (!senderInv.naveInventories) senderInv.naveInventories = {};
+        if (!recipientInv.naveInventories) recipientInv.naveInventories = {};
+
+        if (!senderInv.naveInventories[targetSenderNaveId]) {
+          senderInv.naveInventories[targetSenderNaveId] = {
+            ironKg: senderNaves.length <= 1 ? (senderInv.ironKg || 0) : 0,
+            metalKg: senderNaves.length <= 1 ? (senderInv.metalKg || 0) : 0,
+            plasticKg: senderNaves.length <= 1 ? (senderInv.plasticKg || 0) : 0,
+            epoxiKg: senderNaves.length <= 1 ? (senderInv.epoxiKg || 0) : 0,
+            producedRodsUnits: senderNaves.length <= 1 ? (senderInv.producedRodsUnits || 0) : 0,
+            producedStarRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedStarRodsUnits || (senderInv as any).producedIronRodsUnits || 0) : 0,
+            producedFlatRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedFlatRodsUnits || (senderInv as any).producedMetalRodsUnits || 0) : 0,
+            producedScrewdriversUnits: senderNaves.length <= 1 ? (senderInv.producedScrewdriversUnits || 0) : 0,
+            starScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
+            flatScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0,
+            ironScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
+            metalScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0
+          };
+        }
+
+        const senderNaveInv = senderInv.naveInventories[targetSenderNaveId];
+
+        if (!recipientInv.naveInventories[targetRecipientNaveId]) {
+          recipientInv.naveInventories[targetRecipientNaveId] = {
+            ironKg: 0,
+            metalKg: 0,
+            plasticKg: 0,
+            epoxiKg: 0,
+            producedRodsUnits: 0,
+            producedStarRodsUnits: 0,
+            producedFlatRodsUnits: 0,
+            producedScrewdriversUnits: 0,
+            starScrewdriversUnits: 0,
+            flatScrewdriversUnits: 0,
+            ironScrewdriversUnits: 0,
+            metalScrewdriversUnits: 0
+          };
+        }
+
+        const recipientNaveInv = recipientInv.naveInventories[targetRecipientNaveId];
+        const originNaveName = selectedSenderNave ? (selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen') : 'Almacén de origen';
+
+        let itemLabel = itemKey;
+
+        if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
+          itemLabel = 'Varillas con punta estrella';
+          const currentStock = (senderNaveInv as any).producedStarRodsUnits ?? (senderNaveInv as any).producedIronRodsUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de varillas con punta estrella en ${originNaveName} (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (senderNaveInv as any).producedStarRodsUnits = Math.max(0, currentStock - qty);
+          (senderNaveInv as any).producedIronRodsUnits = Math.max(0, currentStock - qty);
+          senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
+
+          (recipientNaveInv as any).producedStarRodsUnits = ((recipientNaveInv as any).producedStarRodsUnits || 0) + qty;
+          (recipientNaveInv as any).producedIronRodsUnits = ((recipientNaveInv as any).producedIronRodsUnits || 0) + qty;
+          recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
+        } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
+          itemLabel = 'Varillas con punta plana';
+          const currentStock = (senderNaveInv as any).producedFlatRodsUnits ?? (senderNaveInv as any).producedMetalRodsUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de varillas con punta plana en ${originNaveName} (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (senderNaveInv as any).producedFlatRodsUnits = Math.max(0, currentStock - qty);
+          (senderNaveInv as any).producedMetalRodsUnits = Math.max(0, currentStock - qty);
+          senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
+
+          (recipientNaveInv as any).producedFlatRodsUnits = ((recipientNaveInv as any).producedFlatRodsUnits || 0) + qty;
+          (recipientNaveInv as any).producedMetalRodsUnits = ((recipientNaveInv as any).producedMetalRodsUnits || 0) + qty;
+          recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
+        } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro' || itemKey === 'ironScrewdriversUnits') {
+          itemLabel = 'Destornilladores con punta estrella';
+          const currentStock = (senderNaveInv as any).starScrewdriversUnits ?? (senderNaveInv as any).ironScrewdriversUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de destornilladores con punta estrella en ${originNaveName} (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (senderNaveInv as any).starScrewdriversUnits = Math.max(0, currentStock - qty);
+          (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, currentStock - qty);
+          senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
+
+          (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
+          (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
+          recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal' || itemKey === 'metalScrewdriversUnits') {
+          itemLabel = 'Destornilladores con punta plana';
+          const currentStock = (senderNaveInv as any).flatScrewdriversUnits ?? (senderNaveInv as any).metalScrewdriversUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de destornilladores con punta plana en ${originNaveName} (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (senderNaveInv as any).flatScrewdriversUnits = Math.max(0, currentStock - qty);
+          (senderNaveInv as any).metalScrewdriversUnits = Math.max(0, currentStock - qty);
+          senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
+
+          (recipientNaveInv as any).flatScrewdriversUnits = ((recipientNaveInv as any).flatScrewdriversUnits || 0) + qty;
+          (recipientNaveInv as any).metalScrewdriversUnits = ((recipientNaveInv as any).metalScrewdriversUnits || 0) + qty;
+          recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'productos_ensamblados' || itemKey === 'producedScrewdriversUnits') {
+          itemLabel = 'Productos ensamblados (destornilladores)';
+          const currentStock = (senderNaveInv as any).producedScrewdriversUnits || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de productos ensamblados en ${originNaveName} (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          senderNaveInv.producedScrewdriversUnits = Math.max(0, currentStock - qty);
+          (senderNaveInv as any).starScrewdriversUnits = Math.max(0, ((senderNaveInv as any).starScrewdriversUnits || 0) - qty);
+          (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, ((senderNaveInv as any).ironScrewdriversUnits || 0) - qty);
+
+          recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
+          (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
+          (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'ironKg') {
+          itemLabel = 'Fragmentos de hierro (kg)';
+          const currentStock = (senderNaveInv as any).ironKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de fragmentos de hierro en ${originNaveName} (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          senderNaveInv.ironKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+          recipientNaveInv.ironKg = Math.round(((recipientNaveInv.ironKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'metalKg') {
+          itemLabel = 'Fragmentos de metal (kg)';
+          const currentStock = (senderNaveInv as any).metalKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de fragmentos de metal en ${originNaveName} (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          senderNaveInv.metalKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+          recipientNaveInv.metalKg = Math.round(((recipientNaveInv.metalKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'plasticKg') {
+          itemLabel = 'Pellets de plástico (kg)';
+          const currentStock = (senderNaveInv as any).plasticKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de pellets de plástico en ${originNaveName} (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          senderNaveInv.plasticKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+          recipientNaveInv.plasticKg = Math.round(((recipientNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'epoxiKg') {
+          itemLabel = 'Pegamento epoxi (kg)';
+          const currentStock = (senderNaveInv as any).epoxiKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de pegamento epoxi en ${originNaveName} (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          senderNaveInv.epoxiKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
+          recipientNaveInv.epoxiKg = Math.round(((recipientNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
+        } else {
+          const err: any = new Error('Tipo de existencia no reconocido.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        recalculateTotalInventory(senderInv);
+        recalculateTotalInventory(recipientInv);
+
+        const nowIso = new Date().toISOString();
+        senderInv.updatedAt = nowIso;
+        recipientInv.updatedAt = nowIso;
+
+        await syncInventoryToSupabase(senderInv, sender.name, client);
+        await syncInventoryToSupabase(recipientInv, recipient.name, client);
+
+        // 4. ATOMIC DOCUMENT CREATION (materias_primas_pedidos)
+        const orderId = generateId('rmord');
+        let materialType: 'hierro' | 'metal' | 'plastico' | 'epoxi' | 'producto_final' = 'producto_final';
+        if (itemKey === 'ironKg') materialType = 'hierro';
+        else if (itemKey === 'metalKg') materialType = 'metal';
+        else if (itemKey === 'plasticKg') materialType = 'plastico';
+        else if (itemKey === 'epoxiKg') materialType = 'epoxi';
+
+        const transferOrder: RawMaterialOrder = {
+          id: orderId,
+          studentId: recipient.id,
+          studentName: recipient.name,
+          buyerLevel: recipient.level || 1,
+          sellerId: sender.id,
+          sellerName: sender.name,
+          sellerLevel: sender.level || 1,
+          announcementId: `tr-${Date.now()}`,
+          materialType,
+          materialTitle: itemLabel,
+          quantity: qty,
+          unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
+          totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+          basePrice: 0,
+          discountPercentage: 0,
+          discountAmount: 0,
+          insuranceFee: 0,
+          hasInsurance: false,
+          ivaAmount: 0,
+          transportCost: 0,
+          transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
+          totalAmount: 0,
+          needsTransport: transportMethod === 'exterior',
+          deliveryAddress: selectedRecipientNave ? `${selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén'}, ${selectedRecipientNave.location || selectedRecipientNave.direccion || 'Polígono Industrial'}` : 'Almacén del destinatario',
+          destinationNaveId: targetRecipientNaveId,
+          status: 'entregado',
+          requestedAt: nowIso,
+          approvedAt: nowIso,
+          deliveredAt: nowIso,
+          inventoryCredited: true,
+          items: [{
+            announcementId: `tr-${Date.now()}`,
+            materialType,
+            materialTitle: itemLabel,
+            quantity: qty,
+            unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
+            totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+            basePrice: 0
+          }],
+          lastTurnUserId: sender.id,
+          negotiationHistory: [{
+            id: generateId('neg'),
+            authorId: sender.id,
+            authorName: sender.name,
+            timestamp: nowIso,
+            action: 'propuesta_inicial',
+            quantity: qty,
+            pricePerUnit: 0,
+            discountPercentage: 0,
+            insuranceFee: 0,
+            transportCost: 0,
+            transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
+            totalAmount: 0,
+            note: `Envío directo de existencias entre alumnos (${transportMethod === 'propio' ? 'Transporte propio' : 'Servicio exterior'})`
+          }]
+        };
+
+        await syncRawMaterialOrderToSupabase(transferOrder, client);
+
+        let transportInvoiceOrder: RawMaterialOrder | null = null;
+        let fuelInvoiceOrder: RawMaterialOrder | null = null;
+
+        if (transportMethod === 'exterior' && transportFee > 0 && transMovId) {
+          const recipientAcqs = (db.acquisitions || []).filter(a => String(a.studentId) === String(recipient.id));
+          const recipientProp = recipientAcqs[0];
+          const recipientAddress = recipientProp 
+            ? (recipientProp.location || recipientProp.propertyTitle || 'Almacén principal del destinatario')
+            : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
+
+          const basePrice = Math.round((transportFee / 1.21) * 100) / 100;
+          const ivaAmount = Math.round((transportFee - basePrice) * 100) / 100;
+          transportInvoiceOrder = {
+            id: `rmord_trans_${transMovId}`,
+            studentId: sender.id,
+            studentName: sender.name,
+            buyerLevel: sender.level || 1,
+            sellerId: 'LOGISTICA_EXTERIOR',
+            sellerName: 'Servicio exterior de transporte',
+            sellerLevel: 'official',
+            announcementId: `trans-inv-${transMovId}`,
+            materialType,
+            materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
+            quantity: 1,
+            unitWeightKg: 0,
+            totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+            basePrice,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            ivaAmount,
+            transportCost: 0,
+            transportMethod: 'vendedor_envio',
+            totalAmount: transportFee,
+            needsTransport: false,
+            deliveryAddress: recipientAddress,
+            status: 'facturado',
+            invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+            requestedAt: nowIso,
+            approvedAt: nowIso,
+            deliveredAt: nowIso,
+            invoicedAt: nowIso,
+            inventoryCredited: true,
+            items: [{
+              announcementId: `trans-inv-${transMovId}`,
+              materialType,
+              materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
+              quantity: 1,
+              unitWeightKg: 0,
+              totalKg: 0,
+              basePrice,
+              subtotal: basePrice
+            }],
+            lastTurnUserId: sender.id,
+            negotiationHistory: [{
+              id: `neg_${transMovId}`,
+              authorId: 'LOGISTICA_EXTERIOR',
+              authorName: 'Servicio exterior de transporte',
+              timestamp: nowIso,
+              action: 'propuesta_inicial',
+              quantity: 1,
+              pricePerUnit: basePrice,
+              discountPercentage: 0,
+              insuranceFee: 0,
+              transportCost: 0,
+              transportMethod: 'vendedor_envio',
+              totalAmount: transportFee,
+              note: `Factura del Servicio exterior de transporte por envío de existencias a ${recipient.name}`
+            }]
+          };
+          await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
+        } else if (transportMethod === 'propio' && fuelExpense > 0 && fuelMovId) {
+          const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
+          const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+          fuelInvoiceOrder = {
+            id: `rmord_trans_${fuelMovId}`,
+            studentId: sender.id,
+            studentName: sender.name,
+            buyerLevel: sender.level || 1,
+            sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+            sellerName: 'Estación de servicio - suministro de combustible',
+            sellerLevel: 'official',
+            announcementId: `gaso-inv-${fuelMovId}`,
+            materialType: 'combustible',
+            materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
+            quantity: 1,
+            unitWeightKg: 0,
+            totalKg: 0,
+            basePrice: basePricePropio,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            ivaAmount: ivaAmountPropio,
+            transportCost: 0,
+            transportMethod: 'vendedor_envio',
+            totalAmount: fuelExpense,
+            needsTransport: false,
+            deliveryAddress: 'Inmueble de destino del alumno',
+            status: 'facturado',
+            invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+            requestedAt: nowIso,
+            approvedAt: nowIso,
+            deliveredAt: nowIso,
+            invoicedAt: nowIso,
+            inventoryCredited: true,
+            items: [{
+              announcementId: `gaso-inv-${fuelMovId}`,
+              materialType: 'combustible',
+              materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
+              quantity: 1,
+              unitWeightKg: 0,
+              totalKg: 0,
+              basePrice: basePricePropio,
+              subtotal: basePricePropio
+            }],
+            lastTurnUserId: sender.id,
+            negotiationHistory: [{
+              id: `neg_${fuelMovId}`,
+              authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+              authorName: 'Estación de servicio - suministro de combustible',
+              timestamp: nowIso,
+              action: 'propuesta_inicial',
+              quantity: 1,
+              pricePerUnit: basePricePropio,
+              discountPercentage: 0,
+              insuranceFee: 0,
+              transportCost: 0,
+              transportMethod: 'vendedor_envio',
+              totalAmount: fuelExpense,
+              note: `Factura de suministro de combustible camión (${distanceKm} km a ${recipient.name})`
+            }]
+          };
+          await syncRawMaterialOrderToSupabase(fuelInvoiceOrder, client);
+        }
+
+        const destinationNaveName = selectedRecipientNave ? (selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén de destino') : 'Almacén de destino';
+        const transferSuccessMessage = transportMethod === 'propio'
+          ? `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Transporte realizado con tu camión y camionero propio. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
+          : `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Se han cargado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
+
+        return {
+          success: true,
+          message: transferSuccessMessage,
+          updatedInventory: senderInv,
+          recipientInventory: recipientInv,
+          newBalance: newSenderBalance,
+          order: transferOrder,
+          transportInvoiceOrder,
+          fuelInvoiceOrder,
+          fuelExpense,
+          transportFee,
+          fuelMovId,
+          transMovId,
+          distanceKm,
+          itemLabel,
+          qty,
+          originNaveName,
+          destinationNaveName,
+          senderId,
+          recipientId,
+          transportMethod
+        };
+      }, key);
     });
-  }
 
-  const selectedSenderNave = senderNaves.find(n => String(n.id) === String(fromNaveId)) || senderNaves[0];
-  const targetSenderNaveId = selectedSenderNave ? selectedSenderNave.id : (fromNaveId || 'default_nave');
-
-  // Verify forklift in sender warehouse
-  if (selectedSenderNave) {
-    const senderTargetNaveIdStr = String(selectedSenderNave.id || selectedSenderNave.propertyId);
-    const senderNaveForklift = (db.purchasedVehicles || []).find(v =>
-      String(v.studentId) === String(senderId) &&
-      v.vehicleType === 'carretilla_elevadora' &&
-      (
-        String(v.assignedPropertyId) === senderTargetNaveIdStr ||
-        (senderNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
-      )
-    );
-
-    if (!senderNaveForklift) {
-      const naveName = selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen';
-      return res.status(400).json({
-        error: `Operación rechazada: No tienes asignada ninguna carretilla elevadora contrapesada a tu almacén de origen "${naveName}". Para poder expedir y cargar existencias desde esta ubicación, debes disponer de una carretilla elevadora asignada.`
-      });
-    }
-  }
-
-  // Recipient warehouses
-  const recipientNaves = (db.acquisitions || []).filter(a =>
-    String(a.studentId) === String(recipientId) &&
-    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-  );
-
-  if (recipientNaves.length > 1 && !destinationNaveId) {
-    return res.status(400).json({
-      error: 'El alumno destinatario dispone de más de un inmueble con almacén. Debes especificar a qué inmueble deben enviarse las existencias.'
-    });
-  }
-
-  const selectedRecipientNave = recipientNaves.find(n => String(n.id) === String(destinationNaveId)) || recipientNaves[0];
-  const targetRecipientNaveId = selectedRecipientNave ? selectedRecipientNave.id : (destinationNaveId || 'default_nave');
-
-  if (selectedRecipientNave) {
-    const recipientTargetNaveIdStr = String(selectedRecipientNave.id || selectedRecipientNave.propertyId);
-    const recipientNaveForklift = (db.purchasedVehicles || []).find(v =>
-      String(v.studentId) === String(recipientId) &&
-      v.vehicleType === 'carretilla_elevadora' &&
-      (
-        String(v.assignedPropertyId) === recipientTargetNaveIdStr ||
-        (recipientNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
-      )
-    );
-
-    if (!recipientNaveForklift) {
-      const naveName = selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén';
-      const recipientUser = (db.users || []).find((u: any) => String(u.id) === String(recipientId));
-      return res.status(400).json({
-        error: `Operación rechazada: El alumno destinatario (${recipientUser?.name || 'Destinatario'}) no tiene asignada ninguna carretilla elevadora contrapesada al inmueble de destino "${naveName}". Para poder recibir existencias en esa ubicación, debe disponer de una carretilla elevadora asignada a ese inmueble.`
-      });
-    }
-  }
-
-  // Validate transport method
-  let transportFee = 0;
-  let fuelExpense = 0;
-  let distanceKm = 0;
-  let fuelMovId = '';
-  let transMovId = '';
-
-  if (transportMethod === 'propio') {
-    const hasTruck = (db.purchasedVehicles || []).some(
-      v => v.studentId === senderId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
-    );
-    const hasTruckDriver = (db.hiredEmployees || []).some(
-      e => e.studentId === senderId && (e.role === 'camionero' || (e.role as string) === 'conductor')
-    );
-    if (!hasTruck || !hasTruckDriver) {
-      return res.status(400).json({
-        error: 'Para realizar el envío con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.'
-      });
+    // POST-COMMIT CACHE REFRESH (PostgreSQL -> cache)
+    const db = readDb();
+    const sender = db.users?.find(u => u.id === senderId);
+    if (sender) {
+      sender.balance = result.newBalance;
     }
 
-    // Real road distance calculation between sender and recipient warehouses/locations in Spain
-    const senderLoc = selectedSenderNave || sender;
-    const recipientLoc = selectedRecipientNave || recipient;
-    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
-
-    // No transport service fee, but supply expense for fuel based on distance
-    fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
-
-    if (sender.balance < fuelExpense) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${sender.balance.toFixed(2)} €.`
-      });
-    }
-
-    // Deduct fuel supply expense from sender bank account
-    sender.balance = Math.round((sender.balance - fuelExpense) * 100) / 100;
-    syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level).catch(e => console.error(e));
-
-    fuelMovId = generateId('mov');
+    if (!db.transfers) db.transfers = [];
     const nowIso = new Date().toISOString();
-    db.transfers.unshift({
-      id: fuelMovId,
-      senderId: sender.id,
-      senderName: sender.name,
-      senderAccount: sender.accountNumber,
-      receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
-      receiverName: 'Estación de servicio - suministro de combustible',
-      receiverAccount: 'ES00-0000-0000-0000-GASO',
-      amount: fuelExpense,
-      concept: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
-      timestamp: nowIso
-    });
-    syncMovimientoToSupabase(fuelMovId, sender.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`).catch(e => console.error(e));
-  } else if (transportMethod === 'exterior') {
-    // Unified Logistics Fee: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
-    // Incomplete pallets charged as full pallets (Math.ceil)
-    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
-    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-
-    const senderLoc = selectedSenderNave || sender;
-    const recipientLoc = selectedRecipientNave || recipient;
-    distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
-
-    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
-    if (sender.balance < transportFee) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${sender.balance.toFixed(2)} €.`
+    if (result.fuelMovId && result.fuelExpense > 0) {
+      db.transfers.unshift({
+        id: result.fuelMovId,
+        senderId: senderId,
+        senderName: sender?.name || senderId,
+        senderAccount: sender?.accountNumber || '',
+        receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+        receiverName: 'Estación de servicio - suministro de combustible',
+        receiverAccount: 'ES00-0000-0000-0000-GASO',
+        amount: result.fuelExpense,
+        concept: `Gasto de Suministro - Combustible/Gasolina Camión (${result.distanceKm} km a ${result.recipientId})`,
+        timestamp: nowIso
+      });
+    } else if (result.transMovId && result.transportFee > 0) {
+      const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+      const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+      const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+      db.transfers.unshift({
+        id: result.transMovId,
+        senderId: senderId,
+        senderName: sender?.name || senderId,
+        senderAccount: sender?.accountNumber || '',
+        receiverId: 'LOGISTICA_EXTERIOR',
+        receiverName: 'Servicio exterior de transporte',
+        receiverAccount: 'ES00-0000-0000-0000-LOGI',
+        amount: result.transportFee,
+        concept: `Servicio exterior de transporte - Envío de existencias a ${result.recipientId} (${chargedPallets} pal. × ${result.distanceKm} km a 0,38 €/pal-km)`,
+        timestamp: nowIso
       });
     }
-    // Deduct fee from sender bank account
-    sender.balance = Math.round((sender.balance - transportFee) * 100) / 100;
-    syncAccountToSupabase(sender.id, sender.name, sender.balance, sender.username, sender.password, sender.accountNumber, sender.role, sender.level).catch(e => console.error(e));
 
-    transMovId = generateId('mov');
-    const nowIso = new Date().toISOString();
-    db.transfers.unshift({
-      id: transMovId,
-      senderId: sender.id,
-      senderName: sender.name,
-      senderAccount: sender.accountNumber,
-      receiverId: 'LOGISTICA_EXTERIOR',
-      receiverName: 'Servicio exterior de transporte',
-      receiverAccount: 'ES00-0000-0000-0000-LOGI',
-      amount: transportFee,
-      concept: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`,
-      timestamp: nowIso
+    if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+    const idxSender = db.rawMaterialInventories.findIndex(i => i.studentId === senderId);
+    if (idxSender >= 0) db.rawMaterialInventories[idxSender] = result.updatedInventory;
+    else db.rawMaterialInventories.push(result.updatedInventory);
+
+    const idxRecipient = db.rawMaterialInventories.findIndex(i => i.studentId === recipientId);
+    if (idxRecipient >= 0) db.rawMaterialInventories[idxRecipient] = result.recipientInventory;
+    else db.rawMaterialInventories.push(result.recipientInventory);
+
+    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+    db.rawMaterialOrders.unshift(result.order);
+    if (result.transportInvoiceOrder) db.rawMaterialOrders.unshift(result.transportInvoiceOrder);
+    if (result.fuelInvoiceOrder) db.rawMaterialOrders.unshift(result.fuelInvoiceOrder);
+
+    const recipient = db.users?.find(u => u.id === recipientId);
+    addNotification(
+      db,
+      recipientId,
+      'Envío de existencias recibido',
+      `Has recibido ${result.qty} unidades de "${result.itemLabel}" enviadas por ${sender?.name || senderId} (${result.transportMethod === 'propio' ? 'Transporte propio del remitente' : 'Servicio exterior de transporte'}).`,
+      'order_approved'
+    );
+
+    addNotification(
+      db,
+      senderId,
+      'Envío de existencias realizado',
+      `Has enviado ${result.qty} unidades de "${result.itemLabel}" a ${recipient?.name || recipientId} correctamente.`,
+      'order_approved'
+    );
+
+    writeDb(db);
+
+    return res.json({
+      success: true,
+      message: result.message,
+      updatedInventory: result.updatedInventory,
+      newBalance: result.newBalance,
+      order: result.order
     });
-    syncMovimientoToSupabase(transMovId, sender.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`).catch(e => console.error(e));
+  } catch (err: any) {
+    const status = err.statusCode || err.status || 500;
+    console.error('[transfer-stock error]:', err);
+    return res.status(status).json({ error: err.message || 'Error en la transferencia de existencias.' });
   }
-
-  // Deduct stock from sender and add to recipient
-  const senderInv = checkAndCalculateProduction(db, senderId);
-  const recipientInv = checkAndCalculateProduction(db, recipientId);
-
-  if (!senderInv.naveInventories) senderInv.naveInventories = {};
-  if (!recipientInv.naveInventories) recipientInv.naveInventories = {};
-
-  if (!senderInv.naveInventories[targetSenderNaveId]) {
-    senderInv.naveInventories[targetSenderNaveId] = {
-      ironKg: senderNaves.length <= 1 ? (senderInv.ironKg || 0) : 0,
-      metalKg: senderNaves.length <= 1 ? (senderInv.metalKg || 0) : 0,
-      plasticKg: senderNaves.length <= 1 ? (senderInv.plasticKg || 0) : 0,
-      epoxiKg: senderNaves.length <= 1 ? (senderInv.epoxiKg || 0) : 0,
-      producedRodsUnits: senderNaves.length <= 1 ? (senderInv.producedRodsUnits || 0) : 0,
-      producedStarRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedStarRodsUnits || (senderInv as any).producedIronRodsUnits || 0) : 0,
-      producedFlatRodsUnits: senderNaves.length <= 1 ? ((senderInv as any).producedFlatRodsUnits || (senderInv as any).producedMetalRodsUnits || 0) : 0,
-      producedScrewdriversUnits: senderNaves.length <= 1 ? (senderInv.producedScrewdriversUnits || 0) : 0,
-      starScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
-      flatScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0,
-      ironScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0) : 0,
-      metalScrewdriversUnits: senderNaves.length <= 1 ? ((senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0) : 0
-    };
-  }
-
-  const senderNaveInv = senderInv.naveInventories[targetSenderNaveId];
-
-  const getRecipientNaveInv = () => {
-    if (!recipientInv.naveInventories[targetRecipientNaveId]) {
-      recipientInv.naveInventories[targetRecipientNaveId] = {
-        ironKg: 0,
-        metalKg: 0,
-        plasticKg: 0,
-        epoxiKg: 0,
-        producedRodsUnits: 0,
-        producedStarRodsUnits: 0,
-        producedFlatRodsUnits: 0,
-        producedScrewdriversUnits: 0,
-        starScrewdriversUnits: 0,
-        flatScrewdriversUnits: 0,
-        ironScrewdriversUnits: 0,
-        metalScrewdriversUnits: 0
-      };
-    }
-    return recipientInv.naveInventories[targetRecipientNaveId];
-  };
-
-  const recipientNaveInv = getRecipientNaveInv();
-  const originNaveName = selectedSenderNave ? (selectedSenderNave.propertyTitle || selectedSenderNave.title || 'Almacén de origen') : 'Almacén de origen';
-
-  let itemLabel = itemKey;
-
-  if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
-    itemLabel = 'Varillas con punta estrella';
-    const currentStock = (senderNaveInv as any).producedStarRodsUnits ?? (senderNaveInv as any).producedIronRodsUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de varillas con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
-    }
-    (senderNaveInv as any).producedStarRodsUnits = Math.max(0, currentStock - qty);
-    (senderNaveInv as any).producedIronRodsUnits = Math.max(0, currentStock - qty);
-    senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
-
-    (recipientNaveInv as any).producedStarRodsUnits = ((recipientNaveInv as any).producedStarRodsUnits || 0) + qty;
-    (recipientNaveInv as any).producedIronRodsUnits = ((recipientNaveInv as any).producedIronRodsUnits || 0) + qty;
-    recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
-  } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
-    itemLabel = 'Varillas con punta plana';
-    const currentStock = (senderNaveInv as any).producedFlatRodsUnits ?? (senderNaveInv as any).producedMetalRodsUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de varillas con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
-    }
-    (senderNaveInv as any).producedFlatRodsUnits = Math.max(0, currentStock - qty);
-    (senderNaveInv as any).producedMetalRodsUnits = Math.max(0, currentStock - qty);
-    senderNaveInv.producedRodsUnits = Math.max(0, (senderNaveInv.producedRodsUnits || 0) - qty);
-
-    (recipientNaveInv as any).producedFlatRodsUnits = ((recipientNaveInv as any).producedFlatRodsUnits || 0) + qty;
-    (recipientNaveInv as any).producedMetalRodsUnits = ((recipientNaveInv as any).producedMetalRodsUnits || 0) + qty;
-    recipientNaveInv.producedRodsUnits = (recipientNaveInv.producedRodsUnits || 0) + qty;
-  } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro' || itemKey === 'ironScrewdriversUnits') {
-    itemLabel = 'Destornilladores con punta estrella';
-    const currentStock = (senderNaveInv as any).starScrewdriversUnits ?? (senderNaveInv as any).ironScrewdriversUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta estrella en ${originNaveName} (${currentStock} u. disponibles).` });
-    }
-    (senderNaveInv as any).starScrewdriversUnits = Math.max(0, currentStock - qty);
-    (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, currentStock - qty);
-    senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
-
-    (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
-    (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
-    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
-  } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal' || itemKey === 'metalScrewdriversUnits') {
-    itemLabel = 'Destornilladores con punta plana';
-    const currentStock = (senderNaveInv as any).flatScrewdriversUnits ?? (senderNaveInv as any).metalScrewdriversUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de destornilladores con punta plana en ${originNaveName} (${currentStock} u. disponibles).` });
-    }
-    (senderNaveInv as any).flatScrewdriversUnits = Math.max(0, currentStock - qty);
-    (senderNaveInv as any).metalScrewdriversUnits = Math.max(0, currentStock - qty);
-    senderNaveInv.producedScrewdriversUnits = Math.max(0, (senderNaveInv.producedScrewdriversUnits || 0) - qty);
-
-    (recipientNaveInv as any).flatScrewdriversUnits = ((recipientNaveInv as any).flatScrewdriversUnits || 0) + qty;
-    (recipientNaveInv as any).metalScrewdriversUnits = ((recipientNaveInv as any).metalScrewdriversUnits || 0) + qty;
-    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
-  } else if (itemKey === 'productos_ensamblados' || itemKey === 'producedScrewdriversUnits') {
-    itemLabel = 'Productos ensamblados (destornilladores)';
-    const currentStock = (senderNaveInv as any).producedScrewdriversUnits || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de productos ensamblados en ${originNaveName} (${currentStock} u. disponibles).` });
-    }
-    senderNaveInv.producedScrewdriversUnits = Math.max(0, currentStock - qty);
-    (senderNaveInv as any).starScrewdriversUnits = Math.max(0, ((senderNaveInv as any).starScrewdriversUnits || 0) - qty);
-    (senderNaveInv as any).ironScrewdriversUnits = Math.max(0, ((senderNaveInv as any).ironScrewdriversUnits || 0) - qty);
-
-    recipientNaveInv.producedScrewdriversUnits = (recipientNaveInv.producedScrewdriversUnits || 0) + qty;
-    (recipientNaveInv as any).starScrewdriversUnits = ((recipientNaveInv as any).starScrewdriversUnits || 0) + qty;
-    (recipientNaveInv as any).ironScrewdriversUnits = ((recipientNaveInv as any).ironScrewdriversUnits || 0) + qty;
-  } else if (itemKey === 'ironKg') {
-    itemLabel = 'Fragmentos de hierro (kg)';
-    const currentStock = (senderNaveInv as any).ironKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de fragmentos de hierro en ${originNaveName} (${currentStock} kg disponibles).` });
-    }
-    senderNaveInv.ironKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
-    recipientNaveInv.ironKg = Math.round(((recipientNaveInv.ironKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'metalKg') {
-    itemLabel = 'Fragmentos de metal (kg)';
-    const currentStock = (senderNaveInv as any).metalKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de fragmentos de metal en ${originNaveName} (${currentStock} kg disponibles).` });
-    }
-    senderNaveInv.metalKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
-    recipientNaveInv.metalKg = Math.round(((recipientNaveInv.metalKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'plasticKg') {
-    itemLabel = 'Pellets de plástico (kg)';
-    const currentStock = (senderNaveInv as any).plasticKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de pellets de plástico en ${originNaveName} (${currentStock} kg disponibles).` });
-    }
-    senderNaveInv.plasticKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
-    recipientNaveInv.plasticKg = Math.round(((recipientNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'epoxiKg') {
-    itemLabel = 'Pegamento epoxi (kg)';
-    const currentStock = (senderNaveInv as any).epoxiKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de pegamento epoxi en ${originNaveName} (${currentStock} kg disponibles).` });
-    }
-    senderNaveInv.epoxiKg = Math.max(0, Math.round((currentStock - qty) * 1000) / 1000);
-    recipientNaveInv.epoxiKg = Math.round(((recipientNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
-  } else {
-    return res.status(400).json({ error: 'Tipo de existencia no reconocido.' });
-  }
-
-  recalculateTotalInventory(senderInv);
-  recalculateTotalInventory(recipientInv);
-
-  senderInv.updatedAt = new Date().toISOString();
-  recipientInv.updatedAt = new Date().toISOString();
-
-  syncInventoryToSupabase(senderInv, sender.name).catch(e => console.error(e));
-  syncInventoryToSupabase(recipientInv, recipient.name).catch(e => console.error(e));
-
-  // Record transfer in rawMaterialOrders so it reflects in Market Operations History
-  const orderId = generateId('rmord');
-  const nowIso = new Date().toISOString();
-
-  let materialType: 'hierro' | 'metal' | 'plastico' | 'epoxi' | 'producto_final' = 'producto_final';
-  if (itemKey === 'ironKg') materialType = 'hierro';
-  else if (itemKey === 'metalKg') materialType = 'metal';
-  else if (itemKey === 'plasticKg') materialType = 'plastico';
-  else if (itemKey === 'epoxiKg') materialType = 'epoxi';
-
-  const transferOrder: RawMaterialOrder = {
-    id: orderId,
-    studentId: recipient.id,
-    studentName: recipient.name,
-    buyerLevel: recipient.level || 1,
-    sellerId: sender.id,
-    sellerName: sender.name,
-    sellerLevel: sender.level || 1,
-    announcementId: `tr-${Date.now()}`,
-    materialType,
-    materialTitle: itemLabel,
-    quantity: qty,
-    unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
-    totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-    basePrice: 0,
-    discountPercentage: 0,
-    discountAmount: 0,
-    insuranceFee: 0,
-    hasInsurance: false,
-    ivaAmount: 0,
-    transportCost: 0,
-    transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
-    totalAmount: 0,
-    needsTransport: transportMethod === 'exterior',
-    deliveryAddress: selectedRecipientNave ? `${selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén'}, ${selectedRecipientNave.location || selectedRecipientNave.direccion || 'Polígono Industrial'}` : 'Almacén del destinatario',
-    destinationNaveId: targetRecipientNaveId,
-    status: 'entregado',
-    requestedAt: nowIso,
-    approvedAt: nowIso,
-    deliveredAt: nowIso,
-    inventoryCredited: true,
-    items: [{
-      announcementId: `tr-${Date.now()}`,
-      materialType,
-      materialTitle: itemLabel,
-      quantity: qty,
-      unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
-      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-      basePrice: 0
-    }],
-    lastTurnUserId: sender.id,
-    negotiationHistory: [{
-      id: generateId('neg'),
-      authorId: sender.id,
-      authorName: sender.name,
-      timestamp: nowIso,
-      action: 'propuesta_inicial',
-      quantity: qty,
-      pricePerUnit: 0,
-      discountPercentage: 0,
-      insuranceFee: 0,
-      transportCost: 0,
-      transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
-      totalAmount: 0,
-      note: `Envío directo de existencias entre alumnos (${transportMethod === 'propio' ? 'Transporte propio' : 'Servicio exterior'})`
-    }]
-  };
-
-  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-  db.rawMaterialOrders.unshift(transferOrder);
-  syncRawMaterialOrderToSupabase(transferOrder).catch(e => console.error(e));
-
-  if (transportMethod === 'exterior' && transportFee > 0 && transMovId) {
-    const recipientAcqs = (db.acquisitions || []).filter(a => String(a.studentId) === String(recipient.id));
-    const recipientProp = recipientAcqs[0];
-    const recipientAddress = recipientProp 
-      ? (recipientProp.location || recipientProp.propertyTitle || 'Almacén principal del destinatario')
-      : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
-
-    const basePrice = Math.round((transportFee / 1.21) * 100) / 100;
-    const ivaAmount = Math.round((transportFee - basePrice) * 100) / 100;
-    const transportInvoiceOrder: RawMaterialOrder = {
-      id: `rmord_trans_${transMovId}`,
-      studentId: sender.id,
-      studentName: sender.name,
-      buyerLevel: sender.level || 1,
-      sellerId: 'LOGISTICA_EXTERIOR',
-      sellerName: 'Servicio exterior de transporte',
-      sellerLevel: 'official',
-      announcementId: `trans-inv-${transMovId}`,
-      materialType,
-      materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
-      quantity: 1,
-      unitWeightKg: 0,
-      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-      basePrice,
-      discountPercentage: 0,
-      discountAmount: 0,
-      insuranceFee: 0,
-      hasInsurance: false,
-      ivaAmount,
-      transportCost: 0,
-      transportMethod: 'vendedor_envio',
-      totalAmount: transportFee,
-      needsTransport: false,
-      deliveryAddress: recipientAddress,
-      status: 'facturado',
-      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      requestedAt: nowIso,
-      approvedAt: nowIso,
-      deliveredAt: nowIso,
-      invoicedAt: nowIso,
-      inventoryCredited: true,
-      items: [{
-        announcementId: `trans-inv-${transMovId}`,
-        materialType,
-        materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
-        quantity: 1,
-        unitWeightKg: 0,
-        totalKg: 0,
-        basePrice,
-        subtotal: basePrice
-      }],
-      lastTurnUserId: sender.id,
-      negotiationHistory: [{
-        id: `neg_${transMovId}`,
-        authorId: 'LOGISTICA_EXTERIOR',
-        authorName: 'Servicio exterior de transporte',
-        timestamp: nowIso,
-        action: 'propuesta_inicial',
-        quantity: 1,
-        pricePerUnit: basePrice,
-        discountPercentage: 0,
-        insuranceFee: 0,
-        transportCost: 0,
-        transportMethod: 'vendedor_envio',
-        totalAmount: transportFee,
-        note: `Factura del Servicio exterior de transporte por envío de existencias a ${recipient.name}`
-      }]
-    };
-    db.rawMaterialOrders.unshift(transportInvoiceOrder);
-    syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
-  } else if (transportMethod === 'propio' && fuelExpense > 0 && fuelMovId) {
-    const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
-    const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
-    const fuelInvoiceOrder: RawMaterialOrder = {
-      id: `rmord_trans_${fuelMovId}`,
-      studentId: sender.id,
-      studentName: sender.name,
-      buyerLevel: sender.level || 1,
-      sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
-      sellerName: 'Estación de servicio - suministro de combustible',
-      sellerLevel: 'official',
-      announcementId: `gaso-inv-${fuelMovId}`,
-      materialType: 'combustible',
-      materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
-      quantity: 1,
-      unitWeightKg: 0,
-      totalKg: 0,
-      basePrice: basePricePropio,
-      discountPercentage: 0,
-      discountAmount: 0,
-      insuranceFee: 0,
-      hasInsurance: false,
-      ivaAmount: ivaAmountPropio,
-      transportCost: 0,
-      transportMethod: 'vendedor_envio',
-      totalAmount: fuelExpense,
-      needsTransport: false,
-      deliveryAddress: 'Inmueble de destino del alumno',
-      status: 'facturado',
-      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      requestedAt: nowIso,
-      approvedAt: nowIso,
-      deliveredAt: nowIso,
-      invoicedAt: nowIso,
-      inventoryCredited: true,
-      items: [{
-        announcementId: `gaso-inv-${fuelMovId}`,
-        materialType: 'combustible',
-        materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
-        quantity: 1,
-        unitWeightKg: 0,
-        totalKg: 0,
-        basePrice: basePricePropio,
-        subtotal: basePricePropio
-      }],
-      lastTurnUserId: sender.id,
-      negotiationHistory: [{
-        id: `neg_${fuelMovId}`,
-        authorId: 'SUMINISTROS_ESTACION_SERVICIO',
-        authorName: 'Estación de servicio - suministro de combustible',
-        timestamp: nowIso,
-        action: 'propuesta_inicial',
-        quantity: 1,
-        pricePerUnit: basePricePropio,
-        discountPercentage: 0,
-        insuranceFee: 0,
-        transportCost: 0,
-        transportMethod: 'vendedor_envio',
-        totalAmount: fuelExpense,
-        note: `Factura de suministro de combustible camión (${distanceKm} km a ${recipient.name})`
-      }]
-    };
-    db.rawMaterialOrders.unshift(fuelInvoiceOrder);
-    syncRawMaterialOrderToSupabase(fuelInvoiceOrder).catch(e => console.error(e));
-  }
-
-  addNotification(
-    db,
-    recipientId,
-    'Envío de existencias recibido',
-    `Has recibido ${qty} unidades de "${itemLabel}" enviadas por ${sender.name} (${transportMethod === 'propio' ? 'Transporte propio del remitente' : 'Servicio exterior de transporte'}).`,
-    'order_approved'
-  );
-
-  addNotification(
-    db,
-    senderId,
-    'Envío de existencias realizado',
-    `Has enviado ${qty} unidades de "${itemLabel}" a ${recipient.name} correctamente.`,
-    'order_approved'
-  );
-
-  writeDb(db);
-
-  const transferSuccessMessage = transportMethod === 'propio'
-    ? `Envío de ${qty} unidades de ${itemLabel} a ${recipient.name} realizado con éxito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
-    : `Envío de ${qty} unidades de ${itemLabel} a ${recipient.name} realizado con éxito. Se han adeudado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
-
-  res.json({
-    success: true,
-    message: transferSuccessMessage,
-    updatedInventory: senderInv,
-    newBalance: sender.balance,
-    order: transferOrder
-  });
 });
 
 // Inter-warehouse / Inter-nave stock transfer endpoint
-app.post('/api/inventory/transfer-nave-stock', (req, res) => {
+app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
   const { studentId, fromNaveId, toNaveId, itemKey, quantity, transportMethod } = req.body;
   const qty = Number(quantity);
 
@@ -14270,387 +18928,559 @@ app.post('/api/inventory/transfer-nave-stock', (req, res) => {
     return res.status(400).json({ error: 'La nave de origen y la nave de destino deben ser diferentes.' });
   }
 
-  const db = readDb();
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Usuario no encontrado.' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `transfer_nave_${studentId}_${fromNaveId}_${toNaveId}_${itemKey}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  const studentNaves = (db.acquisitions || []).filter(a =>
-    String(a.studentId) === String(studentId) &&
-    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-  );
-  const toNave = studentNaves.find(a => String(a.id) === String(toNaveId)) || (db.acquisitions || []).find(a => String(a.id) === String(toNaveId));
-  const toNaveTargetIdStr = String(toNaveId);
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
+      }
 
-  const toNaveForklift = (db.purchasedVehicles || []).find(v =>
-    String(v.studentId) === String(studentId) &&
-    v.vehicleType === 'carretilla_elevadora' &&
-    (
-      String(v.assignedPropertyId) === toNaveTargetIdStr ||
-      (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
-    )
-  );
+      return await withPostgresTransaction(async (client) => {
+        const db = readDb();
+        const student = db.users.find(u => u.id === studentId);
+        if (!student) {
+          const err: any = new Error('Usuario no encontrado.');
+          err.statusCode = 404;
+          throw err;
+        }
 
-  if (!toNaveForklift) {
-    const naveName = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
-    return res.status(400).json({
-      error: `Operación rechazada: El almacén de destino "${naveName}" no tiene asignada ninguna carretilla elevadora contrapesada. Para poder recibir existencias en un traslado entre almacenes propios, la nave de destino debe disponer de una carretilla elevadora asignada.`
+        const studentNaves = (db.acquisitions || []).filter(a =>
+          String(a.studentId) === String(studentId) &&
+          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        );
+        const toNave = studentNaves.find(a => String(a.id) === String(toNaveId)) || (db.acquisitions || []).find(a => String(a.id) === String(toNaveId));
+        const toNaveTargetIdStr = String(toNaveId);
+
+        const hasForkliftLocal = (db.purchasedVehicles || []).some(v =>
+          String(v.studentId) === String(studentId) &&
+          v.vehicleType === 'carretilla_elevadora' &&
+          (
+            String(v.assignedPropertyId) === toNaveTargetIdStr ||
+            (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+          )
+        );
+
+        let hasForkliftDb = false;
+        try {
+          const fRes = await client.query(
+            `SELECT id FROM vehiculos_comprados 
+             WHERE alumno_id = $1 AND vehiculo_tipo = 'carretilla_elevadora' AND (
+               propiedad_asignada_id = $2 OR ($3 = 1 AND almacen_asignado_index IS NOT NULL)
+             ) LIMIT 1`,
+            [studentId, toNaveTargetIdStr, studentNaves.length]
+          );
+          hasForkliftDb = fRes.rows.length > 0;
+        } catch (e) {
+          // fallback
+        }
+
+        if (!hasForkliftLocal && !hasForkliftDb) {
+          const naveName = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
+          const err: any = new Error(`Operación rechazada: El almacén de destino "${naveName}" no tiene asignada ninguna carretilla elevadora contrapesada. Para poder recibir existencias en un traslado entre almacenes propios, la nave de destino debe disponer de una carretilla elevadora asignada.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Validate transport method
+        let transportFee = 0;
+        let fuelExpense = 0;
+        let distanceKm = 0;
+        const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
+        distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
+
+        if (transportMethod === 'propio') {
+          const hasTruck = (db.purchasedVehicles || []).some(
+            v => v.studentId === studentId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
+          );
+          const hasTruckDriver = (db.hiredEmployees || []).some(
+            e => e.studentId === studentId && (e.role === 'camionero' || (e.role as string) === 'conductor')
+          );
+          if (!hasTruck || !hasTruckDriver) {
+            const err: any = new Error('Para realizar el traslado con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+        } else if (transportMethod === 'exterior') {
+          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+          const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+          const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+          transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+        }
+
+        // 1. LOCK INVENTORY ROW FOR STUDENT
+        await client.query(
+          `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+           VALUES ($1, $2, '{}'::jsonb)
+           ON CONFLICT (alumno_id) DO NOTHING`,
+          [studentId, student.name || 'Estudiante']
+        );
+
+        const invRes = await client.query(
+          `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+          [studentId]
+        );
+        if (!invRes || invRes.rows.length === 0) {
+          const err: any = new Error(`Inventario no encontrado para el alumno ${studentId}`);
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const inv = parseInventoryRow(invRes.rows[0]);
+
+        // 2. FINANCIAL DEDUCTION (IF ANY)
+        let newStudentBalance = student.balance;
+        const expense = transportMethod === 'propio' ? fuelExpense : transportFee;
+        let movId = '';
+
+        if (expense > 0) {
+          await client.query(
+            `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (id) DO NOTHING`,
+            [student.id, student.name, student.balance || 0, student.username, student.password, student.accountNumber, student.role, student.level]
+          );
+
+          const accRes = await client.query(
+            `SELECT id, alumno, saldo, account_number FROM cuentas WHERE id = $1 FOR UPDATE`,
+            [studentId]
+          );
+          if (!accRes || accRes.rows.length === 0) {
+            const err: any = new Error('Cuenta corriente del alumno no encontrada.');
+            err.statusCode = 404;
+            throw err;
+          }
+          const accountRow = accRes.rows[0];
+          const currentBalance = Number(accountRow.saldo) || 0;
+
+          if (currentBalance < expense) {
+            if (transportMethod === 'propio') {
+              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
+              err.statusCode = 400;
+              throw err;
+            } else {
+              const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+              const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+              const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
+              err.statusCode = 400;
+              throw err;
+            }
+          }
+
+          newStudentBalance = Math.round((currentBalance - expense) * 100) / 100;
+          await client.query(`UPDATE cuentas SET saldo = $1 WHERE id = $2`, [newStudentBalance, studentId]);
+
+          movId = generateId('mov');
+          const nowIso = new Date().toISOString();
+
+          if (transportMethod === 'propio') {
+            const concept = `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`;
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [movId, student.id, fuelExpense, nowIso, concept, student.id, student.name, student.accountNumber, 'SUMINISTROS_ESTACION_SERVICIO', 'Estación de servicio - suministro de combustible', 'ES00-0000-0000-0000-GASO']
+            );
+          } else if (transportMethod === 'exterior') {
+            const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+            const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+            const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+            const concept = `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`;
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [movId, student.id, transportFee, nowIso, concept, student.id, student.name, student.accountNumber, 'LOGISTICA_EXTERIOR', 'Servicio exterior de transporte', 'ES00-0000-0000-0000-LOGI']
+            );
+          }
+        }
+
+        // 3. INVENTORY STOCK TRANSFER VALIDATION & UPDATE
+        if (!inv.naveInventories) inv.naveInventories = {};
+
+        if (!inv.naveInventories[fromNaveId]) {
+          const err: any = new Error('No se encontraron los datos de inventario para la nave de origen.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (!inv.naveInventories[toNaveId]) {
+          inv.naveInventories[toNaveId] = {
+            ironKg: 0,
+            metalKg: 0,
+            plasticKg: 0,
+            epoxiKg: 0,
+            producedRodsUnits: 0,
+            producedStarRodsUnits: 0,
+            producedFlatRodsUnits: 0,
+            producedScrewdriversUnits: 0,
+            starScrewdriversUnits: 0,
+            flatScrewdriversUnits: 0,
+            ironScrewdriversUnits: 0,
+            metalScrewdriversUnits: 0
+          };
+        }
+
+        const fromNaveInv = inv.naveInventories[fromNaveId];
+        const toNaveInv = inv.naveInventories[toNaveId];
+
+        let itemLabel = itemKey;
+
+        if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
+          itemLabel = 'Varillas con Punta Estrella';
+          const currentStock = (fromNaveInv as any).producedStarRodsUnits ?? (fromNaveInv as any).producedIronRodsUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente en la nave de origen (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (fromNaveInv as any).producedStarRodsUnits = currentStock - qty;
+          (fromNaveInv as any).producedIronRodsUnits = currentStock - qty;
+          fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
+
+          (toNaveInv as any).producedStarRodsUnits = ((toNaveInv as any).producedStarRodsUnits || 0) + qty;
+          (toNaveInv as any).producedIronRodsUnits = ((toNaveInv as any).producedIronRodsUnits || 0) + qty;
+          toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
+        } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
+          itemLabel = 'Varillas con Punta Plana';
+          const currentStock = (fromNaveInv as any).producedFlatRodsUnits ?? (fromNaveInv as any).producedMetalRodsUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente en la nave de origen (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (fromNaveInv as any).producedFlatRodsUnits = currentStock - qty;
+          (fromNaveInv as any).producedMetalRodsUnits = currentStock - qty;
+          fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
+
+          (toNaveInv as any).producedFlatRodsUnits = ((toNaveInv as any).producedFlatRodsUnits || 0) + qty;
+          (toNaveInv as any).producedMetalRodsUnits = ((toNaveInv as any).producedMetalRodsUnits || 0) + qty;
+          toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
+        } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro' || itemKey === 'ironScrewdriversUnits') {
+          itemLabel = 'Destornilladores con Punta Estrella';
+          const currentStock = (fromNaveInv as any).starScrewdriversUnits ?? (fromNaveInv as any).ironScrewdriversUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente en la nave de origen (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (fromNaveInv as any).starScrewdriversUnits = currentStock - qty;
+          (fromNaveInv as any).ironScrewdriversUnits = currentStock - qty;
+          fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
+
+          (toNaveInv as any).starScrewdriversUnits = ((toNaveInv as any).starScrewdriversUnits || 0) + qty;
+          (toNaveInv as any).ironScrewdriversUnits = ((toNaveInv as any).ironScrewdriversUnits || 0) + qty;
+          toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal' || itemKey === 'metalScrewdriversUnits') {
+          itemLabel = 'Destornilladores con Punta Plana';
+          const currentStock = (fromNaveInv as any).flatScrewdriversUnits ?? (fromNaveInv as any).metalScrewdriversUnits ?? 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente en la nave de origen (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          (fromNaveInv as any).flatScrewdriversUnits = currentStock - qty;
+          (fromNaveInv as any).metalScrewdriversUnits = currentStock - qty;
+          fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
+
+          (toNaveInv as any).flatScrewdriversUnits = ((toNaveInv as any).flatScrewdriversUnits || 0) + qty;
+          (toNaveInv as any).metalScrewdriversUnits = ((toNaveInv as any).metalScrewdriversUnits || 0) + qty;
+          toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'productos_ensamblados' || itemKey === 'producedScrewdriversUnits') {
+          itemLabel = 'Productos ensamblados (destornilladores)';
+          const currentStock = (fromNaveInv as any).producedScrewdriversUnits || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de productos ensamblados en la nave de origen (${currentStock} u. disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          fromNaveInv.producedScrewdriversUnits = Math.max(0, currentStock - qty);
+          (fromNaveInv as any).starScrewdriversUnits = Math.max(0, ((fromNaveInv as any).starScrewdriversUnits || 0) - qty);
+          (fromNaveInv as any).ironScrewdriversUnits = Math.max(0, ((fromNaveInv as any).ironScrewdriversUnits || 0) - qty);
+
+          toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
+          (toNaveInv as any).starScrewdriversUnits = ((toNaveInv as any).starScrewdriversUnits || 0) + qty;
+          (toNaveInv as any).ironScrewdriversUnits = ((toNaveInv as any).ironScrewdriversUnits || 0) + qty;
+        } else if (itemKey === 'ironKg') {
+          itemLabel = 'Fragmentos de Hierro (Kg)';
+          const currentStock = fromNaveInv.ironKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de Fragmentos de Hierro en la nave de origen (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          fromNaveInv.ironKg = Math.round((currentStock - qty) * 1000) / 1000;
+          toNaveInv.ironKg = Math.round(((toNaveInv.ironKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'metalKg') {
+          itemLabel = 'Fragmentos de Metal (Kg)';
+          const currentStock = fromNaveInv.metalKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de Fragmentos de Metal en la nave de origen (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          fromNaveInv.metalKg = Math.round((currentStock - qty) * 1000) / 1000;
+          toNaveInv.metalKg = Math.round(((toNaveInv.metalKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'plasticKg') {
+          itemLabel = 'Pellets de Plástico (Kg)';
+          const currentStock = fromNaveInv.plasticKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de Pellets de Plástico en la nave de origen (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          fromNaveInv.plasticKg = Math.round((currentStock - qty) * 1000) / 1000;
+          toNaveInv.plasticKg = Math.round(((toNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
+        } else if (itemKey === 'epoxiKg') {
+          itemLabel = 'Pegamento Epoxi (Kg)';
+          const currentStock = fromNaveInv.epoxiKg || 0;
+          if (currentStock < qty) {
+            const err: any = new Error(`Stock insuficiente de Pegamento Epoxi en la nave de origen (${currentStock} kg disponibles).`);
+            err.statusCode = 400;
+            throw err;
+          }
+          fromNaveInv.epoxiKg = Math.round((currentStock - qty) * 1000) / 1000;
+          toNaveInv.epoxiKg = Math.round(((toNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
+        } else {
+          const err: any = new Error('Tipo de existencia no reconocido.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        recalculateTotalInventory(inv);
+        const nowIso = new Date().toISOString();
+        inv.updatedAt = nowIso;
+
+        await syncInventoryToSupabase(inv, student.name, client);
+
+        // 4. ATOMIC DOCUMENT CREATION (materias_primas_pedidos for invoice)
+        let invoiceOrder: RawMaterialOrder | null = null;
+        const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén de origen') : 'Almacén de origen';
+        const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
+        const toNaveAddress = toNave
+          ? (toNave.location || toNave.propertyTitle || 'Almacén de destino del alumno')
+          : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
+
+        if (transportMethod === 'propio' && fuelExpense > 0 && movId) {
+          const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
+          const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+          invoiceOrder = {
+            id: `rmord_trans_${movId}`,
+            studentId: student.id,
+            studentName: student.name,
+            buyerLevel: student.level || 1,
+            sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+            sellerName: 'Estación de servicio - suministro de combustible',
+            sellerLevel: 'official',
+            announcementId: `gaso-inv-${movId}`,
+            materialType: 'combustible',
+            materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+            quantity: 1,
+            unitWeightKg: 0,
+            totalKg: 0,
+            basePrice: basePricePropio,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            ivaAmount: ivaAmountPropio,
+            transportCost: 0,
+            transportMethod: 'vendedor_envio',
+            totalAmount: fuelExpense,
+            needsTransport: false,
+            deliveryAddress: toNaveAddress,
+            status: 'facturado',
+            invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+            requestedAt: nowIso,
+            approvedAt: nowIso,
+            deliveredAt: nowIso,
+            invoicedAt: nowIso,
+            inventoryCredited: true,
+            items: [{
+              announcementId: `gaso-inv-${movId}`,
+              materialType: 'combustible',
+              materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+              quantity: 1,
+              unitWeightKg: 0,
+              totalKg: 0,
+              basePrice: basePricePropio,
+              subtotal: basePricePropio
+            }],
+            lastTurnUserId: student.id,
+            negotiationHistory: [{
+              id: `neg_${movId}`,
+              authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+              authorName: 'Estación de servicio - suministro de combustible',
+              timestamp: nowIso,
+              action: 'propuesta_inicial',
+              quantity: 1,
+              pricePerUnit: basePricePropio,
+              discountPercentage: 0,
+              insuranceFee: 0,
+              transportCost: 0,
+              transportMethod: 'vendedor_envio',
+              totalAmount: fuelExpense,
+              note: `Factura de Suministro de Combustible Camión (${distanceKm} km entre almacenes)`
+            }]
+          };
+          await syncRawMaterialOrderToSupabase(invoiceOrder, client);
+        } else if (transportMethod === 'exterior' && transportFee > 0 && movId) {
+          const basePriceExterior = Math.round((transportFee / 1.21) * 100) / 100;
+          const ivaAmountExterior = Math.round((transportFee - basePriceExterior) * 100) / 100;
+          invoiceOrder = {
+            id: `rmord_trans_${movId}`,
+            studentId: student.id,
+            studentName: student.name,
+            buyerLevel: student.level || 1,
+            sellerId: 'LOGISTICA_EXTERIOR',
+            sellerName: 'Servicio exterior de transporte',
+            sellerLevel: 'official',
+            announcementId: `trans-inv-${movId}`,
+            materialType: (itemKey as any) || 'transporte',
+            materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
+            quantity: 1,
+            unitWeightKg: 0,
+            totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+            basePrice: basePriceExterior,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            ivaAmount: ivaAmountExterior,
+            transportCost: 0,
+            transportMethod: 'vendedor_envio',
+            totalAmount: transportFee,
+            needsTransport: false,
+            deliveryAddress: toNaveAddress,
+            status: 'facturado',
+            invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+            requestedAt: nowIso,
+            approvedAt: nowIso,
+            deliveredAt: nowIso,
+            invoicedAt: nowIso,
+            inventoryCredited: true,
+            items: [{
+              announcementId: `trans-inv-${movId}`,
+              materialType: (itemKey as any) || 'transporte',
+              materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
+              quantity: 1,
+              unitWeightKg: 0,
+              totalKg: 0,
+              basePrice: basePriceExterior,
+              subtotal: basePriceExterior
+            }],
+            lastTurnUserId: student.id,
+            negotiationHistory: [{
+              id: `neg_${movId}`,
+              authorId: 'LOGISTICA_EXTERIOR',
+              authorName: 'Servicio exterior de transporte',
+              timestamp: nowIso,
+              action: 'propuesta_inicial',
+              quantity: 1,
+              pricePerUnit: basePriceExterior,
+              discountPercentage: 0,
+              insuranceFee: 0,
+              transportCost: 0,
+              transportMethod: 'vendedor_envio',
+              totalAmount: transportFee,
+              note: `Factura del Servicio exterior de transporte por traslado entre almacenes (${fromNaveTitle} -> ${toNaveTitle})`
+            }]
+          };
+          await syncRawMaterialOrderToSupabase(invoiceOrder, client);
+        }
+
+        const transferSuccessMessage = transportMethod === 'propio'
+          ? `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
+          : `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito. Se han adeudado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
+
+        return {
+          success: true,
+          message: transferSuccessMessage,
+          updatedInventory: inv,
+          newBalance: newStudentBalance,
+          invoiceOrder,
+          fuelExpense,
+          transportFee,
+          movId,
+          distanceKm,
+          itemLabel,
+          qty,
+          studentId,
+          transportMethod
+        };
+      }, key);
     });
-  }
 
-  // Validate transport method
-  let transportFee = 0;
-  let fuelExpense = 0;
-  let distanceKm = 0;
-
-  if (transportMethod === 'propio') {
-    const hasTruck = (db.purchasedVehicles || []).some(
-      v => v.studentId === studentId && (v.vehicleType === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion'))
-    );
-    const hasTruckDriver = (db.hiredEmployees || []).some(
-      e => e.studentId === studentId && (e.role === 'camionero' || (e.role as string) === 'conductor')
-    );
-    if (!hasTruck || !hasTruckDriver) {
-      return res.status(400).json({
-        error: 'Para realizar el traslado con transporte propio necesitas disponer de un camión en tu flota y tener contratado un camionero / conductor en tu plantilla.'
-      });
+    // POST-COMMIT CACHE REFRESH (PostgreSQL -> cache)
+    const db = readDb();
+    const student = db.users?.find(u => u.id === studentId);
+    if (student) {
+      student.balance = result.newBalance;
     }
 
-    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
-    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
-    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
-
-    // No transport service fee, but supply expense for fuel based on distance
-    fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
-
-    if (student.balance < fuelExpense) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${student.balance.toFixed(2)} €.`
-      });
-    }
-
-    // Deduct fuel supply expense from student bank account
-    student.balance = Math.round((student.balance - fuelExpense) * 100) / 100;
-    syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
-
-    const movId = generateId('mov');
+    if (!db.transfers) db.transfers = [];
     const nowIso = new Date().toISOString();
-    db.transfers.unshift({
-      id: movId,
-      senderId: student.id,
-      senderName: student.name,
-      senderAccount: student.accountNumber,
-      receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
-      receiverName: 'Estación de servicio - suministro de combustible',
-      receiverAccount: 'ES00-0000-0000-0000-GASO',
-      amount: fuelExpense,
-      concept: `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`,
-      timestamp: nowIso
+    if (result.movId) {
+      if (result.transportMethod === 'propio') {
+        db.transfers.unshift({
+          id: result.movId,
+          senderId: studentId,
+          senderName: student?.name || studentId,
+          senderAccount: student?.accountNumber || '',
+          receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+          receiverName: 'Estación de servicio - suministro de combustible',
+          receiverAccount: 'ES00-0000-0000-0000-GASO',
+          amount: result.fuelExpense,
+          concept: `Gasto de suministro - Combustible/gasolina camión (${result.distanceKm} km entre almacenes)`,
+          timestamp: nowIso
+        });
+      } else if (result.transportMethod === 'exterior') {
+        const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+        const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+        const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+        db.transfers.unshift({
+          id: result.movId,
+          senderId: studentId,
+          senderName: student?.name || studentId,
+          senderAccount: student?.accountNumber || '',
+          receiverId: 'LOGISTICA_EXTERIOR',
+          receiverName: 'Servicio exterior de transporte',
+          receiverAccount: 'ES00-0000-0000-0000-LOGI',
+          amount: result.transportFee,
+          concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${result.distanceKm} km a 0,38 €/pal-km)`,
+          timestamp: nowIso
+        });
+      }
+    }
+
+    if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+    const idxInv = db.rawMaterialInventories.findIndex(i => i.studentId === studentId);
+    if (idxInv >= 0) db.rawMaterialInventories[idxInv] = result.updatedInventory;
+    else db.rawMaterialInventories.push(result.updatedInventory);
+
+    if (result.invoiceOrder) {
+      if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+      db.rawMaterialOrders.unshift(result.invoiceOrder);
+    }
+
+    writeDb(db);
+
+    return res.json({
+      success: true,
+      message: result.message,
+      updatedInventory: result.updatedInventory,
+      newBalance: result.newBalance
     });
-    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', fuelExpense, nowIso, `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`).catch(e => console.error(e));
-
-    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén de origen') : 'Almacén de origen';
-    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
-    const toNaveAddress = toNave
-      ? (toNave.location || toNave.propertyTitle || 'Almacén de destino del alumno')
-      : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
-
-    const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
-    const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
-    const fuelInvoiceOrder: RawMaterialOrder = {
-      id: `rmord_trans_${movId}`,
-      studentId: student.id,
-      studentName: student.name,
-      buyerLevel: student.level || 1,
-      sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
-      sellerName: 'Estación de servicio - suministro de combustible',
-      sellerLevel: 'official',
-      announcementId: `gaso-inv-${movId}`,
-      materialType: 'combustible',
-      materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
-      quantity: 1,
-      unitWeightKg: 0,
-      totalKg: 0,
-      basePrice: basePricePropio,
-      discountPercentage: 0,
-      discountAmount: 0,
-      insuranceFee: 0,
-      hasInsurance: false,
-      ivaAmount: ivaAmountPropio,
-      transportCost: 0,
-      transportMethod: 'vendedor_envio',
-      totalAmount: fuelExpense,
-      needsTransport: false,
-      deliveryAddress: toNaveAddress,
-      status: 'facturado',
-      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      requestedAt: nowIso,
-      approvedAt: nowIso,
-      deliveredAt: nowIso,
-      invoicedAt: nowIso,
-      inventoryCredited: true,
-      items: [{
-        announcementId: `gaso-inv-${movId}`,
-        materialType: 'combustible',
-        materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
-        quantity: 1,
-        unitWeightKg: 0,
-        totalKg: 0,
-        basePrice: basePricePropio,
-        subtotal: basePricePropio
-      }],
-      lastTurnUserId: student.id,
-      negotiationHistory: [{
-        id: `neg_${movId}`,
-        authorId: 'SUMINISTROS_ESTACION_SERVICIO',
-        authorName: 'Estación de servicio - suministro de combustible',
-        timestamp: nowIso,
-        action: 'propuesta_inicial',
-        quantity: 1,
-        pricePerUnit: basePricePropio,
-        discountPercentage: 0,
-        insuranceFee: 0,
-        transportCost: 0,
-        transportMethod: 'vendedor_envio',
-        totalAmount: fuelExpense,
-        note: `Factura de Suministro de Combustible Camión (${distanceKm} km entre almacenes)`
-      }]
-    };
-
-    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-    db.rawMaterialOrders.unshift(fuelInvoiceOrder);
-    syncRawMaterialOrderToSupabase(fuelInvoiceOrder).catch(e => console.error(e));
-  } else if (transportMethod === 'exterior') {
-    const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
-    const toNave = (db.acquisitions || []).find(a => a.id === toNaveId);
-    distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
-
-    // Unified Logistics Fee: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
-    // Incomplete pallets charged as full pallets (Math.ceil)
-    const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-    const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
-    const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-
-    transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
-    if (student.balance < transportFee) {
-      return res.status(400).json({
-        error: `Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${student.balance.toFixed(2)} €.`
-      });
-    }
-    // Deduct fee from student bank account
-    student.balance = Math.round((student.balance - transportFee) * 100) / 100;
-    syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
-
-    const movId = generateId('mov');
-    const nowIso = new Date().toISOString();
-    db.transfers.unshift({
-      id: movId,
-      senderId: student.id,
-      senderName: student.name,
-      senderAccount: student.accountNumber,
-      receiverId: 'LOGISTICA_EXTERIOR',
-      receiverName: 'Servicio exterior de transporte',
-      receiverAccount: 'ES00-0000-0000-0000-LOGI',
-      amount: transportFee,
-      concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`,
-      timestamp: nowIso
-    });
-    syncMovimientoToSupabase(movId, student.id, 'TRANSFER_OUT', transportFee, nowIso, `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`).catch(e => console.error(e));
-
-    const fromNaveTitle = fromNave ? (fromNave.propertyTitle || fromNave.title || 'Almacén de origen') : 'Almacén de origen';
-    const toNaveTitle = toNave ? (toNave.propertyTitle || toNave.title || 'Almacén de destino') : 'Almacén de destino';
-    const toNaveAddress = toNave
-      ? (toNave.location || toNave.propertyTitle || 'Almacén de destino del alumno')
-      : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
-
-    const basePriceExterior = Math.round((transportFee / 1.21) * 100) / 100;
-    const ivaAmountExterior = Math.round((transportFee - basePriceExterior) * 100) / 100;
-    const transportInvoiceOrder: RawMaterialOrder = {
-      id: `rmord_trans_${movId}`,
-      studentId: student.id,
-      studentName: student.name,
-      buyerLevel: student.level || 1,
-      sellerId: 'LOGISTICA_EXTERIOR',
-      sellerName: 'Servicio exterior de transporte',
-      sellerLevel: 'official',
-      announcementId: `trans-inv-${movId}`,
-      materialType: (itemKey as any) || 'transporte',
-      materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
-      quantity: 1,
-      unitWeightKg: 0,
-      totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-      basePrice: basePriceExterior,
-      discountPercentage: 0,
-      discountAmount: 0,
-      insuranceFee: 0,
-      hasInsurance: false,
-      ivaAmount: ivaAmountExterior,
-      transportCost: 0,
-      transportMethod: 'vendedor_envio',
-      totalAmount: transportFee,
-      needsTransport: false,
-      deliveryAddress: toNaveAddress,
-      status: 'facturado',
-      invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      requestedAt: nowIso,
-      approvedAt: nowIso,
-      deliveredAt: nowIso,
-      invoicedAt: nowIso,
-      inventoryCredited: true,
-      items: [{
-        announcementId: `trans-inv-${movId}`,
-        materialType: (itemKey as any) || 'transporte',
-        materialTitle: `Servicio exterior de transporte - traslado de existencias (${fromNaveTitle} -> ${toNaveTitle}) — Dirección del inmueble de destino: ${toNaveAddress}`,
-        quantity: 1,
-        unitWeightKg: 0,
-        totalKg: 0,
-        basePrice: basePriceExterior,
-        subtotal: basePriceExterior
-      }],
-      lastTurnUserId: student.id,
-      negotiationHistory: [{
-        id: `neg_${movId}`,
-        authorId: 'LOGISTICA_EXTERIOR',
-        authorName: 'Servicio exterior de transporte',
-        timestamp: nowIso,
-        action: 'propuesta_inicial',
-        quantity: 1,
-        pricePerUnit: basePriceExterior,
-        discountPercentage: 0,
-        insuranceFee: 0,
-        transportCost: 0,
-        transportMethod: 'vendedor_envio',
-        totalAmount: transportFee,
-        note: `Factura del Servicio exterior de transporte por traslado entre almacenes (${fromNaveTitle} -> ${toNaveTitle})`
-      }]
-    };
-
-    if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-    db.rawMaterialOrders.unshift(transportInvoiceOrder);
-    syncRawMaterialOrderToSupabase(transportInvoiceOrder).catch(e => console.error(e));
+  } catch (err: any) {
+    const status = err.statusCode || err.status || 500;
+    console.error('[transfer-nave-stock error]:', err);
+    return res.status(status).json({ error: err.message || 'Error en el traslado de existencias entre naves.' });
   }
-
-  // Load and calculate production / inventory
-  const inv = checkAndCalculateProduction(db, studentId);
-  if (!inv.naveInventories) inv.naveInventories = {};
-
-  const fromNaveInv = inv.naveInventories[fromNaveId];
-  const toNaveInv = inv.naveInventories[toNaveId];
-
-  if (!fromNaveInv || !toNaveInv) {
-    return res.status(404).json({ error: 'No se encontraron los datos de inventario para una o ambas naves.' });
-  }
-
-  let itemLabel = itemKey;
-
-  if (itemKey === 'varillas_punta_estrella' || itemKey === 'varillas_hierro_punta') {
-    itemLabel = 'Varillas con Punta Estrella';
-    const currentStock = (fromNaveInv as any).producedStarRodsUnits ?? (fromNaveInv as any).producedIronRodsUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
-    }
-    (fromNaveInv as any).producedStarRodsUnits = currentStock - qty;
-    (fromNaveInv as any).producedIronRodsUnits = currentStock - qty;
-    fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
-
-    (toNaveInv as any).producedStarRodsUnits = ((toNaveInv as any).producedStarRodsUnits || 0) + qty;
-    (toNaveInv as any).producedIronRodsUnits = ((toNaveInv as any).producedIronRodsUnits || 0) + qty;
-    toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
-  } else if (itemKey === 'varillas_punta_plana' || itemKey === 'varillas_metal_punta') {
-    itemLabel = 'Varillas con Punta Plana';
-    const currentStock = (fromNaveInv as any).producedFlatRodsUnits ?? (fromNaveInv as any).producedMetalRodsUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
-    }
-    (fromNaveInv as any).producedFlatRodsUnits = currentStock - qty;
-    (fromNaveInv as any).producedMetalRodsUnits = currentStock - qty;
-    fromNaveInv.producedRodsUnits = Math.max(0, (fromNaveInv.producedRodsUnits || 0) - qty);
-
-    (toNaveInv as any).producedFlatRodsUnits = ((toNaveInv as any).producedFlatRodsUnits || 0) + qty;
-    (toNaveInv as any).producedMetalRodsUnits = ((toNaveInv as any).producedMetalRodsUnits || 0) + qty;
-    toNaveInv.producedRodsUnits = (toNaveInv.producedRodsUnits || 0) + qty;
-  } else if (itemKey === 'destornilladores_punta_estrella' || itemKey === 'destornilladores_hierro') {
-    itemLabel = 'Destornilladores con Punta Estrella';
-    const currentStock = (fromNaveInv as any).starScrewdriversUnits ?? (fromNaveInv as any).ironScrewdriversUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
-    }
-    (fromNaveInv as any).starScrewdriversUnits = currentStock - qty;
-    (fromNaveInv as any).ironScrewdriversUnits = currentStock - qty;
-    fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
-
-    (toNaveInv as any).starScrewdriversUnits = ((toNaveInv as any).starScrewdriversUnits || 0) + qty;
-    (toNaveInv as any).ironScrewdriversUnits = ((toNaveInv as any).ironScrewdriversUnits || 0) + qty;
-    toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
-  } else if (itemKey === 'destornilladores_punta_plana' || itemKey === 'destornilladores_metal') {
-    itemLabel = 'Destornilladores con Punta Plana';
-    const currentStock = (fromNaveInv as any).flatScrewdriversUnits ?? (fromNaveInv as any).metalScrewdriversUnits ?? 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente en la nave de origen (${currentStock} u. disponibles).` });
-    }
-    (fromNaveInv as any).flatScrewdriversUnits = currentStock - qty;
-    (fromNaveInv as any).metalScrewdriversUnits = currentStock - qty;
-    fromNaveInv.producedScrewdriversUnits = Math.max(0, (fromNaveInv.producedScrewdriversUnits || 0) - qty);
-
-    (toNaveInv as any).flatScrewdriversUnits = ((toNaveInv as any).flatScrewdriversUnits || 0) + qty;
-    (toNaveInv as any).metalScrewdriversUnits = ((toNaveInv as any).metalScrewdriversUnits || 0) + qty;
-    toNaveInv.producedScrewdriversUnits = (toNaveInv.producedScrewdriversUnits || 0) + qty;
-  } else if (itemKey === 'ironKg') {
-    itemLabel = 'Fragmentos de Hierro (Kg)';
-    const currentStock = fromNaveInv.ironKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Hierro en la nave de origen (${currentStock} kg disponibles).` });
-    }
-    fromNaveInv.ironKg = Math.round((currentStock - qty) * 1000) / 1000;
-    toNaveInv.ironKg = Math.round(((toNaveInv.ironKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'metalKg') {
-    itemLabel = 'Fragmentos de Metal (Kg)';
-    const currentStock = fromNaveInv.metalKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Fragmentos de Metal en la nave de origen (${currentStock} kg disponibles).` });
-    }
-    fromNaveInv.metalKg = Math.round((currentStock - qty) * 1000) / 1000;
-    toNaveInv.metalKg = Math.round(((toNaveInv.metalKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'plasticKg') {
-    itemLabel = 'Pellets de Plástico (Kg)';
-    const currentStock = fromNaveInv.plasticKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Pellets de Plástico en la nave de origen (${currentStock} kg disponibles).` });
-    }
-    fromNaveInv.plasticKg = Math.round((currentStock - qty) * 1000) / 1000;
-    toNaveInv.plasticKg = Math.round(((toNaveInv.plasticKg || 0) + qty) * 1000) / 1000;
-  } else if (itemKey === 'epoxiKg') {
-    itemLabel = 'Pegamento Epoxi (Kg)';
-    const currentStock = fromNaveInv.epoxiKg || 0;
-    if (currentStock < qty) {
-      return res.status(400).json({ error: `Stock insuficiente de Pegamento Epoxi en la nave de origen (${currentStock} kg disponibles).` });
-    }
-    fromNaveInv.epoxiKg = Math.round((currentStock - qty) * 1000) / 1000;
-    toNaveInv.epoxiKg = Math.round(((toNaveInv.epoxiKg || 0) + qty) * 1000) / 1000;
-  } else {
-    return res.status(400).json({ error: 'Tipo de existencia no reconocido.' });
-  }
-
-  recalculateTotalInventory(inv);
-  inv.updatedAt = new Date().toISOString();
-
-  syncInventoryToSupabase(inv, student.name).catch(e => console.error(e));
-  writeDb(db);
-
-  const transferSuccessMessage = transportMethod === 'propio'
-    ? `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
-    : `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito. Se han adeudado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
-
-  res.json({
-    success: true,
-    message: transferSuccessMessage,
-    updatedInventory: inv,
-    newBalance: student.balance
-  });
 });
 
 // Trading Partners list endpoint (Filtered to contacted partners in Direct Messaging)
@@ -14843,17 +19673,10 @@ app.get('/api/market/messages', (req, res) => {
   const db = readDb();
   if (!db.marketMessages) db.marketMessages = [];
 
-  // Check and process any discounted promissory notes whose due date has arrived
-  let modified = false;
-  if (processDiscountedPromissoryNotesMaturity(db)) {
-    modified = true;
-  }
-
   // Mark messages sent by partnerId to userId as read
   db.marketMessages.forEach(m => {
     if (m.recipientId === userId && m.senderId === partnerId && !m.read) {
       m.read = true;
-      modified = true;
       syncMarketMessageToSupabase(m).catch(e => console.error(e));
     }
   });
@@ -15262,7 +20085,7 @@ app.post('/api/market/messages/sign-promissory-note', (req, res) => {
 });
 
 // Endpoint for beneficiary/vendor to discount a promissory note early at bank
-app.post('/api/market/messages/discount-promissory-note', (req, res) => {
+app.post('/api/market/messages/discount-promissory-note', async (req, res) => {
   const { messageId, beneficiaryId, noteNumber } = req.body;
   if (!messageId && !noteNumber) {
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
@@ -15344,102 +20167,207 @@ app.post('/api/market/messages/discount-promissory-note', (req, res) => {
   // Net advance amount credited to creditor seller
   const netAmount = Number((amount - discountInterest - discountCommission).toFixed(2));
 
-  // Credit beneficiary balance
-  beneficiary.balance = Number((beneficiary.balance + netAmount).toFixed(2));
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `discount_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
 
-  const txId = generateId('tx');
-  const transferConcept = `Anticipo de descuento de pagaré ${pn.promissoryNoteNumber} (nominal: ${formatNumber(amount)} €, dto. 6% [${daysRemaining} d.]: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €, líquido: ${formatNumber(netAmount)} €)`;
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const txId = generateId('tx');
+      const nowIso = new Date().toISOString();
+      const transferConcept = `Anticipo de descuento de pagaré ${pn.promissoryNoteNumber} (nominal: ${formatNumber(amount)} €, dto. 6% [${daysRemaining} d.]: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €, líquido: ${formatNumber(netAmount)} €)`;
 
-  const newTransfer: Transfer = {
-    id: txId,
-    senderId: 'corp-banco-central',
-    senderName: 'Banco Central Mercantil (Descuento comercial de efectos)',
-    senderAccount: 'ES210001000299887700',
-    receiverId: beneficiary.id,
-    receiverName: beneficiary.name,
-    receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-    amount: netAmount,
-    concept: transferConcept,
-    timestamp: now.toISOString()
-  };
+      const newTransfer: Transfer = {
+        id: txId,
+        senderId: 'corp-banco-central',
+        senderName: 'Banco Central Mercantil (Descuento comercial de efectos)',
+        senderAccount: 'ES210001000299887700',
+        receiverId: beneficiary.id,
+        receiverName: beneficiary.name,
+        receiverAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+        amount: netAmount,
+        concept: transferConcept,
+        timestamp: nowIso
+      };
 
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(newTransfer);
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock beneficiary account row
+          const lockRes = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [beneficiary.id]
+          );
+          if (!lockRes || lockRes.rows.length === 0) {
+            const err: any = new Error('Cuenta beneficiaria no encontrada en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-  // Update promissory note data
-  pn.status = 'descontado';
-  pn.isDiscounted = true;
-  pn.discountedAt = now.toISOString();
-  pn.discountDays = daysRemaining;
-  pn.discountRate = 6;
-  pn.discountInterest = discountInterest;
-  pn.discountCommissionRate = 0.5;
-  pn.discountCommission = discountCommission;
-  pn.discountNetReceived = netAmount;
-  pn.discountTransferId = txId;
+          const beneficiaryRow = lockRes.rows[0];
+          const currentBalance = Number(beneficiaryRow.saldo);
+          const newBalance = Number((currentBalance + netAmount).toFixed(2));
 
-  // Direct message notification in chat thread
-  const discountMsg: MarketMessage = {
-    id: generateId('msg'),
-    chatId: msg.chatId,
-    senderId: beneficiary.id,
-    senderName: beneficiary.name,
-    recipientId: payer.id,
-    recipientName: payer.name,
-    content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
-    timestamp: now.toISOString(),
-    read: false,
-    type: 'text'
-  };
-  db.marketMessages.push(discountMsg);
+          // Credit balance in PostgreSQL
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, beneficiary.id]);
 
-  // Add system notifications
-  addNotification(
-    db,
-    beneficiary.id,
-    'Pagaré descontado con éxito',
-    `Has anticipado el cobro del pagaré ${pn.promissoryNoteNumber}. Se han abonado ${formatNumber(netAmount)} € netos en tu cuenta bancaria (nominal: ${formatNumber(amount)} €, dto. 6%: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €).`,
-    'transfer_received',
-    txId
-  );
+          // Insert movimiento on client
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-in',
+              beneficiary.id,
+              netAmount,
+              nowIso,
+              transferConcept,
+              'corp-banco-central',
+              'Banco Central Mercantil (Descuento comercial de efectos)',
+              'ES210001000299887700',
+              beneficiary.id,
+              beneficiary.name,
+              beneficiary.accountNumber || 'ES00 0000 0000 0000 0000'
+            ]
+          );
 
-  addNotification(
-    db,
-    payer.id,
-    'Pagaré descontado por el proveedor',
-    `El acreedor ${beneficiary.name} ha descontado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco cargará el importe nominal en tu cuenta en la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-    'transfer_received',
-    txId
-  );
+          // Update in-memory DB snapshot
+          const currentDb = readDb();
+          const targetMsg = (currentDb.marketMessages || []).find(m =>
+            m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber)
+          );
+          if (targetMsg && targetMsg.promissoryNoteData) {
+            const currentPn = targetMsg.promissoryNoteData;
+            currentPn.status = 'descontado';
+            currentPn.isDiscounted = true;
+            currentPn.discountedAt = nowIso;
+            currentPn.discountDays = daysRemaining;
+            currentPn.discountRate = 6;
+            currentPn.discountInterest = discountInterest;
+            currentPn.discountCommissionRate = 0.5;
+            currentPn.discountCommission = discountCommission;
+            currentPn.discountNetReceived = netAmount;
+            currentPn.discountTransferId = txId;
+          }
 
-  writeDb(db);
+          const benUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+          if (benUser) {
+            benUser.balance = newBalance;
+          }
 
-  // Sync to PostgreSQL Supabase
-  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-in', beneficiary.id, 'TRANSFER_IN', netAmount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
-  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-  syncMarketMessageToSupabase(discountMsg).catch(e => console.error(e));
+          if (!currentDb.transfers) currentDb.transfers = [];
+          currentDb.transfers.unshift(newTransfer);
 
-  res.json({
-    success: true,
-    message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
-    transfer: newTransfer,
-    updatedMessage: msg,
-    newBalance: beneficiary.balance,
-    calculation: {
-      nominalAmount: amount,
-      daysRemaining,
-      discountRate: 6,
-      discountInterest,
-      commissionRate: 0.5,
-      discountCommission,
-      netAmount
-    }
-  });
+          const discountMsg: MarketMessage = {
+            id: generateId('msg'),
+            chatId: msg.chatId,
+            senderId: beneficiary.id,
+            senderName: beneficiary.name,
+            recipientId: payer.id,
+            recipientName: payer.name,
+            content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
+            timestamp: nowIso,
+            read: false,
+            type: 'text'
+          };
+          currentDb.marketMessages.push(discountMsg);
+
+          addNotification(
+            currentDb,
+            beneficiary.id,
+            'Pagaré descontado con éxito',
+            `Has anticipado el cobro del pagaré ${pn.promissoryNoteNumber}. Se han abonado ${formatNumber(netAmount)} € netos en tu cuenta bancaria (nominal: ${formatNumber(amount)} €, dto. 6%: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €).`,
+            'transfer_received',
+            txId
+          );
+
+          addNotification(
+            currentDb,
+            payer.id,
+            'Pagaré descontado por el proveedor',
+            `El acreedor ${beneficiary.name} ha descontado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco cargará el importe nominal en tu cuenta en la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+            'transfer_received',
+            txId
+          );
+
+          writeDb(currentDb);
+          syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+          syncMarketMessageToSupabase(discountMsg).catch(e => console.error(e));
+
+          return {
+            success: true,
+            message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
+            transfer: newTransfer,
+            updatedMessage: targetMsg || msg,
+            newBalance,
+            calculation: {
+              nominalAmount: amount,
+              daysRemaining,
+              annualDiscountRate: 6,
+              discountInterest,
+              commissionRate: 0.5,
+              discountCommission,
+              netAmount
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        beneficiary.balance = Number((beneficiary.balance + netAmount).toFixed(2));
+        if (!db.transfers) db.transfers = [];
+        db.transfers.unshift(newTransfer);
+
+        pn.status = 'descontado';
+        pn.isDiscounted = true;
+        pn.discountedAt = nowIso;
+        pn.discountDays = daysRemaining;
+        pn.discountRate = 6;
+        pn.discountInterest = discountInterest;
+        pn.discountCommissionRate = 0.5;
+        pn.discountCommission = discountCommission;
+        pn.discountNetReceived = netAmount;
+        pn.discountTransferId = txId;
+
+        const discountMsg: MarketMessage = {
+          id: generateId('msg'),
+          chatId: msg.chatId,
+          senderId: beneficiary.id,
+          senderName: beneficiary.name,
+          recipientId: payer.id,
+          recipientName: payer.name,
+          content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
+          timestamp: nowIso,
+          read: false,
+          type: 'text'
+        };
+        db.marketMessages.push(discountMsg);
+
+        writeDb(db);
+        return {
+          success: true,
+          message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
+          transfer: newTransfer,
+          updatedMessage: msg,
+          newBalance: beneficiary.balance,
+          calculation: {
+            nominalAmount: amount,
+            daysRemaining,
+            annualDiscountRate: 6,
+            discountInterest,
+            commissionRate: 0.5,
+            discountCommission,
+            netAmount
+          }
+        };
+      }
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Discount Promissory Note Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al descontar el pagaré en el banco' });
+  }
 });
 
 // Endpoint for beneficiary/vendor to place a promissory note in bank collection management (gestión de cobro)
-app.post('/api/market/messages/collection-management-promissory-note', (req, res) => {
+const handleCollectionManagementPromissoryNote = async (req: express.Request, res: express.Response) => {
   const { messageId, beneficiaryId, noteNumber } = req.body;
   if (!messageId && !noteNumber) {
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
@@ -15509,98 +20437,199 @@ app.post('/api/market/messages/collection-management-promissory-note', (req, res
   // Commission: 0.5% over nominal amount with minimum of 20.00 €
   const commission = Math.max(20, Number((amount * 0.005).toFixed(2)));
 
-  if (beneficiary.balance < commission) {
-    return res.status(400).json({ 
-      error: `Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(beneficiary.balance)} €.` 
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `col_mgmt_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const nowIso = new Date().toISOString();
+      const txId = generateId('tx');
+      const transferConcept = `Comisión de servicio de gestión de cobro de pagaré ${pn.promissoryNoteNumber} (0,5% sobre ${formatNumber(amount)} €, mínimo 20,00 €)`;
+
+      const collectionCommissionTransfer: Transfer = {
+        id: txId,
+        senderId: beneficiary.id,
+        senderName: beneficiary.name,
+        senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+        receiverId: 'corp-banco-central',
+        receiverName: 'Banco Central Mercantil (Servicio de gestión de cobro)',
+        receiverAccount: 'ES210001000299887700',
+        amount: commission,
+        concept: transferConcept,
+        timestamp: nowIso
+      };
+
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock beneficiary account row
+          const lockRes = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [beneficiary.id]
+          );
+          if (!lockRes || lockRes.rows.length === 0) {
+            const err: any = new Error('Empresa beneficiaria no encontrada en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const beneficiaryRow = lockRes.rows[0];
+          const currentBalance = Number(beneficiaryRow.saldo);
+
+          if (currentBalance < commission) {
+            const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(currentBalance)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Number((currentBalance - commission).toFixed(2));
+
+          // Debit commission in PostgreSQL
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, beneficiary.id]);
+
+          // Insert movimiento on client
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              beneficiary.id,
+              commission,
+              nowIso,
+              transferConcept,
+              beneficiary.id,
+              beneficiary.name,
+              beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
+              'corp-banco-central',
+              'Banco Central Mercantil (Servicio de gestión de cobro)',
+              'ES210001000299887700'
+            ]
+          );
+
+          // Update in-memory DB snapshot
+          const currentDb = readDb();
+          const targetMsg = (currentDb.marketMessages || []).find(m =>
+            m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber)
+          );
+          if (targetMsg && targetMsg.promissoryNoteData) {
+            const currentPn = targetMsg.promissoryNoteData;
+            currentPn.status = 'gestion_cobro';
+            currentPn.isCollectionManagement = true;
+            currentPn.collectionManagementAt = nowIso;
+            currentPn.collectionCommissionRate = 0.005;
+            currentPn.collectionCommission = commission;
+            currentPn.collectionTransferId = txId;
+          }
+
+          const benUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+          if (benUser) {
+            benUser.balance = newBalance;
+          }
+
+          if (!currentDb.transfers) currentDb.transfers = [];
+          currentDb.transfers.unshift(collectionCommissionTransfer);
+
+          const collectionMsg: MarketMessage = {
+            id: generateId('msg'),
+            chatId: msg.chatId,
+            senderId: beneficiary.id,
+            senderName: beneficiary.name,
+            recipientId: payer.id,
+            recipientName: payer.name,
+            content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
+            timestamp: nowIso,
+            read: false,
+            type: 'text'
+          };
+          currentDb.marketMessages.push(collectionMsg);
+
+          addNotification(
+            currentDb,
+            beneficiary.id,
+            'Pagaré entregado en gestión de cobro',
+            `Has cedido el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. Se ha cargado la comisión de ${formatNumber(commission)} € (0,5%, mín. 20 €). El banco ingresará automáticamente los ${formatNumber(amount)} € al vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+            'transfer_received',
+            txId
+          );
+
+          addNotification(
+            currentDb,
+            payer.id,
+            'Pagaré entregado en gestión de cobro por el proveedor',
+            `El acreedor ${beneficiary.name} ha entregado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. El banco cargará el importe nominal en tu cuenta a la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+            'transfer_received',
+            txId
+          );
+
+          writeDb(currentDb);
+          syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
+          syncMarketMessageToSupabase(collectionMsg).catch(e => console.error(e));
+
+          return {
+            success: true,
+            message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
+            transfer: collectionCommissionTransfer,
+            updatedMessage: targetMsg || msg,
+            newBalance,
+            commission
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        if (beneficiary.balance < commission) {
+          const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(beneficiary.balance)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        beneficiary.balance = Number((beneficiary.balance - commission).toFixed(2));
+        if (!db.transfers) db.transfers = [];
+        db.transfers.unshift(collectionCommissionTransfer);
+
+        pn.status = 'gestion_cobro';
+        pn.isCollectionManagement = true;
+        pn.collectionManagementAt = nowIso;
+        pn.collectionCommissionRate = 0.005;
+        pn.collectionCommission = commission;
+        pn.collectionTransferId = txId;
+
+        const collectionMsg: MarketMessage = {
+          id: generateId('msg'),
+          chatId: msg.chatId,
+          senderId: beneficiary.id,
+          senderName: beneficiary.name,
+          recipientId: payer.id,
+          recipientName: payer.name,
+          content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
+          timestamp: nowIso,
+          read: false,
+          type: 'text'
+        };
+        db.marketMessages.push(collectionMsg);
+
+        writeDb(db);
+        return {
+          success: true,
+          message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
+          transfer: collectionCommissionTransfer,
+          updatedMessage: msg,
+          newBalance: beneficiary.balance,
+          commission
+        };
+      }
     });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Collection Management Promissory Note Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al solicitar la gestión de cobro del pagaré' });
   }
+};
 
-  const now = new Date();
-
-  // Debit commission from beneficiary account
-  beneficiary.balance = Number((beneficiary.balance - commission).toFixed(2));
-
-  const txId = generateId('tx');
-  const transferConcept = `Comisión de servicio de gestión de cobro de pagaré ${pn.promissoryNoteNumber} (0,5% sobre ${formatNumber(amount)} €, mínimo 20,00 €)`;
-
-  const collectionCommissionTransfer: Transfer = {
-    id: txId,
-    senderId: beneficiary.id,
-    senderName: beneficiary.name,
-    senderAccount: beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-    receiverId: 'corp-banco-central',
-    receiverName: 'Banco Central Mercantil (Servicio de gestión de cobro)',
-    receiverAccount: 'ES210001000299887700',
-    amount: commission,
-    concept: transferConcept,
-    timestamp: now.toISOString()
-  };
-
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(collectionCommissionTransfer);
-
-  // Update Promissory Note status to 'gestion_cobro'
-  pn.status = 'gestion_cobro';
-  pn.isCollectionManagement = true;
-  pn.collectionManagementAt = now.toISOString();
-  pn.collectionCommissionRate = 0.005;
-  pn.collectionCommission = commission;
-  pn.collectionTransferId = txId;
-
-  // Insert informative message in DM thread
-  const collectionMsg: MarketMessage = {
-    id: generateId('msg'),
-    chatId: msg.chatId,
-    senderId: beneficiary.id,
-    senderName: beneficiary.name,
-    recipientId: payer.id,
-    recipientName: payer.name,
-    content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
-    timestamp: now.toISOString(),
-    read: false,
-    type: 'text'
-  };
-  db.marketMessages.push(collectionMsg);
-
-  // Add system notifications
-  addNotification(
-    db,
-    beneficiary.id,
-    'Pagaré entregado en gestión de cobro',
-    `Has cedido el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. Se ha cargado la comisión de ${formatNumber(commission)} € (0,5%, mín. 20 €). El banco ingresará automáticamente los ${formatNumber(amount)} € al vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-    'transfer_received',
-    txId
-  );
-
-  addNotification(
-    db,
-    payer.id,
-    'Pagaré entregado en gestión de cobro por el proveedor',
-    `El acreedor ${beneficiary.name} ha entregado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. El banco cargará el importe nominal en tu cuenta a la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-    'transfer_received',
-    txId
-  );
-
-  writeDb(db);
-
-  // Sync to PostgreSQL Supabase
-  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-out', beneficiary.id, 'TRANSFER_OUT', commission, now.toISOString(), transferConcept, collectionCommissionTransfer).catch(e => console.error(e));
-  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-  syncMarketMessageToSupabase(collectionMsg).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
-    transfer: collectionCommissionTransfer,
-    updatedMessage: msg,
-    newBalance: beneficiary.balance,
-    commission
-  });
-});
+app.post('/api/market/messages/collection-management-promissory-note', handleCollectionManagementPromissoryNote);
+app.post('/api/market/messages/request-promissory-note-collection', handleCollectionManagementPromissoryNote);
 
 // Endpoint for beneficiary/vendor to collect/cash a promissory note at bank on or after due date
-app.post('/api/market/messages/collect-promissory-note', (req, res) => {
+app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
   const { messageId, beneficiaryId, noteNumber } = req.body;
   if (!messageId && !noteNumber) {
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
@@ -15674,135 +20703,202 @@ app.post('/api/market/messages/collect-promissory-note', (req, res) => {
     return res.status(400).json({ error: 'Importe del pagaré no válido.' });
   }
 
-  // Case 1: Insufficient funds in buyer's bank account -> Mark as "impagado"
-  if (payer.balance < amount) {
-    pn.status = 'impagado';
-    pn.collectRequested = true;
-    pn.collectRequestedAt = now.toISOString();
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `collect_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
 
-    const protestMsg: MarketMessage = {
-      id: generateId('msg'),
-      chatId: msg.chatId,
-      senderId: beneficiary.id,
-      senderName: beneficiary.name,
-      recipientId: payer.id,
-      recipientName: payer.name,
-      content: `❌ Pagaré impagado por falta de fondos: El tomador ${beneficiary.name} ha presentado al cobro bancario el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero la cuenta del librador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(payer.balance)} disponibles). El efecto queda en estado de impago con fuerza ejecutiva.`,
-      timestamp: now.toISOString(),
-      read: false,
-      type: 'text'
-    };
-    db.marketMessages.push(protestMsg);
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // Lock accounts in alphabetical order to prevent deadlocks
+          const idsToLock = [payer.id, beneficiary.id].sort();
+          const accountsResult = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level 
+             FROM cuentas 
+             WHERE id = ANY($1) 
+             ORDER BY id ASC 
+             FOR UPDATE`,
+            [idsToLock]
+          );
 
-    addNotification(
-      db,
-      beneficiary.id,
-      'Pagaré impagado por falta de fondos',
-      `El pagaré ${pn.promissoryNoteNumber} de ${formatNumber(amount)} € emitido por ${payer.name} ha resultado impagado por saldo insuficiente.`,
-      'transfer_received',
-      pn.id || messageId
-    );
+          const payerRow = accountsResult.rows.find(r => r.id === payer.id);
+          const beneficiaryRow = accountsResult.rows.find(r => r.id === beneficiary.id);
 
-    addNotification(
-      db,
-      payer.id,
-      'Aviso de pagaré impagado',
-      `El proveedor ${beneficiary.name} ha presentado al cobro el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero tu cuenta no dispone de saldo suficiente. Efecto impagado.`,
-      'transfer_received',
-      pn.id || messageId
-    );
+          if (!payerRow || !beneficiaryRow) {
+            const err: any = new Error('No se encontraron las cuentas de los participantes en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-    writeDb(db);
-    syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-    syncMarketMessageToSupabase(protestMsg).catch(e => console.error(e));
+          const currentPayerBalance = Number(payerRow.saldo);
+          const currentBeneficiaryBalance = Number(beneficiaryRow.saldo);
 
-    return res.json({
-      success: false,
-      isImpagado: true,
-      error: `Pagaré impagado: El comprador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(payer.balance)}) en su cuenta bancaria.`,
-      updatedMessage: msg
+          if (currentPayerBalance < amount) {
+            // Insufficient funds -> Mark as impagado
+            pn.status = 'impagado';
+            pn.collectRequested = true;
+            pn.collectRequestedAt = now.toISOString();
+
+            const protestMsg: MarketMessage = {
+              id: generateId('msg'),
+              chatId: msg.chatId,
+              senderId: beneficiary.id,
+              senderName: beneficiary.name,
+              recipientId: payer.id,
+              recipientName: payer.name,
+              content: `❌ Pagaré impagado por falta de fondos: El tomador ${beneficiary.name} ha presentado al cobro bancario el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero la cuenta del librador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)} disponibles). El efecto queda en estado de impago con fuerza ejecutiva.`,
+              timestamp: now.toISOString(),
+              read: false,
+              type: 'text'
+            };
+            db.marketMessages.push(protestMsg);
+
+            addNotification(
+              db,
+              beneficiary.id,
+              'Pagaré impagado por falta de fondos',
+              `El pagaré ${pn.promissoryNoteNumber} de ${formatNumber(amount)} € emitido por ${payer.name} ha resultado impagado por saldo insuficiente.`,
+              'transfer_received',
+              pn.id || messageId
+            );
+
+            addNotification(
+              db,
+              payer.id,
+              'Aviso de pagaré impagado',
+              `El proveedor ${beneficiary.name} ha presentado al cobro el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero tu cuenta no dispone de saldo suficiente. Efecto impagado.`,
+              'transfer_received',
+              pn.id || messageId
+            );
+
+            writeDb(db);
+            syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+            syncMarketMessageToSupabase(protestMsg).catch(e => console.error(e));
+
+            return {
+              success: false,
+              isImpagado: true,
+              error: `Pagaré impagado: El comprador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)}) en su cuenta bancaria.`,
+              updatedMessage: msg
+            };
+          }
+
+          // Sufficient funds -> Settle in PostgreSQL
+          const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+          const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
+
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
+
+          const txId = generateId('tx');
+          const transferConcept = `Cobro de pagaré bancario ${pn.promissoryNoteNumber} - ${pn.concept || 'Compensación cambiaria'}`;
+
+          const newTransfer: Transfer = {
+            id: txId,
+            senderId: payer.id,
+            senderName: payer.name,
+            senderAccount: payer.accountNumber || pn.bankIban,
+            receiverId: beneficiary.id,
+            receiverName: beneficiary.name,
+            receiverAccount: beneficiary.accountNumber || `ES00 0000 0000 0000 0000`,
+            amount: amount,
+            concept: transferConcept,
+            timestamp: now.toISOString()
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [txId + '-out', payerRow.id, amount, now.toISOString(), transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+          );
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [txId + '-in', beneficiaryRow.id, amount, now.toISOString(), transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+          );
+
+          // Update in-memory DB snapshot
+          payer.balance = newPayerBal;
+          beneficiary.balance = newBeneficiaryBal;
+
+          if (!db.transfers) db.transfers = [];
+          db.transfers.unshift(newTransfer);
+
+          pn.status = 'pagado';
+          pn.paidAt = now.toISOString();
+          pn.paidTransferId = txId;
+          pn.collectRequested = true;
+          pn.collectRequestedAt = now.toISOString();
+
+          const successMsg: MarketMessage = {
+            id: generateId('msg'),
+            chatId: msg.chatId,
+            senderId: beneficiary.id,
+            senderName: beneficiary.name,
+            recipientId: payer.id,
+            recipientName: payer.name,
+            content: `🏦 Pagaré cobrado en banco: El beneficiario ${beneficiary.name} ha presentado al cobro el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. Se ha cargado en la cuenta del librador y abonado en la cuenta del tomador (Ref. bancaria: ${txId}).`,
+            timestamp: now.toISOString(),
+            read: false,
+            type: 'text'
+          };
+          db.marketMessages.push(successMsg);
+
+          addNotification(
+            db,
+            beneficiary.id,
+            'Pagaré cobrado exitosamente',
+            `Has cobrado en el banco el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € de ${payer.name}. Saldo abonado en tu cuenta.`,
+            'transfer_received',
+            txId
+          );
+
+          addNotification(
+            db,
+            payer.id,
+            'Cargo de pagaré al vencimiento',
+            `El banco ha liquidado el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € presentado al cobro por ${beneficiary.name}.`,
+            'transfer_received',
+            txId
+          );
+
+          writeDb(db);
+          syncMarketMessageToSupabase(msg).catch(e => console.error(e));
+          syncMarketMessageToSupabase(successMsg).catch(e => console.error(e));
+
+          return {
+            success: true,
+            message: `Pagaré cobrado con éxito por ${formatNumber(amount)} €. Saldo actualizado.`,
+            transfer: newTransfer,
+            updatedMessage: msg,
+            newBalance: newBeneficiaryBal
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        if (payer.balance < amount) {
+          pn.status = 'impagado';
+          pn.collectRequested = true;
+          pn.collectRequestedAt = now.toISOString();
+          writeDb(db);
+          return { success: false, isImpagado: true, error: 'Pagaré impagado por saldo insuficiente', updatedMessage: msg };
+        }
+
+        payer.balance = Number((payer.balance - amount).toFixed(2));
+        beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
+        pn.status = 'pagado';
+        pn.paidAt = now.toISOString();
+        writeDb(db);
+        return { success: true, updatedMessage: msg, newBalance: beneficiary.balance };
+      }
     });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Collect Promissory Note Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al cobrar el pagaré' });
   }
-
-  // Case 2: Sufficient funds -> Direct bank clearing: debit buyer, credit vendor
-  payer.balance = Number((payer.balance - amount).toFixed(2));
-  beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
-
-  const txId = generateId('tx');
-  const transferConcept = `Cobro de pagaré bancario ${pn.promissoryNoteNumber} - ${pn.concept || 'Compensación cambiaria'}`;
-
-  const newTransfer: Transfer = {
-    id: txId,
-    senderId: payer.id,
-    senderName: payer.name,
-    senderAccount: payer.accountNumber || pn.bankIban,
-    receiverId: beneficiary.id,
-    receiverName: beneficiary.name,
-    receiverAccount: beneficiary.accountNumber || `ES00 0000 0000 0000 0000`,
-    amount: amount,
-    concept: transferConcept,
-    timestamp: now.toISOString()
-  };
-
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(newTransfer);
-
-  pn.status = 'pagado';
-  pn.paidAt = now.toISOString();
-  pn.paidTransferId = txId;
-  pn.collectRequested = true;
-  pn.collectRequestedAt = now.toISOString();
-
-  // Chat message confirmation
-  const successMsg: MarketMessage = {
-    id: generateId('msg'),
-    chatId: msg.chatId,
-    senderId: beneficiary.id,
-    senderName: beneficiary.name,
-    recipientId: payer.id,
-    recipientName: payer.name,
-    content: `🏦 Pagaré cobrado en banco: El beneficiario ${beneficiary.name} ha presentado al cobro el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. Se ha cargado en la cuenta del librador y abonado en la cuenta del tomador (Ref. bancaria: ${txId}).`,
-    timestamp: now.toISOString(),
-    read: false,
-    type: 'text'
-  };
-  db.marketMessages.push(successMsg);
-
-  addNotification(
-    db,
-    beneficiary.id,
-    'Pagaré cobrado exitosamente',
-    `Has cobrado en el banco el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € de ${payer.name}. Saldo abonado en tu cuenta.`,
-    'transfer_received',
-    txId
-  );
-
-  addNotification(
-    db,
-    payer.id,
-    'Cargo de pagaré al vencimiento',
-    `El banco ha liquidado el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € presentado al cobro por ${beneficiary.name}.`,
-    'transfer_received',
-    txId
-  );
-
-  writeDb(db);
-
-  // Sync to PostgreSQL Supabase
-  if (payer.role === 'student') syncAccountToSupabase(payer.id, payer.name, payer.balance).catch(e => console.error(e));
-  if (beneficiary.role === 'student') syncAccountToSupabase(beneficiary.id, beneficiary.name, beneficiary.balance).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-out', payer.id, 'TRANSFER_OUT', amount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-in', beneficiary.id, 'TRANSFER_IN', amount, now.toISOString(), transferConcept, newTransfer).catch(e => console.error(e));
-  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-  syncMarketMessageToSupabase(successMsg).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: `Pagaré cobrado con éxito por ${formatNumber(amount)} €. Saldo actualizado.`,
-    transfer: newTransfer,
-    updatedMessage: msg,
-    newBalance: beneficiary.balance
-  });
 });
 
 app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {
@@ -15973,7 +21069,7 @@ app.get('/api/court/unpaid-notes', (req, res) => {
 });
 
 // File a new lawsuit (Demanda ordinaria o Cambiaria)
-app.post('/api/court/lawsuits', (req, res) => {
+app.post('/api/court/lawsuits', async (req, res) => {
   const {
     type,
     subtype,
@@ -16038,7 +21134,6 @@ app.post('/api/court/lawsuits', (req, res) => {
   
   const totalClaimAmount = Number((numAmount + interestAndCostsAmount).toFixed(2));
   const caseNumber = generateCaseNumber(type);
-  const now = new Date();
 
   // Automatic billing of Lawyer fee: 15% of claimed amount + 21% IVA
   const lawyerFeeBase = Number((numAmount * 0.15).toFixed(2));
@@ -16046,123 +21141,183 @@ app.post('/api/court/lawsuits', (req, res) => {
   const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
   const lawyerFeeInvoiceNum = `FRA-ABOG-${caseNumber.replace(/[^0-9]/g, '').slice(0, 8)}`;
 
-  // Deduct lawyer fee from plaintiff balance
-  plaintiff.balance = Number((plaintiff.balance - lawyerFeeTotal).toFixed(2));
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_lawsuit_${plaintiffId}_${defendantId}_${numAmount}_${type}_${Math.floor(Date.now() / 4000)}`;
 
-  const feeTxId = generateId('tx');
-  const feeConcept = `Minuta Letrado (15% s/ ${formatNumber(numAmount)} €) + IVA 21% - Demanda ${caseNumber} [Factura ${lawyerFeeInvoiceNum}]`;
-  const lawyerTransfer: Transfer = {
-    id: feeTxId,
-    senderId: plaintiff.id,
-    senderName: plaintiff.name,
-    senderAccount: plaintiff.accountNumber,
-    receiverId: 'corp-despacho-abogados',
-    receiverName: 'Despacho Jurídico & Letrados Procesales S.L.P.',
-    receiverAccount: 'ES980001004455667788',
-    amount: lawyerFeeTotal,
-    concept: feeConcept,
-    timestamp: now.toISOString()
-  };
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const feeTxId = generateId('tx');
+      const feeConcept = `Minuta Letrado (15% s/ ${formatNumber(numAmount)} €) + IVA 21% - Demanda ${caseNumber} [Factura ${lawyerFeeInvoiceNum}]`;
+      const lawyerTransfer: Transfer = {
+        id: feeTxId,
+        senderId: plaintiff.id,
+        senderName: plaintiff.name,
+        senderAccount: plaintiff.accountNumber,
+        receiverId: 'corp-despacho-abogados',
+        receiverName: 'Despacho Jurídico & Letrados Procesales S.L.P.',
+        receiverAccount: 'ES980001004455667788',
+        amount: lawyerFeeTotal,
+        concept: feeConcept,
+        timestamp: now.toISOString()
+      };
 
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(lawyerTransfer);
+      let promissoryNoteData: PromissoryNoteData | undefined;
+      if (type === 'cambiaria' && promissoryNoteNumber) {
+        const noteMsg = db.marketMessages?.find(
+          m => m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === promissoryNoteNumber
+        );
+        if (noteMsg && noteMsg.promissoryNoteData) {
+          promissoryNoteData = noteMsg.promissoryNoteData;
+        }
+      }
 
-  let promissoryNoteData: PromissoryNoteData | undefined;
-  if (type === 'cambiaria' && promissoryNoteNumber) {
-    const noteMsg = db.marketMessages?.find(
-      m => m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === promissoryNoteNumber
-    );
-    if (noteMsg && noteMsg.promissoryNoteData) {
-      promissoryNoteData = noteMsg.promissoryNoteData;
-    }
+      const lawsuit: CourtLawsuit = {
+        id: generateId('dem'),
+        caseNumber,
+        courtName: 'Juzgado de 1ª Instancia e Instrucción Nº 1 (Sede Electrónica)',
+        type,
+        subtype,
+        plaintiffId,
+        plaintiffName: plaintiff.name,
+        plaintiffNif: plaintiff.username?.toUpperCase() + '-ES',
+        plaintiffIban: plaintiff.accountNumber,
+        defendantId,
+        defendantName: defendant.name,
+        defendantNif: defendant.username?.toUpperCase() + '-ES',
+        defendantIban: defendant.accountNumber,
+        claimedAmount: numAmount,
+        interestAndCostsAmount,
+        totalClaimAmount,
+        contractDate: contractDate || now.toISOString().slice(0, 10),
+        goodsDescription,
+        facts,
+        legalBasis: legalBasis || (type === 'cambiaria' 
+          ? 'Arts. 819 a 827 de la Ley de Enjuiciamiento Civil (LEC) y Arts. 49, 94 y concordantes de la Ley Cambiaria y del Cheque (LCCh).'
+          : 'Arts. 399 y concordantes de la LEC; Arts. 325, 336 y 345 del Código de Comercio; Art. 1124 del Código Civil.'),
+        petitum: petitum || (type === 'cambiaria'
+          ? `Requerimiento judicial de pago inmediato por ${formatNumber(numAmount)} € de principal más ${formatNumber(interestAndCostsAmount)} € para intereses de demora procesal y costas, con decreto de embargo preventivo cautelar sobre las cuentas y bienes del demandado.`
+          : `Sentencia condenatoria que declare el incumplimiento contractual y condene al demandado al pago de ${formatNumber(numAmount)} €, más los intereses legales devengados y las costas procesales.`),
+        evidenceSummary: evidenceSummary || 'Mensajería contractual, extractos bancarios, pagaré oficial y registros del simulador.',
+        attachments: validAttachments,
+        relatedOrderId,
+        promissoryNoteNumber,
+        promissoryNoteId,
+        promissoryNoteDueDate: promissoryNoteData?.dueDate,
+        promissoryNoteData,
+        status: 'pendiente_admision',
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        lawyerFeeAmount: lawyerFeeBase,
+        lawyerFeeIva: lawyerFeeIva,
+        lawyerFeeTotal: lawyerFeeTotal,
+        lawyerFeeInvoiceNumber: lawyerFeeInvoiceNum
+      };
+
+      let newPlaintiffBalance = plaintiff.balance;
+
+      if (dbPool) {
+        await withPostgresTransaction(async (client) => {
+          const lockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE`,
+            [plaintiff.id]
+          );
+          if (lockRes.rows.length === 0) {
+            const err: any = new Error('Cuenta del demandante no encontrada en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const currentBal = Number(lockRes.rows[0].saldo);
+          if (currentBal < lawyerFeeTotal) {
+            const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${currentBal.toFixed(2)} € disponible) para abonar la minuta de abogado por importe de ${lawyerFeeTotal.toFixed(2)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          newPlaintiffBalance = Math.round((currentBal - lawyerFeeTotal) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff.id]);
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              feeTxId + '-out',
+              plaintiff.id,
+              lawyerFeeTotal,
+              now.toISOString(),
+              feeConcept,
+              plaintiff.id,
+              plaintiff.name,
+              lockRes.rows[0].account_number,
+              'corp-despacho-abogados',
+              'Despacho Jurídico & Letrados Procesales S.L.P.',
+              'ES980001004455667788'
+            ]
+          );
+
+          await syncCourtLawsuitToSupabase(lawsuit, client);
+        }, key);
+      } else {
+        if (plaintiff.balance < lawyerFeeTotal) {
+          return res.status(400).json({
+            error: `Saldo insuficiente en tu cuenta bancaria (${plaintiff.balance.toFixed(2)} € disponible) para abonar la minuta de abogado por importe de ${lawyerFeeTotal.toFixed(2)} €.`
+          });
+        }
+        newPlaintiffBalance = Number((plaintiff.balance - lawyerFeeTotal).toFixed(2));
+      }
+
+      plaintiff.balance = newPlaintiffBalance;
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(lawyerTransfer);
+
+      db.courtLawsuits.unshift(lawsuit);
+
+      // Send judicial & financial notifications
+      addNotification(
+        db,
+        plaintiff.id,
+        '⚖️ Demanda presentada y minuta abonada',
+        `Has presentado la demanda con Autos nº ${caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${lawyerFeeInvoiceNum}). El procedimiento queda pendiente de Auto de admisión a trámite por el Juez.`,
+        'transfer_received',
+        feeTxId
+      );
+
+      // Notify the teacher/judge (pupdaniel) for admission review
+      const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
+      if (judgeUser && judgeUser.id !== plaintiff.id && judgeUser.id !== defendant.id) {
+        addNotification(
+          db,
+          judgeUser.id,
+          '⚖️ Nueva demanda pendiente de admisión a trámite',
+          `El actor ${plaintiff.name} ha interpuesto la ${type === 'cambiaria' ? 'Demanda cambiaria' : 'Demanda ordinaria'} (${caseNumber}) contra ${defendant.name} por ${formatNumber(numAmount)} €. Pendiente de dictar Auto de admisión a trámite o Inadmisión.`,
+          'transfer_received',
+          lawsuit.id
+        );
+      }
+
+      writeDb(db);
+
+      return {
+        success: true,
+        message: `Demanda ${caseNumber} presentada con éxito. Minuta de abogado (${formatNumber(lawyerFeeTotal)} € con IVA) abonada. Pendiente de admisión a trámite por el Magistrado-Juez.`,
+        lawsuit,
+        newBalance: plaintiff.balance,
+        lawyerFee: {
+          amount: lawyerFeeBase,
+          iva: lawyerFeeIva,
+          total: lawyerFeeTotal,
+          invoiceNumber: lawyerFeeInvoiceNum
+        }
+      };
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Court Lawsuit Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al presentar la demanda judicial' });
   }
-
-  const lawsuit: CourtLawsuit = {
-    id: generateId('dem'),
-    caseNumber,
-    courtName: 'Juzgado de 1ª Instancia e Instrucción Nº 1 (Sede Electrónica)',
-    type,
-    subtype,
-    plaintiffId,
-    plaintiffName: plaintiff.name,
-    plaintiffNif: plaintiff.username?.toUpperCase() + '-ES',
-    plaintiffIban: plaintiff.accountNumber,
-    defendantId,
-    defendantName: defendant.name,
-    defendantNif: defendant.username?.toUpperCase() + '-ES',
-    defendantIban: defendant.accountNumber,
-    claimedAmount: numAmount,
-    interestAndCostsAmount,
-    totalClaimAmount,
-    contractDate: contractDate || now.toISOString().slice(0, 10),
-    goodsDescription,
-    facts,
-    legalBasis: legalBasis || (type === 'cambiaria' 
-      ? 'Arts. 819 a 827 de la Ley de Enjuiciamiento Civil (LEC) y Arts. 49, 94 y concordantes de la Ley Cambiaria y del Cheque (LCCh).'
-      : 'Arts. 399 y concordantes de la LEC; Arts. 325, 336 y 345 del Código de Comercio; Art. 1124 del Código Civil.'),
-    petitum: petitum || (type === 'cambiaria'
-      ? `Requerimiento judicial de pago inmediato por ${formatNumber(numAmount)} € de principal más ${formatNumber(interestAndCostsAmount)} € para intereses de demora procesal y costas, con decreto de embargo preventivo cautelar sobre las cuentas y bienes del demandado.`
-      : `Sentencia condenatoria que declare el incumplimiento contractual y condene al demandado al pago de ${formatNumber(numAmount)} €, más los intereses legales devengados y las costas procesales.`),
-    evidenceSummary: evidenceSummary || 'Mensajería contractual, extractos bancarios, pagaré oficial y registros del simulador.',
-    attachments: validAttachments,
-    relatedOrderId,
-    promissoryNoteNumber,
-    promissoryNoteId,
-    promissoryNoteDueDate: promissoryNoteData?.dueDate,
-    promissoryNoteData,
-    status: 'pendiente_admision',
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    lawyerFeeAmount: lawyerFeeBase,
-    lawyerFeeIva: lawyerFeeIva,
-    lawyerFeeTotal: lawyerFeeTotal,
-    lawyerFeeInvoiceNumber: lawyerFeeInvoiceNum
-  };
-
-  db.courtLawsuits.unshift(lawsuit);
-
-  // Send judicial & financial notifications
-  addNotification(
-    db,
-    plaintiff.id,
-    '⚖️ Demanda presentada y minuta abonada',
-    `Has presentado la demanda con Autos nº ${caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${lawyerFeeInvoiceNum}). El procedimiento queda pendiente de Auto de admisión a trámite por el Juez.`,
-    'transfer_received',
-    feeTxId
-  );
-
-  // Notify the teacher/judge (pupdaniel) for admission review
-  const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
-  if (judgeUser && judgeUser.id !== plaintiff.id && judgeUser.id !== defendant.id) {
-    addNotification(
-      db,
-      judgeUser.id,
-      '⚖️ Nueva demanda pendiente de admisión a trámite',
-      `El actor ${plaintiff.name} ha interpuesto la ${type === 'cambiaria' ? 'Demanda cambiaria' : 'Demanda ordinaria'} (${caseNumber}) contra ${defendant.name} por ${formatNumber(numAmount)} €. Pendiente de dictar Auto de admisión a trámite o Inadmisión.`,
-      'transfer_received',
-      lawsuit.id
-    );
-  }
-
-  writeDb(db);
-
-  // Sync to Supabase
-  syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
-  syncMovimientoToSupabase(feeTxId + '-out', plaintiff.id, 'TRANSFER_OUT', lawyerFeeTotal, now.toISOString(), feeConcept, lawyerTransfer).catch(e => console.error(e));
-  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: `Demanda ${caseNumber} presentada con éxito. Minuta de abogado (${formatNumber(lawyerFeeTotal)} € con IVA) abonada. Pendiente de admisión a trámite por el Magistrado-Juez.`,
-    lawsuit,
-    newBalance: plaintiff.balance,
-    lawyerFee: {
-      amount: lawyerFeeBase,
-      iva: lawyerFeeIva,
-      total: lawyerFeeTotal,
-      invoiceNumber: lawyerFeeInvoiceNum
-    }
-  });
 });
 
 // Teacher / Judge: Auto de admisión a trámite o Inadmisión de Demanda
@@ -16246,7 +21401,7 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
 });
 
 // Teacher / Judge: Embargo Preventivo Cautelar (Juicio Cambiario - Art. 821 LEC)
-app.post('/api/court/lawsuits/:id/preventative-embargo', (req, res) => {
+app.post('/api/court/lawsuits/:id/preventative-embargo', async (req, res) => {
   const { id } = req.params;
   const { notes, judgeId } = req.body;
 
@@ -16273,72 +21428,121 @@ app.post('/api/court/lawsuits/:id/preventative-embargo', (req, res) => {
     return res.status(404).json({ error: 'Partes procesales no encontradas' });
   }
 
-  const now = new Date();
   const totalToEmbargo = lawsuit.totalClaimAmount || Number((lawsuit.claimedAmount * 1.30).toFixed(2));
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_embargo_${id}_${totalToEmbargo}_${Math.floor(Date.now() / 4000)}`;
 
-  // Retain / Debit funds from defendant to Judicial Consignation Escrow Account
-  defendant.balance = Number((defendant.balance - totalToEmbargo).toFixed(2));
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const embargoTxId = generateId('tx');
+      const embargoConcept = `Traba de Embargo Preventivo Cautelar (Art. 821 LEC) - Autos Cambiarios ${lawsuit.caseNumber}`;
 
-  const embargoTxId = generateId('tx');
-  const embargoConcept = `Traba de Embargo Preventivo Cautelar (Art. 821 LEC) - Autos Cambiarios ${lawsuit.caseNumber}`;
+      const escrowTransfer: Transfer = {
+        id: embargoTxId,
+        senderId: defendant.id,
+        senderName: defendant.name,
+        senderAccount: defendant.accountNumber,
+        receiverId: 'corp-deposito-judicial',
+        receiverName: 'Cuenta General de Consignaciones y Depósitos Judiciales (Juzgado)',
+        receiverAccount: 'ES990001009988776655',
+        amount: totalToEmbargo,
+        concept: embargoConcept,
+        timestamp: now.toISOString()
+      };
 
-  const escrowTransfer: Transfer = {
-    id: embargoTxId,
-    senderId: defendant.id,
-    senderName: defendant.name,
-    senderAccount: defendant.accountNumber,
-    receiverId: 'corp-deposito-judicial',
-    receiverName: 'Cuenta General de Consignaciones y Depósitos Judiciales (Juzgado)',
-    receiverAccount: 'ES990001009988776655',
-    amount: totalToEmbargo,
-    concept: embargoConcept,
-    timestamp: now.toISOString()
-  };
+      lawsuit.status = 'embargo_preventivo';
+      lawsuit.embargoDate = now.toISOString();
+      lawsuit.embargoAmount = totalToEmbargo;
+      lawsuit.embargoTransferId = embargoTxId;
+      lawsuit.embargoNotes = notes || `Auto Judicial de Embargo Preventivo Cautelar decretado y trabado sobre las cuentas y saldos bancarios del demandado (${defendant.name}) por importe de ${formatNumber(totalToEmbargo)} € (Principal + Intereses de demora procesal y costas) conforme al Art. 821 de la LEC.`;
+      lawsuit.updatedAt = now.toISOString();
 
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(escrowTransfer);
+      let newDefendantBalance = defendant.balance;
 
-  lawsuit.status = 'embargo_preventivo';
-  lawsuit.embargoDate = now.toISOString();
-  lawsuit.embargoAmount = totalToEmbargo;
-  lawsuit.embargoTransferId = embargoTxId;
-  lawsuit.embargoNotes = notes || `Auto Judicial de Embargo Preventivo Cautelar decretado y trabado sobre las cuentas y saldos bancarios del demandado (${defendant.name}) por importe de ${formatNumber(totalToEmbargo)} € (Principal + Intereses de demora procesal y costas) conforme al Art. 821 de la LEC.`;
-  lawsuit.updatedAt = now.toISOString();
+      if (dbPool) {
+        await withPostgresTransaction(async (client) => {
+          const lockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE`,
+            [defendant.id]
+          );
 
-  addNotification(
-    db,
-    defendant.id,
-    '⚖️ Auto de embargo preventivo cautelar',
-    `El Magistrado-Juez ha decretado el embargo preventivo inmediato de ${formatNumber(totalToEmbargo)} € en tus cuentas bancarias en los Autos Cambiarios ${lawsuit.caseNumber} (Art. 821 LEC).`,
-    'transfer_received',
-    embargoTxId
-  );
+          if (lockRes.rows.length === 0) {
+            const err: any = new Error('Cuenta del demandado no encontrada en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-  addNotification(
-    db,
-    plaintiff.id,
-    '⚖️ Embargo preventivo trabado con éxito',
-    `Se ha ejecutado la traba de embargo preventivo cautelar por ${formatNumber(totalToEmbargo)} € sobre los saldos del demandado ${defendant.name} en el Juicio Cambiario ${lawsuit.caseNumber} (Art. 821 LEC).`,
-    'transfer_received',
-    embargoTxId
-  );
+          const currentBal = Number(lockRes.rows[0].saldo);
+          newDefendantBalance = Math.round((currentBal - totalToEmbargo) * 100) / 100;
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant.id]);
 
-  writeDb(db);
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              embargoTxId + '-out',
+              defendant.id,
+              totalToEmbargo,
+              now.toISOString(),
+              embargoConcept,
+              defendant.id,
+              defendant.name,
+              lockRes.rows[0].account_number,
+              'corp-deposito-judicial',
+              'Cuenta General de Consignaciones y Depósitos Judiciales (Juzgado)',
+              'ES990001009988776655'
+            ]
+          );
 
-  syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-  syncMovimientoToSupabase(embargoTxId + '-out', defendant.id, 'TRANSFER_OUT', totalToEmbargo, now.toISOString(), embargoConcept, escrowTransfer).catch(e => console.error(e));
-  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+          await syncCourtLawsuitToSupabase(lawsuit, client);
+        }, key);
+      } else {
+        newDefendantBalance = Number((defendant.balance - totalToEmbargo).toFixed(2));
+      }
 
-  res.json({
-    success: true,
-    message: `Embargo preventivo de ${formatNumber(totalToEmbargo)} € trabado sobre las cuentas de ${defendant.name} con éxito (Art. 821 LEC).`,
-    lawsuit,
-    transfer: escrowTransfer
-  });
+      defendant.balance = newDefendantBalance;
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(escrowTransfer);
+
+      addNotification(
+        db,
+        defendant.id,
+        '⚖️ Auto de embargo preventivo cautelar',
+        `El Magistrado-Juez ha decretado el embargo preventivo inmediato de ${formatNumber(totalToEmbargo)} € en tus cuentas bancarias en los Autos Cambiarios ${lawsuit.caseNumber} (Art. 821 LEC).`,
+        'transfer_received',
+        embargoTxId
+      );
+
+      addNotification(
+        db,
+        plaintiff.id,
+        '⚖️ Embargo preventivo trabado con éxito',
+        `Se ha ejecutado la traba de embargo preventivo cautelar por ${formatNumber(totalToEmbargo)} € sobre los saldos del demandado ${defendant.name} en el Juicio Cambiario ${lawsuit.caseNumber} (Art. 821 LEC).`,
+        'transfer_received',
+        embargoTxId
+      );
+
+      writeDb(db);
+
+      return {
+        success: true,
+        message: `Embargo preventivo de ${formatNumber(totalToEmbargo)} € trabado sobre las cuentas de ${defendant.name} con éxito (Art. 821 LEC).`,
+        lawsuit,
+        transfer: escrowTransfer
+      };
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Court Preventative Embargo Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al decretar el embargo preventivo' });
+  }
 });
 
 // Settle / Pay lawsuit voluntarily in court (Allanamiento procesal y consignación)
-app.post('/api/court/lawsuits/:id/pay-settle', (req, res) => {
+app.post('/api/court/lawsuits/:id/pay-settle', async (req, res) => {
   const { id } = req.params;
   const { payerId } = req.body;
 
@@ -16370,85 +21574,169 @@ app.post('/api/court/lawsuits/:id/pay-settle', (req, res) => {
   }
 
   const amountToPay = lawsuit.claimedAmount;
-  if (defendant.balance < amountToPay) {
-    return res.status(400).json({
-      error: `Saldo bancario insuficiente (${formatCurrency(defendant.balance)} disponibles). Se requieren ${formatCurrency(amountToPay)} para consignar y liquidar la demanda judicial.`
-    });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_pay_settle_${id}_${amountToPay}_${Math.floor(Date.now() / 4000)}`;
 
-  // Execute bank transfer
-  defendant.balance = Number((defendant.balance - amountToPay).toFixed(2));
-  plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const txId = generateId('tx');
+      const concept = `Consignación y Pago Judicial - Autos ${lawsuit.caseNumber}`;
 
-  const now = new Date();
-  const txId = generateId('tx');
-  const concept = `Consignación y Pago Judicial - Autos ${lawsuit.caseNumber}`;
+      const newTransfer: Transfer = {
+        id: txId,
+        senderId: defendant.id,
+        senderName: defendant.name,
+        senderAccount: defendant.accountNumber,
+        receiverId: plaintiff.id,
+        receiverName: plaintiff.name,
+        receiverAccount: plaintiff.accountNumber,
+        amount: amountToPay,
+        concept,
+        timestamp: now.toISOString()
+      };
 
-  const newTransfer: Transfer = {
-    id: txId,
-    senderId: defendant.id,
-    senderName: defendant.name,
-    senderAccount: defendant.accountNumber,
-    receiverId: plaintiff.id,
-    receiverName: plaintiff.name,
-    receiverAccount: plaintiff.accountNumber,
-    amount: amountToPay,
-    concept,
-    timestamp: now.toISOString()
-  };
+      lawsuit.status = 'allanada_pagada';
+      lawsuit.updatedAt = now.toISOString();
+      lawsuit.resolutionDate = now.toISOString();
+      lawsuit.resolutionNotes = `Allanamiento procesal íntegro del demandado (${defendant.name}) mediante consignación y abono bancario de ${formatNumber(amountToPay)} € en autos.`;
+      lawsuit.executionTransferId = txId;
 
-  if (!db.transfers) db.transfers = [];
-  db.transfers.unshift(newTransfer);
+      let newDefendantBalance = defendant.balance;
+      let newPlaintiffBalance = plaintiff.balance;
 
-  lawsuit.status = 'allanada_pagada';
-  lawsuit.updatedAt = now.toISOString();
-  lawsuit.resolutionDate = now.toISOString();
-  lawsuit.resolutionNotes = `Allanamiento procesal íntegro del demandado (${defendant.name}) mediante consignación y abono bancario de ${formatNumber(amountToPay)} € en autos.`;
-  lawsuit.executionTransferId = txId;
+      if (dbPool) {
+        await withPostgresTransaction(async (client) => {
+          // Lock accounts in deterministic order to prevent deadlocks
+          const orderedIds = [defendant.id, plaintiff.id].sort();
+          const lockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = ANY($1) FOR UPDATE`,
+            [orderedIds]
+          );
 
-  // If tied to promissory note, update promissory note status too
-  if (lawsuit.promissoryNoteNumber && db.marketMessages) {
-    db.marketMessages.forEach(m => {
-      if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
-        m.promissoryNoteData.status = 'pagado';
-        m.promissoryNoteData.paidAt = now.toISOString();
-        m.promissoryNoteData.paidTransferId = txId;
+          const defRow = lockRes.rows.find(r => r.id === defendant.id);
+          const plainRow = lockRes.rows.find(r => r.id === plaintiff.id);
+
+          if (!defRow || !plainRow) {
+            const err: any = new Error('Cuentas no encontradas en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const defBal = Number(defRow.saldo);
+          if (defBal < amountToPay) {
+            const err: any = new Error(
+              `Saldo bancario insuficiente (${formatCurrency(defBal)} disponibles). Se requieren ${formatCurrency(amountToPay)} para consignar y liquidar la demanda judicial.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          newDefendantBalance = Math.round((defBal - amountToPay) * 100) / 100;
+          newPlaintiffBalance = Math.round((Number(plainRow.saldo) + amountToPay) * 100) / 100;
+
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant.id]);
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff.id]);
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              defendant.id,
+              amountToPay,
+              now.toISOString(),
+              concept,
+              defendant.id,
+              defendant.name,
+              defRow.account_number,
+              plaintiff.id,
+              plaintiff.name,
+              plainRow.account_number
+            ]
+          );
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-in',
+              plaintiff.id,
+              amountToPay,
+              now.toISOString(),
+              concept,
+              defendant.id,
+              defendant.name,
+              defRow.account_number,
+              plaintiff.id,
+              plaintiff.name,
+              plainRow.account_number
+            ]
+          );
+
+          await syncCourtLawsuitToSupabase(lawsuit, client);
+        }, key);
+      } else {
+        if (defendant.balance < amountToPay) {
+          return res.status(400).json({
+            error: `Saldo bancario insuficiente (${formatCurrency(defendant.balance)} disponibles). Se requieren ${formatCurrency(amountToPay)} para consignar y liquidar la demanda judicial.`
+          });
+        }
+        newDefendantBalance = Number((defendant.balance - amountToPay).toFixed(2));
+        newPlaintiffBalance = Number((plaintiff.balance + amountToPay).toFixed(2));
       }
+
+      defendant.balance = newDefendantBalance;
+      plaintiff.balance = newPlaintiffBalance;
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(newTransfer);
+
+      // If tied to promissory note, update promissory note status too
+      if (lawsuit.promissoryNoteNumber && db.marketMessages) {
+        db.marketMessages.forEach(m => {
+          if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
+            m.promissoryNoteData.status = 'pagado';
+            m.promissoryNoteData.paidAt = now.toISOString();
+            m.promissoryNoteData.paidTransferId = txId;
+          }
+        });
+      }
+
+      addNotification(
+        db,
+        plaintiff.id,
+        '⚖️ Cobro de demanda judicial',
+        `El demandado ${defendant.name} ha satisfecho íntegramente la deuda de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. Saldo abonado en tu cuenta.`,
+        'transfer_received',
+        txId
+      );
+
+      addNotification(
+        db,
+        defendant.id,
+        '⚖️ Demanda judicial liquidada',
+        `Has satisfecho la cantidad de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. El procedimiento ha quedado archivado por allanamiento.`,
+        'transfer_received',
+        txId
+      );
+
+      writeDb(db);
+
+      return {
+        success: true,
+        message: `Deuda judicial satisfecha con éxito por ${formatNumber(amountToPay)} €. Autos archivados por allanamiento.`,
+        lawsuit,
+        transfer: newTransfer,
+        newBalance: defendant.balance
+      };
     });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Court Pay Settle Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al liquidar la demanda judicial' });
   }
-
-  addNotification(
-    db,
-    plaintiff.id,
-    '⚖️ Cobro de demanda judicial',
-    `El demandado ${defendant.name} ha satisfecho íntegramente la deuda de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. Saldo abonado en tu cuenta.`,
-    'transfer_received',
-    txId
-  );
-
-  addNotification(
-    db,
-    defendant.id,
-    '⚖️ Demanda judicial liquidada',
-    `Has satisfecho la cantidad de ${formatNumber(amountToPay)} € en los Autos ${lawsuit.caseNumber}. El procedimiento ha quedado archivado por allanamiento.`,
-    'transfer_received',
-    txId
-  );
-
-  writeDb(db);
-  syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-  syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-out', defendant.id, 'TRANSFER_OUT', amountToPay, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
-  syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
-  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: `Deuda judicial satisfecha con éxito por ${formatNumber(amountToPay)} €. Autos archivados por allanamiento.`,
-    lawsuit,
-    transfer: newTransfer,
-    newBalance: defendant.balance
-  });
 });
 
 // Defendant response / contestación a la demanda (LEC)
@@ -16972,17 +22260,17 @@ async function startServer() {
   try {
     const startupDb = readDb();
     checkAndProcessAutomatedElectricity(startupDb);
-    processStudentAutomaticPayments(startupDb);
+    await processStudentAutomaticPayments(startupDb);
   } catch (e) {
     console.error('[Startup Automated Payments Error]', e);
   }
 
   // Periodic check every 15 minutes for automated bills and obligations
-  setInterval(() => {
+  setInterval(async () => {
     try {
       const periodicDb = readDb();
       checkAndProcessAutomatedElectricity(periodicDb);
-      processStudentAutomaticPayments(periodicDb);
+      await processStudentAutomaticPayments(periodicDb);
     } catch (e) {
       console.error('[Periodic Automated Processing Error]', e);
     }
