@@ -2105,6 +2105,61 @@ async function syncRawMaterialAnnouncementToSupabase(ann: RawMaterialAnnouncemen
   }
 }
 
+function parseRawMaterialAnnouncementRow(row: any): RawMaterialAnnouncement {
+  let parsedLevel: number | 'official' | undefined = undefined;
+  if (row.seller_level === 'official') {
+    parsedLevel = 'official';
+  } else if (row.seller_level !== undefined && row.seller_level !== null) {
+    const numLevel = Number(row.seller_level);
+    if (!isNaN(numLevel)) parsedLevel = numLevel as any;
+  }
+
+  let parsedDuration: number | 'indefinido' = 'indefinido';
+  if (row.duration_days && row.duration_days !== 'indefinido') {
+    const numDur = Number(row.duration_days);
+    if (!isNaN(numDur)) parsedDuration = numDur;
+  }
+
+  let parsedStock: number | 'ilimitado' = 'ilimitado';
+  if (row.stock && row.stock !== 'ilimitado') {
+    const numStock = Number(row.stock);
+    if (!isNaN(numStock)) parsedStock = numStock;
+  }
+
+  let parsedPriceAlert: any = undefined;
+  if (row.price_alert) {
+    try {
+      parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
+    } catch (e) {
+      console.warn('[Supabase Parse] price_alert JSON parse error:', e);
+    }
+  }
+
+  return {
+    id: String(row.id),
+    materialType: String(row.material_type) as any,
+    title: String(row.title),
+    presentation: String(row.presentation || 'Pallet'),
+    unitWeightKg: Number(row.unit_weight_kg || 1000),
+    isPallet: Boolean(row.is_pallet),
+    pricePerUnit: Number(row.price_per_unit || 0),
+    description: String(row.description || ''),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    durationDays: parsedDuration,
+    expirationDate: row.expiration_date ? new Date(row.expiration_date).toISOString() : undefined,
+    stock: parsedStock,
+    active: Boolean(row.active),
+    sellerId: row.seller_id ? String(row.seller_id) : undefined,
+    sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerLevel: parsedLevel,
+    sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
+    sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
+    sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
+    isDesTornillo: Boolean(row.is_des_tornillo),
+    priceAlert: parsedPriceAlert
+  };
+}
+
 async function syncMarketMessageToSupabase(msg: MarketMessage) {
   if (!dbPool) return;
   try {
@@ -14024,60 +14079,7 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
     try {
       const resRaw = await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
       if (resRaw && resRaw.rows && resRaw.rows.length > 0) {
-        announcements = resRaw.rows.map((row: any) => {
-          let parsedLevel: number | 'official' | undefined = undefined;
-          if (row.seller_level === 'official') {
-            parsedLevel = 'official';
-          } else if (row.seller_level) {
-            const numLevel = Number(row.seller_level);
-            if (!isNaN(numLevel)) parsedLevel = numLevel as any;
-          }
-
-          let parsedDuration: number | 'indefinido' = 'indefinido';
-          if (row.duration_days && row.duration_days !== 'indefinido') {
-            const numDur = Number(row.duration_days);
-            if (!isNaN(numDur)) parsedDuration = numDur;
-          }
-
-          let parsedStock: number | 'ilimitado' = 'ilimitado';
-          if (row.stock && row.stock !== 'ilimitado') {
-            const numStock = Number(row.stock);
-            if (!isNaN(numStock)) parsedStock = numStock;
-          }
-
-          let parsedPriceAlert: any = undefined;
-          if (row.price_alert) {
-            try {
-              parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
-            } catch (e) {
-              console.warn('[Supabase Parse] price_alert JSON parse error:', e);
-            }
-          }
-
-          return {
-            id: String(row.id),
-            materialType: String(row.material_type) as any,
-            title: String(row.title),
-            presentation: String(row.presentation || 'Pallet'),
-            unitWeightKg: Number(row.unit_weight_kg || 1000),
-            isPallet: Boolean(row.is_pallet),
-            pricePerUnit: Number(row.price_per_unit || 0),
-            description: String(row.description || ''),
-            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-            durationDays: parsedDuration,
-            expirationDate: row.expiration_date ? new Date(row.expiration_date).toISOString() : undefined,
-            stock: parsedStock,
-            active: Boolean(row.active),
-            sellerId: row.seller_id ? String(row.seller_id) : undefined,
-            sellerName: row.seller_name ? String(row.seller_name) : undefined,
-            sellerLevel: parsedLevel,
-            sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
-            sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
-            sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
-            isDesTornillo: Boolean(row.is_des_tornillo),
-            priceAlert: parsedPriceAlert
-          };
-        });
+        announcements = resRaw.rows.map(parseRawMaterialAnnouncementRow);
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Announcements]:', e);
@@ -14090,199 +14092,661 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
   res.json({ success: true, announcements });
 });
 
-app.post('/api/raw-materials/announcements', async (req, res) => {
-  const { materialType, title, presentation, unitWeightKg, isPallet, pricePerUnit, description, durationDays, stock, sellerId, sellerName, sellerLocation, sellerMunicipality, sellerProvince, isDesTornillo: rawIsDesTornillo } = req.body;
-  const db = readDb();
-  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+app.post(['/api/raw-materials/announcements', '/api/teacher/raw-materials/announcements'], async (req, res) => {
+  const {
+    materialType,
+    title,
+    presentation,
+    unitWeightKg,
+    isPallet,
+    pricePerUnit,
+    description,
+    durationDays,
+    stock,
+    sellerId,
+    sellerName,
+    sellerLocation,
+    sellerMunicipality,
+    sellerProvince,
+    isDesTornillo: rawIsDesTornillo,
+    idempotencyKey: bodyIdempotencyKey
+  } = req.body;
 
   let sId = sellerId || 'proveedor-materia-prima';
-  let sName = sellerName || 'Suministros Industriales S.A.';
-  let sLevel: number | 'official' = 'official';
 
-  const user = db.users.find(u => u.id === sId);
-  if (user) {
-    sName = user.role === 'teacher' ? 'BricoMaster Distribuciones, S.A.' : user.name;
-    sLevel = user.role === 'teacher' ? 'official' : (user.level || 1);
-  }
+  // 1. If no PostgreSQL pool available, fallback to legacy in-memory handling
+  if (!dbPool) {
+    const db = readDb();
+    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
 
-  const userWh = (db.acquisitions || []).find((a: any) => a.studentId === sId && (a.propertyType === 'nave_industrial' || a.propertyType === 'almacen'));
-  const finalSellerLoc = sellerLocation || (userWh ? (userWh.location || userWh.municipality || userWh.propertyTitle) : ((user as any)?.location || ''));
-  const finalSellerMun = sellerMunicipality || (userWh ? userWh.municipality : ((user as any)?.municipality || (user as any)?.city || ''));
-  const finalSellerProv = sellerProvince || (userWh ? userWh.province : ((user as any)?.province || (user as any)?.provincia || ''));
+    let sName = sellerName || 'Suministros Industriales S.A.';
+    let sLevel: number | 'official' = 'official';
 
-  const isDesTornilloVal = !!rawIsDesTornillo || (user && user.level === 3);
-
-  let finalMaterialType = materialType || 'hierro';
-  let annStockValue: number | 'ilimitado' = stock !== undefined ? stock : 'ilimitado';
-
-  if (user && user.role !== 'teacher') {
-    finalMaterialType = 'producto_final';
-    const sellerInv = checkAndCalculateProduction(db, user.id);
-
-    const titleLower = (title || '').toLowerCase();
-    const isPlana = titleLower.includes('plana');
-    const isEstrella = titleLower.includes('estrella');
-
-    const availableUnits = getAvailableStockForSellerProduct(sellerInv, title, finalMaterialType);
-
-    const otherActiveAnns = (db.rawMaterialAnnouncements || []).filter(
-      a => a.sellerId === user.id && a.active
-    );
-    const lockedInOtherAnns = otherActiveAnns.reduce((sum, a) => {
-      const aTitle = (a.title || '').toLowerCase();
-      if (isPlana && !aTitle.includes('plana')) return sum;
-      if (isEstrella && !aTitle.includes('estrella')) return sum;
-      return sum + (typeof a.stock === 'number' ? a.stock : 0);
-    }, 0);
-
-    const availableToLock = Math.max(0, availableUnits - lockedInOtherAnns);
-    const requestedStock = (stock === 'ilimitado' || stock === '' || stock === undefined || stock === null)
-      ? availableToLock
-      : Number(stock);
-
-    if (availableUnits <= 0) {
-      return res.status(400).json({
-        error: `No dispones de existencias en tu almacén de "${title || 'este producto'}" para poner a la venta. Tu stock actual es de ${availableUnits} unidades.`
-      });
+    const user = db.users.find(u => u.id === sId);
+    if (user) {
+      sName = user.role === 'teacher' ? 'BricoMaster Distribuciones, S.A.' : user.name;
+      sLevel = user.role === 'teacher' ? 'official' : (user.level || 1);
     }
 
-    if (requestedStock > availableToLock) {
-      return res.status(400).json({
-        error: `Stock insuficiente en tu almacén: intentas poner a la venta ${requestedStock} u., pero de tus ${availableUnits} u. producidas/almacenadas ya tienes ${lockedInOtherAnns} u. comprometidas en otros anuncios. Máximo disponible a la venta: ${availableToLock} u.`
-      });
+    const userWh = (db.acquisitions || []).find((a: any) => a.studentId === sId && (a.propertyType === 'nave_industrial' || a.propertyType === 'almacen'));
+    const finalSellerLoc = sellerLocation || (userWh ? (userWh.location || userWh.municipality || userWh.propertyTitle) : ((user as any)?.location || ''));
+    const finalSellerMun = sellerMunicipality || (userWh ? userWh.municipality : ((user as any)?.municipality || (user as any)?.city || ''));
+    const finalSellerProv = sellerProvince || (userWh ? userWh.province : ((user as any)?.province || (user as any)?.provincia || ''));
+
+    const isDesTornilloVal = !!rawIsDesTornillo || (user && user.level === 3);
+
+    let finalMaterialType = materialType || 'hierro';
+    let annStockValue: number | 'ilimitado' = stock !== undefined ? stock : 'ilimitado';
+
+    if (user && user.role !== 'teacher') {
+      finalMaterialType = 'producto_final';
+      const sellerInv = checkAndCalculateProduction(db, user.id);
+
+      const titleLower = (title || '').toLowerCase();
+      const isPlana = titleLower.includes('plana');
+      const isEstrella = titleLower.includes('estrella');
+
+      const availableUnits = getAvailableStockForSellerProduct(sellerInv, title, finalMaterialType);
+
+      const otherActiveAnns = (db.rawMaterialAnnouncements || []).filter(
+        a => a.sellerId === user.id && a.active
+      );
+      const lockedInOtherAnns = otherActiveAnns.reduce((sum, a) => {
+        const aTitle = (a.title || '').toLowerCase();
+        if (isPlana && !aTitle.includes('plana')) return sum;
+        if (isEstrella && !aTitle.includes('estrella')) return sum;
+        return sum + (typeof a.stock === 'number' ? a.stock : 0);
+      }, 0);
+
+      const availableToLock = Math.max(0, availableUnits - lockedInOtherAnns);
+      const requestedStock = (stock === 'ilimitado' || stock === '' || stock === undefined || stock === null)
+        ? availableToLock
+        : Number(stock);
+
+      if (availableUnits <= 0) {
+        return res.status(400).json({
+          error: `No dispones de existencias en tu almacén de "${title || 'este producto'}" para poner a la venta. Tu stock actual es de ${availableUnits} unidades.`
+        });
+      }
+
+      if (requestedStock > availableToLock) {
+        return res.status(400).json({
+          error: `Stock insuficiente en tu almacén: intentas poner a la venta ${requestedStock} u., pero de tus ${availableUnits} u. producidas/almacenadas ya tienes ${lockedInOtherAnns} u. comprometidas en otros anuncios. Máximo disponible a la venta: ${availableToLock} u.`
+        });
+      }
+      annStockValue = requestedStock;
     }
-    annStockValue = requestedStock;
+
+    const id = generateId('rm-ann');
+    const newAnn: RawMaterialAnnouncement = {
+      id,
+      materialType: finalMaterialType,
+      title: title || (isDesTornilloVal ? 'Anuncio El Des-Tornillo' : 'Producto final alumno'),
+      presentation: presentation || 'Unidades',
+      unitWeightKg: (finalMaterialType === 'producto_final' || isDesTornilloVal || (title && title.toLowerCase().includes('destornillador'))) ? 0 : (Number(unitWeightKg) || 1000),
+      isPallet: isPallet !== undefined ? !!isPallet : (finalMaterialType !== 'producto_final'),
+      pricePerUnit: Number(pricePerUnit) || 100,
+      description: description || '',
+      durationDays: durationDays || 'indefinido',
+      stock: annStockValue,
+      active: true,
+      updatedAt: new Date().toISOString(),
+      sellerId: sId,
+      sellerName: sName,
+      sellerLevel: sLevel,
+      sellerLocation: finalSellerLoc,
+      sellerMunicipality: finalSellerMun,
+      sellerProvince: finalSellerProv,
+      isDesTornillo: isDesTornilloVal
+    };
+
+    db.rawMaterialAnnouncements.unshift(newAnn);
+    await syncRawMaterialAnnouncementToSupabase(newAnn);
+
+    const otherUsers = db.users.filter(u => u.id !== sId);
+    otherUsers.forEach(u => {
+      addNotification(
+        db,
+        u.id,
+        'Nuevo Anuncio en Mercado',
+        `Se ha publicado "${newAnn.title}" en Mercado por ${sName} (${newAnn.pricePerUnit.toFixed(2)} €/u).`,
+        'announcement_new',
+        undefined,
+        newAnn.id
+      );
+    });
+
+    writeDb(db);
+    return res.json({ success: true, announcement: newAnn, message: 'Anuncio publicado con éxito en el Mercado.' });
   }
 
-  const id = generateId('rm-ann');
-  const newAnn: RawMaterialAnnouncement = {
-    id,
-    materialType: finalMaterialType,
-    title: title || (isDesTornilloVal ? 'Anuncio El Des-Tornillo' : 'Producto final alumno'),
-    presentation: presentation || 'Unidades',
-    unitWeightKg: (finalMaterialType === 'producto_final' || isDesTornilloVal || (title && title.toLowerCase().includes('destornillador'))) ? 0 : (Number(unitWeightKg) || 1000),
-    isPallet: isPallet !== undefined ? !!isPallet : (finalMaterialType !== 'producto_final'),
-    pricePerUnit: Number(pricePerUnit) || 100,
-    description: description || '',
-    durationDays: durationDays || 'indefinido',
-    stock: annStockValue,
-    active: true,
-    updatedAt: new Date().toISOString(),
-    sellerId: sId,
-    sellerName: sName,
-    sellerLevel: sLevel,
-    sellerLocation: finalSellerLoc,
-    sellerMunicipality: finalSellerMun,
-    sellerProvince: finalSellerProv,
-    isDesTornillo: isDesTornilloVal
-  };
+  // 2. PostgreSQL Transactional Implementation (FASE 4.3.11.1)
+  const headerIdem = req.headers['x-idempotency-key'] as string | undefined;
+  const idemKey = headerIdem || bodyIdempotencyKey || `rm_ann_${sId}_${generateId('idem')}`;
 
-  db.rawMaterialAnnouncements.unshift(newAnn);
-  await syncRawMaterialAnnouncementToSupabase(newAnn);
+  try {
+    const result = await executeWithIdempotency(idemKey, async (effectiveKey) => {
+      return await withPostgresTransaction(async (client) => {
+        // Look up seller user in PostgreSQL (cuentas) or db.json fallback
+        const userQueryRes = await client.query(
+          `SELECT id, alumno, role, level FROM cuentas WHERE id = $1`,
+          [sId]
+        );
+        const pgUser = userQueryRes.rows[0];
 
-  const otherUsers = db.users.filter(u => u.id !== sId);
-  otherUsers.forEach(u => {
-    addNotification(
-      db,
-      u.id,
-      'Nuevo Anuncio en Mercado',
-      `Se ha publicado "${newAnn.title}" en Mercado por ${sName} (${newAnn.pricePerUnit.toFixed(2)} €/u).`,
-      'announcement_new',
-      undefined,
-      newAnn.id
-    );
-  });
+        const dbSnapshot = readDb();
+        const memUser = dbSnapshot.users?.find(u => u.id === sId);
 
-  writeDb(db);
-  res.json({ success: true, announcement: newAnn, message: 'Anuncio publicado con éxito en el Mercado.' });
+        const isTeacher = (pgUser && pgUser.role === 'teacher') ||
+          (memUser && memUser.role === 'teacher') ||
+          sId === 'proveedor-materia-prima' ||
+          sId === 'profesor-1';
+
+        let sName = sellerName || 'Suministros Industriales S.A.';
+        let sLevel: number | 'official' = 'official';
+
+        if (isTeacher) {
+          sName = 'BricoMaster Distribuciones, S.A.';
+          sLevel = 'official';
+        } else if (pgUser) {
+          sName = pgUser.alumno || sellerName || 'Estudiante';
+          sLevel = pgUser.level || memUser?.level || 1;
+        } else if (memUser) {
+          sName = memUser.name || sellerName || 'Estudiante';
+          sLevel = memUser.level || 1;
+        }
+
+        const userWh = (dbSnapshot.acquisitions || []).find((a: any) => a.studentId === sId && (a.propertyType === 'nave_industrial' || a.propertyType === 'almacen'));
+        const finalSellerLoc = sellerLocation || (userWh ? (userWh.location || userWh.municipality || userWh.propertyTitle) : ((memUser as any)?.location || ''));
+        const finalSellerMun = sellerMunicipality || (userWh ? userWh.municipality : ((memUser as any)?.municipality || (memUser as any)?.city || ''));
+        const finalSellerProv = sellerProvince || (userWh ? userWh.province : ((memUser as any)?.province || (memUser as any)?.provincia || ''));
+
+        const isDesTornilloVal = !!rawIsDesTornillo || (sLevel === 3) || (memUser && memUser.level === 3);
+
+        let finalMaterialType = materialType || 'hierro';
+        let annStockValue: number | 'ilimitado' = stock !== undefined ? stock : 'ilimitado';
+
+        // For student sellers: lock student inventory row and check committed stock in PostgreSQL
+        if (!isTeacher && sId !== 'proveedor-materia-prima') {
+          finalMaterialType = 'producto_final';
+
+          // 2.1. Ensure inventory row exists and lock it
+          await client.query(
+            `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+             VALUES ($1, $2, '{}'::jsonb)
+             ON CONFLICT (alumno_id) DO NOTHING`,
+            [sId, sName]
+          );
+
+          const invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [sId]
+          );
+
+          if (!invRes || invRes.rows.length === 0) {
+            const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${sId}`);
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const sellerInv = parseInventoryRow(invRes.rows[0]);
+          const availableUnits = getAvailableStockForSellerProduct(sellerInv, title, finalMaterialType);
+
+          const titleLower = (title || '').toLowerCase();
+          const isPlana = titleLower.includes('plana');
+          const isEstrella = titleLower.includes('estrella');
+
+          // 2.2. Query active announcements for this student in PostgreSQL
+          const activeAnnsRes = await client.query(
+            `SELECT id, title, stock FROM anuncios_materia_prima
+             WHERE seller_id = $1 AND active = true`,
+            [sId]
+          );
+
+          // Calculate stock already committed in other active announcements
+          const lockedInOtherAnns = activeAnnsRes.rows.reduce((sum: number, a: any) => {
+            const aTitle = (a.title || '').toLowerCase();
+            if (isPlana && !aTitle.includes('plana')) return sum;
+            if (isEstrella && !aTitle.includes('estrella')) return sum;
+            const numStock = (a.stock !== null && a.stock !== undefined && a.stock !== 'ilimitado') ? Number(a.stock) : 0;
+            return sum + (isNaN(numStock) ? 0 : numStock);
+          }, 0);
+
+          const availableToLock = Math.max(0, availableUnits - lockedInOtherAnns);
+          const requestedStock = (stock === 'ilimitado' || stock === '' || stock === undefined || stock === null)
+            ? availableToLock
+            : Number(stock);
+
+          if (availableUnits <= 0) {
+            const err: any = new Error(`No dispones de existencias en tu almacén de "${title || 'este producto'}" para poner a la venta. Tu stock actual es de ${availableUnits} unidades.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          if (requestedStock > availableToLock) {
+            const err: any = new Error(`Stock insuficiente en tu almacén: intentas poner a la venta ${requestedStock} u., pero de tus ${availableUnits} u. producidas/almacenadas ya tienes ${lockedInOtherAnns} u. comprometidas en otros anuncios. Máximo disponible a la venta: ${availableToLock} u.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          annStockValue = requestedStock;
+        }
+
+        const id = generateId('rm-ann');
+        const newAnn: RawMaterialAnnouncement = {
+          id,
+          materialType: finalMaterialType,
+          title: title || (isDesTornilloVal ? 'Anuncio El Des-Tornillo' : 'Producto final alumno'),
+          presentation: presentation || 'Unidades',
+          unitWeightKg: (finalMaterialType === 'producto_final' || isDesTornilloVal || (title && title.toLowerCase().includes('destornillador'))) ? 0 : (Number(unitWeightKg) || 1000),
+          isPallet: isPallet !== undefined ? !!isPallet : (finalMaterialType !== 'producto_final'),
+          pricePerUnit: Number(pricePerUnit) || 100,
+          description: description || '',
+          durationDays: durationDays || 'indefinido',
+          stock: annStockValue,
+          active: true,
+          updatedAt: new Date().toISOString(),
+          sellerId: sId,
+          sellerName: sName,
+          sellerLevel: sLevel,
+          sellerLocation: finalSellerLoc,
+          sellerMunicipality: finalSellerMun,
+          sellerProvince: finalSellerProv,
+          isDesTornillo: isDesTornilloVal
+        };
+
+        // 2.3. Insert announcement directly in PostgreSQL inside transaction
+        await client.query(
+          `INSERT INTO anuncios_materia_prima (
+            id, material_type, title, presentation, unit_weight_kg, is_pallet, price_per_unit,
+            description, updated_at, duration_days, expiration_date, stock, active, seller_id, seller_name, seller_level,
+            seller_location, seller_municipality, seller_province,
+            is_des_tornillo, price_alert
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          ON CONFLICT (id) DO UPDATE SET
+            material_type = EXCLUDED.material_type,
+            title = EXCLUDED.title,
+            presentation = EXCLUDED.presentation,
+            unit_weight_kg = EXCLUDED.unit_weight_kg,
+            is_pallet = EXCLUDED.is_pallet,
+            price_per_unit = EXCLUDED.price_per_unit,
+            description = EXCLUDED.description,
+            updated_at = EXCLUDED.updated_at,
+            duration_days = EXCLUDED.duration_days,
+            expiration_date = EXCLUDED.expiration_date,
+            stock = EXCLUDED.stock,
+            active = EXCLUDED.active,
+            seller_id = EXCLUDED.seller_id,
+            seller_name = EXCLUDED.seller_name,
+            seller_level = EXCLUDED.seller_level,
+            seller_location = EXCLUDED.seller_location,
+            seller_municipality = EXCLUDED.seller_municipality,
+            seller_province = EXCLUDED.seller_province,
+            is_des_tornillo = EXCLUDED.is_des_tornillo,
+            price_alert = EXCLUDED.price_alert`,
+          [
+            newAnn.id,
+            newAnn.materialType,
+            newAnn.title,
+            newAnn.presentation,
+            newAnn.unitWeightKg,
+            newAnn.isPallet,
+            newAnn.pricePerUnit,
+            newAnn.description,
+            newAnn.updatedAt,
+            String(newAnn.durationDays),
+            newAnn.expirationDate || null,
+            String(newAnn.stock),
+            newAnn.active,
+            newAnn.sellerId,
+            newAnn.sellerName,
+            newAnn.sellerLevel !== undefined ? String(newAnn.sellerLevel) : null,
+            newAnn.sellerLocation || '',
+            newAnn.sellerMunicipality || '',
+            newAnn.sellerProvince || '',
+            !!newAnn.isDesTornillo,
+            newAnn.priceAlert ? JSON.stringify(newAnn.priceAlert) : null
+          ]
+        );
+
+        return { success: true, announcement: newAnn, message: 'Anuncio publicado con éxito en el Mercado.' };
+      }, effectiveKey);
+    });
+
+    // 2.4. Post-commit local cache update (fresh read to prevent stale overwrites)
+    try {
+      if (result && (result as any).announcement) {
+        const publishedAnn = (result as any).announcement;
+        const freshDb = readDb();
+        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+        const existingIdx = freshDb.rawMaterialAnnouncements.findIndex(a => a.id === publishedAnn.id);
+        if (existingIdx >= 0) {
+          freshDb.rawMaterialAnnouncements[existingIdx] = publishedAnn;
+        } else {
+          freshDb.rawMaterialAnnouncements.unshift(publishedAnn);
+        }
+
+        const otherUsers = (freshDb.users || []).filter(u => u.id !== publishedAnn.sellerId);
+        otherUsers.forEach(u => {
+          addNotification(
+            freshDb,
+            u.id,
+            'Nuevo Anuncio en Mercado',
+            `Se ha publicado "${publishedAnn.title}" en Mercado por ${publishedAnn.sellerName} (${Number(publishedAnn.pricePerUnit).toFixed(2)} €/u).`,
+            'announcement_new',
+            undefined,
+            publishedAnn.id
+          );
+        });
+
+        writeDb(freshDb);
+      }
+    } catch (cacheErr) {
+      console.error('[Post-commit Cache] Error updating local announcement cache:', cacheErr);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400;
+    return res.status(statusCode).json({ error: error.message || 'Error al procesar la publicación del anuncio' });
+  }
 });
 
 app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], async (req, res) => {
   const { id } = req.params;
-  const { pricePerUnit, title, description, presentation, durationDays, stock, active, isDesTornillo, unitWeightKg, isPallet, materialType, sellerId, sellerName, sellerLevel, sellerLocation, sellerMunicipality, sellerProvince } = req.body;
-  const db = readDb();
+  const {
+    pricePerUnit,
+    title,
+    description,
+    presentation,
+    durationDays,
+    stock,
+    active,
+    isDesTornillo,
+    unitWeightKg,
+    isPallet,
+    materialType,
+    sellerId,
+    sellerName,
+    sellerLevel,
+    sellerLocation,
+    sellerMunicipality,
+    sellerProvince,
+    userId,
+    studentId,
+    requesterId
+  } = req.body;
 
-  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
-  const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
-  if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
+  // 1. Idempotency Key Extraction
+  const headerIdem = req.headers['x-idempotency-key'] as string | undefined;
+  const bodyIdem = req.body?.idempotencyKey || req.body?.idempotency_key;
+  const idemKey = headerIdem || bodyIdem || `rm_ann_put_${id}_${generateId('idem')}`;
 
-  const isTeacherOrOfficial = 
-    ann.sellerId === 'proveedor-materia-prima' || 
-    ann.sellerId === 'profesor-1' || 
-    ann.sellerLevel === 'official' ||
-    sellerId === 'profesor-1' ||
-    ann.materialType !== 'producto_final' ||
-    (materialType && materialType !== 'producto_final');
+  // If dbPool is not configured, fallback gracefully
+  if (!dbPool) {
+    const db = readDb();
+    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+    const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
+    if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
 
-  if (!isTeacherOrOfficial && ann.sellerId) {
-    const sellerInv = checkAndCalculateProduction(db, ann.sellerId);
-    const annTitle = title || ann.title || '';
-    const titleLower = annTitle.toLowerCase();
-    const isPlana = titleLower.includes('plana');
-    const isEstrella = titleLower.includes('estrella');
-    const mType = ann.materialType;
+    const reqUser = userId || studentId || requesterId || (req.headers['x-user-id'] as string | undefined);
+    if (reqUser && reqUser !== ann.sellerId && reqUser !== 'profesor-1') {
+      return res.status(403).json({ error: 'No tienes permisos para editar este anuncio. Solo el vendedor propietario o el profesor pueden modificarlo.' });
+    }
 
-    const availableUnits = getAvailableStockForSellerProduct(sellerInv, annTitle, mType);
+    if (pricePerUnit !== undefined) ann.pricePerUnit = Number(pricePerUnit);
+    if (title) ann.title = title;
+    if (description !== undefined) ann.description = description;
+    if (presentation !== undefined) ann.presentation = presentation;
+    if (unitWeightKg !== undefined) ann.unitWeightKg = Number(unitWeightKg);
+    if (isPallet !== undefined) ann.isPallet = !!isPallet;
+    if (materialType !== undefined) ann.materialType = materialType;
+    if (durationDays !== undefined) ann.durationDays = durationDays;
+    if (stock !== undefined) ann.stock = stock;
+    if (active !== undefined) ann.active = !!active;
+    if (isDesTornillo !== undefined) ann.isDesTornillo = !!isDesTornillo;
+    if (sellerId !== undefined) ann.sellerId = sellerId;
+    if (sellerName !== undefined) ann.sellerName = sellerName;
+    if (sellerLevel !== undefined) ann.sellerLevel = sellerLevel;
+    if (sellerLocation !== undefined) ann.sellerLocation = sellerLocation;
+    if (sellerMunicipality !== undefined) ann.sellerMunicipality = sellerMunicipality;
+    if (sellerProvince !== undefined) ann.sellerProvince = sellerProvince;
+    ann.updatedAt = new Date().toISOString();
+    writeDb(db);
+    return res.json({ success: true, announcement: ann });
+  }
 
-    const otherActiveAnns = (db.rawMaterialAnnouncements || []).filter(
-      a => a.sellerId === ann.sellerId && a.active && a.id !== ann.id
-    );
-    const lockedInOtherAnns = otherActiveAnns.reduce((sum, a) => {
-      const aTitle = (a.title || '').toLowerCase();
-      if (isPlana && !aTitle.includes('plana')) return sum;
-      if (isEstrella && !aTitle.includes('estrella')) return sum;
-      return sum + (typeof a.stock === 'number' ? a.stock : 0);
-    }, 0);
+  try {
+    const result = await executeWithIdempotency(idemKey, async (effectiveKey) => {
+      return await withPostgresTransaction(async (client) => {
+        // 2. Lock Announcement in PostgreSQL (Fuente de verdad)
+        let annRes = await client.query(
+          `SELECT * FROM anuncios_materia_prima WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
 
-    const availableToLock = Math.max(0, availableUnits - lockedInOtherAnns);
+        if (!annRes || annRes.rows.length === 0) {
+          // Fallback sync from memory/seeds if first time
+          const dbSnap = readDb();
+          const memAnn = (dbSnap.rawMaterialAnnouncements || []).find((a: any) => a.id === id);
+          if (memAnn) {
+            await syncRawMaterialAnnouncementToSupabase(memAnn, client);
+            annRes = await client.query(
+              `SELECT * FROM anuncios_materia_prima WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
 
-    if (stock !== undefined) {
-      const requestedStock = (stock === 'ilimitado' || stock === '' || stock === null)
-        ? availableToLock
-        : Number(stock);
+        if (!annRes || annRes.rows.length === 0) {
+          const err: any = new Error('Anuncio de materia prima no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
 
-      if (requestedStock > availableToLock) {
-        return res.status(400).json({
-          error: `Stock insuficiente en tu almacén: intentas configurar el stock a ${requestedStock} u., pero solo dispones de ${availableToLock} u. libres (${availableUnits} u. producidas - ${lockedInOtherAnns} u. en otros anuncios).`
-        });
+        const currentDbRow = annRes.rows[0];
+        const currentAnn = parseRawMaterialAnnouncementRow(currentDbRow);
+
+        // 3. Authorization check (against PostgreSQL locked announcement)
+        const callingUser = userId || studentId || requesterId || (req.headers['x-user-id'] as string | undefined);
+        if (callingUser && callingUser !== currentAnn.sellerId && callingUser !== 'profesor-1') {
+          const err: any = new Error('No tienes permisos para editar este anuncio. Solo el vendedor propietario o el profesor pueden modificarlo.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 4. Role & product type determination
+        const isTeacherOrOfficial = 
+          currentAnn.sellerId === 'proveedor-materia-prima' || 
+          currentAnn.sellerId === 'profesor-1' || 
+          currentAnn.sellerLevel === 'official' ||
+          sellerId === 'profesor-1' ||
+          currentAnn.materialType !== 'producto_final' ||
+          (materialType && materialType !== 'producto_final');
+
+        // Fields to update (preserve PostgreSQL value if undefined in request)
+        const finalTitle = (title !== undefined && title !== null && String(title).trim() !== '') ? String(title).trim() : currentAnn.title;
+        const finalMaterialType = materialType !== undefined ? materialType : currentAnn.materialType;
+        const finalPresentation = presentation !== undefined ? presentation : currentAnn.presentation;
+        const finalDescription = description !== undefined ? description : currentAnn.description;
+        const finalDurationDays = durationDays !== undefined ? durationDays : currentAnn.durationDays;
+        const finalIsPallet = isPallet !== undefined ? !!isPallet : currentAnn.isPallet;
+        const finalIsDesTornillo = isDesTornillo !== undefined ? !!isDesTornillo : currentAnn.isDesTornillo;
+        const finalSellerId = sellerId !== undefined ? sellerId : currentAnn.sellerId;
+        const finalSellerName = sellerName !== undefined ? sellerName : currentAnn.sellerName;
+        const finalSellerLevel = sellerLevel !== undefined ? sellerLevel : currentAnn.sellerLevel;
+        const finalSellerLocation = sellerLocation !== undefined ? sellerLocation : currentAnn.sellerLocation;
+        const finalSellerMunicipality = sellerMunicipality !== undefined ? sellerMunicipality : currentAnn.sellerMunicipality;
+        const finalSellerProvince = sellerProvince !== undefined ? sellerProvince : currentAnn.sellerProvince;
+
+        // Weight calculation
+        let finalUnitWeightKg = currentAnn.unitWeightKg;
+        if (unitWeightKg !== undefined) {
+          const isProdFinal = finalMaterialType === 'producto_final' || finalIsDesTornillo || finalTitle.toLowerCase().includes('destornillador');
+          finalUnitWeightKg = isProdFinal ? 0 : Number(unitWeightKg);
+        }
+
+        // Price & price alert resolution
+        let finalPrice = currentAnn.pricePerUnit;
+        let finalPriceAlert = currentAnn.priceAlert;
+        if (pricePerUnit !== undefined) {
+          const newPrice = Number(pricePerUnit);
+          finalPrice = newPrice;
+          if (finalPriceAlert && finalPriceAlert.active && newPrice < currentAnn.pricePerUnit) {
+            finalPriceAlert = { ...finalPriceAlert, active: false };
+          }
+        }
+
+        // 5. Stock Validation & Protection
+        // Critical: If stock is undefined, PRESERVE PostgreSQL locked stock directly!
+        let finalStock: number | 'ilimitado' = currentAnn.stock;
+
+        if (stock !== undefined) {
+          if (isTeacherOrOfficial) {
+            finalStock = (stock === 'ilimitado' || stock === '' || stock === null) ? 'ilimitado' : Number(stock);
+          } else if (currentAnn.sellerId) {
+            // Student seller stock validation against physical inventory in PostgreSQL
+            await client.query(
+              `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
+               VALUES ($1, $2, '{}'::jsonb)
+               ON CONFLICT (alumno_id) DO NOTHING`,
+              [currentAnn.sellerId, finalSellerName || 'Estudiante']
+            );
+
+            const invRes = await client.query(
+              `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+              [currentAnn.sellerId]
+            );
+
+            if (!invRes || invRes.rows.length === 0) {
+              const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${currentAnn.sellerId}`);
+              err.statusCode = 404;
+              throw err;
+            }
+
+            const sellerInv = parseInventoryRow(invRes.rows[0]);
+            const availableUnits = getAvailableStockForSellerProduct(sellerInv, finalTitle, finalMaterialType);
+
+            const titleLower = finalTitle.toLowerCase();
+            const isPlana = titleLower.includes('plana');
+            const isEstrella = titleLower.includes('estrella');
+
+            const otherActiveAnnsRes = await client.query(
+              `SELECT id, title, stock FROM anuncios_materia_prima
+               WHERE seller_id = $1 AND active = true AND id != $2`,
+              [currentAnn.sellerId, id]
+            );
+
+            const lockedInOtherAnns = otherActiveAnnsRes.rows.reduce((sum: number, a: any) => {
+              const aTitle = (a.title || '').toLowerCase();
+              if (isPlana && !aTitle.includes('plana')) return sum;
+              if (isEstrella && !aTitle.includes('estrella')) return sum;
+              const numStock = (a.stock !== null && a.stock !== undefined && a.stock !== 'ilimitado') ? Number(a.stock) : 0;
+              return sum + (isNaN(numStock) ? 0 : numStock);
+            }, 0);
+
+            const availableToLock = Math.max(0, availableUnits - lockedInOtherAnns);
+            const requestedStock = (stock === 'ilimitado' || stock === '' || stock === null)
+              ? availableToLock
+              : Number(stock);
+
+            if (requestedStock > availableToLock) {
+              const err: any = new Error(
+                `Stock insuficiente en tu almacén: intentas configurar el stock a ${requestedStock} u., pero solo dispones de ${availableToLock} u. libres (${availableUnits} u. producidas - ${lockedInOtherAnns} u. en otros anuncios).`
+              );
+              err.statusCode = 400;
+              throw err;
+            }
+
+            finalStock = requestedStock;
+          }
+        }
+
+        // 6. Active flag
+        let finalActive = currentAnn.active;
+        if (active !== undefined) {
+          finalActive = !!active;
+        }
+
+        // 7. Atomic UPDATE in PostgreSQL
+        const updateRes = await client.query(
+          `UPDATE anuncios_materia_prima
+           SET material_type = $2,
+               title = $3,
+               presentation = $4,
+               unit_weight_kg = $5,
+               is_pallet = $6,
+               price_per_unit = $7,
+               description = $8,
+               updated_at = $9,
+               duration_days = $10,
+               stock = $11,
+               active = $12,
+               seller_id = $13,
+               seller_name = $14,
+               seller_level = $15,
+               seller_location = $16,
+               seller_municipality = $17,
+               seller_province = $18,
+               is_des_tornillo = $19,
+               price_alert = $20
+           WHERE id = $1
+           RETURNING *`,
+          [
+            id,
+            finalMaterialType,
+            finalTitle,
+            finalPresentation,
+            finalUnitWeightKg,
+            finalIsPallet,
+            finalPrice,
+            finalDescription,
+            new Date().toISOString(),
+            String(finalDurationDays),
+            String(finalStock),
+            finalActive,
+            finalSellerId,
+            finalSellerName,
+            finalSellerLevel !== undefined && finalSellerLevel !== null ? String(finalSellerLevel) : null,
+            finalSellerLocation || '',
+            finalSellerMunicipality || '',
+            finalSellerProvince || '',
+            finalIsDesTornillo,
+            finalPriceAlert ? JSON.stringify(finalPriceAlert) : null
+          ]
+        );
+
+        const updatedRow = updateRes.rows[0];
+        const updatedAnn = parseRawMaterialAnnouncementRow(updatedRow);
+
+        return { success: true, announcement: updatedAnn };
+      }, effectiveKey);
+    });
+
+    // 8. Post-commit targeted cache update (fresh read, no table wipe, no redundant sync)
+    try {
+      if (result && (result as any).announcement) {
+        const savedAnn = (result as any).announcement;
+        const freshDb = readDb();
+        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+        const existingIdx = freshDb.rawMaterialAnnouncements.findIndex(a => a.id === savedAnn.id);
+        if (existingIdx >= 0) {
+          freshDb.rawMaterialAnnouncements[existingIdx] = savedAnn;
+        } else {
+          freshDb.rawMaterialAnnouncements.unshift(savedAnn);
+        }
+        writeDb(freshDb);
       }
+    } catch (cacheErr) {
+      console.error('[Post-commit Cache] Error updating local announcement cache on PUT:', cacheErr);
     }
-  }
 
-  const oldPrice = ann.pricePerUnit;
-  if (pricePerUnit !== undefined) {
-    const newPrice = Number(pricePerUnit);
-    ann.pricePerUnit = newPrice;
-    // If student reduced price, resolve any active price alert
-    if (ann.priceAlert && ann.priceAlert.active && newPrice < oldPrice) {
-      ann.priceAlert.active = false;
-    }
+    return res.json(result);
+  } catch (error: any) {
+    console.error('[Announcement PUT Error]:', error);
+    const statusCode = error.statusCode || 400;
+    return res.status(statusCode).json({ error: error.message || 'Error al actualizar el anuncio de materia prima' });
   }
-  if (title) ann.title = title;
-  if (description !== undefined) ann.description = description;
-  if (presentation !== undefined) ann.presentation = presentation;
-  if (unitWeightKg !== undefined) {
-    const isProdFinal = ann.materialType === 'producto_final' || ann.isDesTornillo || (ann.title && ann.title.toLowerCase().includes('destornillador')) || (title && title.toLowerCase().includes('destornillador'));
-    ann.unitWeightKg = isProdFinal ? 0 : Number(unitWeightKg);
-  }
-  if (isPallet !== undefined) ann.isPallet = !!isPallet;
-  if (materialType !== undefined) ann.materialType = materialType;
-  if (durationDays !== undefined) ann.durationDays = durationDays;
-  if (stock !== undefined) ann.stock = stock;
-  if (active !== undefined) ann.active = !!active;
-  if (isDesTornillo !== undefined) ann.isDesTornillo = !!isDesTornillo;
-  if (sellerId !== undefined) ann.sellerId = sellerId;
-  if (sellerName !== undefined) ann.sellerName = sellerName;
-  if (sellerLevel !== undefined) ann.sellerLevel = sellerLevel;
-  if (sellerLocation !== undefined) ann.sellerLocation = sellerLocation;
-  if (sellerMunicipality !== undefined) ann.sellerMunicipality = sellerMunicipality;
-  if (sellerProvince !== undefined) ann.sellerProvince = sellerProvince;
-  ann.updatedAt = new Date().toISOString();
-
-  await syncRawMaterialAnnouncementToSupabase(ann);
-
-  writeDb(db);
-  res.json({ success: true, announcement: ann });
 });
 
 app.post('/api/raw-materials/announcements/:id/price-alert', async (req, res) => {
@@ -14349,13 +14813,106 @@ app.delete('/api/raw-materials/announcements/:id/price-alert', async (req, res) 
 
 app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/announcements/:id'], async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
-  if (db.rawMaterialAnnouncements) {
-    db.rawMaterialAnnouncements = db.rawMaterialAnnouncements.filter(a => a.id !== id);
-    writeDb(db);
+  const { userId, studentId, requesterId } = req.body || {};
+
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string) || (req.query?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `delete_ann_${id}_${Date.now()}`;
+
+  if (!dbPool) {
+    const db = readDb();
+    if (db.rawMaterialAnnouncements) {
+      db.rawMaterialAnnouncements = db.rawMaterialAnnouncements.filter((a: any) => a.id !== id);
+      writeDb(db);
+    }
+    return res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
   }
-  await deleteRawMaterialAnnouncementFromSupabase(id);
-  res.json({ success: true, message: 'Anuncio eliminado correctamente.' });
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (effectiveKey) => {
+      return await withPostgresTransaction(async (client) => {
+        // 1. Lock Announcement in PostgreSQL (Fuente de verdad)
+        let annRes = await client.query(
+          `SELECT * FROM anuncios_materia_prima WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+
+        if (!annRes || annRes.rows.length === 0) {
+          // Check memory db snapshot before concluding it doesn't exist
+          const dbSnap = readDb();
+          const memAnn = (dbSnap.rawMaterialAnnouncements || []).find((a: any) => a.id === id);
+          if (memAnn) {
+            await syncRawMaterialAnnouncementToSupabase(memAnn, client);
+            annRes = await client.query(
+              `SELECT * FROM anuncios_materia_prima WHERE id = $1 FOR UPDATE`,
+              [id]
+            );
+          }
+        }
+
+        if (!annRes || annRes.rows.length === 0) {
+          // Already non-existent or previously deleted — preserve existing endpoint behavior
+          return {
+            success: true,
+            message: 'Anuncio eliminado correctamente.'
+          };
+        }
+
+        const currentDbRow = annRes.rows[0];
+        const currentAnn = parseRawMaterialAnnouncementRow(currentDbRow);
+
+        // 2. Authorization check against the locked PostgreSQL row
+        const callingUser = userId || studentId || requesterId || req.query?.userId || req.query?.studentId || (req.headers['x-user-id'] as string | undefined);
+        let isTeacher = callingUser === 'profesor-1' || callingUser === 'teacher' || req.originalUrl?.includes('/api/teacher/') || req.baseUrl?.includes('/api/teacher/');
+
+        if (callingUser && !isTeacher) {
+          const userCheck = await client.query(
+            `SELECT role FROM cuentas WHERE id = $1 OR usuario = $1`,
+            [callingUser]
+          );
+          if (userCheck.rows.length > 0 && userCheck.rows[0].role === 'teacher') {
+            isTeacher = true;
+          }
+        }
+
+        if (callingUser && !isTeacher && callingUser !== currentAnn.sellerId) {
+          const err: any = new Error('No tienes permisos para eliminar este anuncio. Solo el vendedor propietario o el profesor pueden eliminarlo.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 3. Perform atomic deletion in PostgreSQL
+        await client.query('DELETE FROM anuncios_materia_prima WHERE id = $1', [id]);
+
+        // Support for controlled test-induced rollback verification
+        if (req.headers['x-test-force-rollback'] === 'true' || req.body?.simulateRollback === true) {
+          const simErr: any = new Error('Rollback provocado para verificación de atomicidad transaccional.');
+          simErr.statusCode = 400;
+          throw simErr;
+        }
+
+        return {
+          success: true,
+          message: 'Anuncio eliminado correctamente.'
+        };
+      }, effectiveKey);
+    });
+
+    // 4. Safe post-commit update of db.json
+    try {
+      const freshDb = readDb();
+      if (freshDb.rawMaterialAnnouncements) {
+        freshDb.rawMaterialAnnouncements = freshDb.rawMaterialAnnouncements.filter((a: any) => a.id !== id);
+      }
+      writeDb(freshDb);
+    } catch (cacheErr) {
+      console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400;
+    return res.status(statusCode).json({ error: error.message || 'Error al eliminar el anuncio de materia prima' });
+  }
 });
 
 function ensureTransportInvoicesForTransfers(db: any) {
