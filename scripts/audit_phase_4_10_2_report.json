@@ -1,0 +1,154 @@
+{
+  "timestamp": "2026-09-24T07:51:26.606Z",
+  "allPassed": true,
+  "totalTests": 19,
+  "results": {
+    "TEST A": {
+      "passed": true,
+      "summary": "Admisión feliz: estado admitida en PG, fecha y plazo asignados, 2 notificaciones en PG, coherencia db.json",
+      "httpStatus": 200,
+      "pgStatus": "admitida",
+      "notifsCount": 2
+    },
+    "TEST B": {
+      "passed": true,
+      "summary": "Inadmisión feliz: estado inadmitida en PG, fecha_resolucion, 1 notificación solo al demandante, coherencia db.json",
+      "httpStatus": 200,
+      "pgStatus": "inadmitida",
+      "notifsCount": 1
+    },
+    "TEST C": {
+      "passed": true,
+      "summary": "Doble admisión simultánea: ambas responden 200 coherentemente, exactamente una transición y 2 notificaciones (sin duplicar)",
+      "status1": 200,
+      "status2": 200,
+      "notifsCount": 2
+    },
+    "TEST D": {
+      "passed": true,
+      "summary": "Decisiones opuestas simultáneas: serialización mediante FOR UPDATE, un ganador (200), un perdedor (400) por estado incompatible",
+      "admitStatus": 200,
+      "rejectStatus": 400,
+      "finalPgStatus": "admitida"
+    },
+    "TEST E": {
+      "passed": true,
+      "summary": "Secuencia procesal con defendant-answer: rechaza 400 antes de admitir, procede 200 tras admitir",
+      "beforeStatus": 400,
+      "admitStatus": 200,
+      "afterStatus": 200
+    },
+    "TEST F": {
+      "passed": true,
+      "summary": "Interacción con pay-settle: admisión normal y allanamiento posterior consistente",
+      "admitStatus": 200,
+      "settleStatus": 200,
+      "finalPgStatus": "allanada_pagada"
+    },
+    "TEST G": {
+      "passed": true,
+      "summary": "Admisión procesal frente a judge-ruling: estado pasa a admitida de forma atómica",
+      "admitStatus": 200,
+      "pgStatus": "admitida"
+    },
+    "TEST H": {
+      "passed": true,
+      "summary": "Inadmisión previa bloquea contestación (400) y embargo (400)",
+      "rejectStatus": 200,
+      "answerStatus": 400,
+      "embargoStatus": 400
+    },
+    "TEST I": {
+      "passed": true,
+      "summary": "Re-admisión idempotente: responde 200, cero transiciones extra, cero notificaciones duplicadas (2 == 2)",
+      "firstStatus": 200,
+      "secondStatus": 200,
+      "notifsBefore": 2,
+      "notifsAfter": 2
+    },
+    "TEST J": {
+      "passed": true,
+      "summary": "Re-inadmisión idempotente: responde 200, cero transiciones extra, cero notificaciones duplicadas (1 == 1)",
+      "firstStatus": 200,
+      "secondStatus": 200,
+      "notifsBefore": 1,
+      "notifsAfter": 1
+    },
+    "TEST K": {
+      "passed": true,
+      "summary": "Admisión rechazada (400) en todos los estados incompatibles: inadmitida, ejecutada, desestimada, allanada_pagada, estimada, embargo_preventivo",
+      "testedStates": [
+        "inadmitida",
+        "ejecutada",
+        "desestimada",
+        "allanada_pagada",
+        "estimada",
+        "embargo_preventivo"
+      ]
+    },
+    "TEST L": {
+      "passed": true,
+      "summary": "Inadmisión rechazada (400) en todos los estados incompatibles: admitida, ejecutada, desestimada, allanada_pagada, estimada, embargo_preventivo",
+      "testedStates": [
+        "admitida",
+        "ejecutada",
+        "desestimada",
+        "allanada_pagada",
+        "estimada",
+        "embargo_preventivo"
+      ]
+    },
+    "TEST M": {
+      "passed": true,
+      "summary": "Idempotencia con x-idempotency-key explícito: respuesta idéntica, registro en operaciones_idempotencia, sin duplicar notificaciones",
+      "status1": 200,
+      "status2": 200,
+      "notifs": 2
+    },
+    "TEST N": {
+      "passed": true,
+      "summary": "Idempotencia con fallback determinista: court_judge_admission_${id}_admitir registrado y cero efectos secundarios duplicados",
+      "expectedKey": "court_judge_admission_test_4102_n_1790236282683_admitir",
+      "foundIdemRow": true,
+      "notifs": 2
+    },
+    "TEST O": {
+      "passed": true,
+      "summary": "Demanda inexistente devuelve HTTP 404 de forma limpia",
+      "status": 404,
+      "error": "Procedimiento judicial no encontrado"
+    },
+    "TEST P": {
+      "passed": true,
+      "summary": "Payload inválido (admission != admitir/rechazar) devuelve HTTP 400 y no muta la base de datos",
+      "status": 400,
+      "pgStatus": "pendiente_admision"
+    },
+    "TEST Q": {
+      "passed": true,
+      "summary": "Cero impacto financiero: los saldos de demandante y demandado se mantienen idénticos antes y después",
+      "defBalBefore": "10000.00",
+      "defBalAfter": "10000.00",
+      "plainBalBefore": "10000.00",
+      "plainBalAfter": "10000.00"
+    },
+    "TEST R": {
+      "passed": true,
+      "summary": "PostgreSQL es la fuente de verdad única: aun borrada de db.json, el endpoint la lee de PG, la admite y sincroniza la caché post-commit",
+      "status": 200,
+      "pgStatus": "admitida",
+      "syncedToMemory": true
+    },
+    "TEST S": {
+      "passed": true,
+      "summary": "Persistencia duradera en PostgreSQL verificada mediante consulta independiente directa",
+      "pgRow": {
+        "id": "test_4102_s_1790236285895",
+        "estado": "admitida",
+        "fecha_admision": "2026-09-24T07:51:26.246Z",
+        "notas_admision": "Persistencia verificada",
+        "plazo_limite_contestacion": "2026-10-22T07:51:26.246Z"
+      }
+    }
+  }
+}

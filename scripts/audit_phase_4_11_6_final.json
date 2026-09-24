@@ -1,0 +1,4730 @@
+{
+  "auditPhase": "4.11.6",
+  "timestamp": "2026-09-24T07:41:52.511Z",
+  "verdict": "NO PREPARADA PARA AULA CONCURRENTE",
+  "summary": {
+    "endpoints": {
+      "total": 126,
+      "gradeA": 99,
+      "gradeB": 25,
+      "gradeC": 2
+    },
+    "workers": {
+      "total": 5,
+      "gradeA": 5,
+      "gradeB": 0,
+      "gradeC": 0
+    },
+    "invariants": {
+      "total": 15,
+      "passed": 15,
+      "failed": 0
+    },
+    "concurrency30Students": {
+      "totalRequests": 90,
+      "successes": 60,
+      "businessRejections": 30,
+      "serverErrors": 0,
+      "deadlocksDetected": 0,
+      "lostUpdatesDetected": 0,
+      "doubleDebitsDetected": 0,
+      "avgLatencyMs": 8892,
+      "p95LatencyMs": 19208,
+      "p99LatencyMs": 20261,
+      "balanceConservationOk": true,
+      "initialTotalBalance": 150000,
+      "finalTotalBalance": 150000
+    },
+    "regressions": {
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "idempotencyEntries": 1259
+  },
+  "endpoints": [
+    {
+      "line": 6500,
+      "endLine": 6527,
+      "method": "GET",
+      "path": "/api/supabase-status",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "movimientos"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 6527,
+      "endLine": 6567,
+      "method": "POST",
+      "path": "/api/supabase-connect",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "movimientos"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 6567,
+      "endLine": 6708,
+      "method": "POST",
+      "path": "/api/supabase-sync",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "memory",
+        "cuentas",
+        "postgresql",
+        "movimientos",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncAllToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "pg_advisory_xact_lock"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "C",
+      "reasons": [
+        "Sincronización masiva de memoria a Supabase sin bloqueo ni aislamiento transaccional"
+      ]
+    },
+    {
+      "line": 6708,
+      "endLine": 6796,
+      "method": "POST",
+      "path": "/api/login",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6709,
+      "endLine": 6797,
+      "method": "POST",
+      "path": "/api/auth/login",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6710,
+      "endLine": 6798,
+      "method": "POST",
+      "path": "/api/acceso",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6711,
+      "endLine": 6799,
+      "method": "POST",
+      "path": "/api/entrar",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6712,
+      "endLine": 6800,
+      "method": "POST",
+      "path": "/acceso",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6713,
+      "endLine": 6801,
+      "method": "POST",
+      "path": "/entrar",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6714,
+      "endLine": 6802,
+      "method": "POST",
+      "path": "/login",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas",
+        "response"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 6767,
+      "endLine": 6814,
+      "method": "GET",
+      "path": "/api/users",
+      "module": "Usuarios y Autenticación",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 6768,
+      "endLine": 6815,
+      "method": "GET",
+      "path": "/users",
+      "module": "Usuarios y Autenticación",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 6863,
+      "endLine": 6954,
+      "method": "POST",
+      "path": "/api/users",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "pg_advisory_xact_lock"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL con bloqueo pesimista FOR UPDATE"
+      ]
+    },
+    {
+      "line": 6864,
+      "endLine": 6955,
+      "method": "POST",
+      "path": "/users",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "pg_advisory_xact_lock"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL con bloqueo pesimista FOR UPDATE"
+      ]
+    },
+    {
+      "line": 6867,
+      "endLine": 7144,
+      "method": "PUT",
+      "path": "/api/users/:id",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "pg"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "user",
+        "balance",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL con bloqueo pesimista FOR UPDATE"
+      ]
+    },
+    {
+      "line": 7144,
+      "endLine": 7327,
+      "method": "PUT",
+      "path": "/api/users/:id/adjust-balance",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "balance",
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL con bloqueo pesimista FOR UPDATE"
+      ]
+    },
+    {
+      "line": 7145,
+      "endLine": 7328,
+      "method": "PUT",
+      "path": "/users/:id/adjust-balance",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "balance",
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL con bloqueo pesimista FOR UPDATE"
+      ]
+    },
+    {
+      "line": 7507,
+      "endLine": 7865,
+      "method": "DELETE",
+      "path": "/api/users/:id",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "movimientos",
+        "prestamos",
+        "obligaciones_pago",
+        "inmuebles",
+        "adquisiciones",
+        "market_messages",
+        "demandas_judiciales",
+        "empleados_contratados",
+        "registros_nomina",
+        "vehiculos_comprados",
+        "maquinaria_adquisiciones",
+        "materias_primas_inventario",
+        "obligaciones_fiscales",
+        "notificaciones",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "anuncios_materia_prima",
+        "ofertas_empleo",
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [
+        "notificaciones",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "anuncios_materia_prima",
+        "ofertas_empleo",
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "cuentas",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 7508,
+      "endLine": 7866,
+      "method": "DELETE",
+      "path": "/users/:id",
+      "module": "Usuarios y Autenticación",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "movimientos",
+        "prestamos",
+        "obligaciones_pago",
+        "inmuebles",
+        "adquisiciones",
+        "market_messages",
+        "demandas_judiciales",
+        "empleados_contratados",
+        "registros_nomina",
+        "vehiculos_comprados",
+        "maquinaria_adquisiciones",
+        "materias_primas_inventario",
+        "obligaciones_fiscales",
+        "notificaciones",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "anuncios_materia_prima",
+        "ofertas_empleo",
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [
+        "notificaciones",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "anuncios_materia_prima",
+        "ofertas_empleo",
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "cuentas",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 7682,
+      "endLine": 7852,
+      "method": "POST",
+      "path": "/api/transfers",
+      "module": "Banca y Transferencias",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "both",
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 7683,
+      "endLine": 7853,
+      "method": "POST",
+      "path": "/transfers",
+      "module": "Banca y Transferencias",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "both",
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 7701,
+      "endLine": 7715,
+      "method": "GET",
+      "path": "/api/transfers",
+      "module": "Banca y Transferencias",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7702,
+      "endLine": 7716,
+      "method": "GET",
+      "path": "/transfers",
+      "module": "Banca y Transferencias",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7710,
+      "endLine": 7714,
+      "method": "GET",
+      "path": "/api/logs",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7711,
+      "endLine": 7715,
+      "method": "GET",
+      "path": "/logs",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7714,
+      "endLine": 7914,
+      "method": "POST",
+      "path": "/api/bank/reconcile",
+      "module": "Banca y Transferencias",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "movimientos",
+        "postgresql",
+        "supabase",
+        "adquisiciones",
+        "obligaciones_pago",
+        "prestamos",
+        "maquinaria_adquisiciones",
+        "ofertas_empleo",
+        "empleados_contratados",
+        "registros_nomina",
+        "obligaciones_fiscales",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "vehiculos_comprados",
+        "materias_primas_inventario",
+        "materias_primas_pedidos",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "market_messages",
+        "notificaciones",
+        "demandas_judiciales",
+        "inmuebles",
+        "anuncios_materia_prima"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "adquisiciones",
+        "obligaciones_pago",
+        "prestamos",
+        "maquinaria_adquisiciones",
+        "ofertas_empleo",
+        "empleados_contratados",
+        "registros_nomina",
+        "obligaciones_fiscales",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "planos_distribucion_naves",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "vehiculos_comprados",
+        "materias_primas_inventario",
+        "materias_primas_pedidos",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "market_messages",
+        "notificaciones",
+        "demandas_judiciales",
+        "inmuebles",
+        "anuncios_materia_prima"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncAccountToSupabase",
+        "syncPropertyToSupabase",
+        "syncRawMaterialAnnouncementToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Reconciliación bancaria protegida con validación de movimientos e integridad"
+      ]
+    },
+    {
+      "line": 7914,
+      "endLine": 7925,
+      "method": "POST",
+      "path": "/api/reset-simulation",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7925,
+      "endLine": 7938,
+      "method": "GET",
+      "path": "/api/backup",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 7938,
+      "endLine": 8105,
+      "method": "POST",
+      "path": "/api/restore",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "movimientos",
+        "adquisiciones",
+        "obligaciones_pago",
+        "prestamos",
+        "maquinaria_adquisiciones",
+        "ofertas_empleo",
+        "empleados_contratados",
+        "registros_nomina",
+        "obligaciones_fiscales",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "vehiculos_comprados",
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "market_messages",
+        "notificaciones",
+        "demandas_judiciales",
+        "planos_distribucion_naves",
+        "inmuebles",
+        "anuncios_materia_prima",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "movimientos",
+        "adquisiciones",
+        "obligaciones_pago",
+        "prestamos",
+        "maquinaria_adquisiciones",
+        "ofertas_empleo",
+        "empleados_contratados",
+        "registros_nomina",
+        "obligaciones_fiscales",
+        "contratos_electricos",
+        "facturas_electricidad",
+        "contratos_telecom",
+        "facturas_telecom",
+        "pedidos_oficina",
+        "vehiculos_comprados",
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "perfiles_empresa",
+        "contactos_mercado",
+        "market_messages",
+        "notificaciones",
+        "demandas_judiciales",
+        "planos_distribucion_naves",
+        "inmuebles",
+        "anuncios_materia_prima",
+        "cuentas",
+        "set",
+        "memory"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "pg_advisory_xact_lock"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Protegido globalmente mediante pg_advisory_xact_lock exclusivo"
+      ]
+    },
+    {
+      "line": 8105,
+      "endLine": 8142,
+      "method": "GET",
+      "path": "/api/properties",
+      "module": "Inmuebles y Bienes Raíces",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "inmuebles"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 8142,
+      "endLine": 8153,
+      "method": "GET",
+      "path": "/api/acquisitions",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 8153,
+      "endLine": 8267,
+      "method": "POST",
+      "path": "/api/properties",
+      "module": "Inmuebles y Bienes Raíces",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncPropertyToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncPropertyToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncPropertyToSupabase, syncPropertyToSupabase"
+      ]
+    },
+    {
+      "line": 8267,
+      "endLine": 8276,
+      "method": "DELETE",
+      "path": "/api/properties",
+      "module": "Inmuebles y Bienes Raíces",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "inmuebles"
+      ],
+      "tablesMutated": [
+        "inmuebles"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 8276,
+      "endLine": 8298,
+      "method": "DELETE",
+      "path": "/api/properties/:id",
+      "module": "Inmuebles y Bienes Raíces",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 8298,
+      "endLine": 8967,
+      "method": "POST",
+      "path": "/api/properties/buy-rent",
+      "module": "Inmuebles y Bienes Raíces",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "inmuebles"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "inmuebles",
+        "movimientos",
+        "adquisiciones",
+        "obligaciones_pago",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncFloorPlanToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncFloorPlanToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 8967,
+      "endLine": 8972,
+      "method": "GET",
+      "path": "/api/machinery/catalog",
+      "module": "Maquinaria y Equipos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 8972,
+      "endLine": 9715,
+      "method": "POST",
+      "path": "/api/machinery/buy",
+      "module": "Maquinaria y Equipos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "adquisiciones",
+        "maquinaria_adquisiciones",
+        "planos_distribucion_naves",
+        "contratos_electricos"
+      ],
+      "tablesMutated": [
+        "const",
+        "student",
+        "cuentas",
+        "movimientos",
+        "in",
+        "planos_distribucion_naves"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMachineryToSupabase",
+        "syncObligationToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 9715,
+      "endLine": 10037,
+      "method": "PUT",
+      "path": "/api/student/machinery/:id/relocate",
+      "module": "Maquinaria y Equipos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "maquinaria_adquisiciones",
+        "cuentas",
+        "adquisiciones",
+        "contratos_electricos"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "maquinaria_adquisiciones",
+        "db"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 10037,
+      "endLine": 10310,
+      "method": "GET",
+      "path": "/api/company/:studentId",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "maquinaria_adquisiciones"
+      ],
+      "tablesMutated": [
+        "maquinaria_adquisiciones"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMachineryToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncMachineryToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Endpoint GET realiza mutaciones secundarias de lectura/sincronización de caché"
+      ]
+    },
+    {
+      "line": 10310,
+      "endLine": 10464,
+      "method": "POST",
+      "path": "/api/obligations/pay",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "obligaciones_pago"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "obligaciones_pago",
+        "acquisition",
+        "adquisiciones",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 10464,
+      "endLine": 13876,
+      "method": "POST",
+      "path": "/api/taxes/pay",
+      "module": "Fiscalidad e Impuestos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "obligaciones_fiscales",
+        "bank",
+        "market_messages",
+        "postgresql",
+        "pg",
+        "prestamos",
+        "upcoming"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "obligaciones_fiscales",
+        "movimientos",
+        "in",
+        "market_messages",
+        "notificaciones",
+        "memory",
+        "penalty",
+        "prestamos",
+        "const",
+        "student",
+        "the"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMarketMessageToSupabase",
+        "syncAcquisitionToSupabase",
+        "syncMachineryToSupabase",
+        "syncObligationToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncMarketMessageToSupabase",
+        "syncAcquisitionToSupabase",
+        "syncMachineryToSupabase",
+        "syncObligationToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 13876,
+      "endLine": 13892,
+      "method": "GET",
+      "path": "/api/student/deferred-payments-audit",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 13892,
+      "endLine": 13911,
+      "method": "POST",
+      "path": "/api/student/verify-payments",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 13911,
+      "endLine": 13948,
+      "method": "GET",
+      "path": "/api/teacher/deferred-payments-audit",
+      "module": "Administración y Sistema",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 13948,
+      "endLine": 13964,
+      "method": "GET",
+      "path": "/api/student/upcoming-payments",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 13964,
+      "endLine": 13977,
+      "method": "GET",
+      "path": "/api/loans",
+      "module": "Financiación y Préstamos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 13977,
+      "endLine": 14315,
+      "method": "POST",
+      "path": "/api/loans/request",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "adquisiciones",
+        "prestamos"
+      ],
+      "tablesMutated": [
+        "prestamos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 14315,
+      "endLine": 14572,
+      "method": "POST",
+      "path": "/api/loans/:id/accept",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "prestamos",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "prestamos",
+        "movimientos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 14572,
+      "endLine": 14752,
+      "method": "POST",
+      "path": "/api/loans/:id/reject",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "prestamos"
+      ],
+      "tablesMutated": [
+        "prestamos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 14752,
+      "endLine": 15013,
+      "method": "POST",
+      "path": "/api/teacher/loans/:id/review",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "prestamos"
+      ],
+      "tablesMutated": [
+        "prestamos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 15013,
+      "endLine": 15044,
+      "method": "PUT",
+      "path": "/api/student/change-password",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncAccountToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncAccountToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncAccountToSupabase"
+      ]
+    },
+    {
+      "line": 15044,
+      "endLine": 15061,
+      "method": "GET",
+      "path": "/api/job-listings",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15061,
+      "endLine": 15146,
+      "method": "POST",
+      "path": "/api/teacher/job-listings/batch",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncJobListingToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncJobListingToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncJobListingToSupabase"
+      ]
+    },
+    {
+      "line": 15146,
+      "endLine": 15157,
+      "method": "DELETE",
+      "path": "/api/teacher/job-listings/:id",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "ofertas_empleo"
+      ],
+      "tablesMutated": [
+        "ofertas_empleo"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 15157,
+      "endLine": 15167,
+      "method": "DELETE",
+      "path": "/api/teacher/job-listings",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "ofertas_empleo"
+      ],
+      "tablesMutated": [
+        "ofertas_empleo"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 15167,
+      "endLine": 15368,
+      "method": "POST",
+      "path": "/api/jobs/:id/hire",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "ofertas_empleo",
+        "empleados_contratados",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "ofertas_empleo"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncHiredEmployeeToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15368,
+      "endLine": 15376,
+      "method": "GET",
+      "path": "/api/student/employees",
+      "module": "Empleados y Nóminas",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15376,
+      "endLine": 15548,
+      "method": "PUT",
+      "path": "/api/student/employees/:id/assign-machinery",
+      "module": "Empleados y Nóminas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "empleados_contratados",
+        "maquinaria_adquisiciones"
+      ],
+      "tablesMutated": [
+        "const",
+        "empleados_contratados"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15548,
+      "endLine": 15720,
+      "method": "POST",
+      "path": "/api/student/employees/auto-assign-all",
+      "module": "Empleados y Nóminas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "empleados_contratados",
+        "maquinaria_adquisiciones"
+      ],
+      "tablesMutated": [
+        "const",
+        "empleados_contratados"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15720,
+      "endLine": 15803,
+      "method": "POST",
+      "path": "/api/student/employees/unassign-all",
+      "module": "Empleados y Nóminas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "empleados_contratados"
+      ],
+      "tablesMutated": [
+        "const",
+        "empleados_contratados"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15803,
+      "endLine": 15840,
+      "method": "DELETE",
+      "path": "/api/obligations/:id",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "obligaciones_pago"
+      ],
+      "tablesMutated": [
+        "obligaciones_pago"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15840,
+      "endLine": 15895,
+      "method": "DELETE",
+      "path": "/api/acquisitions/:id",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "adquisiciones",
+        "maquinaria_adquisiciones",
+        "obligaciones_pago"
+      ],
+      "tablesMutated": [
+        "obligaciones_pago",
+        "adquisiciones"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15895,
+      "endLine": 15924,
+      "method": "PUT",
+      "path": "/api/acquisitions/:id",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [],
+      "tablesMutated": [
+        "acquisition"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncAcquisitionToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15924,
+      "endLine": 15975,
+      "method": "DELETE",
+      "path": "/api/machinery/acquisitions/:id",
+      "module": "Maquinaria y Equipos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "maquinaria_adquisiciones"
+      ],
+      "tablesMutated": [
+        "empleados_contratados",
+        "maquinaria_adquisiciones"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 15975,
+      "endLine": 16002,
+      "method": "PUT",
+      "path": "/api/machinery/acquisitions/:id",
+      "module": "Maquinaria y Equipos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [],
+      "tablesMutated": [
+        "machinery"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMachineryToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16002,
+      "endLine": 16128,
+      "method": "DELETE",
+      "path": "/api/loans/:id",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "prestamos",
+        "postgresql"
+      ],
+      "tablesMutated": [
+        "postgresql",
+        "prestamos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 16128,
+      "endLine": 16362,
+      "method": "PUT",
+      "path": "/api/loans/:id",
+      "module": "Financiación y Préstamos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "prestamos"
+      ],
+      "tablesMutated": [
+        "in",
+        "prestamos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 16362,
+      "endLine": 16369,
+      "method": "GET",
+      "path": "/api/electricity/contracts",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16369,
+      "endLine": 16382,
+      "method": "GET",
+      "path": "/api/electricity/contract",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16382,
+      "endLine": 16645,
+      "method": "POST",
+      "path": "/api/electricity/contract",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "adquisiciones",
+        "contratos_electricos",
+        "maquinaria_adquisiciones"
+      ],
+      "tablesMutated": [
+        "contratos_electricos",
+        "maquinaria_adquisiciones"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16645,
+      "endLine": 16844,
+      "method": "GET",
+      "path": "/api/electricity/bills",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "planos_distribucion_naves",
+        "adquisiciones"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16844,
+      "endLine": 16851,
+      "method": "GET",
+      "path": "/api/electricity/floor-plans",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 16851,
+      "endLine": 17109,
+      "method": "POST",
+      "path": "/api/electricity/floor-plan",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "adquisiciones",
+        "planos_distribucion_naves"
+      ],
+      "tablesMutated": [
+        "plano",
+        "planos_distribucion_naves"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17109,
+      "endLine": 17113,
+      "method": "GET",
+      "path": "/api/telecom/plans",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17113,
+      "endLine": 17120,
+      "method": "GET",
+      "path": "/api/telecom/contracts",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17120,
+      "endLine": 17128,
+      "method": "GET",
+      "path": "/api/telecom/invoices",
+      "module": "Facturas y Pagarés",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17128,
+      "endLine": 17297,
+      "method": "POST",
+      "path": "/api/telecom/contract",
+      "module": "Suministros (Luz y Telecom)",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas",
+        "adquisiciones"
+      ],
+      "tablesMutated": [
+        "const",
+        "contratos_telecom",
+        "try"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "C",
+      "reasons": [
+        "Mutación en memoria con sincronización fire-and-forget syncTelecomContractToSupabase sin await"
+      ]
+    },
+    {
+      "line": 17297,
+      "endLine": 17305,
+      "method": "GET",
+      "path": "/api/office-store/orders",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17305,
+      "endLine": 17553,
+      "method": "POST",
+      "path": "/api/office-store/checkout",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncOfficeOrderToSupabase",
+        "syncVehicleToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncVehicleToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 17553,
+      "endLine": 17560,
+      "method": "GET",
+      "path": "/api/student/vehicles",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 17560,
+      "endLine": 17750,
+      "method": "POST",
+      "path": "/api/vehicles/buy",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncVehicleToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 17750,
+      "endLine": 17975,
+      "method": "POST",
+      "path": "/api/vehicles/buy-cart",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncVehicleToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 17975,
+      "endLine": 18158,
+      "method": "PUT",
+      "path": "/api/student/vehicles/:id/assign-warehouse",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "vehiculos_comprados",
+        "adquisiciones"
+      ],
+      "tablesMutated": [
+        "const",
+        "directamente",
+        "vehiculos_comprados"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE",
+        "FOR SHARE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 18158,
+      "endLine": 18421,
+      "method": "PUT",
+      "path": "/api/student/employees/:id/assign-vehicle",
+      "module": "Empleados y Nóminas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "empleados_contratados",
+        "vehiculos_comprados"
+      ],
+      "tablesMutated": [
+        "const",
+        "vehiculos_comprados",
+        "empleados_contratados"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 18421,
+      "endLine": 18437,
+      "method": "PUT",
+      "path": "/api/teacher/students/:studentId/level",
+      "module": "Administración y Sistema",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [
+        "syncAccountToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncAccountToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncAccountToSupabase"
+      ]
+    },
+    {
+      "line": 18437,
+      "endLine": 18451,
+      "method": "GET",
+      "path": "/api/notifications",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 18451,
+      "endLine": 18464,
+      "method": "PATCH",
+      "path": "/api/notifications/:id/read",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncNotificationToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncNotificationToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncNotificationToSupabase"
+      ]
+    },
+    {
+      "line": 18464,
+      "endLine": 18561,
+      "method": "POST",
+      "path": "/api/notifications/read-all",
+      "module": "General / Operaciones",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncNotificationToSupabase",
+        "syncRawMaterialAnnouncementToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncNotificationToSupabase",
+        "syncRawMaterialAnnouncementToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": true,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncNotificationToSupabase, syncRawMaterialAnnouncementToSupabase"
+      ]
+    },
+    {
+      "line": 18561,
+      "endLine": 19239,
+      "method": "GET",
+      "path": "/api/raw-materials/announcements",
+      "module": "Materias Primas y Producción",
+      "isMutation": false,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "anuncios_materia_prima",
+        "cuentas",
+        "materias_primas_inventario",
+        "memory"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "anuncios_materia_prima",
+        "set",
+        "in"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialAnnouncementToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Endpoint GET realiza mutaciones secundarias de lectura/sincronización de caché"
+      ]
+    },
+    {
+      "line": 19239,
+      "endLine": 19285,
+      "method": "POST",
+      "path": "/api/raw-materials/announcements/:id/price-alert",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialAnnouncementToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 19285,
+      "endLine": 19600,
+      "method": "DELETE",
+      "path": "/api/raw-materials/announcements/:id/price-alert",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "anuncios_materia_prima",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "anuncios_materia_prima",
+        "of",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialAnnouncementToSupabase",
+        "syncAccountToSupabase",
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncAccountToSupabase",
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 19600,
+      "endLine": 19683,
+      "method": "GET",
+      "path": "/api/raw-materials/orders",
+      "module": "Materias Primas y Producción",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 19683,
+      "endLine": 20938,
+      "method": "POST",
+      "path": "/api/raw-materials/orders",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "student",
+        "anuncios_materia_prima",
+        "materias_primas_inventario",
+        "postgresql",
+        "adquisiciones",
+        "planos_distribucion_naves",
+        "current",
+        "seller",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "anuncios_materia_prima",
+        "cuentas",
+        "movimientos",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialAnnouncementToSupabase",
+        "syncInventoryToSupabase",
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 20938,
+      "endLine": 21269,
+      "method": "POST",
+      "path": "/api/raw-materials/orders/:id/negotiate",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [
+        "materias_primas_pedidos",
+        "operaciones_idempotencia",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 21269,
+      "endLine": 22021,
+      "method": "POST",
+      "path": "/api/raw-materials/orders/:id/approve",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "cuentas",
+        "seller",
+        "announcement"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "cuentas",
+        "inventories",
+        "anuncios_materia_prima",
+        "movimientos",
+        "order",
+        "after"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialOrderToSupabase",
+        "syncInventoryToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 22021,
+      "endLine": 22224,
+      "method": "POST",
+      "path": "/api/raw-materials/orders/:id/reject",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [
+        "materias_primas_pedidos",
+        "operaciones_idempotencia",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 22224,
+      "endLine": 22942,
+      "method": "POST",
+      "path": "/api/raw-materials/orders/:id/ship",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "operaciones_idempotencia",
+        "materias_primas_pedidos",
+        "materias_primas_inventario",
+        "seller",
+        "announcements"
+      ],
+      "tablesMutated": [
+        "operaciones_idempotencia",
+        "materias_primas_inventario",
+        "anuncios_materia_prima",
+        "order",
+        "materias_primas_pedidos",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialOrderToSupabase",
+        "syncInventoryToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 22942,
+      "endLine": 23115,
+      "method": "POST",
+      "path": "/api/raw-materials/orders/:id/send-invoice",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "materias_primas_pedidos"
+      ],
+      "tablesMutated": [
+        "operaciones_idempotencia",
+        "materias_primas_pedidos",
+        "warning",
+        "local"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 23115,
+      "endLine": 23155,
+      "method": "GET",
+      "path": "/api/market/company-profiles",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "perfiles_empresa"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 23155,
+      "endLine": 23192,
+      "method": "POST",
+      "path": "/api/market/company-profile",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCompanyProfileToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Mutación secundaria apoyada en caché de memoria/db.json (sin impacto financiero directo)"
+      ]
+    },
+    {
+      "line": 23192,
+      "endLine": 23216,
+      "method": "POST",
+      "path": "/api/market/contact-partner",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMarketContactToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncMarketContactToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncMarketContactToSupabase"
+      ]
+    },
+    {
+      "line": 23216,
+      "endLine": 23307,
+      "method": "GET",
+      "path": "/api/students-list",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 23307,
+      "endLine": 24071,
+      "method": "POST",
+      "path": "/api/inventory/transfer-stock",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "vehiculos_comprados",
+        "materias_primas_inventario",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "cuentas",
+        "movimientos",
+        "if"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncInventoryToSupabase",
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 24071,
+      "endLine": 24639,
+      "method": "POST",
+      "path": "/api/inventory/transfer-nave-stock",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "vehiculos_comprados",
+        "materias_primas_inventario",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "cuentas",
+        "movimientos",
+        "if"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncInventoryToSupabase",
+        "syncRawMaterialOrderToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 24639,
+      "endLine": 24740,
+      "method": "GET",
+      "path": "/api/market/trading-partners",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [
+        "this",
+        "most"
+      ],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 24740,
+      "endLine": 24752,
+      "method": "GET",
+      "path": "/api/market/messages/unread-count",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 24752,
+      "endLine": 24788,
+      "method": "GET",
+      "path": "/api/court/unread-count",
+      "module": "Justicia y Demandas",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 24788,
+      "endLine": 24823,
+      "method": "POST",
+      "path": "/api/court/notifications/mark-read",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncNotificationToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncNotificationToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncNotificationToSupabase"
+      ]
+    },
+    {
+      "line": 24823,
+      "endLine": 24846,
+      "method": "GET",
+      "path": "/api/market/messages",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMarketMessageToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncMarketMessageToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 24846,
+      "endLine": 24889,
+      "method": "POST",
+      "path": "/api/market/messages",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncMarketMessageToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncMarketMessageToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncMarketMessageToSupabase"
+      ]
+    },
+    {
+      "line": 24889,
+      "endLine": 25112,
+      "method": "POST",
+      "path": "/api/market/messages/send-manual-invoice",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncRawMaterialOrderToSupabase",
+        "syncMarketMessageToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncRawMaterialOrderToSupabase",
+        "syncMarketMessageToSupabase"
+      ],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "B",
+      "reasons": [
+        "Llamadas fire-and-forget de sincronización no esperadas: syncRawMaterialOrderToSupabase, syncRawMaterialOrderToSupabase, syncMarketMessageToSupabase"
+      ]
+    },
+    {
+      "line": 25112,
+      "endLine": 25507,
+      "method": "POST",
+      "path": "/api/market/messages/sign-promissory-note",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "operaciones_idempotencia",
+        "cuentas",
+        "market_messages"
+      ],
+      "tablesMutated": [
+        "market_messages",
+        "notificaciones",
+        "if",
+        "warning"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 25507,
+      "endLine": 26563,
+      "method": "POST",
+      "path": "/api/market/messages/discount-promissory-note",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "market_messages",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "const",
+        "cuentas",
+        "movimientos",
+        "market_messages",
+        "notificaciones",
+        "warning",
+        "if"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 26563,
+      "endLine": 27075,
+      "method": "POST",
+      "path": "/api/market/messages/collection-management-promissory-note",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "market_messages",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "const",
+        "cuentas",
+        "movimientos",
+        "market_messages",
+        "notificaciones",
+        "if",
+        "warning"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 26564,
+      "endLine": 27076,
+      "method": "POST",
+      "path": "/api/market/messages/request-promissory-note-collection",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "market_messages",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "const",
+        "cuentas",
+        "movimientos",
+        "market_messages",
+        "notificaciones",
+        "if",
+        "warning"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 26567,
+      "endLine": 27245,
+      "method": "POST",
+      "path": "/api/market/messages/collect-promissory-note",
+      "module": "Mercado B2B y Pedidos",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "market_messages",
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "const",
+        "market_messages",
+        "notificaciones",
+        "cuentas",
+        "movimientos",
+        "warning"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncInventoryToSupabase"
+      ],
+      "unawaitedSyncFunctions": [
+        "syncInventoryToSupabase"
+      ],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 27245,
+      "endLine": 27394,
+      "method": "POST",
+      "path": "/api/raw-materials/rod-production-mode",
+      "module": "Materias Primas y Producción",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "materias_primas_inventario"
+      ],
+      "tablesMutated": [
+        "materias_primas_inventario",
+        "memory"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 27394,
+      "endLine": 27425,
+      "method": "GET",
+      "path": "/api/court/lawsuits",
+      "module": "Justicia y Demandas",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 27425,
+      "endLine": 27453,
+      "method": "GET",
+      "path": "/api/court/unpaid-notes",
+      "module": "Justicia y Demandas",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": true,
+      "usesWriteDb": false,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 27453,
+      "endLine": 27705,
+      "method": "POST",
+      "path": "/api/court/lawsuits",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCourtLawsuitToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 27705,
+      "endLine": 28002,
+      "method": "POST",
+      "path": "/api/court/lawsuits/:id/judge-admission",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "demandas_judiciales"
+      ],
+      "tablesMutated": [
+        "demandas_judiciales",
+        "notificaciones",
+        "set",
+        "error"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    },
+    {
+      "line": 28002,
+      "endLine": 28143,
+      "method": "POST",
+      "path": "/api/court/lawsuits/:id/preventative-embargo",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCourtLawsuitToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 28143,
+      "endLine": 28341,
+      "method": "POST",
+      "path": "/api/court/lawsuits/:id/pay-settle",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "cuentas"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "promissory"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCourtLawsuitToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 28341,
+      "endLine": 29108,
+      "method": "POST",
+      "path": "/api/court/lawsuits/:id/defendant-answer",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "operaciones_idempotencia",
+        "demandas_judiciales",
+        "pg",
+        "cuentas",
+        "market_messages"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "market_messages"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCourtLawsuitToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 29108,
+      "endLine": 29752,
+      "method": "POST",
+      "path": "/api/court/lawsuits/:id/judge-ruling",
+      "module": "Justicia y Demandas",
+      "isMutation": true,
+      "queriesPostgres": true,
+      "mutatesPostgres": true,
+      "tablesQueried": [
+        "demandas_judiciales",
+        "db",
+        "market_messages",
+        "cuentas",
+        "public"
+      ],
+      "tablesMutated": [
+        "cuentas",
+        "movimientos",
+        "market_messages"
+      ],
+      "usesReadDb": true,
+      "usesWriteDb": true,
+      "usesDbInMemory": true,
+      "syncFunctionsUsed": [
+        "syncCourtLawsuitToSupabase"
+      ],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": true,
+      "usesExecuteWithIdempotency": true,
+      "locksUsed": [
+        "FOR UPDATE"
+      ],
+      "lockOrder": [
+        "Jerarquía estándar: cuentas/demandas/prestamos"
+      ],
+      "affectsBalanceOrFinance": true,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": [
+        "Transaccionalidad ACID PostgreSQL + Idempotencia estricta"
+      ]
+    },
+    {
+      "line": 29752,
+      "endLine": 29766,
+      "method": "GET",
+      "path": "*",
+      "module": "General / Operaciones",
+      "isMutation": false,
+      "queriesPostgres": false,
+      "mutatesPostgres": false,
+      "tablesQueried": [],
+      "tablesMutated": [],
+      "usesReadDb": false,
+      "usesWriteDb": false,
+      "usesDbInMemory": false,
+      "syncFunctionsUsed": [],
+      "unawaitedSyncFunctions": [],
+      "usesWithPostgresTransaction": false,
+      "usesExecuteWithIdempotency": false,
+      "locksUsed": [],
+      "lockOrder": [],
+      "affectsBalanceOrFinance": false,
+      "respondsBeforePersistence": false,
+      "grade": "A",
+      "reasons": []
+    }
+  ],
+  "workers": [
+    {
+      "name": "checkAndProcessAutomatedPayrollAndTaxes",
+      "line": 5074,
+      "frequency": "Cada 15 minutos (setInterval) y al inicio del servidor",
+      "operationsPerformed": "Calcula nóminas mensuales, retenciones IRPF, cuotas patronales/obreras TGSS, inserta movimientos contables y debita impuestos vencidos",
+      "tablesAffected": [
+        "cuentas",
+        "movimientos",
+        "registros_nomina",
+        "empleados_contratados",
+        "obligaciones_fiscales",
+        "operaciones_idempotencia"
+      ],
+      "locksUsed": [
+        "SELECT ... FOR UPDATE sobre cuentas",
+        "SELECT ... FOR UPDATE sobre obligaciones_fiscales"
+      ],
+      "isTransactional": true,
+      "hasIdempotency": true,
+      "selfConcurrencyProtection": true,
+      "crossConcurrencyProtection": true,
+      "grade": "A",
+      "reasons": [
+        "Migrado a withPostgresTransaction en Fase 4.11.5",
+        "Bloqueo determinista FOR UPDATE",
+        "Idempotencia estricta por mes/empleado y tax_id"
+      ]
+    },
+    {
+      "name": "checkAndProcessAutomatedElectricity",
+      "line": 5725,
+      "frequency": "Cada 15 minutos y al inicio del servidor",
+      "operationsPerformed": "Genera factura del mes vencido de electricidad (IberLuz) y adeuda el importe automáticamente el día 1 con fondos suficientes",
+      "tablesAffected": [
+        "cuentas",
+        "movimientos",
+        "electricityBills",
+        "operaciones_idempotencia"
+      ],
+      "locksUsed": [
+        "SELECT ... FOR UPDATE sobre cuentas"
+      ],
+      "isTransactional": true,
+      "hasIdempotency": true,
+      "selfConcurrencyProtection": true,
+      "crossConcurrencyProtection": true,
+      "grade": "A",
+      "reasons": [
+        "Protegido con executeWithIdempotency y withPostgresTransaction",
+        "Verificación estricta de saldo suficiente para evitar saldos negativos"
+      ]
+    },
+    {
+      "name": "checkAndProcessAutomatedTelecom",
+      "line": 5951,
+      "frequency": "Cada 15 minutos y al inicio del servidor",
+      "operationsPerformed": "Genera factura prorrateada o mensual de telefonía e internet y adeuda cuota en cuenta el día 1 si hay fondos suficientes",
+      "tablesAffected": [
+        "cuentas",
+        "movimientos",
+        "telecomInvoices",
+        "operaciones_idempotencia"
+      ],
+      "locksUsed": [
+        "SELECT ... FOR UPDATE sobre cuentas"
+      ],
+      "isTransactional": true,
+      "hasIdempotency": true,
+      "selfConcurrencyProtection": true,
+      "crossConcurrencyProtection": true,
+      "grade": "A",
+      "reasons": [
+        "Protegido con executeWithIdempotency y withPostgresTransaction",
+        "Bloqueo FOR UPDATE sobre cuentas y prevención de descubierto"
+      ]
+    },
+    {
+      "name": "processStudentAutomaticPayments (Cobro de Cuotas de Préstamos)",
+      "line": 11210,
+      "frequency": "Cada 15 minutos, al inicio y bajo demanda vía POST /api/student/verify-payments",
+      "operationsPerformed": "Evalúa cuotas vencidas e intereses moratorios de préstamos activos y efectúa el débito atómico de la amortización",
+      "tablesAffected": [
+        "prestamos",
+        "cuentas",
+        "movimientos",
+        "operaciones_idempotencia"
+      ],
+      "locksUsed": [
+        "SELECT ... FOR UPDATE sobre prestamos",
+        "SELECT ... FOR UPDATE sobre cuentas"
+      ],
+      "isTransactional": true,
+      "hasIdempotency": true,
+      "selfConcurrencyProtection": true,
+      "crossConcurrencyProtection": true,
+      "grade": "A",
+      "reasons": [
+        "Migrado a PostgreSQL en Fase 4.9.2 con jerarquía prestamos -> cuentas",
+        "Idempotencia atómica por periodo y préstamo"
+      ]
+    },
+    {
+      "name": "processDiscountedPromissoryNotesMaturityPG (Vencimiento de Pagarés)",
+      "line": 10593,
+      "frequency": "Invocado cíclicamente dentro de processStudentAutomaticPayments",
+      "operationsPerformed": "Procesa el vencimiento de pagarés en estado descontado o gestión de cobro, cargando al librado y acreditando al tenedor/banco",
+      "tablesAffected": [
+        "market_messages",
+        "cuentas",
+        "movimientos",
+        "operaciones_idempotencia"
+      ],
+      "locksUsed": [
+        "SELECT ... FOR UPDATE sobre market_messages",
+        "SELECT ... FOR UPDATE sobre cuentas"
+      ],
+      "isTransactional": true,
+      "hasIdempotency": true,
+      "selfConcurrencyProtection": true,
+      "crossConcurrencyProtection": true,
+      "grade": "A",
+      "reasons": [
+        "Protegido en Fase 4.11.5 con withPostgresTransaction",
+        "Idempotencia maturity_promissory_${id} y bloqueo FOR UPDATE"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": 1,
+      "name": "Ausencia de saldos bancarios negativos no autorizados",
+      "passed": true,
+      "details": "Cero cuentas con saldo negativo."
+    },
+    {
+      "id": 2,
+      "name": "Correspondencia simétrica TRANSFER_OUT -> TRANSFER_IN interbancaria",
+      "passed": true,
+      "details": "Todas las transferencias inter-alumnos tienen par TRANSFER_IN."
+    },
+    {
+      "id": 3,
+      "name": "Unicidad absoluta en claves de idempotencia",
+      "passed": true,
+      "details": "Cero colisiones en operaciones_idempotencia."
+    },
+    {
+      "id": 4,
+      "name": "Coherencia matemática entre movimientos y saldo de cuenta",
+      "passed": true,
+      "details": "Saldos bancarios reconciliados exactamente con el libro mayor de movimientos."
+    },
+    {
+      "id": 5,
+      "name": "Ausencia de préstamos activos duplicados",
+      "passed": true,
+      "details": "Cero préstamos activos duplicados."
+    },
+    {
+      "id": 6,
+      "name": "Ausencia de cuotas de préstamos cobradas doblemente",
+      "passed": true,
+      "details": "Cero cuotas duplicadas registradas."
+    },
+    {
+      "id": 7,
+      "name": "Ausencia de pagarés con vencimiento procesado dos veces",
+      "passed": true,
+      "details": "Cero pagarés con vencimiento duplicado."
+    },
+    {
+      "id": 8,
+      "name": "Ausencia de obligaciones fiscales pagadas dos veces",
+      "passed": true,
+      "details": "Cero obligaciones tributarias duplicadas."
+    },
+    {
+      "id": 9,
+      "name": "Ausencia de facturas de suministros duplicadas para el mismo periodo",
+      "passed": true,
+      "details": "Cero facturas periódicas duplicadas."
+    },
+    {
+      "id": 10,
+      "name": "Integridad referencial en asignaciones de maquinaria de empleados",
+      "passed": true,
+      "details": "Todas las máquinas asignadas existen en maquinaria_adquisiciones."
+    },
+    {
+      "id": 11,
+      "name": "Ausencia de referencias a activos inmobiliarios eliminados",
+      "passed": true,
+      "details": "Integridad relacional garantizada mediante borrado transaccional y validación de claves ajenas."
+    },
+    {
+      "id": 12,
+      "name": "Consistencia de la máquina de estados de demandas judiciales",
+      "passed": true,
+      "details": "Todas las demandas se encuentran en estados válidos."
+    },
+    {
+      "id": 13,
+      "name": "Ausencia de notificaciones judiciales duplicadas",
+      "passed": true,
+      "details": "Notificaciones generadas estrictamente en bloque post-commit transaccional."
+    },
+    {
+      "id": 14,
+      "name": "PostgreSQL como fuente autoritativa primaria de cuentas y saldos",
+      "passed": true,
+      "details": "PostgreSQL activo con 474 cuentas gobernadas bajo ACID."
+    },
+    {
+      "id": 15,
+      "name": "Subordinación de memoria/db.json al commit de PostgreSQL",
+      "passed": true,
+      "details": "Ninguna mutación financiera es visible en memoria sin previo COMMIT en PostgreSQL."
+    }
+  ],
+  "concurrency30Students": {
+    "totalRequests": 90,
+    "successes": 60,
+    "businessRejections": 30,
+    "serverErrors": 0,
+    "deadlocksDetected": 0,
+    "lostUpdatesDetected": 0,
+    "doubleDebitsDetected": 0,
+    "avgLatencyMs": 8892,
+    "p95LatencyMs": 19208,
+    "p99LatencyMs": 20261,
+    "balanceConservationOk": true,
+    "initialTotalBalance": 150000,
+    "finalTotalBalance": 150000
+  },
+  "regressions": [
+    {
+      "suite": "Fase 4.9.2 (Préstamos ACID & Workers)",
+      "file": "scripts/test_phase_4_9_2.ts",
+      "status": "PASS",
+      "testsPassed": 8,
+      "testsFailed": 0,
+      "durationMs": 50762,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.9.3 (Concurrencia Préstamos)",
+      "file": "scripts/test_phase_4_9_3.ts",
+      "status": "PASS",
+      "testsPassed": 24,
+      "testsFailed": 0,
+      "durationMs": 27283,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.9.4 (Rollbacks y Fallos)",
+      "file": "scripts/test_phase_4_9_4.ts",
+      "status": "PASS",
+      "testsPassed": 16,
+      "testsFailed": 0,
+      "durationMs": 14648,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.9.6 (Intereses Moratorios)",
+      "file": "scripts/test_phase_4_9_6.ts",
+      "status": "PASS",
+      "testsPassed": 10,
+      "testsFailed": 0,
+      "durationMs": 13946,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.9.8 (Banca y Transferencias)",
+      "file": "scripts/test_phase_4_9_8.ts",
+      "status": "PASS",
+      "testsPassed": 32,
+      "testsFailed": 0,
+      "durationMs": 43711,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.10.2 (Justicia y Demandas)",
+      "file": "scripts/test_phase_4_10_2.ts",
+      "status": "PASS",
+      "testsPassed": 19,
+      "testsFailed": 0,
+      "durationMs": 22615,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.11.3 (Auditoría Integral)",
+      "file": "scripts/test_phase_4_11_3.ts",
+      "status": "PASS",
+      "testsPassed": 10,
+      "testsFailed": 0,
+      "durationMs": 8739,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.11.4 (Saneamiento Suministros)",
+      "file": "scripts/test_phase_4_11_4.ts",
+      "status": "PASS",
+      "testsPassed": 8,
+      "testsFailed": 0,
+      "durationMs": 15957,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    },
+    {
+      "suite": "Fase 4.11.5 (Saneamiento Final 5 Riesgos)",
+      "file": "scripts/test_phase_4_11_5.ts",
+      "status": "PASS",
+      "testsPassed": 12,
+      "testsFailed": 0,
+      "durationMs": 5537,
+      "details": "Todos los escenarios superados satisfactoriamente."
+    }
+  ]
+}

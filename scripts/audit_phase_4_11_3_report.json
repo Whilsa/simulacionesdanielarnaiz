@@ -1,0 +1,60 @@
+{
+  "timestamp": "2026-09-24T07:51:34.850Z",
+  "phase": "4.11.3 - Saneamiento Crítico para Aula Concurrente",
+  "status": "READY",
+  "summary": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0
+  },
+  "results": [
+    {
+      "suite": "Decoupled readDb",
+      "name": "GET requests do not cause side-effect writes to db.json",
+      "passed": true,
+      "details": "Peticiones GET ejecutadas concurrentemente sin mutaciones espurias"
+    },
+    {
+      "suite": "Atomic User Creation",
+      "name": "Concurrent creation of identical username prevents duplicate insert and handles collision",
+      "passed": true,
+      "details": "Creados: 1, Rechazados por duplicidad: 1, Registros en PG: 1"
+    },
+    {
+      "suite": "Atomic User Initial Balance",
+      "name": "Initial balance of 5000 is backed by a transactional deposit movement in PostgreSQL",
+      "passed": true,
+      "details": "Movimiento encontrado en PG con importe: 5000.00€"
+    },
+    {
+      "suite": "Atomic User Update",
+      "name": "PUT /api/users/:id updates student record atomically in PostgreSQL",
+      "passed": true,
+      "details": "Alumno actualizado: Alumno Concurrente Actualizado, Nivel: 2"
+    },
+    {
+      "suite": "Acquisition Dependency Protection",
+      "name": "Cannot delete property/nave while active machinery lines are installed inside",
+      "passed": true,
+      "details": "Respuesta esperada 400 con mensaje de dependencia: No se puede eliminar el inmueble: tiene líneas de maquinaria instaladas (Línea de Ensamblaje Test). Reubique o desinstale la maquinaria previamente."
+    },
+    {
+      "suite": "Atomic Machinery Deletion",
+      "name": "Deleting machinery removes it from PG and unassigns linked employees in the same transaction",
+      "passed": true,
+      "details": "Maquinaria eliminada en PG y operario desvinculado (maquinaria_asignada_id = null)"
+    },
+    {
+      "suite": "Atomic Acquisition Deletion",
+      "name": "Deleting property/acquisition removes acquisition and linked obligations atomically from PG",
+      "passed": true,
+      "details": "Inmueble y obligaciones asociadas eliminados limpiamente en transacción"
+    },
+    {
+      "suite": "Concurrent Financial Transfers Invariant",
+      "name": "Total balance (A + B = 2000) is strictly preserved across 10 concurrent transfers",
+      "passed": true,
+      "details": "Transacciones exitosas: 10/10, Saldo A: 500€ (esperado 500€), Saldo B: 1500€ (esperado 1500€)"
+    }
+  ]
+}

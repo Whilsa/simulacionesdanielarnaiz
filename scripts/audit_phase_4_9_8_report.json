@@ -1,0 +1,253 @@
+{
+  "TEST_A": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "pgCount": 0,
+      "inDb": false
+    }
+  },
+  "TEST_B": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "pgCount": 0
+    }
+  },
+  "TEST_C": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "pgCount": 0
+    }
+  },
+  "TEST_D": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "pgCount": 0
+    }
+  },
+  "TEST_E": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "No se puede eliminar el préstamo en estado 'active' porque ya cuenta con actividad financiera e historial contable.",
+      "pgState": "active"
+    }
+  },
+  "TEST_F": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "No se puede eliminar el préstamo en estado 'paid_off' porque ya cuenta con actividad financiera e historial contable.",
+      "pgState": "paid_off"
+    }
+  },
+  "TEST_G": {
+    "pass": true,
+    "details": {
+      "status": 404,
+      "error": "Préstamo no encontrado en la base de datos"
+    }
+  },
+  "TEST_H": {
+    "pass": true,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "pgCount": 0
+    }
+  },
+  "TEST_I": {
+    "pass": true,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "r2Data": {
+        "success": true,
+        "message": "Préstamo eliminado"
+      }
+    }
+  },
+  "TEST_J": {
+    "pass": true,
+    "details": {
+      "delStatus": 200,
+      "accStatus": 404,
+      "pgLoan": "DELETED",
+      "saldo": "5000.00"
+    }
+  },
+  "TEST_K": {
+    "pass": true,
+    "details": {
+      "delStatus": 400,
+      "workerStatus": 200,
+      "pgRowExists": true,
+      "estado": "active"
+    }
+  },
+  "TEST_L": {
+    "pass": true,
+    "details": {
+      "delStatus": 200,
+      "movCount": 1
+    }
+  },
+  "TEST_M": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "importe": "60000.00",
+      "comision": "60.00",
+      "cuota": "2618.84",
+      "schedLength": 24
+    }
+  },
+  "TEST_N": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "plazo": 48,
+      "schedLength": 48
+    }
+  },
+  "TEST_O": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "rate": "9.00",
+      "cuota": "913.81",
+      "interest1": 150
+    }
+  },
+  "TEST_P": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "El préstamo ya está en estado 'active' y no puede modificarse mediante este endpoint.",
+      "importe": "40000.00"
+    }
+  },
+  "TEST_Q": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "El préstamo ya está en estado 'paid_off' y no puede modificarse mediante este endpoint.",
+      "estado": "paid_off"
+    }
+  },
+  "TEST_R": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "No se permite cambiar el estado del préstamo mediante este endpoint. Las transiciones de estado deben realizarse mediante la revisión docente (/api/teacher/loans/:id/review) o el flujo de aceptación/rechazo.",
+      "estado": "offered"
+    }
+  },
+  "TEST_S": {
+    "pass": true,
+    "details": {
+      "r1": 200,
+      "r2": 200,
+      "importe": "35000.00",
+      "plazo": 60,
+      "schedLen": 60
+    }
+  },
+  "TEST_T": {
+    "pass": true,
+    "details": {
+      "putStatus": 200,
+      "accStatus": 200,
+      "finalConcedido": "25000.00",
+      "saldo": "29975.00"
+    }
+  },
+  "TEST_U": {
+    "pass": true,
+    "details": {
+      "putStatus": 400,
+      "workerStatus": 200,
+      "importe": "20000.00"
+    }
+  },
+  "TEST_V": {
+    "pass": true,
+    "details": {
+      "putStatus": 400,
+      "revStatus": 200,
+      "estado": "teacher_offered",
+      "importe": "30000.00"
+    }
+  },
+  "TEST_W": {
+    "pass": true,
+    "details": {
+      "r1Status": 200,
+      "r2Status": 200,
+      "importe": "32000.00"
+    }
+  },
+  "TEST_X": {
+    "pass": true,
+    "details": {
+      "r1": 200,
+      "r2": 200,
+      "importe": "38000.00"
+    }
+  },
+  "TEST_Y": {
+    "pass": true,
+    "details": {
+      "status": 400,
+      "error": "El importe del préstamo debe ser superior a 0",
+      "pgImporte": "20000.00",
+      "memImporte": 20000
+    }
+  },
+  "TEST_Z": {
+    "pass": true,
+    "details": {
+      "pgImporte": "45000.00",
+      "memImporte": 45000
+    }
+  },
+  "REGRESSION_4.9.6_REQUEST": {
+    "pass": true,
+    "details": {
+      "status": 201,
+      "loanStatus": "offered"
+    }
+  },
+  "REGRESSION_4.9.3_ACCEPT": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "loanStatus": "active"
+    }
+  },
+  "REGRESSION_4.9.4_REVIEW": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "loanStatus": "teacher_offered"
+    }
+  },
+  "REGRESSION_4.9.4_REJECT": {
+    "pass": true,
+    "details": {
+      "status": 200,
+      "loanStatus": "rejected"
+    }
+  },
+  "REGRESSION_4.9.2_WORKER": {
+    "pass": true,
+    "details": {
+      "quota1Paid": true,
+      "finalSaldo": "4500.00",
+      "resStatus": 200
+    }
+  }
+}

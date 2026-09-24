@@ -1,0 +1,205 @@
+{
+  "timestamp": "2026-09-20T07:42:46.844Z",
+  "columns": [
+    {
+      "column_name": "id",
+      "data_type": "character varying",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "alumno_id",
+      "data_type": "character varying",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "alumno_nombre",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "alumno_cuenta",
+      "data_type": "character varying",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "importe_solicitado",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "importe_ofrecido",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "importe_concedido",
+      "data_type": "numeric",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "plazo_meses",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "tipo_interes",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "euribor",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "diferencial",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "comision_apertura",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "cuota_mensual",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "garantia_tipo",
+      "data_type": "character varying",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "garantia_inmueble_id",
+      "data_type": "character varying",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "garantia_inmueble_titulo",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "garantia_superficie_m2",
+      "data_type": "numeric",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "garantia_valor_tasacion",
+      "data_type": "numeric",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "estado",
+      "data_type": "character varying",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "requiere_profesor",
+      "data_type": "boolean",
+      "is_nullable": "NO",
+      "column_default": "false"
+    },
+    {
+      "column_name": "notas_profesor",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fecha_creacion",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "column_name": "fecha_aceptacion",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "tabla_amortizacion",
+      "data_type": "jsonb",
+      "is_nullable": "YES",
+      "column_default": null
+    }
+  ],
+  "constraints": [
+    {
+      "conname": "prestamos_pkey",
+      "contype": "p",
+      "def": "PRIMARY KEY (id)"
+    }
+  ],
+  "loansInPostgresCount": 4,
+  "loansInDbJsonCount": 4,
+  "discrepancies": [],
+  "loanMovements": {
+    "count": "12",
+    "total": "2772770.00"
+  },
+  "sampleLoans": [
+    {
+      "id": "prestamo-rzxx41zu4",
+      "alumno_nombre": "Productor Destornilladores",
+      "estado": "active",
+      "importe_solicitado": "200000.00",
+      "importe_concedido": "200000.00",
+      "cuota_mensual": "1529.11",
+      "plazo_meses": 180,
+      "scheduleLength": 180
+    },
+    {
+      "id": "prestamo-p9hk2w3zi",
+      "alumno_nombre": "Prueba",
+      "estado": "active",
+      "importe_solicitado": "150000.00",
+      "importe_concedido": "150000.00",
+      "cuota_mensual": "1147.50",
+      "plazo_meses": 180,
+      "scheduleLength": 180
+    },
+    {
+      "id": "prestamo-c5nyu1ell",
+      "alumno_nombre": "Fabricante Varillas",
+      "estado": "active",
+      "importe_solicitado": "1000000.00",
+      "importe_concedido": "960000.00",
+      "cuota_mensual": "7342.82",
+      "plazo_meses": 180,
+      "scheduleLength": 180
+    },
+    {
+      "id": "prestamo-egamp16nr",
+      "alumno_nombre": "Fabricante Destornilladores completo",
+      "estado": "active",
+      "importe_solicitado": "250000.00",
+      "importe_concedido": "250000.00",
+      "cuota_mensual": "7436.72",
+      "plazo_meses": 36,
+      "scheduleLength": 36
+    }
+  ]
+}

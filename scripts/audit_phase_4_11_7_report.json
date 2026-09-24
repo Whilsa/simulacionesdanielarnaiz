@@ -1,0 +1,62 @@
+[
+  {
+    "suite": "GET Orders Read-Only",
+    "name": "GET /api/raw-materials/orders does not trigger synthetic order generation or db.json writes",
+    "passed": true,
+    "details": "Peticiones GET leídas exitosamente (97 órdenes) sin modificaciones de archivo."
+  },
+  {
+    "suite": "Telecom Contract Atomicity & Idempotency",
+    "name": "Contract creation inserts into PostgreSQL atomically and returns cached response on idempotency replay",
+    "passed": true,
+    "details": "Contrato creado ID=tel_contract-indhxlfzu, persistido en contratos_telecom y verificado por clave idempotente."
+  },
+  {
+    "suite": "Telecom Contract Rollback Integrity",
+    "name": "Simulated failure triggers complete transaction rollback with zero phantom rows in Postgres",
+    "passed": true,
+    "details": "Rollback validado: status 500, 0 registros de tel-empresa-1000 en PG y 0 registros en operaciones_idempotencia."
+  },
+  {
+    "suite": "Telecom Contract Single-Active Invariant",
+    "name": "Contracting a new plan deactivates previous active contracts in PostgreSQL transaction",
+    "passed": true,
+    "details": "Activos: 1 (tel-corp-2000), Cancelados: 1."
+  },
+  {
+    "suite": "Supabase-Sync Protection",
+    "name": "/api/supabase-sync respects existing PostgreSQL records as source of truth and acquires advisory xact lock",
+    "passed": true,
+    "details": "Sincronización completada. Alumno de prueba preservado intacto en PG (cuentasCount: 709)."
+  },
+  {
+    "suite": "Supabase-Sync Concurrency Lock",
+    "name": "Concurrent calls to /api/supabase-sync serialize cleanly via pg_advisory_xact_lock without deadlocks",
+    "passed": true,
+    "details": "2 llamadas concurrentes resueltas con código 200 exitosamente."
+  },
+  {
+    "suite": "Invariant 1: Ausencia de Saldos Negativos",
+    "name": "No account in cuentas has a negative balance (saldo >= 0)",
+    "passed": true,
+    "details": "0 cuentas con saldo negativo."
+  },
+  {
+    "suite": "Invariant 2: Simetría TRANSFER_OUT -> TRANSFER_IN Inter-alumnos",
+    "name": "All inter-student outgoing transfers have corresponding TRANSFER_IN movements",
+    "passed": true,
+    "details": "Todas las transferencias interbancarias tienen contrapartida."
+  },
+  {
+    "suite": "Invariant 3: Claves de Idempotencia Únicas",
+    "name": "No duplicate idempotency keys exist in operaciones_idempotencia",
+    "passed": true,
+    "details": "Claves únicas sin duplicidades."
+  },
+  {
+    "suite": "Invariant 4: Integridad de Movimientos Financieros",
+    "name": "All financial movements have valid positive amounts and non-null accounts",
+    "passed": true,
+    "details": "Todos los movimientos son estrictamente positivos y asociados a cuentas válidas."
+  }
+]

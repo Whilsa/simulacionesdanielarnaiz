@@ -1,0 +1,146 @@
+{
+  "TEST_A": {
+    "description": "DELETE sobre préstamo en estado offered",
+    "httpStatus": 200,
+    "httpResponse": {
+      "success": true,
+      "message": "Préstamo eliminado"
+    },
+    "foundInPG": false,
+    "foundInDbJson": false,
+    "observedBehavior": "Permite borrado físico completo"
+  },
+  "TEST_B": {
+    "description": "DELETE sobre préstamo active (ya desembolsado con movimientos)",
+    "httpStatus": 200,
+    "httpResponse": {
+      "success": true,
+      "message": "Préstamo eliminado"
+    },
+    "loanDeletedInPG": true,
+    "loanDeletedInDbJson": true,
+    "orphanMovementsCount": 1,
+    "observedBehavior": "CRÍTICO: Permite borrar físicamente un préstamo activo, dejando movimientos huérfanos sin documento contractual."
+  },
+  "TEST_C": {
+    "description": "DELETE sobre préstamo paid_off (totalmente amortizado)",
+    "httpStatus": 200,
+    "httpResponse": {
+      "success": true,
+      "message": "Préstamo eliminado"
+    },
+    "deletedInPG": true,
+    "deletedInDbJson": true,
+    "observedBehavior": "Permite borrado físico de préstamo amortizado, destruyendo histórico de crédito."
+  },
+  "TEST_D": {
+    "description": "Concurrencia DELETE vs accept",
+    "deleteStatus": 200,
+    "acceptStatus": 404,
+    "deleteData": {
+      "success": true,
+      "message": "Préstamo eliminado"
+    },
+    "acceptData": {
+      "error": "Préstamo no encontrado en la base de datos"
+    },
+    "finalPGLoanStatus": "NOT_FOUND_IN_PG",
+    "studentBalance": "5000.00",
+    "loanInDbJson": false,
+    "observedBehavior": "DELETE status 200, Accept status 404. Si ambos responden 200 o si DELETE ocurre sin transacción, puede haber desincronización."
+  },
+  "TEST_E": {
+    "description": "Concurrencia DELETE vs Worker de cuotas",
+    "deleteStatus": 200,
+    "workerStatus": 404,
+    "finalPGLoan": "DELETED",
+    "finalBalance": "10000.00",
+    "observedBehavior": "DELETE no adquiere lock FOR UPDATE; compite directamente con el worker."
+  },
+  "TEST_F": {
+    "description": "PUT sobre préstamo offered",
+    "httpStatus": 200,
+    "pgImporteOfrecido": "25000.00",
+    "pgPlazoMeses": 48,
+    "pgTipoInteres": "5.00",
+    "pgEstado": "offered",
+    "pgCuotaMensual": "1000.00",
+    "observedBehavior": "PUT actualiza campos en PG via syncLoanToSupabase pero cuota_mensual y tabla_amortizacion quedan desactualizadas."
+  },
+  "TEST_G": {
+    "description": "PUT sobre préstamo active (desembolsado)",
+    "httpStatus": 200,
+    "loanReturned": 80000,
+    "pgImporteOfrecido": "80000.00",
+    "pgImporteConcedido": "40000.00",
+    "pgPlazoMeses": 120,
+    "observedBehavior": "CRÍTICO: PUT permite modificar importe y plazo de un préstamo ya ACTIVO y desembolsado."
+  },
+  "TEST_H": {
+    "description": "PUT sobre préstamo paid_off cambiando status a active",
+    "httpStatus": 200,
+    "pgEstado": "active",
+    "observedBehavior": "CRÍTICO: PUT permite resucitar un préstamo totalmente amortizado a estado active sin control contable."
+  },
+  "TEST_I": {
+    "description": "PUT modifica tipo_interes de 4.5% a 9.0%",
+    "httpStatus": 200,
+    "newRateInPG": "9.00",
+    "cuotaMensualInPG": "885.50",
+    "scheduleRowsCount": 1,
+    "scheduleFirstRowInterest": 75,
+    "observedBehavior": "INCONSISTENCIA: tipo_interes se actualizó a 9.0%, pero cuota_mensual y tabla_amortizacion mantienen el cálculo al 4.5%."
+  },
+  "TEST_J": {
+    "description": "PUT modifica plazo_meses de 24 a 48",
+    "httpStatus": 200,
+    "newTermInPG": 48,
+    "cuotaMensualInPG": "885.50",
+    "scheduleRowsCount": 24,
+    "observedBehavior": "INCONSISTENCIA: plazo_meses cambió a 48, pero tabla_amortizacion sigue teniendo solo 24 cuotas y cuota_mensual intacta."
+  },
+  "TEST_K": {
+    "description": "PUT modifica offeredAmount de 20.000 a 60.000",
+    "httpStatus": 200,
+    "newAmountInPG": "60000.00",
+    "openingFeeInPG": "20.00",
+    "cuotaMensualInPG": "885.50",
+    "observedBehavior": "INCONSISTENCIA: importe_ofrecido aumentó al triple (60.000), pero comision_apertura sigue siendo 20.00 (debería ser 60) y cuota_mensual intacta."
+  },
+  "TEST_L": {
+    "description": "Dos llamadas PUT concurrentes al mismo préstamo",
+    "res1Status": 200,
+    "res2Status": 200,
+    "pgImporte": "35000.00",
+    "pgPlazo": 60,
+    "dbJsonImporte": 35000,
+    "dbJsonPlazo": 60,
+    "observedBehavior": "PUT 1 (offeredAmount 35000): 200, PUT 2 (termMonths 60): 200. Final PG: amount=35000.00, term=60. Debido a lectura/escritura desincronizada de db.json y syncLoanToSupabase sin locks, existe carrera crítica de Lost Update."
+  },
+  "TEST_M": {
+    "description": "Concurrencia PUT vs accept",
+    "putStatus": 200,
+    "acceptStatus": 200,
+    "finalPGLoanAmount": "70000.00",
+    "finalPGApprovedAmount": "70000.00",
+    "studentBalance": "74980.00",
+    "observedBehavior": "PUT status 200, Accept status 200. Si PUT gana antes del lock de accept, accept formaliza 70.000 sin revisión docente ni recálculo de cuota."
+  },
+  "TEST_N": {
+    "description": "Concurrencia PUT vs Worker",
+    "putStatus": 200,
+    "workerStatus": 404,
+    "pgEstado": "active",
+    "pgPlazo": 60,
+    "observedBehavior": "PUT altera los metadatos en PG/memoria mientras el worker procesa cuotas del schedule original."
+  },
+  "TEST_O": {
+    "description": "Concurrencia PUT vs Teacher Review",
+    "putStatus": 200,
+    "reviewStatus": 200,
+    "finalPGLoanAmount": "30000.00",
+    "finalPGTerm": 36,
+    "finalPGEstado": "teacher_offered",
+    "observedBehavior": "PUT 200, Review 200. El endpoint de review usa transacción y FOR UPDATE, mientras que PUT usa syncLoanToSupabase fuera de transacción."
+  }
+}

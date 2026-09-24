@@ -200,6 +200,12 @@ export interface MachineryAcquisition {
   equipmentList?: string[];
   equipment?: string[];
   imageUrl?: string;
+  relocationStatus?: 'desmontaje' | 'remontaje' | 'completed' | string;
+  relocationTargetNaveId?: string;
+  relocationTargetNaveTitle?: string;
+  relocationStartDate?: string;
+  relocationDisassemblyEndDate?: string;
+  relocationReassemblyEndDate?: string;
   relocationInvoice?: RelocationInvoice;
   relocationInvoices?: RelocationInvoice[];
   [key: string]: any;

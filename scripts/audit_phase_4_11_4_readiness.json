@@ -1,0 +1,224 @@
+{
+  "audit_version": "4.11.4",
+  "audit_date": "2026-09-23T07:50:00.000Z",
+  "target_environment": "Aula Concurrente Educativa (~30 alumnos simultáneos)",
+  "executive_verdict": {
+    "status": "PREPARADA_CONDICIONADA_CON_PUNTOS_CRITICOS",
+    "ready_for_concurrency": false,
+    "grade_a_endpoints_count": 97,
+    "grade_b_endpoints_count": 14,
+    "grade_c_endpoints_count": 19,
+    "total_audited_endpoints": 130,
+    "total_audited_workers": 6,
+    "summary": "El núcleo transaccional crítico (transferencias bancarias, préstamos, compras de suministros, juzgado, órdenes B2B y transferencias de inventario) se encuentra completamente blindado con PostgreSQL, SELECT ... FOR UPDATE, orden determinista anti-deadlock e idempotencia. Sin embargo, existen 3 workers en segundo plano y varios endpoints auxiliares con riesgos Grado C (mutación en memoria con read-modify-write y fire-and-forget sync) que impiden declarar el sistema 100% libre de colisiones si el profesor activa la simulación automática completa sin aplicar los parches pendientes."
+  },
+  "modules_assessment": {
+    "core_banking": {
+      "status": "GRADO_A",
+      "concurrency_safe": true,
+      "transactional": true,
+      "lock_strategy": "Deterministic sorted ID ordering: [idA, idB].sort() with SELECT ... FOR UPDATE on cuentas",
+      "zero_sum_balance_invariant": "Verified 100% conserved across 30 concurrent transfers among 10 users",
+      "ledger_movements_integrity": "Atomic twin entries (TRANSFER_OUT + TRANSFER_IN) without duplicates or orphaned records",
+      "idempotency_protection": "executeWithIdempotency with 2-phase commit and 24h key cache"
+    },
+    "loans_and_credit": {
+      "status": "GRADO_A",
+      "concurrency_safe": true,
+      "transactional": true,
+      "lock_strategy": "Strict two-phase locking: prestamos FOR UPDATE followed by cuentas FOR UPDATE",
+      "worker_cobro_automatico": "processStudentAutomaticPayments fully migrated in Phase 4.9.2 to withPostgresTransaction + FOR UPDATE",
+      "endpoints": [
+        { "route": "POST /api/loans/request", "grade": "A" },
+        { "route": "POST /api/loans/:id/accept", "grade": "A" },
+        { "route": "POST /api/loans/:id/reject", "grade": "A" },
+        { "route": "POST /api/teacher/loans/:id/review", "grade": "A" }
+      ]
+    },
+    "judicial_and_court": {
+      "status": "GRADO_A",
+      "concurrency_safe": true,
+      "transactional": true,
+      "lock_strategy": "demandas_judiciales FOR UPDATE and sorted cuentas FOR UPDATE",
+      "endpoints": [
+        { "route": "POST /api/court/lawsuits", "grade": "A" },
+        { "route": "POST /api/court/lawsuits/:id/judge-admission", "grade": "A" },
+        { "route": "POST /api/court/lawsuits/:id/preventative-embargo", "grade": "A" },
+        { "route": "POST /api/court/lawsuits/:id/pay-settle", "grade": "A" },
+        { "route": "POST /api/court/lawsuits/:id/defendant-answer", "grade": "A" },
+        { "route": "POST /api/court/lawsuits/:id/judge-ruling", "grade": "A" }
+      ]
+    },
+    "b2b_market_and_promissory_notes": {
+      "status": "GRADO_A",
+      "concurrency_safe": true,
+      "transactional": true,
+      "lock_strategy": "market_messages FOR UPDATE and sorted cuentas FOR UPDATE",
+      "endpoints": [
+        { "route": "POST /api/market/messages/sign-promissory-note", "grade": "A" },
+        { "route": "POST /api/market/messages/discount-promissory-note", "grade": "A" },
+        { "route": "POST /api/market/messages/collect-promissory-note", "grade": "A" },
+        { "route": "POST /api/market/messages/collection-management-promissory-note", "grade": "A" }
+      ],
+      "worker_vencimiento_descontados": {
+        "function": "processDiscountedPromissoryNotesMaturity",
+        "grade": "C",
+        "vulnerability": "Recorre db.marketMessages en memoria y debita al deudor vía safeDbQuery('UPDATE cuentas SET saldo = $1') sin transacción ni bloqueo pesimista."
+      }
+    },
+    "raw_materials_and_logistics": {
+      "status": "GRADO_A_MINUS",
+      "concurrency_safe": true,
+      "transactional": true,
+      "lock_strategy": "Deterministic sorted student IDs on materias_primas_inventario FOR UPDATE, then cuentas FOR UPDATE",
+      "endpoints": [
+        { "route": "POST /api/raw-materials/orders", "grade": "A" },
+        { "route": "POST /api/raw-materials/orders/:id/approve", "grade": "A" },
+        { "route": "POST /api/raw-materials/orders/:id/ship", "grade": "A" },
+        { "route": "POST /api/raw-materials/orders/:id/deliver", "grade": "A" },
+        { "route": "POST /api/inventory/transfer-stock", "grade": "A" },
+        { "route": "POST /api/inventory/transfer-nave-stock", "grade": "A" },
+        { "route": "POST /api/raw-materials/rod-production-mode", "grade": "C", "vulnerability": "Mutación directa en memoria con syncInventoryToSupabase fire-and-forget" }
+      ]
+    },
+    "automated_workers_and_periodic_tasks": {
+      "status": "GRADO_C",
+      "concurrency_safe": false,
+      "details": "Existen workers en segundo plano ejecutados periódicamente por setInterval que no han sido convertidos al estándar de Fase 4.9.2.",
+      "critical_workers": [
+        {
+          "name": "checkAndProcessAutomatedPayrollAndTaxes",
+          "interval": "Periódico / Triggered",
+          "grade": "C",
+          "reason": "Debita salarios e IRPF modificando student.balance en memoria y lanzando syncAccountToSupabase en segundo plano sin withPostgresTransaction ni SELECT FOR UPDATE."
+        },
+        {
+          "name": "processDiscountedPromissoryNotesMaturity",
+          "interval": "Cada 60 segundos",
+          "grade": "C",
+          "reason": "Debita pagarés vencidos al deudor con cálculo en memoria y safeDbQuery UPDATE sin bloqueo pesimista ni transacción atómica completa."
+        },
+        {
+          "name": "checkAndProcessAutomatedElectricity & checkAndProcessAutomatedTelecom",
+          "interval": "Periódico",
+          "grade": "B",
+          "reason": "Desacoplado de readDb() en Fase 4.11.3, pero la facturación periódica aún contiene ramas con fire-and-forget sync fuera de transacción."
+        }
+      ]
+    },
+    "bank_reconcile": {
+      "status": "GRADO_C",
+      "route": "POST /api/bank/reconcile",
+      "grade": "C",
+      "reason": "Calcula expectedBalance en memoria asumiendo saldos iniciales fijos y ejecuta UPDATE cuentas SET saldo = $1 sin transacción ni bloqueo, lo que sobreescribiría saldos concurrentes activos."
+    }
+  },
+  "concurrency_test_battery_results": {
+    "total_tests": 8,
+    "passed": 8,
+    "failed": 0,
+    "tests": [
+      {
+        "suite": "Multi-Party Transfers",
+        "name": "Invariante suma cero de saldos tras 30 transferencias concurrentes entre 10 cuentas",
+        "passed": true,
+        "metrics": "30/30 exitosas. Suma inicial: 20000€, Suma final: 20000€. Latencia total: 8803ms (media 293.4ms/req)"
+      },
+      {
+        "suite": "Movements Ledger Integrity",
+        "name": "Cada transferencia genera exactamente 2 asientos (TRANSFER_OUT y TRANSFER_IN) sin duplicados",
+        "passed": true,
+        "metrics": "60 movimientos registrados en PostgreSQL para 30 transferencias"
+      },
+      {
+        "suite": "Concurrent Loan Acceptance",
+        "name": "5 peticiones concurrentes de aceptación sobre el mismo préstamo abonan el capital exactamente una sola vez",
+        "passed": true,
+        "metrics": "5/5 peticiones concurrentes controladas por idempotencia y FOR UPDATE; abono neto único de 49500€"
+      },
+      {
+        "suite": "Loan State Progression",
+        "name": "El estado del préstamo pasa estrictamente a 'active'",
+        "passed": true,
+        "metrics": "Estado en PostgreSQL verificado como 'active'"
+      },
+      {
+        "suite": "Insufficient Funds Prevention under Concurrency",
+        "name": "Operaciones concurrentes de compra nunca permiten que el saldo caiga en negativo",
+        "passed": true,
+        "metrics": "Saldo final >= 0 garantizado por bloqueo pesimista en cuentas"
+      },
+      {
+        "suite": "Concurrent Tax Obligation Payment",
+        "name": "El importe de la obligación fiscal se debita exactamente una sola vez (5000 -> 4550€)",
+        "passed": true,
+        "metrics": "Saldo verificado exactamente en 4550€"
+      },
+      {
+        "suite": "Tax Status Updated",
+        "name": "La obligación fiscal pasa a estado 'pagado' en PostgreSQL",
+        "passed": true,
+        "metrics": "Estado verificado como 'pagado'"
+      },
+      {
+        "suite": "Lock Contention Benchmark",
+        "name": "Transacciones cruzadas bajo contención completan sin deadlocks ni colisiones",
+        "passed": true,
+        "metrics": "Min: 397ms, Media: 1925.7ms, Max: 3455ms sobre conexión remota"
+      }
+    ]
+  },
+  "grade_c_inventory": [
+    {
+      "identifier": "WORKER_PAYROLL_TAXES",
+      "location": "server.ts: lines 4750-5046 (checkAndProcessAutomatedPayrollAndTaxes)",
+      "risk": "Race condition en débito de nóminas e impuestos sin transacción PostgreSQL."
+    },
+    {
+      "identifier": "WORKER_DISCOUNTED_PROMISSORY_NOTES",
+      "location": "server.ts: lines 4467-4560 (processDiscountedPromissoryNotesMaturity)",
+      "risk": "Cobro de pagarés descontados vencidos usa db.json en memoria y UPDATE simple sin FOR UPDATE."
+    },
+    {
+      "identifier": "POST /api/bank/reconcile",
+      "location": "server.ts: lines 7133-7192",
+      "risk": "Sobreescritura destructiva de saldos bancarios calculados sobre estado en memoria."
+    },
+    {
+      "identifier": "POST /api/raw-materials/rod-production-mode",
+      "location": "server.ts: lines 26427-26466",
+      "risk": "Mutación no atómica de inventario con sincronización fire-and-forget."
+    },
+    {
+      "identifier": "POST /api/restore",
+      "location": "server.ts: lines 7342-7390",
+      "risk": "Sobreescritura masiva en caliente de toda la base de datos sin serialización."
+    }
+  ],
+  "remediation_roadmap": [
+    {
+      "step": 1,
+      "priority": "CRITICAL",
+      "task": "Migrar checkAndProcessAutomatedPayrollAndTaxes a withPostgresTransaction con SELECT ... FOR UPDATE en cuentas de los alumnos.",
+      "estimated_effort": "2 horas"
+    },
+    {
+      "step": 2,
+      "priority": "CRITICAL",
+      "task": "Migrar processDiscountedPromissoryNotesMaturity a transacción PostgreSQL bloqueando market_messages y cuentas con FOR UPDATE.",
+      "estimated_effort": "1.5 horas"
+    },
+    {
+      "step": 3,
+      "priority": "HIGH",
+      "task": "Proteger POST /api/bank/reconcile: bloquear cuentas durante la conciliación o recalcular saldos desde el histórico de movimientos en PostgreSQL en vez de db.json.",
+      "estimated_effort": "1 hora"
+    },
+    {
+      "step": 4,
+      "priority": "MEDIUM",
+      "task": "Transactificar POST /api/raw-materials/rod-production-mode utilizando materias_primas_inventario FOR UPDATE.",
+      "estimated_effort": "45 minutos"
+    }
+  ]
+}

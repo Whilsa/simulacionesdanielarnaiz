@@ -23,7 +23,7 @@
         "data": {
           "success": true,
           "order": {
-            "id": "rmord-zppq2ah9v",
+            "id": "rmord-tmomu4grh",
             "studentId": "test_buyer_rm_1",
             "studentName": "Alumno RM Concurrente A",
             "buyerLevel": 1,
@@ -53,11 +53,12 @@
             "deliveryAddress": "Nave industrial Test test_buyer_rm_1, Polígono Industrial Concurrencia 1",
             "destinationNaveId": "acq-test-nave-test_buyer_rm_1",
             "status": "entregado",
-            "requestedAt": "2026-09-09T07:32:41.661Z",
-            "approvedAt": "2026-09-09T07:32:41.661Z",
-            "deliveredAt": "2026-09-09T07:32:41.661Z",
+            "inventoryCredited": true,
+            "requestedAt": "2026-09-17T09:19:25.927Z",
+            "approvedAt": "2026-09-17T09:19:25.927Z",
+            "deliveredAt": "2026-09-17T09:19:25.927Z",
             "estimatedDeliveryDays": 0,
-            "estimatedDeliveryAt": "2026-09-09T07:32:41.661Z",
+            "estimatedDeliveryAt": "2026-09-17T09:19:25.927Z",
             "items": [
               {
                 "announcementId": "rm-hierro",
@@ -75,10 +76,10 @@
             "lastTurnUserId": "test_buyer_rm_1",
             "negotiationHistory": [
               {
-                "id": "neg-onau4oenh",
+                "id": "neg-93h17bulc",
                 "authorId": "test_buyer_rm_1",
                 "authorName": "Alumno RM Concurrente A",
-                "timestamp": "2026-09-09T07:32:41.661Z",
+                "timestamp": "2026-09-17T09:19:25.927Z",
                 "action": "propuesta_inicial",
                 "quantity": 1,
                 "pricePerUnit": 475,
@@ -92,10 +93,10 @@
                 "note": "Solicitud inicial de compra realizada"
               },
               {
-                "id": "neg-ife0giixq",
+                "id": "neg-4jsl5tnqq",
                 "authorId": "profesor-1",
                 "authorName": "BricoMaster Distribuciones, S.A.",
-                "timestamp": "2026-09-09T07:32:41.661Z",
+                "timestamp": "2026-09-17T09:19:25.927Z",
                 "action": "aceptado",
                 "quantity": 1,
                 "pricePerUnit": 475,
@@ -106,9 +107,7 @@
                 "totalAmount": 687.4,
                 "note": "Compra aceptada y entregada de forma inmediata"
               }
-            ],
-            "stockDeducted": true,
-            "inventoryCredited": true
+            ]
           },
           "message": "¡Compra realizada con éxito! Se han descontado 687.40 € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén."
         }
@@ -155,7 +154,7 @@
         "data": {
           "success": true,
           "order": {
-            "id": "rmord-x6ctkbfxz",
+            "id": "rmord-v3dr6p964",
             "studentId": "test_buyer_rm_3a",
             "studentName": "Comprador Stock A",
             "buyerLevel": 2,
@@ -185,7 +184,8 @@
             "deliveryAddress": "Nave industrial Test test_buyer_rm_3a, Polígono Industrial Concurrencia 1",
             "destinationNaveId": "acq-test-nave-test_buyer_rm_3a",
             "status": "pendiente",
-            "requestedAt": "2026-09-09T07:32:42.510Z",
+            "inventoryCredited": false,
+            "requestedAt": "2026-09-17T09:19:29.507Z",
             "items": [
               {
                 "announcementId": "test-ann-stock-limit",
@@ -203,10 +203,10 @@
             "lastTurnUserId": "test_buyer_rm_3a",
             "negotiationHistory": [
               {
-                "id": "neg-5i22sijxz",
+                "id": "neg-ic3b8s2tq",
                 "authorId": "test_buyer_rm_3a",
                 "authorName": "Comprador Stock A",
-                "timestamp": "2026-09-09T07:32:42.510Z",
+                "timestamp": "2026-09-17T09:19:29.507Z",
                 "action": "propuesta_inicial",
                 "quantity": 4,
                 "pricePerUnit": 100,
@@ -229,7 +229,7 @@
         "data": {
           "success": true,
           "order": {
-            "id": "rmord-8itovlg3b",
+            "id": "rmord-dw1uqgmz5",
             "studentId": "test_buyer_rm_3b",
             "studentName": "Comprador Stock B",
             "buyerLevel": 2,
@@ -259,7 +259,8 @@
             "deliveryAddress": "Nave industrial Test test_buyer_rm_3b, Polígono Industrial Concurrencia 1",
             "destinationNaveId": "acq-test-nave-test_buyer_rm_3b",
             "status": "pendiente",
-            "requestedAt": "2026-09-09T07:32:42.523Z",
+            "inventoryCredited": false,
+            "requestedAt": "2026-09-17T09:19:29.521Z",
             "items": [
               {
                 "announcementId": "test-ann-stock-limit",
@@ -277,10 +278,10 @@
             "lastTurnUserId": "test_buyer_rm_3b",
             "negotiationHistory": [
               {
-                "id": "neg-8poxiryve",
+                "id": "neg-9ryt3n07q",
                 "authorId": "test_buyer_rm_3b",
                 "authorName": "Comprador Stock B",
-                "timestamp": "2026-09-09T07:32:42.523Z",
+                "timestamp": "2026-09-17T09:19:29.521Z",
                 "action": "propuesta_inicial",
                 "quantity": 4,
                 "pricePerUnit": 100,
@@ -306,19 +307,19 @@
     "name": "Varias compras simultáneas (3) con saldo para solo una",
     "concurrentRequests": 3,
     "expected": "1 compra aceptada (200), 2 rechazadas (400), saldo = 4,160 €, 1 movimiento, 1 adquisición en PG",
-    "actual": "HTTP [400, 200, 400], saldo PG: 4160 €, movimientos: 1, máquinas: 1",
-    "pass": true,
+    "actual": "HTTP [400, 400, 400], saldo PG: 130000 €, movimientos: 0, máquinas: 0",
+    "pass": false,
     "negativeBalanceDetected": false,
     "duplicationDetected": false,
     "deadlocksDetected": false,
     "partialStateDetected": false,
     "details": {
       "r1Status": 400,
-      "r2Status": 200,
+      "r2Status": 400,
       "r3Status": 400,
-      "pgBal": 4160,
-      "pgMovsCount": 1,
-      "pgMacCount": 1
+      "pgBal": 130000,
+      "pgMovsCount": 0,
+      "pgMacCount": 0
     }
   },
   {
@@ -327,18 +328,18 @@
     "name": "Dos peticiones simultáneas con MISMA clave de idempotencia",
     "concurrentRequests": 2,
     "expected": "Ambas HTTP 200 con mismo resultado, 1 sola compra efectiva, 1 movimiento, 1 adquisición, saldo = 24,160 €",
-    "actual": "HTTP [200, 200], saldo: 24160 €, movs: 1, adquisiciones: 1, idem en PG: 1",
-    "pass": true,
+    "actual": "HTTP [400, 400], saldo: 150000 €, movs: 0, adquisiciones: 0, idem en PG: 0",
+    "pass": false,
     "negativeBalanceDetected": false,
     "duplicationDetected": false,
     "deadlocksDetected": false,
     "partialStateDetected": false,
     "details": {
-      "r1Status": 200,
-      "r2Status": 200,
-      "pgBal": 24160,
-      "pgMovsCount": 1,
-      "pgMacCount": 1
+      "r1Status": 400,
+      "r2Status": 400,
+      "pgBal": 150000,
+      "pgMovsCount": 0,
+      "pgMacCount": 0
     }
   },
   {

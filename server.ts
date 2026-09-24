@@ -298,7 +298,13 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         personal_requerido INT NOT NULL,
         potencia_kw NUMERIC(10, 2) NOT NULL,
         capacidad_produccion_unidades_hora INT NOT NULL,
-        equipamiento JSONB
+        equipamiento JSONB,
+        relocation_status VARCHAR(50) DEFAULT 'completed',
+        relocation_target_nave_id VARCHAR(100),
+        relocation_target_nave_title TEXT,
+        relocation_start_date TIMESTAMPTZ,
+        relocation_disassembly_end_date TIMESTAMPTZ,
+        relocation_reassembly_end_date TIMESTAMPTZ
       );
 
       CREATE TABLE IF NOT EXISTS ofertas_empleo (
@@ -475,6 +481,9 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS read BOOLEAN DEFAULT FALSE;
       ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS type VARCHAR(50) DEFAULT 'text';
       ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS invoice_data JSONB;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_market_messages_promissory_number 
+      ON market_messages ((invoice_data->>'promissoryNoteNumber')) 
+      WHERE (type = 'promissory_note' AND invoice_data->>'promissoryNoteNumber' IS NOT NULL);
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_id VARCHAR(255);
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS propiedad_asignada_titulo TEXT;
       ALTER TABLE vehiculos_comprados ADD COLUMN IF NOT EXISTS almacen_asignado_nombre TEXT;
@@ -770,6 +779,14 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE demandas_judiciales ADD COLUMN IF NOT EXISTS minuta_demandado_total NUMERIC(12, 2);
       ALTER TABLE demandas_judiciales ADD COLUMN IF NOT EXISTS minuta_demandado_factura_num VARCHAR(255);
 
+      ALTER TABLE maquinaria_adquisiciones
+      ADD COLUMN IF NOT EXISTS relocation_status VARCHAR(50) DEFAULT 'completed',
+      ADD COLUMN IF NOT EXISTS relocation_target_nave_id VARCHAR(100),
+      ADD COLUMN IF NOT EXISTS relocation_target_nave_title TEXT,
+      ADD COLUMN IF NOT EXISTS relocation_start_date TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS relocation_disassembly_end_date TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS relocation_reassembly_end_date TIMESTAMPTZ;
+
       CREATE TABLE IF NOT EXISTS operaciones_idempotencia (
         clave VARCHAR(255) PRIMARY KEY,
         respuesta JSONB NOT NULL,
@@ -796,6 +813,9 @@ async function withPostgresTransaction<T>(
   const client = await dbPool.connect();
   try {
     await client.query('BEGIN');
+
+    // 0. Acquire shared advisory lock to prevent concurrent restore while permitting high-throughput concurrent normal operations
+    await client.query('SELECT pg_advisory_xact_lock_shared(987654321)');
 
     // 1. If an idempotencyKey is provided, atomically acquire row lock / register idempotency intent in PostgreSQL
     if (idempotencyKey) {
@@ -993,40 +1013,9 @@ async function syncMarketContactToSupabase(contact: MarketContact) {
   }
 }
 
+// DEPRECATED: Replaced by transactional handleDeleteUserRoute. Kept as no-op for backward compatibility.
 async function deleteAccountFromSupabase(id: string, username?: string, name?: string) {
-  if (!dbPool) return;
-  try {
-    const uname = (username || id).toLowerCase();
-    const studentName = (name || id).toLowerCase();
-
-    await safeDbQuery('DELETE FROM cuentas WHERE id = $1 OR LOWER(usuario) = $2 OR LOWER(alumno) = $3', [id, uname, studentName]);
-    await safeDbQuery('DELETE FROM movimientos WHERE cuenta_id = $1', [id]);
-    await safeDbQuery('DELETE FROM adquisiciones WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM obligaciones_pago WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM prestamos WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM maquinaria_adquisiciones WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM ofertas_empleo WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM empleados_contratados WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM registros_nomina WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM obligaciones_fiscales WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM contratos_electricos WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM contratos_telecom WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM facturas_telecom WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM pedidos_oficina WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM anuncios_materia_prima WHERE seller_id = $1', [id]);
-    await safeDbQuery('DELETE FROM perfiles_empresa WHERE student_id = $1', [id]);
-    await safeDbQuery('DELETE FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1', [id]);
-    await safeDbQuery('DELETE FROM facturas_electricidad WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM vehiculos_comprados WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM materias_primas_inventario WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM materias_primas_pedidos WHERE alumno_id = $1', [id]);
-    await safeDbQuery('DELETE FROM market_messages WHERE sender_id = $1 OR recipient_id = $1', [id]);
-    await safeDbQuery('DELETE FROM notificaciones WHERE user_id = $1', [id]);
-    await safeDbQuery('DELETE FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1', [id]);
-  } catch (e) {
-    console.error('[Supabase DB] Error deleting account and related data from Supabase:', e);
-  }
+  console.warn('[Supabase DB] deleteAccountFromSupabase is deprecated. Use handleDeleteUserRoute for transactional deletion.');
 }
 
 function parseSafeDate(d: any): Date {
@@ -1135,10 +1124,11 @@ async function deletePropertyFromSupabase(id: string) {
   }
 }
 
-async function syncAcquisitionToSupabase(acq: PropertyAcquisition) {
-  if (!dbPool) return;
+async function syncAcquisitionToSupabase(acq: PropertyAcquisition, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO adquisiciones (id, inmueble_id, inmueble_titulo, inmueble_tipo, operacion, alumno_id, alumno_nombre, superficie_m2, ubicacion, imagen_url, porcentaje_suelo, precio_base, importe_iva, precio_total, fecha_compra, metodo_pago, alquiler_mensual, proximo_pago_alquiler, entrada_pagada, saldo_pendiente)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        ON CONFLICT (id) DO UPDATE SET 
@@ -1814,11 +1804,12 @@ async function syncElectricityContractToSupabase(contract: ElectricityContract) 
   }
 }
 
-async function syncElectricityBillToSupabase(bill: ElectricityBill) {
-  if (!dbPool) return;
+async function syncElectricityBillToSupabase(bill: ElectricityBill, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
     const breakdownJson = bill.propertyBreakdown ? JSON.stringify(bill.propertyBreakdown) : null;
-    await safeDbQuery(
+    await runner(
       `INSERT INTO facturas_electricidad (
         id, numero_factura, alumno_id, alumno_nombre, empresa_nombre, cif_nif,
         contrato_id, cups_code, mes, anio, fecha_inicio, fecha_fin, dias_facturados,
@@ -1950,10 +1941,11 @@ async function syncTelecomContractToSupabase(contract: TelecomContract) {
   }
 }
 
-async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice) {
-  if (!dbPool) return;
+async function syncTelecomInvoiceToSupabase(invoice: TelecomInvoice, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
   try {
-    await safeDbQuery(
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
       `INSERT INTO facturas_telecom (
         id, numero_factura, alumno_id, alumno_nombre, empresa_nombre, nif_cif,
         contrato_id, plan_nombre, proveedor, mes, anio, fecha_emision,
@@ -2287,7 +2279,7 @@ async function syncCourtLawsuitToSupabase(lawsuit: CourtLawsuit, client?: pg.Poo
         lawsuit.id,
         lawsuit.caseNumber,
         lawsuit.courtName || 'Juzgado de 1ª Instancia e Instrucción Nº 1',
-        lawsuit.type,
+        lawsuit.type || 'juicio_cambiario',
         lawsuit.subtype || null,
         lawsuit.plaintiffId,
         lawsuit.plaintiffName,
@@ -2836,7 +2828,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             assemblyDays: Number(row.dias_montaje || 5),
             assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
             assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'montaje' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa'),
+            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
             installedAtNaveId: String(row.nave_instalada_id),
             installedNaveId: String(row.nave_instalada_id),
             installationNaveId: String(row.nave_instalada_id),
@@ -2848,7 +2840,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             requiredPowerKW: Number(row.potencia_kw || 35),
             powerKw: Number(row.potencia_kw || 35),
             equipmentList: equip,
-            equipment: equip
+            equipment: equip,
+            relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
+            relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
+            relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
+            relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
+            relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
+            relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
           };
         });
       } else if (db.machineryAcquisitions && db.machineryAcquisitions.length > 0) {
@@ -4752,7 +4750,7 @@ function isEmployeePayrollPaid(
   return inTransfers;
 }
 
-function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
+async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Promise<void> {
   if (!db.hiredEmployees) db.hiredEmployees = [];
   if (!db.payrollRecords) db.payrollRecords = [];
   if (!db.taxObligations) db.taxObligations = [];
@@ -4765,6 +4763,517 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
   const currentMonth = now.getMonth() + 1; // 1 - 12
   const currentYear = now.getFullYear();
 
+  // If PostgreSQL is available, execute with full ACID transactions and row locking
+  if (dbPool) {
+    // 1. Process Payroll on day 26 or later of the corresponding month
+    if (currentDay >= 26) {
+      // Find students who have hired employees
+      let studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
+      try {
+        const empRes = await dbPool.query('SELECT DISTINCT alumno_id FROM empleados_contratados WHERE alumno_id IS NOT NULL');
+        if (empRes && empRes.rows) {
+          empRes.rows.forEach((r: any) => {
+            if (r.alumno_id) studentsWithEmployees.add(r.alumno_id);
+          });
+        }
+      } catch (e) {
+        // Fallback to memory set
+      }
+
+      for (const studentId of studentsWithEmployees) {
+        try {
+          let postCommitData: (() => void) | null = null;
+          await withPostgresTransaction(async (client) => {
+            // Lock student account
+            const studentRes = await client.query(
+              'SELECT id, alumno, saldo, usuario, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+              [studentId]
+            );
+            if (!studentRes || studentRes.rows.length === 0) return;
+            const studentRow = studentRes.rows[0];
+            if (studentRow.role !== 'student') return;
+
+            // Fetch hired employees for this student
+            let myEmployees: any[] = [];
+            const empDbRes = await client.query(
+              'SELECT * FROM empleados_contratados WHERE alumno_id = $1 ORDER BY fecha_contratacion ASC',
+              [studentId]
+            );
+            if (empDbRes && empDbRes.rows && empDbRes.rows.length > 0) {
+              myEmployees = empDbRes.rows.map((r: any) => ({
+                id: r.id,
+                studentId: r.alumno_id,
+                employeeName: r.nombre_empleado,
+                grossSalaryMonthly: Number(r.sueldo_bruto_mensual),
+                hireDate: r.fecha_contratacion ? new Date(r.fecha_contratacion).toISOString() : undefined,
+                jobOfferId: r.oferta_id,
+                gender: r.genero,
+                age: r.edad,
+                role: r.puesto
+              }));
+            } else {
+              myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+            }
+
+            if (myEmployees.length === 0) return;
+
+            // Fetch already registered payroll records for this month/year in PostgreSQL
+            const prDbRes = await client.query(
+              'SELECT id, mes, anio, paid_employee_ids, detalles_empleados FROM registros_nomina WHERE alumno_id = $1 AND mes = $2 AND anio = $3',
+              [studentId, currentMonth, currentYear]
+            );
+
+            const paidEmployeeIdsSet = new Set<string>();
+            if (prDbRes && prDbRes.rows) {
+              for (const row of prDbRes.rows) {
+                if (row.paid_employee_ids && Array.isArray(row.paid_employee_ids)) {
+                  row.paid_employee_ids.forEach((id: string) => paidEmployeeIdsSet.add(id));
+                }
+                if (row.detalles_empleados && Array.isArray(row.detalles_empleados)) {
+                  row.detalles_empleados.forEach((b: any) => {
+                    if (b.employeeId) paidEmployeeIdsSet.add(b.employeeId);
+                  });
+                }
+              }
+            }
+
+            const unpaidEmployees = myEmployees.filter(e => !paidEmployeeIdsSet.has(e.id));
+            if (unpaidEmployees.length === 0) return;
+
+            let totalGross = 0;
+            let totalEmployeeIRPF = 0;
+            let totalEmployeeSS = 0;
+            let totalNetPaid = 0;
+            let totalCompanySS = 0;
+            let isProportionalPayroll = false;
+            const employeeBreakdown: EmployeePayrollBreakdown[] = [];
+            const newlyPaidEmployeeIds: string[] = [];
+            const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+            const nowIso = now.toISOString();
+
+            const movementsToInsert: any[] = [];
+            const transfersCreated: Transfer[] = [];
+
+            for (const emp of unpaidEmployees) {
+              const empName = emp.employeeName || emp.name || 'Empleado';
+              let empGross = 0;
+              let isProportional = false;
+              let workedDays = daysInMonth;
+
+              if (emp.hireDate) {
+                const parts = String(emp.hireDate).split('T')[0].split('-');
+                const hireYear = parseInt(parts[0], 10);
+                const hireMonth = parseInt(parts[1], 10);
+                const hireDay = parseInt(parts[2], 10);
+
+                if (hireYear > currentYear || (hireYear === currentYear && hireMonth > currentMonth)) {
+                  continue;
+                }
+
+                if (hireMonth === currentMonth && hireYear === currentYear) {
+                  isProportional = true;
+                  isProportionalPayroll = true;
+                  workedDays = Math.max(1, daysInMonth - hireDay + 1);
+                  empGross = (emp.grossSalaryMonthly / daysInMonth) * workedDays;
+                } else {
+                  workedDays = daysInMonth;
+                  empGross = emp.grossSalaryMonthly;
+                }
+              } else {
+                workedDays = daysInMonth;
+                empGross = emp.grossSalaryMonthly;
+              }
+
+              empGross = Math.round(empGross * 100) / 100;
+              const empIRPF = Math.round(empGross * 0.17 * 100) / 100;
+              const empSSEmp = Math.round(empGross * 0.0648 * 100) / 100;
+              const empNet = Math.round((empGross - empIRPF - empSSEmp) * 100) / 100;
+              const empSSComp = Math.round(empGross * 0.75 * 100) / 100;
+
+              totalGross += empGross;
+              totalEmployeeIRPF += empIRPF;
+              totalEmployeeSS += empSSEmp;
+              totalNetPaid += empNet;
+              totalCompanySS += empSSComp;
+
+              const txId = generateId('tx');
+              const transferConcept = `Pago de nómina - ${empName} (Mes ${currentMonth}/${currentYear})`;
+              const receiverAccount = emp.bankAccount || `ES910001000299${String(emp.id).replace(/\D/g, '').padStart(6, '0')}`;
+
+              const transfer: Transfer = {
+                id: txId,
+                senderId: studentRow.id,
+                senderName: studentRow.alumno,
+                senderAccount: studentRow.account_number,
+                receiverId: `empleado-${emp.id}`,
+                receiverName: empName,
+                receiverAccount,
+                amount: empNet,
+                concept: transferConcept,
+                timestamp: nowIso
+              };
+              transfersCreated.push(transfer);
+
+              movementsToInsert.push({
+                id: txId + '-out',
+                cuentaId: studentRow.id,
+                amount: empNet,
+                concept: transferConcept,
+                receiverId: `empleado-${emp.id}`,
+                receiverName: empName,
+                receiverAccount
+              });
+
+              newlyPaidEmployeeIds.push(emp.id);
+              employeeBreakdown.push({
+                employeeId: emp.id,
+                employeeName: empName,
+                grossSalary: empGross,
+                employeeSS: empSSEmp,
+                employeeIRPF: empIRPF,
+                netSalary: empNet,
+                companySS: empSSComp,
+                isProportional,
+                workedDays,
+                totalMonthDays: daysInMonth,
+                transferId: txId,
+                paidAt: nowIso
+              });
+            }
+
+            if (newlyPaidEmployeeIds.length === 0) return;
+
+            totalGross = Math.round(totalGross * 100) / 100;
+            totalEmployeeIRPF = Math.round(totalEmployeeIRPF * 100) / 100;
+            totalEmployeeSS = Math.round(totalEmployeeSS * 100) / 100;
+            totalNetPaid = Math.round(totalNetPaid * 100) / 100;
+            totalCompanySS = Math.round(totalCompanySS * 100) / 100;
+
+            const currentBalance = Number(studentRow.saldo);
+            // Simulator rule: if student balance cannot cover net salaries, do not drive balance negative
+            if (currentBalance < totalNetPaid) {
+              console.warn(`[Payroll Worker] Saldo insuficiente para pagar nóminas de ${studentRow.alumno}. Saldo: ${currentBalance}€, Requerido: ${totalNetPaid}€`);
+              return;
+            }
+
+            const newBalance = Number((currentBalance - totalNetPaid).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+
+            // Persist individual movements in PostgreSQL
+            for (const m of movementsToInsert) {
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING`,
+                [m.id, m.cuentaId, m.amount, nowIso, m.concept, studentRow.id, studentRow.alumno, studentRow.account_number, m.receiverId, m.receiverName, m.receiverAccount]
+              );
+            }
+
+            // Persist PayrollRecord in PostgreSQL
+            const prId = generateId('payroll');
+            const detailsJson = JSON.stringify(employeeBreakdown);
+            const paidIdsJson = JSON.stringify(newlyPaidEmployeeIds);
+
+            await client.query(
+              `INSERT INTO registros_nomina (
+                id, alumno_id, alumno_nombre, fecha_nomina, mes, anio, num_empleados,
+                total_bruto, total_ss_empleado, total_irpf, total_liquido, total_ss_empresa,
+                es_proporcional, detalles_empleados, paid_employee_ids
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              ON CONFLICT (id) DO UPDATE SET
+                detalles_empleados = EXCLUDED.detalles_empleados,
+                paid_employee_ids = EXCLUDED.paid_employee_ids`,
+              [prId, studentRow.id, studentRow.alumno, nowIso, currentMonth, currentYear, newlyPaidEmployeeIds.length, totalGross, totalEmployeeSS, totalEmployeeIRPF, totalNetPaid, totalCompanySS, isProportionalPayroll, detailsJson, paidIdsJson]
+            );
+
+            // Due dates for tax obligations
+            let nextMonth = currentMonth + 1;
+            let nextYear = currentYear;
+            if (nextMonth > 12) {
+              nextMonth = 1;
+              nextYear += 1;
+            }
+            const ssDueDateObj = new Date(nextYear, nextMonth - 1, 20, 9, 0, 0);
+
+            let qNum = 1;
+            let irpfDueDateObj: Date;
+            if (currentMonth >= 10) {
+              qNum = 4;
+              irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0);
+            } else if (currentMonth >= 7) {
+              qNum = 3;
+              irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0);
+            } else if (currentMonth >= 4) {
+              qNum = 2;
+              irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0);
+            } else {
+              qNum = 1;
+              irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0);
+            }
+
+            const ssEmpId = generateId('tax');
+            const ssCompId = generateId('tax');
+            const ssEmpConcept = `Cuotas Seguridad Social Trabajador (6,48%) Mes ${currentMonth}/${currentYear}`;
+            const ssCompConcept = `Aportación patronal Seguridad Social (75%) Mes ${currentMonth}/${currentYear}`;
+
+            await client.query(
+              `INSERT INTO obligaciones_fiscales (id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, nomina_id)
+               VALUES ($1, $2, $3, 'ss_employee', $4, $5, $6, 'pendiente', $7)
+               ON CONFLICT (id) DO NOTHING`,
+              [ssEmpId, studentRow.id, studentRow.alumno, ssEmpConcept, totalEmployeeSS, ssDueDateObj.toISOString(), prId]
+            );
+
+            await client.query(
+              `INSERT INTO obligaciones_fiscales (id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, nomina_id)
+               VALUES ($1, $2, $3, 'ss_company', $4, $5, $6, 'pendiente', $7)
+               ON CONFLICT (id) DO NOTHING`,
+              [ssCompId, studentRow.id, studentRow.alumno, ssCompConcept, totalCompanySS, ssDueDateObj.toISOString(), prId]
+            );
+
+            // Lock and aggregate or insert IRPF
+            const existingIrpfRes = await client.query(
+              `SELECT id, importe, concepto FROM obligaciones_fiscales 
+               WHERE alumno_id = $1 AND tipo = 'irpf' AND estado = 'pendiente'
+                 AND EXTRACT(YEAR FROM fecha_vencimiento) = $2
+                 AND EXTRACT(MONTH FROM fecha_vencimiento) = $3
+               LIMIT 1 FOR UPDATE`,
+              [studentRow.id, irpfDueDateObj.getFullYear(), irpfDueDateObj.getMonth() + 1]
+            );
+
+            let irpfTaxId = generateId('tax');
+            let isIrpfUpdated = false;
+            let updatedIrpfAmt = totalEmployeeIRPF;
+
+            if (existingIrpfRes && existingIrpfRes.rows && existingIrpfRes.rows.length > 0) {
+              const exRow = existingIrpfRes.rows[0];
+              irpfTaxId = exRow.id;
+              isIrpfUpdated = true;
+              updatedIrpfAmt = Number((Number(exRow.importe) + totalEmployeeIRPF).toFixed(2));
+              await client.query(
+                `UPDATE obligaciones_fiscales SET importe = $1, concepto = $2 WHERE id = $3`,
+                [updatedIrpfAmt, `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`, exRow.id]
+              );
+            } else {
+              await client.query(
+                `INSERT INTO obligaciones_fiscales (id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado, nomina_id)
+                 VALUES ($1, $2, $3, 'irpf', $4, $5, $6, 'pendiente', $7)
+                 ON CONFLICT (id) DO NOTHING`,
+                [irpfTaxId, studentRow.id, studentRow.alumno, `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`, totalEmployeeIRPF, irpfDueDateObj.toISOString(), prId]
+              );
+            }
+
+            postCommitData = () => {
+              const currentDb = readDb();
+              const studentInMemory = (currentDb.users || []).find(u => u.id === studentRow.id);
+              if (studentInMemory) {
+                studentInMemory.balance = newBalance;
+              }
+              if (!currentDb.transfers) currentDb.transfers = [];
+              transfersCreated.forEach(t => currentDb.transfers.unshift(t));
+
+              if (!currentDb.payrollRecords) currentDb.payrollRecords = [];
+              const memoryPR: PayrollRecord = {
+                id: prId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                payrollDate: nowIso,
+                periodMonth: currentMonth,
+                periodYear: currentYear,
+                employeeCount: newlyPaidEmployeeIds.length,
+                totalGrossSalary: totalGross,
+                totalEmployeeSS: totalEmployeeSS,
+                totalEmployeeIRPF: totalEmployeeIRPF,
+                totalNetSalaryPaid: totalNetPaid,
+                totalCompanySS: totalCompanySS,
+                isProportional: isProportionalPayroll,
+                status: 'paid',
+                createdAt: nowIso,
+                paidEmployeeIds: newlyPaidEmployeeIds,
+                employeeBreakdown: employeeBreakdown
+              };
+              currentDb.payrollRecords.push(memoryPR);
+
+              if (!currentDb.taxObligations) currentDb.taxObligations = [];
+              currentDb.taxObligations.push({
+                id: ssEmpId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                type: 'ss_employee',
+                concept: ssEmpConcept,
+                amount: totalEmployeeSS,
+                dueDate: ssDueDateObj.toISOString(),
+                status: 'pendiente',
+                payrollRecordId: prId
+              });
+              currentDb.taxObligations.push({
+                id: ssCompId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                type: 'ss_company',
+                concept: ssCompConcept,
+                amount: totalCompanySS,
+                dueDate: ssDueDateObj.toISOString(),
+                status: 'pendiente',
+                payrollRecordId: prId
+              });
+
+              if (isIrpfUpdated) {
+                const exIrpfMem = currentDb.taxObligations.find(t => t.id === irpfTaxId);
+                if (exIrpfMem) {
+                  exIrpfMem.amount = updatedIrpfAmt;
+                  exIrpfMem.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
+                }
+              } else {
+                currentDb.taxObligations.push({
+                  id: irpfTaxId,
+                  studentId: studentRow.id,
+                  studentName: studentRow.alumno,
+                  type: 'irpf',
+                  concept: `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`,
+                  amount: totalEmployeeIRPF,
+                  dueDate: irpfDueDateObj.toISOString(),
+                  status: 'pendiente',
+                  payrollRecordId: prId
+                });
+              }
+
+              if (!currentDb.systemLogs) currentDb.systemLogs = [];
+              currentDb.systemLogs.unshift({
+                id: generateId('log'),
+                action: 'PAYROLL_AUTOMATED',
+                details: `Nóminas pagadas transaccionalmente en PostgreSQL el día 26 para ${studentRow.alumno}: ${newlyPaidEmployeeIds.length} transferencias por importe neto total de ${totalNetPaid}€ (${unpaidEmployees.map(e => e.employeeName).join(', ')}). Obligaciones fiscales generadas con éxito.`,
+                timestamp: nowIso,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno
+              });
+
+              writeDb(currentDb);
+            };
+          });
+
+          if (postCommitData) {
+            postCommitData();
+          }
+        } catch (err) {
+          console.error(`[Payroll Worker PG Error for Student ${studentId}]:`, err);
+        }
+      }
+    }
+
+    // 2. Process Tax Obligations on day 1 or later
+    if (currentDay >= 1) {
+      try {
+        const pendingTaxesRes = await dbPool.query(
+          `SELECT id, alumno_id, alumno_nombre, tipo, concepto, importe, fecha_vencimiento, estado
+           FROM obligaciones_fiscales
+           WHERE estado = 'pendiente' AND fecha_vencimiento <= NOW()
+           ORDER BY fecha_vencimiento ASC`
+        );
+
+        if (pendingTaxesRes && pendingTaxesRes.rows && pendingTaxesRes.rows.length > 0) {
+          for (const taxRow of pendingTaxesRes.rows) {
+            try {
+              let postCommitTax: (() => void) | null = null;
+              const idemKey = `auto_tax_pay_${taxRow.id}`;
+
+              await withPostgresTransaction(async (client) => {
+                // Lock student account and tax obligation row
+                const studentLock = await client.query(
+                  'SELECT id, alumno, saldo, usuario, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+                  [taxRow.alumno_id]
+                );
+                if (!studentLock || studentLock.rows.length === 0) return;
+                const lockedStudent = studentLock.rows[0];
+
+                const taxLock = await client.query(
+                  'SELECT id, alumno_id, alumno_nombre, tipo, concepto, importe, estado FROM obligaciones_fiscales WHERE id = $1 FOR UPDATE',
+                  [taxRow.id]
+                );
+                if (!taxLock || taxLock.rows.length === 0) return;
+                const lockedTax = taxLock.rows[0];
+
+                if (lockedTax.estado !== 'pendiente') return;
+
+                const taxAmount = Number(lockedTax.importe);
+                const currentBalance = Number(lockedStudent.saldo);
+
+                if (currentBalance < taxAmount) {
+                  console.warn(`[Tax Auto Worker] Saldo insuficiente para liquidar ${lockedTax.concepto} de ${lockedStudent.alumno}. Saldo: ${currentBalance}€, Requerido: ${taxAmount}€`);
+                  return;
+                }
+
+                const newBalance = Number((currentBalance - taxAmount).toFixed(2));
+                const nowIso = new Date().toISOString();
+
+                await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, lockedStudent.id]);
+                await client.query('UPDATE obligaciones_fiscales SET estado = $1, fecha_pago = $2 WHERE id = $3', ['pagado', nowIso, lockedTax.id]);
+
+                const txId = generateId('tx');
+                const receiverName = lockedTax.tipo === 'irpf' ? 'Agencia Tributaria - Hacienda Pública' : 'Tesorería General de la Seguridad Social';
+                const concept = `Pago automático de ${lockedTax.concepto}`;
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [txId + '-out', lockedStudent.id, taxAmount, nowIso, concept, lockedStudent.id, lockedStudent.alumno, lockedStudent.account_number, lockedTax.tipo === 'irpf' ? 'hacienda' : 'seguridad-social', receiverName, 'ES000000000000000000']
+                );
+
+                postCommitTax = () => {
+                  const currentDb = readDb();
+                  const studentMem = (currentDb.users || []).find(u => u.id === lockedStudent.id);
+                  if (studentMem) studentMem.balance = newBalance;
+
+                  const taxMem = (currentDb.taxObligations || []).find(t => t.id === lockedTax.id);
+                  if (taxMem) {
+                    taxMem.status = 'pagado';
+                    taxMem.paidDate = nowIso;
+                  }
+
+                  if (!currentDb.transfers) currentDb.transfers = [];
+                  currentDb.transfers.unshift({
+                    id: txId,
+                    senderId: lockedStudent.id,
+                    senderName: lockedStudent.alumno,
+                    senderAccount: lockedStudent.account_number,
+                    receiverId: lockedTax.tipo === 'irpf' ? 'hacienda' : 'seguridad-social',
+                    receiverName,
+                    receiverAccount: 'ES000000000000000000',
+                    amount: taxAmount,
+                    concept,
+                    timestamp: nowIso
+                  });
+
+                  if (!currentDb.systemLogs) currentDb.systemLogs = [];
+                  currentDb.systemLogs.unshift({
+                    id: generateId('log'),
+                    action: 'TAX_AUTOMATED_PAYMENT',
+                    details: `Pago automático fiscal transaccional realizado por ${lockedStudent.alumno}: ${lockedTax.concepto} por importe de ${taxAmount}€`,
+                    timestamp: nowIso,
+                    studentId: lockedStudent.id,
+                    studentName: lockedStudent.alumno
+                  });
+
+                  writeDb(currentDb);
+                };
+              }, idemKey);
+
+              if (postCommitTax) {
+                postCommitTax();
+              }
+            } catch (taxErr) {
+              console.error(`[Tax Worker Error on Tax ${taxRow.id}]:`, taxErr);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[Tax Worker Query Error]:', e);
+      }
+    }
+
+    return;
+  }
+
+  // Fallback in-memory implementation when PostgreSQL is not configured
   // 1. Process Payroll on day 26 or later of the corresponding month
   if (currentDay >= 26) {
     const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
@@ -4859,7 +5368,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         };
 
         db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', empNet, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
         newlyPaidEmployeeIds.push(emp.id);
         employeeBreakdown.push({
@@ -4887,8 +5395,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       totalNetPaid = Math.round(totalNetPaid * 100) / 100;
       totalCompanySS = Math.round(totalCompanySS * 100) / 100;
 
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role, student.level).catch(e => console.error(e));
-
       // Register / update PayrollRecord
       const prId = generateId('payroll');
       const newPR: PayrollRecord = {
@@ -4911,7 +5417,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         employeeBreakdown: employeeBreakdown
       };
       db.payrollRecords.push(newPR);
-      syncPayrollRecordToSupabase(newPR).catch(e => console.error(e));
 
       // TGSS SS due date: 20th of following month
       let nextMonth = currentMonth + 1;
@@ -4927,16 +5432,16 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       let irpfDueDateObj: Date;
       if (currentMonth >= 10) {
         qNum = 4;
-        irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0); // Jan 15 next year
+        irpfDueDateObj = new Date(currentYear + 1, 0, 15, 9, 0, 0);
       } else if (currentMonth >= 7) {
         qNum = 3;
-        irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0); // Oct 15
+        irpfDueDateObj = new Date(currentYear, 9, 15, 9, 0, 0);
       } else if (currentMonth >= 4) {
         qNum = 2;
-        irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0); // Jul 15
+        irpfDueDateObj = new Date(currentYear, 6, 15, 9, 0, 0);
       } else {
         qNum = 1;
-        irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0); // Apr 15
+        irpfDueDateObj = new Date(currentYear, 3, 15, 9, 0, 0);
       }
 
       const ssEmpObl: TaxObligation = {
@@ -4964,8 +5469,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       };
 
       db.taxObligations.push(ssEmpObl, ssCompObl);
-      syncTaxObligationToSupabase(ssEmpObl).catch(e => console.error(e));
-      syncTaxObligationToSupabase(ssCompObl).catch(e => console.error(e));
 
       const existingIrpf = db.taxObligations.find(t => 
         t.studentId === student.id && 
@@ -4978,7 +5481,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       if (existingIrpf) {
         existingIrpf.amount = Math.round((existingIrpf.amount + totalEmployeeIRPF) * 100) / 100;
         existingIrpf.concept = `Retenciones IRPF de nóminas (17%) Trimestre Q${qNum} ${currentYear}`;
-        syncTaxObligationToSupabase(existingIrpf).catch(e => console.error(e));
       } else {
         const irpfObl: TaxObligation = {
           id: generateId('tax'),
@@ -4992,7 +5494,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
           payrollRecordId: prId
         };
         db.taxObligations.push(irpfObl);
-        syncTaxObligationToSupabase(irpfObl).catch(e => console.error(e));
       }
 
       const namesList = unpaidEmployees.map(e => e.employeeName || (e as any).name).join(', ');
@@ -5018,9 +5519,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       tax.status = 'pagado';
       tax.paidDate = now.toISOString();
 
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-      syncTaxObligationToSupabase(tax).catch(e => console.error(e));
-
       const txId = generateId('tx');
       const receiverName = tax.type === 'irpf' ? 'Agencia Tributaria - Hacienda Pública' : 'Tesorería General de la Seguridad Social';
       const transfer: Transfer = {
@@ -5036,7 +5534,6 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
         timestamp: now.toISOString()
       };
       db.transfers.unshift(transfer);
-      syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', tax.amount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
 
       db.systemLogs.unshift({
         id: generateId('log'),
@@ -5048,6 +5545,8 @@ function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema) {
       });
     }
   }
+
+    writeDb(db);
 }
 
 function calculateElectricityForStudent(studentId: string, month: number, year: number, db: DatabaseSchema): ElectricityBill | null {
@@ -5223,7 +5722,7 @@ function calculateElectricityForStudent(studentId: string, month: number, year: 
   };
 }
 
-function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
+async function checkAndProcessAutomatedElectricity(db: DatabaseSchema): Promise<boolean> {
   if (!db.electricityContracts) db.electricityContracts = [];
   if (!db.electricityBills) db.electricityBills = [];
 
@@ -5251,10 +5750,42 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const cMonth = cDate.getMonth() + 1;
       if (bill.periodYear < cYear || (bill.periodYear === cYear && bill.periodMonth < cMonth)) {
         if (bill.status === 'pagado') {
+          const refundKey = `refund_elec_${bill.id}`;
+          if (dbPool) {
+            try {
+              await withPostgresTransaction(async (client) => {
+                const checkIdem = await client.query('SELECT clave FROM operaciones_idempotencia WHERE clave = $1', [refundKey]);
+                if (checkIdem.rows.length > 0) return;
+
+                const accRes = await client.query('SELECT id, saldo, alumno, usuario, account_number, role FROM cuentas WHERE id = $1 FOR UPDATE', [bill.studentId]);
+                if (accRes.rows.length === 0) return;
+
+                const currentBalance = Number(accRes.rows[0].saldo);
+                const newBalance = Math.round((currentBalance + bill.totalAmount) * 100) / 100;
+                await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, bill.studentId]);
+
+                const movId = generateId('mov-refund');
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'DEPOSIT', $3, NOW(), $4, 'iberluz-comercializadora', 'IberLuz Suministro Eléctrico S.A.', 'ES00-IBER-LUZ-0000', $2, $5, $6)`,
+                  [movId, bill.studentId, bill.totalAmount, `Abono por regularización factura eléctrica pre-contrato Mes ${bill.periodMonth}/${bill.periodYear}`, accRes.rows[0].alumno || accRes.rows[0].usuario, accRes.rows[0].account_number]
+                );
+
+                await client.query("UPDATE facturas_electricidad SET estado = 'anulada' WHERE id = $1", [bill.id]).catch(() => {});
+
+                await client.query(
+                  "INSERT INTO operaciones_idempotencia (clave, resultado, estado) VALUES ($1, $2, 'COMPLETED') ON CONFLICT (clave) DO NOTHING",
+                  [refundKey, JSON.stringify({ refunded: true, amount: bill.totalAmount })]
+                );
+              });
+            } catch (refundErr) {
+              console.error('[Electricity Refund Error]:', refundErr);
+            }
+          }
+
           const student = db.users.find(u => u.id === bill.studentId);
           if (student) {
             student.balance = Math.round((student.balance + bill.totalAmount) * 100) / 100;
-            syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
           }
           if (db.transfers) {
             db.transfers = db.transfers.filter(t => !t.concept.includes(`factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear}`));
@@ -5290,7 +5821,9 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const newBill = calculateElectricityForStudent(contract.studentId, prevMonth, prevYear, db);
       if (newBill) {
         db.electricityBills.push(newBill);
-        syncElectricityBillToSupabase(newBill).catch(e => console.error(e));
+        if (dbPool) {
+          await syncElectricityBillToSupabase(newBill);
+        }
         modified = true;
       }
     }
@@ -5306,48 +5839,134 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
       const student = db.users.find(u => u.id === bill.studentId && u.role === 'student');
       if (!student) continue;
 
-      if (student.balance >= bill.totalAmount) {
-        student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
-        bill.status = 'pagado';
-        bill.paidDate = now.toISOString();
-        modified = true;
+      const txId = generateId('tx');
+      const nowIso = now.toISOString();
+      const concept = `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (Nº ${bill.billNumber})`;
+      const rawIdemKey = `electricity_payment_${bill.studentId}_${bill.id || bill.billNumber}`;
 
-        syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-        syncElectricityBillToSupabase(bill).catch(e => console.error(e));
+      if (dbPool) {
+        const paidSuccessfully = await executeWithIdempotency(rawIdemKey, async (key) => {
+          return await withPostgresTransaction(async (client) => {
+            // 1. SELECT cuentas FOR UPDATE
+            const accRes = await client.query(
+              'SELECT id, alumno, saldo, account_number, usuario, password, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+              [bill.studentId]
+            );
+            if (accRes.rows.length === 0) return false;
 
-        const txId = generateId('tx');
-        const transfer: Transfer = {
-          id: txId,
-          senderId: student.id,
-          senderName: student.name,
-          senderAccount: student.accountNumber,
-          receiverId: 'iberluz-comercializadora',
-          receiverName: 'IberLuz Comercializadora S.A.',
-          receiverAccount: 'ES210001000299887722',
-          amount: bill.totalAmount,
-          concept: `Pago domiciliado de factura de electricidad IberLuz Mes ${bill.periodMonth}/${bill.periodYear} (Nº ${bill.billNumber})`,
-          timestamp: now.toISOString()
-        };
-        db.transfers.unshift(transfer);
-        syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', bill.totalAmount, now.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+            const currentBal = Number(accRes.rows[0].saldo);
+            if (currentBal < bill.totalAmount) {
+              // Insufficient funds: do not debit account
+              db.systemLogs.unshift({
+                id: generateId('log'),
+                action: 'ELECTRICITY_PAYMENT_FAILED_NO_FUNDS',
+                details: `Intento de cargo automático de electricidad IberLuz el día 1 fallido por saldo insuficiente para ${student.name}: Factura ${bill.billNumber} (${bill.totalAmount}€). Saldo actual: ${currentBal}€`,
+                timestamp: nowIso,
+                studentId: student.id,
+                studentName: student.name
+              });
+              return false;
+            }
 
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'ELECTRICITY_AUTOMATED_PAYMENT',
-          details: `Pago automático de electricidad IberLuz realizado el día 1 para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
-          timestamp: now.toISOString(),
-          studentId: student.id,
-          studentName: student.name
+            const newBal = Math.round((currentBal - bill.totalAmount) * 100) / 100;
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBal, student.id]);
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                txId + '-out',
+                student.id,
+                bill.totalAmount,
+                nowIso,
+                concept,
+                student.id,
+                student.name,
+                accRes.rows[0].account_number,
+                'iberluz-comercializadora',
+                'IberLuz Comercializadora S.A.',
+                'ES210001000299887722'
+              ]
+            );
+
+            bill.status = 'pagado';
+            bill.paidDate = nowIso;
+            await syncElectricityBillToSupabase(bill, client);
+
+            // Post-commit local updates
+            student.balance = newBal;
+            const transfer: Transfer = {
+              id: txId,
+              senderId: student.id,
+              senderName: student.name,
+              senderAccount: accRes.rows[0].account_number,
+              receiverId: 'iberluz-comercializadora',
+              receiverName: 'IberLuz Comercializadora S.A.',
+              receiverAccount: 'ES210001000299887722',
+              amount: bill.totalAmount,
+              concept,
+              timestamp: nowIso
+            };
+            if (!db.transfers) db.transfers = [];
+            db.transfers.unshift(transfer);
+
+            db.systemLogs.unshift({
+              id: generateId('log'),
+              action: 'ELECTRICITY_AUTOMATED_PAYMENT',
+              details: `Pago automático de electricidad IberLuz realizado el día 1 para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
+              timestamp: nowIso,
+              studentId: student.id,
+              studentName: student.name
+            });
+
+            return true;
+          }, key);
         });
+
+        if (paidSuccessfully) {
+          modified = true;
+        }
       } else {
-        db.systemLogs.unshift({
-          id: generateId('log'),
-          action: 'ELECTRICITY_PAYMENT_FAILED_NO_FUNDS',
-          details: `Intento de cargo automático de electricidad IberLuz el día 1 fallido por saldo insuficiente para ${student.name}: Factura ${bill.billNumber} (${bill.totalAmount}€). Saldo actual: ${student.balance}€`,
-          timestamp: now.toISOString(),
-          studentId: student.id,
-          studentName: student.name
-        });
+        // Fallback if no PostgreSQL
+        if (student.balance >= bill.totalAmount) {
+          student.balance = Math.round((student.balance - bill.totalAmount) * 100) / 100;
+          bill.status = 'pagado';
+          bill.paidDate = nowIso;
+          modified = true;
+
+          const transfer: Transfer = {
+            id: txId,
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber,
+            receiverId: 'iberluz-comercializadora',
+            receiverName: 'IberLuz Comercializadora S.A.',
+            receiverAccount: 'ES210001000299887722',
+            amount: bill.totalAmount,
+            concept,
+            timestamp: nowIso
+          };
+          if (!db.transfers) db.transfers = [];
+          db.transfers.unshift(transfer);
+
+          db.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'ELECTRICITY_AUTOMATED_PAYMENT',
+            details: `Pago automático de electricidad IberLuz realizado el día 1 para ${student.name}: Factura ${bill.billNumber} por importe de ${bill.totalAmount}€`,
+            timestamp: nowIso,
+            studentId: student.id,
+            studentName: student.name
+          });
+        } else {
+          db.systemLogs.unshift({
+            id: generateId('log'),
+            action: 'ELECTRICITY_PAYMENT_FAILED_NO_FUNDS',
+            details: `Intento de cargo automático de electricidad IberLuz el día 1 fallido por saldo insuficiente para ${student.name}: Factura ${bill.billNumber} (${bill.totalAmount}€). Saldo actual: ${student.balance}€`,
+            timestamp: nowIso,
+            studentId: student.id,
+            studentName: student.name
+          });
+        }
       }
     }
   }
@@ -5359,10 +5978,11 @@ function checkAndProcessAutomatedElectricity(db: DatabaseSchema) {
   return modified;
 }
 
-function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
+async function checkAndProcessAutomatedTelecom(db: DatabaseSchema): Promise<boolean> {
   if (!db.telecomContracts) db.telecomContracts = [];
   if (!db.telecomInvoices) db.telecomInvoices = [];
 
+  let modified = false;
   const now = new Date();
   const activeContracts = db.telecomContracts.filter(c => c.status === 'active');
 
@@ -5378,19 +5998,52 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
     const prematureInvoices = db.telecomInvoices.filter(inv => {
       if (inv.contractId !== contract.id) return false;
       const invDate = new Date(inv.issueDate);
-      const firstDueOfContract = new Date(startYear, startMonth, 1, 0, 0, 0); // 1st of month following contract month
+      const firstDueOfContract = new Date(startYear, startMonth, 1, 0, 0, 0);
       return invDate < firstDueOfContract;
     });
 
     for (const premInv of prematureInvoices) {
-      student.balance = Math.round((student.balance + premInv.totalAmount) * 100) / 100;
-      syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
+      if (premInv.status === 'pagado') {
+        const refundKey = `refund_tel_${premInv.id}`;
+        if (dbPool) {
+          try {
+            await withPostgresTransaction(async (client) => {
+              const checkIdem = await client.query('SELECT clave FROM operaciones_idempotencia WHERE clave = $1', [refundKey]);
+              if (checkIdem.rows.length > 0) return;
 
+              const accRes = await client.query('SELECT id, saldo, alumno, usuario, account_number, role FROM cuentas WHERE id = $1 FOR UPDATE', [student.id]);
+              if (accRes.rows.length === 0) return;
+
+              const currentBalance = Number(accRes.rows[0].saldo);
+              const newBalance = Math.round((currentBalance + premInv.totalAmount) * 100) / 100;
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, student.id]);
+
+              const movId = generateId('mov-refund');
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'DEPOSIT', $3, NOW(), $4, 'telecom-provider', 'Compañía Telecomunicaciones', 'ES00-TEL-0000-0000', $2, $5, $6)`,
+                [movId, student.id, premInv.totalAmount, `Abono por regularización factura telecom pre-contrato ${premInv.invoiceNumber}`, accRes.rows[0].alumno || accRes.rows[0].usuario, accRes.rows[0].account_number]
+              );
+
+              await client.query("UPDATE facturas_telecom SET estado = 'anulada' WHERE id = $1", [premInv.id]).catch(() => {});
+
+              await client.query(
+                "INSERT INTO operaciones_idempotencia (clave, resultado, estado) VALUES ($1, $2, 'COMPLETED') ON CONFLICT (clave) DO NOTHING",
+                [refundKey, JSON.stringify({ refunded: true, amount: premInv.totalAmount })]
+              );
+            });
+          } catch (refundErr) {
+            console.error('[Telecom Refund Error]:', refundErr);
+          }
+        }
+
+        student.balance = Math.round((student.balance + premInv.totalAmount) * 100) / 100;
+      }
       db.telecomInvoices = db.telecomInvoices.filter(i => i.id !== premInv.id);
-
       if (db.transfers) {
         db.transfers = db.transfers.filter(t => !(t.senderId === student.id && t.amount === premInv.totalAmount && t.concept.includes(premInv.invoiceNumber)));
       }
+      modified = true;
     }
 
     // 2. Process billing for any completed month where payment is due (due on 1st of month M+1)
@@ -5401,10 +6054,8 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
     let curM = startMonth;
 
     while (curY < nowYear || (curY === nowYear && curM <= nowMonth)) {
-      // Due date for service month (curY, curM) is 1st of month (curM + 1)
       const paymentDueDate = new Date(curY, curM, 1, 9, 0, 0);
 
-      // Only process if paymentDueDate is on or before now
       if (now >= paymentDueDate) {
         const existingInvoice = db.telecomInvoices.find(
           inv => inv.contractId === contract.id && inv.periodMonth === curM && inv.periodYear === curY
@@ -5431,8 +6082,9 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
             ? `Cuota proporcional de Servicio ${contract.planName} (${activeDays}/${daysInMonth} días del mes de alta ${curM}/${curY})`
             : `Cuota Mensual de Servicio ${contract.planName} (Mes ${curM}/${curY})`;
 
+          const invoiceId = generateId('tel_inv');
           const invoice: TelecomInvoice = {
-            id: generateId('tel_inv'),
+            id: invoiceId,
             invoiceNumber,
             studentId: student.id,
             studentName: student.name,
@@ -5449,8 +6101,7 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
             ivaRate: 21,
             ivaAmount,
             totalAmount,
-            status: 'pagado',
-            paidDate: paymentDueDate.toISOString(),
+            status: 'pendiente',
             items: [
               {
                 concept: invoiceConcept,
@@ -5460,38 +6111,136 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
             paymentMethod: 'Adeudo directo automático en cuenta (1 de mes)'
           };
 
-          db.telecomInvoices.unshift(invoice);
-          syncTelecomInvoiceToSupabase(invoice).catch(e => console.error(e));
-
-          student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
-          syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
           const txId = generateId('tx');
-          const transfer: Transfer = {
-            id: txId,
-            senderId: student.id,
-            senderName: student.name,
-            senderAccount: student.accountNumber,
-            receiverId: 'telecom-provider',
-            receiverName: contract.provider,
-            receiverAccount: 'ES880004000199223344',
-            amount: totalAmount,
-            concept: `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`,
-            timestamp: paymentDueDate.toISOString()
-          };
-          if (!db.transfers) db.transfers = [];
-          db.transfers.unshift(transfer);
-          syncMovimientoToSupabase(txId + '-out', student.id, 'TRANSFER_OUT', totalAmount, paymentDueDate.toISOString(), transfer.concept, transfer).catch(e => console.error(e));
+          const nowIso = now.toISOString();
+          const transferConcept = `Pago domiciliado cuota telecomunicaciones ${contract.planName} (${curM}/${curY})`;
+          const rawIdemKey = `telecom_payment_${contract.studentId}_${contract.id}_${curY}_${curM}`;
 
-          if (!db.systemLogs) db.systemLogs = [];
-          db.systemLogs.unshift({
-            id: generateId('log'),
-            action: 'TELECOM_AUTOMATED_PAYMENT',
-            details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
-            timestamp: paymentDueDate.toISOString(),
-            studentId: student.id,
-            studentName: student.name
-          });
+          if (dbPool) {
+            await executeWithIdempotency(rawIdemKey, async (key) => {
+              return await withPostgresTransaction(async (client) => {
+                const accRes = await client.query(
+                  'SELECT id, alumno, saldo, account_number, role FROM cuentas WHERE id = $1 FOR UPDATE',
+                  [student.id]
+                );
+                if (accRes.rows.length === 0) {
+                  await syncTelecomInvoiceToSupabase(invoice, client);
+                  return;
+                }
+
+                const currentBal = Number(accRes.rows[0].saldo);
+                if (currentBal >= totalAmount) {
+                  // Sufficient funds: deduct and mark paid
+                  const newBal = Math.round((currentBal - totalAmount) * 100) / 100;
+                  await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBal, student.id]);
+
+                  await client.query(
+                    `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                     VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                    [
+                      txId + '-out',
+                      student.id,
+                      totalAmount,
+                      nowIso,
+                      transferConcept,
+                      student.id,
+                      student.name,
+                      accRes.rows[0].account_number,
+                      'telecom-provider',
+                      contract.provider,
+                      'ES880004000199223344'
+                    ]
+                  );
+
+                  invoice.status = 'pagado';
+                  invoice.paidDate = paymentDueDate.toISOString();
+                  await syncTelecomInvoiceToSupabase(invoice, client);
+
+                  student.balance = newBal;
+                  const transfer: Transfer = {
+                    id: txId,
+                    senderId: student.id,
+                    senderName: student.name,
+                    senderAccount: accRes.rows[0].account_number,
+                    receiverId: 'telecom-provider',
+                    receiverName: contract.provider,
+                    receiverAccount: 'ES880004000199223344',
+                    amount: totalAmount,
+                    concept: transferConcept,
+                    timestamp: paymentDueDate.toISOString()
+                  };
+                  if (!db.transfers) db.transfers = [];
+                  db.transfers.unshift(transfer);
+
+                  db.systemLogs.unshift({
+                    id: generateId('log'),
+                    action: 'TELECOM_AUTOMATED_PAYMENT',
+                    details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
+                    timestamp: paymentDueDate.toISOString(),
+                    studentId: student.id,
+                    studentName: student.name
+                  });
+                } else {
+                  // Insufficient funds: invoice remains 'pendiente'
+                  invoice.status = 'pendiente';
+                  await syncTelecomInvoiceToSupabase(invoice, client);
+
+                  db.systemLogs.unshift({
+                    id: generateId('log'),
+                    action: 'TELECOM_PAYMENT_FAILED_NO_FUNDS',
+                    details: `Intento de cobro automático de telecomunicaciones ${contract.planName} fallido por saldo insuficiente para ${student.name}: ${totalAmount}€. Saldo actual: ${currentBal}€`,
+                    timestamp: nowIso,
+                    studentId: student.id,
+                    studentName: student.name
+                  });
+                }
+              }, key);
+            });
+          } else {
+            // Local mode fallback
+            if (student.balance >= totalAmount) {
+              student.balance = Math.round((student.balance - totalAmount) * 100) / 100;
+              invoice.status = 'pagado';
+              invoice.paidDate = paymentDueDate.toISOString();
+
+              const transfer: Transfer = {
+                id: txId,
+                senderId: student.id,
+                senderName: student.name,
+                senderAccount: student.accountNumber,
+                receiverId: 'telecom-provider',
+                receiverName: contract.provider,
+                receiverAccount: 'ES880004000199223344',
+                amount: totalAmount,
+                concept: transferConcept,
+                timestamp: paymentDueDate.toISOString()
+              };
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift(transfer);
+
+              db.systemLogs.unshift({
+                id: generateId('log'),
+                action: 'TELECOM_AUTOMATED_PAYMENT',
+                details: `Cobro mensual automático de telecomunicaciones ${contract.planName} para ${student.name}: ${totalAmount}€ (IVA incl.)`,
+                timestamp: paymentDueDate.toISOString(),
+                studentId: student.id,
+                studentName: student.name
+              });
+            } else {
+              invoice.status = 'pendiente';
+              db.systemLogs.unshift({
+                id: generateId('log'),
+                action: 'TELECOM_PAYMENT_FAILED_NO_FUNDS',
+                details: `Intento de cobro automático de telecomunicaciones ${contract.planName} fallido por saldo insuficiente para ${student.name}: ${totalAmount}€. Saldo actual: ${student.balance}€`,
+                timestamp: nowIso,
+                studentId: student.id,
+                studentName: student.name
+              });
+            }
+          }
+
+          db.telecomInvoices.unshift(invoice);
+          modified = true;
         }
       }
 
@@ -5502,6 +6251,11 @@ function checkAndProcessAutomatedTelecom(db: DatabaseSchema) {
       }
     }
   }
+
+  if (modified) {
+    writeDb(db);
+  }
+  return modified;
 }
 
 function sanitizeDbStrings(db: DatabaseSchema) {
@@ -5670,16 +6424,15 @@ function readDb(): DatabaseSchema {
 
     sanitizeDbStrings(db);
 
-    checkAndProcessAutomatedPayrollAndTaxes(db);
-    checkAndProcessAutomatedElectricity(db);
-    checkAndProcessAutomatedTelecom(db);
+    // Note: Automated background workers (payroll, electricity, telecom) are decoupled
+    // from readDb() to guarantee idempotent, side-effect-free database reads.
+    // They are executed via startup triggers and dedicated periodic intervals.
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
       if (teacher.username !== 'pupdaniel' || teacher.password !== '1987') {
         teacher.username = 'pupdaniel';
         teacher.password = '1987';
-        fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
       }
     } else {
       db.users.unshift({
@@ -5810,39 +6563,56 @@ app.post('/api/supabase-connect', async (req, res) => {
   }
 });
 
-// Supabase Manual Sync Endpoint
+// Supabase Manual Sync Endpoint (Isolated & Advisory-Locked)
 app.post('/api/supabase-sync', async (req, res) => {
   if (!dbPool) {
     return res.status(400).json({ success: false, error: 'DATABASE_URL no está configurada' });
   }
+  const client = await dbPool.connect();
   try {
+    await client.query('BEGIN');
+    // Global advisory transaction lock to serialize with /api/restore and prevent concurrent race conditions
+    await client.query('SELECT pg_advisory_xact_lock(987654321)');
+
     const tableInit = await initSupabaseTables();
     if (!tableInit.success) {
+      await client.query('ROLLBACK');
       return res.status(500).json({ success: false, error: tableInit.error });
     }
 
-    const currentDb = readDb();
-    await syncAllToSupabase(currentDb);
+    // Only seed from memory if PostgreSQL accounts table is empty (preventing destruction of PostgreSQL truth!)
+    const countRes = await client.query('SELECT COUNT(*) FROM cuentas');
+    const pgCount = parseInt(countRes.rows[0]?.count || '0', 10);
+    if (pgCount === 0) {
+      const currentDb = readDb();
+      await syncAllToSupabase(currentDb);
+    }
 
-    const restoreRes = await restoreFromSupabase();
-
-    let cuentasCount = 0;
-    let movimientosCount = 0;
-    const cRes = await safeDbQuery('SELECT COUNT(*) FROM cuentas');
-    const mRes = await safeDbQuery('SELECT COUNT(*) FROM movimientos');
-    cuentasCount = cRes?.rows?.[0]?.count ? Number(cRes.rows[0].count) : 0;
-    movimientosCount = mRes?.rows?.[0]?.count ? Number(mRes.rows[0].count) : 0;
-
-    res.json({
-      success: true,
-      message: 'Sincronización y restauración con Supabase completada con éxito.',
-      cuentasCount,
-      movimientosCount
-    });
-  } catch (e: any) {
-    console.error('[Supabase Sync Error]', e);
-    res.status(500).json({ success: false, error: e.message || String(e) });
+    await client.query('COMMIT');
+  } catch (err: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Supabase Sync Error]', err);
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  } finally {
+    client.release();
   }
+
+  // After COMMIT, reconcile in-memory cache from PostgreSQL (single source of truth)
+  await restoreFromSupabase();
+
+  let cuentasCount = 0;
+  let movimientosCount = 0;
+  const cRes = await safeDbQuery('SELECT COUNT(*) FROM cuentas');
+  const mRes = await safeDbQuery('SELECT COUNT(*) FROM movimientos');
+  cuentasCount = cRes?.rows?.[0]?.count ? Number(cRes.rows[0].count) : 0;
+  movimientosCount = mRes?.rows?.[0]?.count ? Number(mRes.rows[0].count) : 0;
+
+  res.json({
+    success: true,
+    message: 'Sincronización y conciliación con PostgreSQL/Supabase completada con éxito (fuente de verdad protegida).',
+    cuentasCount,
+    movimientosCount
+  });
 });
 
 // Authenticate / Login
@@ -5998,37 +6768,85 @@ app.get('/api/users', handleGetUsersRoute);
 app.get('/users', handleGetUsersRoute);
 
 // Create new bank user account (Teacher only)
-const handleCreateUserRoute = (req: express.Request, res: express.Response) => {
+const handleCreateUserRoute = async (req: express.Request, res: express.Response) => {
   const { name, username, password, initialBalance, level } = req.body;
 
   if (!name || !username || !password) {
     return res.status(400).json({ error: 'Nombre, usuario y contraseña son requeridos' });
   }
 
+  const cleanUsername = username.toLowerCase().trim();
   const db = readDb();
-  const exists = db.users.some(u => u.username.toLowerCase() === username.toLowerCase());
+  const exists = db.users.some(u => u.username.toLowerCase() === cleanUsername);
   
   if (exists) {
     return res.status(400).json({ error: 'El nombre de usuario ya existe' });
   }
 
   const userLevel = (level && [1, 2, 3].includes(Number(level))) ? (Number(level) as 1 | 2 | 3) : 1;
+  const initialBal = Number(initialBalance) || 0;
 
   const newUser: User = {
     id: generateId('user'),
-    username: username.toLowerCase().trim(),
+    username: cleanUsername,
     password: password.trim(),
     role: 'student',
     name: name.trim(),
     accountNumber: generateIBAN(),
-    balance: Number(initialBalance) || 0,
+    balance: initialBal,
     level: userLevel
   };
 
-  db.users.push(newUser);
-  if (newUser.role === 'student') {
-    syncAccountToSupabase(newUser.id, newUser.name, newUser.balance, newUser.username, newUser.password, newUser.accountNumber, newUser.role, newUser.level).catch(e => console.error(e));
+  if (dbPool) {
+    try {
+      await withPostgresTransaction(async (client) => {
+        // Advisory xact lock to serialize concurrent creation of identical username
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['user_creation_' + cleanUsername]);
+
+        const checkRes = await client.query(
+          'SELECT id FROM cuentas WHERE LOWER(usuario) = LOWER($1) OR id = $2',
+          [cleanUsername, newUser.id]
+        );
+        if (checkRes.rows.length > 0) {
+          const err: any = new Error('El nombre de usuario ya existe en la base de datos');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        await client.query(
+          `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [newUser.id, newUser.name, newUser.balance, newUser.username, newUser.password, newUser.accountNumber, newUser.role, newUser.level]
+        );
+
+        if (initialBal > 0) {
+          const txId = generateId('tx');
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'DEPOSIT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-in',
+              newUser.id,
+              initialBal,
+              new Date().toISOString(),
+              'Saldo inicial de apertura de cuenta',
+              'corp-banco-central',
+              'Banco Central Mercantil',
+              'ES210001000299887700',
+              newUser.id,
+              newUser.name,
+              newUser.accountNumber
+            ]
+          );
+        }
+      });
+    } catch (err: any) {
+      console.error('[Create User Transaction Error]:', err);
+      return res.status(err.statusCode || 500).json({ error: err.message || 'Error al crear usuario en la base de datos' });
+    }
   }
+
+  db.users.push(newUser);
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -6046,36 +6864,85 @@ app.post('/api/users', handleCreateUserRoute);
 app.post('/users', handleCreateUserRoute);
 
 // Update user details (Teacher only)
-app.put('/api/users/:id', (req, res) => {
+app.put('/api/users/:id', async (req, res) => {
   const { id } = req.params;
   const { name, username, password, level } = req.body;
 
   const db = readDb();
-  const userIndex = db.users.findIndex(u => u.id === id);
+  if (!db.users) db.users = [];
+  let userIndex = db.users.findIndex(u => u.id === id);
+
+  if (userIndex === -1 && dbPool) {
+    try {
+      const qUser = await safeDbQuery('SELECT * FROM cuentas WHERE id = $1', [id]);
+      if (qUser && qUser.rows.length > 0) {
+        const row = qUser.rows[0];
+        const loadedUser: User = {
+          id: String(row.id),
+          username: String(row.usuario || '').toLowerCase(),
+          password: String(row.password || '123'),
+          role: (row.role || 'student') as any,
+          name: String(row.alumno || row.usuario || ''),
+          accountNumber: String(row.account_number || generateIBAN()),
+          balance: Number(row.saldo || 0),
+          level: Number(row.level || 1) as 1 | 2 | 3
+        };
+        db.users.push(loadedUser);
+        userIndex = db.users.length - 1;
+      }
+    } catch (e) {
+      console.warn('[PUT /api/users/:id] Error loading user from PG:', e);
+    }
+  }
 
   if (userIndex === -1) {
     return res.status(404).json({ error: 'Usuario no encontrado' });
   }
 
   const user = db.users[userIndex];
+  let newUsername = user.username;
   
   if (username && username.toLowerCase().trim() !== user.username) {
     const exists = db.users.some(u => u.username.toLowerCase() === username.toLowerCase().trim() && u.id !== id);
     if (exists) {
       return res.status(400).json({ error: 'El nombre de usuario ya está tomado' });
     }
-    user.username = username.toLowerCase().trim();
+    newUsername = username.toLowerCase().trim();
   }
 
-  if (name) user.name = name.trim();
-  if (password) user.password = password.trim();
-  if (level && [1, 2, 3].includes(Number(level))) {
-    user.level = Number(level) as 1 | 2 | 3;
+  const newName = name ? name.trim() : user.name;
+  const newPassword = password ? password.trim() : user.password;
+  const newLevel = (level && [1, 2, 3].includes(Number(level))) ? (Number(level) as 1 | 2 | 3) : user.level;
+
+  if (dbPool && user.role === 'student') {
+    try {
+      await withPostgresTransaction(async (client) => {
+        if (newUsername !== user.username) {
+          const checkU = await client.query('SELECT id FROM cuentas WHERE LOWER(usuario) = LOWER($1) AND id <> $2', [newUsername, id]);
+          if (checkU.rows.length > 0) {
+            const err: any = new Error('El nombre de usuario ya está tomado en la base de datos');
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        await client.query(
+          `UPDATE cuentas
+           SET alumno = $1, usuario = $2, password = $3, level = $4
+           WHERE id = $5`,
+          [newName, newUsername, newPassword, newLevel, id]
+        );
+      });
+    } catch (err: any) {
+      console.error('[Update User Error]:', err);
+      return res.status(err.statusCode || 500).json({ error: err.message || 'Error al actualizar usuario' });
+    }
   }
 
-  if (user.role === 'student') {
-    syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role, user.level).catch(e => console.error(e));
-  }
+  user.name = newName;
+  user.username = newUsername;
+  user.password = newPassword;
+  user.level = newLevel;
 
   const newLog: SystemLog = {
     id: generateId('log'),
@@ -6277,58 +7144,368 @@ const handleAdjustBalanceRoute = async (req: express.Request, res: express.Respo
 app.put('/api/users/:id/adjust-balance', handleAdjustBalanceRoute);
 app.put('/users/:id/adjust-balance', handleAdjustBalanceRoute);
 
-// Delete user account (Teacher only)
-app.delete('/api/users/:id', async (req, res) => {
+// Delete user account (Teacher only) - Transactional & Idempotent with PostgreSQL as single source of truth
+const handleDeleteUserRoute = async (req: express.Request, res: express.Response) => {
   const { id } = req.params;
+  const rawId = String(id || '').trim();
 
-  const db = readDb();
-  const user = db.users.find(u => u.id === id);
-
-  if (!user) {
-    return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (!rawId) {
+    return res.status(400).json({ error: 'Falta el identificador del usuario' });
   }
 
-  if (user.role === 'teacher') {
-    return res.status(400).json({ error: 'No se puede eliminar la cuenta del profesor principal' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body && req.body.idempotencyKey);
+  const idemKey = rawIdemKey || `delete_user_${rawId}`;
 
-  db.users = db.users.filter(u => u.id !== id);
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. SELECT cuentas FOR UPDATE (Primary lock on target account in PostgreSQL)
+          const lockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+             FROM cuentas
+             WHERE id = $1::text OR LOWER(usuario) = LOWER($1::text) OR LOWER(alumno) = LOWER($1::text)
+             LIMIT 1
+             FOR UPDATE`,
+            [rawId]
+          );
 
-  // Clean all student-owned records from local db memory
-  if (db.acquisitions) db.acquisitions = db.acquisitions.filter(a => a.studentId !== id);
-  if (db.paymentObligations) db.paymentObligations = db.paymentObligations.filter(o => o.studentId !== id);
-  if (db.loans) db.loans = db.loans.filter(l => l.studentId !== id);
-  if (db.machineryAcquisitions) db.machineryAcquisitions = db.machineryAcquisitions.filter(m => m.studentId !== id);
-  if (db.hiredEmployees) db.hiredEmployees = db.hiredEmployees.filter(e => e.studentId !== id);
-  if (db.payrollRecords) db.payrollRecords = db.payrollRecords.filter(p => p.studentId !== id);
-  if (db.taxObligations) db.taxObligations = db.taxObligations.filter(t => t.studentId !== id);
-  if (db.electricityContracts) db.electricityContracts = db.electricityContracts.filter(c => c.studentId !== id);
-  if (db.naveFloorPlans) db.naveFloorPlans = db.naveFloorPlans.filter(fp => fp.studentId !== id);
-  if (db.telecomContracts) db.telecomContracts = db.telecomContracts.filter(tc => tc.studentId !== id);
-  if (db.telecomInvoices) db.telecomInvoices = db.telecomInvoices.filter(ti => ti.studentId !== id);
-  if (db.officeOrders) db.officeOrders = db.officeOrders.filter(oo => oo.studentId !== id);
-  if (db.jobListings) {
-    db.jobListings = db.jobListings.map(j => {
-      if (j.hiredByStudentId === id) {
-        return { ...j, status: 'disponible', hiredByStudentId: undefined, hiredByStudentName: undefined, hiredAtDate: undefined };
+          if (!lockRes || lockRes.rows.length === 0) {
+            const err: any = new Error('Usuario no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const userRow = lockRes.rows[0];
+          const canonicalId = String(userRow.id);
+          const canonicalUsername = String(userRow.usuario || '').trim();
+          const canonicalName = String(userRow.alumno || '').trim();
+
+          // 2. Validate teacher role (Teacher account cannot be deleted)
+          if (
+            userRow.role === 'teacher' ||
+            canonicalId === 'profesor-1' ||
+            canonicalUsername.toLowerCase() === 'pupdaniel' ||
+            canonicalId.toLowerCase().includes('pupdaniel')
+          ) {
+            const err: any = new Error('No se puede eliminar la cuenta del profesor principal');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. Financial validations: Balance check (Do not destroy unliquidated money)
+          const balance = Number(userRow.saldo);
+          if (Math.abs(balance) > 0.001) {
+            const err: any = new Error(
+              `No se puede eliminar la cuenta porque tiene saldo no liquidado (${balance.toFixed(2)} €). Se requiere liquidar el saldo a 0 antes de proceder con la eliminación.`
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 4. Financial validations: Accounting movements (Audit trail preservation)
+          const movRes = await client.query(
+            'SELECT id FROM movimientos WHERE cuenta_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (movRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque tiene movimientos bancarios históricos registrados. La información contable debe preservarse.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 5. Financial validations: Loans (Active debt or credit history preservation)
+          const loanRes = await client.query(
+            'SELECT id, estado FROM prestamos WHERE alumno_id = $1 OR alumno_id = $2 LIMIT 1',
+            [canonicalId, canonicalUsername]
+          );
+          if (loanRes.rows.length > 0) {
+            const loanEstado = loanRes.rows[0].estado;
+            const err: any = new Error(
+              `No se puede eliminar el usuario porque tiene préstamos asociados (estado: '${loanEstado}'). No se permite destruir deuda viva ni historial crediticio.`
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 6. Payment Obligations
+          const oblRes = await client.query(
+            'SELECT id FROM obligaciones_pago WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (oblRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque tiene obligaciones de pago registradas.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 7. Real Estate & Property Acquisitions (Do not leave orphan properties)
+          const inmbRes = await client.query(
+            'SELECT id FROM inmuebles WHERE propietario_id = $1 OR propietario_id = $2 LIMIT 1',
+            [canonicalId, canonicalUsername]
+          );
+          const acqRes = await client.query(
+            'SELECT id FROM adquisiciones WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (inmbRes.rows.length > 0 || acqRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque posee inmuebles o adquisiciones vinculadas. Debe transferir o liquidar los activos inmobiliarios previamente.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 8. Commercial Promissory Notes and Market Messages
+          const msgRes = await client.query(
+            'SELECT id, type FROM market_messages WHERE sender_id = $1 OR recipient_id = $1 OR sender_id = $2 OR recipient_id = $2 LIMIT 1',
+            [canonicalId, canonicalUsername]
+          );
+          if (msgRes.rows.length > 0) {
+            const isPn = msgRes.rows[0].type === 'promissory_note';
+            const err: any = new Error(
+              `No se puede eliminar el usuario porque tiene ${isPn ? 'pagarés mercantiles' : 'mensajes comerciales'} asociados que forman parte del registro de operaciones.`
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 9. Judicial Lawsuits (Court proceedings)
+          const courtRes = await client.query(
+            'SELECT id, estado, numero_autos FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1 OR demandante_id = $2 OR demandado_id = $2 LIMIT 1',
+            [canonicalId, canonicalUsername]
+          );
+          if (courtRes.rows.length > 0) {
+            const lawsuit = courtRes.rows[0];
+            const err: any = new Error(
+              `No se puede eliminar el usuario porque está vinculado a procedimientos judiciales (Autos ${lawsuit.numero_autos || lawsuit.id}, estado: '${lawsuit.estado}').`
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 10. Labor & Payroll Records
+          const empRes = await client.query(
+            'SELECT id FROM empleados_contratados WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          const nomRes = await client.query(
+            'SELECT id FROM registros_nomina WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (empRes.rows.length > 0 || nomRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque tiene contratos de trabajo o registros de nómina acumulados.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 11. Logistics & Vehicles
+          const vehRes = await client.query(
+            'SELECT id FROM vehiculos_comprados WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (vehRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque posee vehículos logísticos adquiridos.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 12. Machinery
+          const maqRes = await client.query(
+            'SELECT id FROM maquinaria_adquisiciones WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (maqRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque posee maquinaria adquirida vinculada.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 13. Raw materials inventory
+          const invRes = await client.query(
+            `SELECT alumno_id FROM materias_primas_inventario
+             WHERE alumno_id = $1
+               AND (
+                 COALESCE(fragmentos_hierro_kg, 0) > 0 OR
+                 COALESCE(fragmentos_metal_kg, 0) > 0 OR
+                 COALESCE(pellets_plastico_kg, 0) > 0 OR
+                 COALESCE(pegamento_epoxi_kg, 0) > 0 OR
+                 COALESCE(varillas_punta, 0) > 0 OR
+                 COALESCE(varillas_hierro_punta, 0) > 0 OR
+                 COALESCE(varillas_metal_punta, 0) > 0 OR
+                 COALESCE(productos_ensamblados, 0) > 0 OR
+                 COALESCE(destornilladores_hierro, 0) > 0 OR
+                 COALESCE(destornilladores_metal, 0) > 0
+               )
+             LIMIT 1`,
+            [canonicalId]
+          );
+          if (invRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque posee existencias de materias primas en inventario.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // 14. Tax obligations
+          const taxRes = await client.query(
+            'SELECT id FROM obligaciones_fiscales WHERE alumno_id = $1 LIMIT 1',
+            [canonicalId]
+          );
+          if (taxRes.rows.length > 0) {
+            const err: any = new Error(
+              'No se puede eliminar el usuario porque tiene obligaciones fiscales registradas.'
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // ATOMIC DELETION: Delete non-blocking student-owned peripheral settings
+          await client.query('DELETE FROM notificaciones WHERE user_id = $1', [canonicalId]);
+          await client.query('DELETE FROM perfiles_empresa WHERE student_id = $1', [canonicalId]);
+          await client.query('DELETE FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1', [canonicalId]);
+          await client.query('DELETE FROM contratos_electricos WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM facturas_electricidad WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM contratos_telecom WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM facturas_telecom WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM pedidos_oficina WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM anuncios_materia_prima WHERE seller_id = $1', [canonicalId]);
+          await client.query('DELETE FROM ofertas_empleo WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM materias_primas_pedidos WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM materias_primas_inventario WHERE alumno_id = $1', [canonicalId]);
+
+          // Finally delete the account itself
+          await client.query('DELETE FROM cuentas WHERE id = $1', [canonicalId]);
+
+          return {
+            success: true,
+            message: 'Usuario eliminado exitosamente',
+            _postCommitData: {
+              userId: canonicalId,
+              username: canonicalUsername,
+              name: canonicalName
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory mode
+        const db = readDb();
+        const user = db.users.find(u => u.id === rawId || u.username?.toLowerCase() === rawId.toLowerCase());
+        if (!user) {
+          const err: any = new Error('Usuario no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (user.role === 'teacher') {
+          const err: any = new Error('No se puede eliminar la cuenta del profesor principal');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (Math.abs(Number(user.balance || 0)) > 0.001) {
+          const err: any = new Error('No se puede eliminar la cuenta porque tiene saldo no liquidado');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.transfers || []).some(t => t.senderId === user.id || t.receiverId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque tiene movimientos bancarios registrados');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.loans || []).some(l => l.studentId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque tiene préstamos asociados');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.paymentObligations || []).some(o => o.studentId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque tiene obligaciones de pago');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.acquisitions || []).some(a => a.studentId === user.id) || (db.properties || []).some(p => p.ownerId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque posee inmuebles vinculados');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.marketMessages || []).some(m => m.senderId === user.id || m.recipientId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque tiene mensajes o pagarés asociados');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.courtLawsuits || []).some(l => l.plaintiffId === user.id || l.defendantId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque está vinculado a procedimientos judiciales');
+          err.statusCode = 409;
+          throw err;
+        }
+        if ((db.hiredEmployees || []).some(e => e.studentId === user.id)) {
+          const err: any = new Error('No se puede eliminar el usuario porque tiene empleados contratados');
+          err.statusCode = 409;
+          throw err;
+        }
+
+        db.users = db.users.filter(u => u.id !== user.id);
+        writeDb(db);
+
+        return {
+          success: true,
+          message: 'Usuario eliminado exitosamente',
+          _postCommitData: {
+            userId: user.id,
+            username: user.username,
+            name: user.name
+          }
+        };
       }
-      return j;
+    });
+
+    // POST-COMMIT: Update in-memory db.json cache ONLY AFTER PostgreSQL commit
+    if (result && result._postCommitData) {
+      const { userId, username, name } = result._postCommitData;
+      const db = readDb();
+      db.users = (db.users || []).filter(u => u.id !== userId && u.username !== username);
+      if (db.notifications) db.notifications = db.notifications.filter(n => n.userId !== userId);
+      if (db.electricityContracts) db.electricityContracts = db.electricityContracts.filter(c => c.studentId !== userId);
+      if (db.telecomContracts) db.telecomContracts = db.telecomContracts.filter(tc => tc.studentId !== userId);
+      if (db.telecomInvoices) db.telecomInvoices = db.telecomInvoices.filter(ti => ti.studentId !== userId);
+      if (db.officeOrders) db.officeOrders = db.officeOrders.filter(oo => oo.studentId !== userId);
+      if (db.naveFloorPlans) db.naveFloorPlans = db.naveFloorPlans.filter(fp => fp.studentId !== userId);
+
+      if (!db.systemLogs) db.systemLogs = [];
+      db.systemLogs.unshift({
+        id: generateId('log'),
+        timestamp: new Date().toISOString(),
+        action: 'DELETE_USER',
+        details: `Usuario ${name || userId} (${username || userId}) eliminado exitosamente tras verificación transaccional en PostgreSQL.`
+      });
+
+      writeDb(db);
+    }
+
+    return res.json({
+      success: true,
+      message: result?.message || 'Usuario eliminado exitosamente'
+    });
+  } catch (err: any) {
+    console.error('[DELETE /api/users/:id Error]:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Error al eliminar usuario'
     });
   }
+};
 
-  await deleteAccountFromSupabase(id, user.username, user.name);
-
-  const newLog: SystemLog = {
-    id: generateId('log'),
-    action: 'DELETE_USER',
-    details: `Cuenta eliminada: ${user.name} (${user.username}), saldo restante de ${user.balance} €`,
-    timestamp: new Date().toISOString()
-  };
-  db.systemLogs.unshift(newLog);
-
-  writeDb(db);
-  res.json({ success: true, message: 'Usuario eliminado exitosamente' });
-});
+app.delete('/api/users/:id', handleDeleteUserRoute);
+app.delete('/users/:id', handleDeleteUserRoute);
 
 // Create transfer between students
 const handleTransferRoute = async (req: express.Request, res: express.Response) => {
@@ -6533,44 +7710,58 @@ const handleGetLogsRoute = (req: express.Request, res: express.Response) => {
 app.get('/api/logs', handleGetLogsRoute);
 app.get('/logs', handleGetLogsRoute);
 
-// Manual Bank Reconciliation Endpoint (Teacher or system trigger)
+// Safe Bank Reconciliation Endpoint (Teacher or system trigger)
 app.post('/api/bank/reconcile', async (req, res) => {
   if (!dbPool) {
     return res.status(400).json({ success: false, error: 'Supabase PostgreSQL no está configurado.' });
   }
   try {
-    const db = readDb();
-    const accountsRes = await safeDbQuery('SELECT * FROM cuentas ORDER BY alumno ASC');
-    const movsRes = await safeDbQuery('SELECT * FROM movimientos ORDER BY fecha ASC');
+    // 1. PostgreSQL is the single source of truth
+    const accountsRes = await safeDbQuery('SELECT id, alumno, saldo, usuario, account_number, role, level FROM cuentas ORDER BY alumno ASC');
+    const movsRes = await safeDbQuery('SELECT cuenta_id, tipo, importe, fecha FROM movimientos ORDER BY fecha ASC');
 
+    const db = readDb();
     const reconciled: Array<{ studentName: string; studentId: string; previousBalance: number; reconciledBalance: number; movementsCount: number }> = [];
 
     if (accountsRes && accountsRes.rows && movsRes && movsRes.rows) {
-      for (const student of db.users) {
-        if (student.role !== 'student') continue;
-        const studentMovs = movsRes.rows.filter((m: any) => m.cuenta_id === student.id);
-        if (studentMovs.length > 0) {
-          let netMovs = 0;
-          for (const m of studentMovs) {
-            const amt = Number(m.importe);
-            if (m.tipo === 'TRANSFER_IN') netMovs += amt;
-            else if (m.tipo === 'TRANSFER_OUT') netMovs -= amt;
-          }
-          const isRetailOrWholesale = (student.username && ['cliente04', 'cliente05'].includes(student.username)) || 
-                                     student.name.toLowerCase().includes('minorista') || 
-                                     student.name.toLowerCase().includes('mayorista');
-          const defaultInitial = isRetailOrWholesale ? 3000 : 60000;
-          const expectedBalance = Number((defaultInitial + netMovs).toFixed(2));
-          const oldBal = student.balance;
+      for (const acc of accountsRes.rows) {
+        if (acc.role !== 'student' && acc.id === 'profesor-1') continue;
 
-          if (Math.abs(oldBal - expectedBalance) > 0.01 && expectedBalance >= 0) {
-            student.balance = expectedBalance;
-            await safeDbQuery('UPDATE cuentas SET saldo = $1 WHERE id = $2', [expectedBalance, student.id]);
+        const studentMovs = movsRes.rows.filter((m: any) => m.cuenta_id === acc.id);
+        const currentPgBalance = Number(acc.saldo);
+
+        // Find student in memory cache
+        let student = (db.users || []).find(u => u.id === acc.id);
+        if (!student) {
+          student = {
+            id: acc.id,
+            name: acc.alumno,
+            username: acc.usuario || acc.id,
+            password: '••••',
+            accountNumber: acc.account_number,
+            balance: currentPgBalance,
+            role: acc.role,
+            level: acc.level || 1
+          };
+          if (!db.users) db.users = [];
+          db.users.push(student);
+          reconciled.push({
+            studentName: acc.alumno,
+            studentId: acc.id,
+            previousBalance: 0,
+            reconciledBalance: currentPgBalance,
+            movementsCount: studentMovs.length
+          });
+        } else {
+          const oldMemBal = Number(student.balance);
+          // If in-memory cache deviates from PostgreSQL authoritative balance, reconcile cache to match PostgreSQL
+          if (Math.abs(oldMemBal - currentPgBalance) > 0.001) {
+            student.balance = currentPgBalance;
             reconciled.push({
-              studentName: student.name,
-              studentId: student.id,
-              previousBalance: oldBal,
-              reconciledBalance: expectedBalance,
+              studentName: acc.alumno || student.name,
+              studentId: acc.id,
+              previousBalance: oldMemBal,
+              reconciledBalance: currentPgBalance,
               movementsCount: studentMovs.length
             });
           }
@@ -6585,8 +7776,8 @@ app.post('/api/bank/reconcile', async (req, res) => {
     res.json({
       success: true,
       message: reconciled.length > 0 
-        ? `Se han conciliado ${reconciled.length} cuenta(s) con sus movimientos contables.`
-        : 'Todos los saldos bancarios cuadran exactamente con el historial de movimientos de Supabase.',
+        ? `Se ha sincronizado la caché en memoria de ${reconciled.length} cuenta(s) con el saldo autorizado de PostgreSQL.`
+        : 'Todos los saldos de las cuentas en PostgreSQL son íntegros y la memoria está perfectamente sincronizada.',
       reconciled
     });
   } catch (err: any) {
@@ -6743,7 +7934,8 @@ app.get('/api/backup', (req, res) => {
 });
 
 // Restore full backup (Teacher only)
-app.post('/api/restore', (req, res) => {
+// Restore full backup (Teacher only)
+app.post('/api/restore', async (req, res) => {
   try {
     const backup = req.body;
     if (!backup || typeof backup !== 'object') {
@@ -6772,23 +7964,138 @@ app.post('/api/restore', (req, res) => {
       teacher.password = '1987';
     }
 
+    if (dbPool) {
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+        // 1. Acquire exclusive PostgreSQL maintenance advisory lock across the database
+        await client.query('SELECT pg_advisory_xact_lock(987654321)');
+
+        // 2. Atomic purge of tables in foreign-key / dependency order
+        await client.query('DELETE FROM movimientos');
+        await client.query('DELETE FROM adquisiciones');
+        await client.query('DELETE FROM obligaciones_pago');
+        await client.query('DELETE FROM prestamos');
+        await client.query('DELETE FROM maquinaria_adquisiciones');
+        await client.query('DELETE FROM ofertas_empleo');
+        await client.query('DELETE FROM empleados_contratados');
+        await client.query('DELETE FROM registros_nomina');
+        await client.query('DELETE FROM obligaciones_fiscales');
+        await client.query('DELETE FROM contratos_electricos');
+        await client.query('DELETE FROM facturas_electricidad');
+        await client.query('DELETE FROM contratos_telecom');
+        await client.query('DELETE FROM facturas_telecom');
+        await client.query('DELETE FROM pedidos_oficina');
+        await client.query('DELETE FROM vehiculos_comprados');
+        await client.query('DELETE FROM materias_primas_pedidos');
+        await client.query('DELETE FROM materias_primas_inventario');
+        await client.query('DELETE FROM perfiles_empresa');
+        await client.query('DELETE FROM contactos_mercado');
+        await client.query('DELETE FROM market_messages');
+        await client.query('DELETE FROM notificaciones');
+        await client.query('DELETE FROM demandas_judiciales');
+        await client.query('DELETE FROM planos_distribucion_naves');
+        await client.query('DELETE FROM inmuebles');
+        await client.query('DELETE FROM anuncios_materia_prima');
+        await client.query('DELETE FROM cuentas');
+
+        // 3. Atomically restore accounts
+        for (const u of backup.users) {
+          await client.query(
+            `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (id) DO UPDATE SET
+               alumno = EXCLUDED.alumno,
+               saldo = EXCLUDED.saldo,
+               usuario = EXCLUDED.usuario,
+               password = EXCLUDED.password,
+               account_number = EXCLUDED.account_number,
+               role = EXCLUDED.role,
+               level = EXCLUDED.level`,
+            [u.id, u.name, Number(u.balance || 0), u.username || u.id, u.password || '1234', u.accountNumber || 'ES000000000000000000', u.role || 'student', u.level || 1]
+          );
+        }
+
+        // 4. Atomically restore movements
+        for (const tx of (backup.transfers || [])) {
+          const nowIso = tx.timestamp || new Date().toISOString();
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (id) DO NOTHING`,
+            [tx.id + '-out', tx.senderId, tx.amount, nowIso, tx.concept, tx.senderId, tx.senderName, tx.senderAccount, tx.receiverId, tx.receiverName, tx.receiverAccount]
+          );
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (id) DO NOTHING`,
+            [tx.id + '-in', tx.receiverId, tx.amount, nowIso, tx.concept, tx.senderId, tx.senderName, tx.senderAccount, tx.receiverId, tx.receiverName, tx.receiverAccount]
+          );
+        }
+
+        // 5. Restore properties if present
+        if (Array.isArray(backup.properties)) {
+          for (const p of backup.properties) {
+            await client.query(
+              `INSERT INTO inmuebles (id, titulo, tipo, operacion, precio, superficie, ubicacion, caracteristicas, estado, comprador_id, inquilino_id, fecha_creacion, imagen_url)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+               ON CONFLICT (id) DO NOTHING`,
+              [p.id, p.title, p.type, p.operation, p.price, p.surface || null, p.location || null, p.features ? JSON.stringify(p.features) : null, p.status, p.buyerId || null, p.tenantId || null, p.createdAt || new Date().toISOString(), p.imageUrl || null]
+            );
+          }
+        }
+
+        // 6. Restore raw material announcements if present
+        if (Array.isArray(backup.rawMaterialAnnouncements)) {
+          for (const ann of backup.rawMaterialAnnouncements) {
+            await client.query(
+              `INSERT INTO anuncios_materia_prima (id, tipo, material_id, titulo, descripcion, precio_unitario, unidad, stock_disponible, vendedor_id, vendedor_nombre, fecha_creacion)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               ON CONFLICT (id) DO NOTHING`,
+              [ann.id, ann.type, ann.materialId, ann.title, ann.description, ann.unitPrice, ann.unit, ann.availableStock, ann.sellerId, ann.sellerName, ann.createdAt || new Date().toISOString()]
+            );
+          }
+        }
+
+        // 7. Restore loans if present
+        if (Array.isArray(backup.loans)) {
+          for (const loan of backup.loans) {
+            await client.query(
+              `INSERT INTO prestamos (id, alumno_id, alumno_nombre, tipo, capital_inicial, capital_pendiente, plazo_meses, cuotas_pagadas, tipo_interes, tipo_interes_aplicado, tae, estado, fecha_concesion, importe_cuota, impagado, cuotas_impagadas)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+               ON CONFLICT (id) DO NOTHING`,
+              [loan.id, loan.studentId, loan.studentName, loan.type, loan.initialCapital, loan.remainingCapital, loan.termMonths, loan.paidInstallments, loan.interestRateType, loan.interestRate, loan.tae, loan.status, loan.grantedAt, loan.installmentAmount, loan.unpaid || false, loan.unpaidCount || 0]
+            );
+          }
+        }
+
+        await client.query('COMMIT');
+      } catch (dbErr) {
+        await client.query('ROLLBACK');
+        throw dbErr;
+      } finally {
+        client.release();
+      }
+    }
+
+    // POST-COMMIT: Update memory and db.json ONLY after PostgreSQL transaction succeeds
     writeDb(backup);
 
     // Append restoration log
     const db = readDb();
     const newLog: SystemLog = {
       id: generateId('log'),
-      action: 'RESET_SIMULATION', // Using compatible system action
-      details: 'Copia de seguridad restaurada de forma exitosa por el profesor.',
+      action: 'RESET_SIMULATION',
+      details: 'Copia de seguridad restaurada de forma exitosa y atómica en PostgreSQL por el profesor.',
       timestamp: new Date().toISOString()
     };
     db.systemLogs.unshift(newLog);
     writeDb(db);
-    syncAllToSupabase(db).catch(e => console.error('[Supabase Backup Restore Sync Error]:', e));
 
-    res.json({ success: true, message: 'Copia de seguridad restaurada con éxito.' });
+    res.json({ success: true, message: 'Copia de seguridad restaurada con éxito y atomicidad garantizada.' });
   } catch (error: any) {
-    res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + error.message });
+    console.error('[Restore Error]:', error);
+    res.status(500).json({ error: 'Error al restaurar la copia de seguridad: ' + (error.message || String(error)) });
   }
 });
 
@@ -7666,18 +8973,20 @@ app.post('/api/machinery/buy', async (req, res) => {
   const { studentId, machineryId, optionId, targetNaveId, paymentMethod } = req.body;
   const db = readDb();
 
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
+  let student = db.users.find(u => u.id === studentId);
+  if (!student && !dbPool) {
     return res.status(404).json({ error: 'Estudiante no encontrado' });
   }
 
   // Check for automatic payments and overdue debt blocking
-  await processStudentAutomaticPayments(db, studentId);
-  const studentStatus = getStudentPaymentStatus(db, studentId);
-  if (studentStatus.isBlocked) {
-    return res.status(400).json({
-      error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
-    });
+  if (student) {
+    await processStudentAutomaticPayments(db, studentId);
+    const studentStatus = getStudentPaymentStatus(db, studentId);
+    if (studentStatus.isBlocked) {
+      return res.status(400).json({
+        error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
+      });
+    }
   }
 
   const machinery = MACHINERY_CATALOG.find(m => m.id === machineryId);
@@ -7690,204 +8999,472 @@ app.post('/api/machinery/buy', async (req, res) => {
     return res.status(404).json({ error: 'Opción de configuración de maquinaria no encontrada' });
   }
 
-  // Validation: Student MUST own or rent an Industrial Nave suitable for this machinery
-  const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
-  const targetAcquisition = acquisitions.find(a => a.id === targetNaveId || a.propertyId === targetNaveId);
-
-  if (!targetAcquisition) {
-    return res.status(400).json({
-      error: `Para comprar esta maquinaria se requiere obligatoriamente disponer de una nave industrial de al menos ${machinery.requiredSurfaceM2} m² (superficie de producción). Por favor, adquiere o alquila una nave industrial adecuada antes de continuar.`
-    });
-  }
-
-  const pType = (targetAcquisition.propertyType || targetAcquisition.type || '').toLowerCase();
-  const pTitle = (targetAcquisition.propertyTitle || targetAcquisition.title || '').toLowerCase();
-  const isIndustrialNave = pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
-
-  if (!isIndustrialNave) {
-    const typeLabel = targetAcquisition.propertyType === 'local_comercial' ? 'Local comercial' : targetAcquisition.propertyType === 'almacen' ? 'Almacén' : 'Inmueble';
-    return res.status(400).json({
-      error: `Requisito de ubicación incumplido: El inmueble seleccionado "${targetAcquisition.propertyTitle}" es un ${typeLabel}. La maquinaria industrial de fabricación solo puede ser instalada dentro de una nave industrial.`
-    });
-  }
-
-  // Calculate surface breakdown coherently with the floor plan
-  const surfaceBreakdown = getNaveSurfaceBreakdownBackend(db, studentId, targetAcquisition);
-  const requiredSurfaceM2 = machinery.requiredSurfaceM2 || (machinery.category === 'metal_hierro' ? 240 : 180);
-
-  if (surfaceBreakdown.availableForMachineryM2 < requiredSurfaceM2) {
-    return res.status(400).json({
-      error: `Superficie insuficiente en la nave industrial: La nave "${targetAcquisition.propertyTitle}" dispone de ${surfaceBreakdown.totalNaveM2} m² en total. Actualmente tiene instalada(s) ${surfaceBreakdown.existingMachinery.length} máquina(s) ocupando un total de ${surfaceBreakdown.occupiedMachineryM2} m², almacén de ${surfaceBreakdown.storageZoneM2} m² y administración de ${surfaceBreakdown.adminZoneM2} m². En el plano quedan ${surfaceBreakdown.availableForMachineryM2} m² disponibles para maquinaria (${surfaceBreakdown.freeInMachineryZone} m² libres en la zona de maquinaria + ${surfaceBreakdown.freeZoneM2} m² de superficie diáfana/libre). La nueva línea "${machinery.title}" requiere ${requiredSurfaceM2} m². Por favor, amplía la superficie diáfana en el plano de distribución o adquiere una nueva nave industrial.`
-    });
-  }
-
-  const vendorName = 'Maquinarias e Instalaciones Industriales S.A.';
-  const vendorAccount = 'ES210001000299887799';
-  const now = new Date();
-
-  // Check electricity supply contract power requirements for the target property
-  const targetPropId = String(targetAcquisition.id);
-  const targetPropTitle = (targetAcquisition.propertyTitle || '').toLowerCase().trim();
-
-  const elecContract = (db.electricityContracts || []).find(c => c.studentId === student.id && c.status === 'active' && (
-    (targetPropId && (c.propertyId === targetPropId || c.id === targetPropId)) ||
-    (targetPropTitle && c.propertyTitle && c.propertyTitle.toLowerCase().trim() === targetPropTitle)
-  )) || (db.electricityContracts || []).find(c => c.studentId === student.id && c.status === 'active' && !c.propertyId);
-
-  // Machinery assigned to THIS nave
-  const targetNaveMachinery = (db.machineryAcquisitions || []).filter(m => {
-    if (m.studentId !== student.id) return false;
-    const mNaveId = String(m.installedAtNaveId || m.installedNaveId || m.installationNaveId || m.propertyId || m.acquisitionId || '');
-    if (mNaveId && mNaveId === targetPropId) return true;
-    const mNaveTitle = (m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || m.naveInstaladaTitulo || '').toLowerCase().trim();
-    if (mNaveTitle && targetPropTitle && (mNaveTitle === targetPropTitle || mNaveTitle.includes(targetPropTitle) || targetPropTitle.includes(mNaveTitle))) return true;
-    return false;
-  });
-
-  const totalMachineryPowerNeeded = targetNaveMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0) + (machinery.requiredPowerKW || 35);
-  const totalPowerNeeded = totalMachineryPowerNeeded + 10; // 10 kW for basic nave lighting & HVAC
-
-  const isPowerContracted = elecContract && elecContract.contractedPowerKw >= totalPowerNeeded;
-  const initialMachineryStatus = isPowerContracted ? 'montaje' : 'pendiente_energia';
-  const assemblyFinishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-
   if (paymentMethod !== 'contado' && paymentMethod !== 'aplazado_pagares') {
     return res.status(400).json({ error: 'Forma de pago no válida.' });
   }
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
-  const idemKey = rawIdemKey || `mac_buy_${studentId}_${machineryId}_${optionId}_${paymentMethod}_${targetNaveId}_${Math.floor(Date.now() / 4000)}`;
+  const idemKey = rawIdemKey || `mac_buy_${studentId}_${machineryId}_${optionId}_${paymentMethod}_${targetNaveId}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
   try {
     const result = await executeWithIdempotency(idemKey, async (key) => {
-      if (paymentMethod === 'contado') {
-        const basePrice = option.basePrice;
-        const ivaAmount = Number((basePrice * 0.21).toFixed(2));
-        const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+      const vendorName = 'Maquinarias e Instalaciones Industriales S.A.';
+      const vendorAccount = 'ES210001000299887799';
+      const now = new Date();
+      const nowIso = now.toISOString();
 
-        if (dbPool) {
-          return await withPostgresTransaction(async (client) => {
-            const studentLock = await client.query(
-              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-              [studentId]
-            );
-            if (!studentLock || studentLock.rows.length === 0) {
-              const err: any = new Error('Estudiante no encontrado en la base de datos');
-              err.statusCode = 404;
-              throw err;
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // LOCK HIERARCHY:
+          // 1. cuentas FOR UPDATE
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [studentId]
+          );
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+          const studentRow = studentLock.rows[0];
+          const effectiveSid = String(studentRow.id);
+          const studentUsername = String(studentRow.usuario || '');
+
+          // 2. adquisiciones (target nave) FOR SHARE
+          const acqRes = await client.query(
+            'SELECT * FROM adquisiciones WHERE (id = $1 OR inmueble_id = $1) AND (alumno_id = $2 OR alumno_id = $3) FOR SHARE',
+            [targetNaveId, effectiveSid, studentUsername]
+          );
+          const targetAcq = acqRes.rows[0];
+          if (!targetAcq) {
+            const err: any = new Error(`Para comprar esta maquinaria se requiere obligatoriamente disponer de una nave industrial de al menos ${machinery.requiredSurfaceM2} m² (superficie de producción). Por favor, adquiere o alquila una nave industrial adecuada antes de continuar.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const pType = (targetAcq.tipo_inmueble || targetAcq.tipo || '').toLowerCase();
+          const pTitle = (targetAcq.inmueble_titulo || targetAcq.titulo || '').toLowerCase();
+          const isIndustrialNave = pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
+          if (!isIndustrialNave) {
+            const typeLabel = targetAcq.tipo_inmueble === 'local_comercial' ? 'Local comercial' : targetAcq.tipo_inmueble === 'almacen' ? 'Almacén' : 'Inmueble';
+            const err: any = new Error(`Requisito de ubicación incumplido: El inmueble seleccionado "${targetAcq.inmueble_titulo}" es un ${typeLabel}. La maquinaria industrial de fabricación solo puede ser instalada dentro de una nave industrial.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const targetPropId = String(targetAcq.inmueble_id || targetAcq.id);
+          const targetAcqId = String(targetAcq.id);
+          const targetPropTitle = (targetAcq.inmueble_titulo || '').toLowerCase().trim();
+          const totalNaveM2 = Number(targetAcq.superficie_m2 || targetAcq.m2) || 1000;
+
+          // 3. maquinaria_adquisiciones (existing machines in nave) FOR UPDATE
+          const machRes = await client.query(
+            `SELECT * FROM maquinaria_adquisiciones 
+             WHERE (alumno_id = $1 OR alumno_id = $2)
+               AND (
+                 nave_instalada_id = $3 
+                 OR nave_instalada_id = $4
+                 OR LOWER(TRIM(nave_instalada_titulo)) = $5
+               )
+             FOR UPDATE`,
+            [effectiveSid, studentUsername, targetAcqId, targetPropId, targetPropTitle]
+          );
+          const existingMachines = machRes.rows;
+
+          let occupiedMachineryM2 = 0;
+          let totalMachineryPowerNeeded = 0;
+
+          for (const m of existingMachines) {
+            const cat = MACHINERY_CATALOG.find(c => c.id === m.maquinaria_id);
+            if (cat && cat.requiredSurfaceM2) {
+              occupiedMachineryM2 += Number(cat.requiredSurfaceM2);
+            } else {
+              const mTitle = (m.linea_titulo || '').toLowerCase();
+              const isMetal = m.categoria === 'metal_hierro' || mTitle.includes('metal') || mTitle.includes('hierro');
+              occupiedMachineryM2 += isMetal ? 240 : 180;
             }
-            const studentRow = studentLock.rows[0];
-            const currentBal = Number(studentRow.saldo);
+            totalMachineryPowerNeeded += (Number(m.potencia_kw) || 35);
+          }
+
+          // 4. planos_distribucion_naves FOR UPDATE
+          const planRes = await client.query(
+            `SELECT * FROM planos_distribucion_naves 
+             WHERE (alumno_id = $1 OR alumno_id = $2)
+               AND (
+                 adquisicion_id = $3 
+                 OR inmueble_id = $4 
+                 OR inmueble_id = $3 
+                 OR LOWER(TRIM(titulo_inmueble)) = $5
+               )
+             FOR UPDATE`,
+            [effectiveSid, studentUsername, targetAcqId, targetPropId, targetPropTitle]
+          );
+          const currentPlan = planRes.rows[0] || null;
+
+          let currentMachineryZoneM2 = 0;
+          let storageZoneM2 = 30;
+          let adminZoneM2 = 0;
+          let currentFreeZoneM2 = 0;
+
+          if (currentPlan) {
+            currentMachineryZoneM2 = Number(currentPlan.zona_maquinaria_m2) || 0;
+            storageZoneM2 = Number(currentPlan.zona_almacen_m2 ?? currentPlan.almacen_materias_primas_m2) || 30;
+            adminZoneM2 = Number(currentPlan.zona_admin_m2) || 0;
+            currentFreeZoneM2 = currentPlan.zona_libre_m2 !== undefined && currentPlan.zona_libre_m2 !== null
+              ? Number(currentPlan.zona_libre_m2)
+              : Math.max(0, totalNaveM2 - currentMachineryZoneM2 - storageZoneM2 - adminZoneM2);
+          } else {
+            currentMachineryZoneM2 = occupiedMachineryM2;
+            storageZoneM2 = 30;
+            adminZoneM2 = 0;
+            currentFreeZoneM2 = Math.max(0, totalNaveM2 - currentMachineryZoneM2 - storageZoneM2 - adminZoneM2);
+          }
+
+          const freeInMachineryZone = Math.max(0, currentMachineryZoneM2 - occupiedMachineryM2);
+          const availableForMachineryM2 = freeInMachineryZone + currentFreeZoneM2;
+          const requiredSurfaceM2 = machinery.requiredSurfaceM2 || (machinery.category === 'metal_hierro' ? 240 : 180);
+
+          if (availableForMachineryM2 < requiredSurfaceM2) {
+            const err: any = new Error(
+              `Superficie insuficiente en la nave industrial: La nave "${targetAcq.inmueble_titulo}" dispone de ${totalNaveM2} m² en total. Actualmente tiene instalada(s) ${existingMachines.length} máquina(s) ocupando un total de ${occupiedMachineryM2} m², almacén de ${storageZoneM2} m² y administración de ${adminZoneM2} m². En el plano quedan ${availableForMachineryM2} m² disponibles para maquinaria (${freeInMachineryZone} m² libres en la zona de maquinaria + ${currentFreeZoneM2} m² de superficie diáfana/libre). La nueva línea "${machinery.title}" requiere ${requiredSurfaceM2} m². Por favor, amplía la superficie diáfana en el plano de distribución o adquiere una nueva nave industrial.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Check electricity supply contract power requirements
+          const elecRes = await client.query(
+            'SELECT * FROM contratos_electricos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = $3',
+            [effectiveSid, studentUsername, 'active']
+          );
+          const elecContract = elecRes.rows.find((e: any) =>
+            (targetPropId && (String(e.inmueble_id) === targetPropId || String(e.id) === targetPropId)) ||
+            (targetAcqId && String(e.inmueble_id) === targetAcqId) ||
+            (targetPropTitle && e.titulo_inmueble && e.titulo_inmueble.toLowerCase().trim() === targetPropTitle)
+          ) || elecRes.rows.find((e: any) => !e.inmueble_id);
+
+          const totalPowerNeeded = totalMachineryPowerNeeded + (machinery.requiredPowerKW || 35) + 10;
+          const contractedPower = elecContract ? Number(elecContract.potencia_contratada_kw || 0) : 0;
+          const isPowerContracted = contractedPower >= totalPowerNeeded;
+          const initialMachineryStatus = isPowerContracted ? 'montaje' : 'pendiente_energia';
+          const assemblyFinishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+          // Calculate and deduct payments
+          const currentBal = Number(studentRow.saldo);
+          let newBalance = currentBal;
+          let paymentTransferAmount = 0;
+          let transferConcept = '';
+          let basePrice = option.basePrice;
+          let ivaAmount = 0;
+          let totalPrice = 0;
+          let downPaymentPaid = 0;
+          let pendingBalance = 0;
+          let deferredPrice = basePrice;
+          let count = 0;
+          let installmentAmount = 0;
+          let downPaymentBase = 0;
+          let initialCashRequired = 0;
+
+          if (paymentMethod === 'contado') {
+            basePrice = option.basePrice;
+            ivaAmount = Number((basePrice * 0.21).toFixed(2));
+            totalPrice = Number((basePrice + ivaAmount).toFixed(2));
+            downPaymentPaid = totalPrice;
+            pendingBalance = 0;
+            deferredPrice = basePrice;
+
             if (currentBal < totalPrice) {
               const err: any = new Error(`Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`);
               err.statusCode = 400;
               throw err;
             }
 
-            const newBalance = Number((currentBal - totalPrice).toFixed(2));
-            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
+            newBalance = Number((currentBal - totalPrice).toFixed(2));
+            paymentTransferAmount = totalPrice;
+            transferConcept = `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`;
+          } else {
+            // aplazado_pagares
+            const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
+            ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
+            const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
+            downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
+            initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+            const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2));
+            count = 24;
+            installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
 
-            const txId = generateId('tx');
-            const nowIso = now.toISOString();
+            basePrice = basePriceWithSurcharge;
+            deferredPrice = basePriceWithSurcharge;
+            totalPrice = totalPriceWithSurchargeAndIva;
+            downPaymentPaid = initialCashRequired;
+            pendingBalance = pendingBaseBalance;
 
-            const newTransfer: Transfer = {
-              id: txId,
-              senderId: studentRow.id,
-              senderName: studentRow.alumno,
-              senderAccount: studentRow.account_number,
-              receiverId: 'corp-maquinaria-proveedor',
-              receiverName: vendorName,
-              receiverAccount: vendorAccount,
-              amount: totalPrice,
-              concept: `Compra al contado + IVA 21% de ${machinery.title} (${option.title})`,
-              timestamp: nowIso
-            };
+            if (currentBal < initialCashRequired) {
+              const err: any = new Error(`Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`);
+              err.statusCode = 400;
+              throw err;
+            }
 
-            await client.query(
-              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            newBalance = Number((currentBal - initialCashRequired).toFixed(2));
+            paymentTransferAmount = initialCashRequired;
+            transferConcept = `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`;
+          }
+
+          // Update student balance
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+
+          // Insert transfer movement
+          const txId = generateId('tx');
+          const newTransfer: Transfer = {
+            id: txId,
+            senderId: studentRow.id,
+            senderName: studentRow.alumno,
+            senderAccount: studentRow.account_number,
+            receiverId: 'corp-maquinaria-proveedor',
+            receiverName: vendorName,
+            receiverAccount: vendorAccount,
+            amount: paymentTransferAmount,
+            concept: transferConcept,
+            timestamp: nowIso
+          };
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              studentRow.id,
+              paymentTransferAmount,
+              nowIso,
+              newTransfer.concept,
+              studentRow.id,
+              studentRow.alumno,
+              studentRow.account_number,
+              'corp-maquinaria-proveedor',
+              vendorName,
+              vendorAccount
+            ]
+          );
+
+          // Create machinery acquisition record
+          const machAcqId = generateId('mac-acq');
+          const machAcq: MachineryAcquisition = {
+            id: machAcqId,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno,
+            machineryId: machinery.id,
+            category: machinery.category,
+            lineTitle: machinery.title,
+            title: machinery.title,
+            optionTitle: option.title,
+            lathesCount: option.lathesCount,
+            productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
+            imageUrl: machinery.imageUrl,
+            basePrice,
+            financedPrice: deferredPrice,
+            deferredPrice,
+            ivaAmount,
+            totalPrice,
+            paymentMethod,
+            downPaymentPaid,
+            pendingBalance,
+            installmentsCount: paymentMethod === 'aplazado_pagares' ? count : undefined,
+            installmentCount: paymentMethod === 'aplazado_pagares' ? count : undefined,
+            installmentMonthlyAmount: paymentMethod === 'aplazado_pagares' ? installmentAmount : undefined,
+            totalRequiredM2: machinery.totalRequiredM2,
+            requiredSurfaceM2: machinery.requiredSurfaceM2,
+            installationNaveId: targetAcq.id,
+            installedAtNaveId: targetAcq.id,
+            installedNaveId: targetAcq.id,
+            installationNaveTitle: targetAcq.inmueble_titulo,
+            installedAtNaveTitle: targetAcq.inmueble_titulo,
+            installedNaveTitle: targetAcq.inmueble_titulo,
+            installationSurfaceM2: targetAcq.superficie_m2,
+            purchaseDate: nowIso,
+            assemblyDays: 5,
+            assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
+            status: initialMachineryStatus,
+            requiredStaff: machinery.requiredStaff || 2,
+            requiredPowerKW: machinery.requiredPowerKW || 35,
+            powerKw: machinery.requiredPowerKW || 35,
+            equipmentList: machinery.equipmentList || machinery.equipment || [],
+            equipment: machinery.equipmentList || machinery.equipment || []
+          };
+
+          await syncMachineryToSupabase(machAcq, client);
+
+          // If aplazado, create payment obligations
+          const generatedObligations: PaymentObligation[] = [];
+          if (paymentMethod === 'aplazado_pagares') {
+            for (let i = 1; i <= count; i++) {
+              const dueDate = new Date();
+              dueDate.setDate(dueDate.getDate() + (i * 30));
+
+              const ob: PaymentObligation = {
+                id: generateId('obl'),
+                acquisitionId: machAcqId,
+                studentId: studentRow.id,
+                studentName: studentRow.alumno,
+                propertyTitle: `${machinery.title} (${option.title})`,
+                type: 'pagare',
+                amount: installmentAmount,
+                dueDate: dueDate.toISOString(),
+                status: 'pendiente',
+                installmentNumber: i,
+                totalInstallments: count
+              };
+              generatedObligations.push(ob);
+              await syncObligationToSupabase(ob, client);
+            }
+          }
+
+          // ATOMIC FLOOR PLAN UPDATE IN POSTGRESQL
+          const newTotalMachineryM2 = occupiedMachineryM2 + requiredSurfaceM2;
+          let updatedPlanRow: any = null;
+
+          if (currentPlan) {
+            if (newTotalMachineryM2 > currentMachineryZoneM2) {
+              const newStorageM2 = Number(currentPlan.zona_almacen_m2) || 30;
+              const newAdminM2 = Number(currentPlan.zona_admin_m2) || 0;
+              const newFreeM2 = Math.max(0, totalNaveM2 - newTotalMachineryM2 - newStorageM2 - newAdminM2);
+              const upRes = await client.query(
+                `UPDATE planos_distribucion_naves
+                 SET zona_maquinaria_m2 = $1,
+                     zona_libre_m2 = $2,
+                     fecha_actualizacion = CURRENT_TIMESTAMP
+                 WHERE id = $3
+                 RETURNING *`,
+                [newTotalMachineryM2, newFreeM2, currentPlan.id]
+              );
+              updatedPlanRow = upRes.rows[0];
+            } else {
+              updatedPlanRow = currentPlan;
+            }
+          } else {
+            const initStorageM2 = 30;
+            const initAdminM2 = 0;
+            const initFreeM2 = Math.max(0, totalNaveM2 - newTotalMachineryM2 - initStorageM2 - initAdminM2);
+            const newPlanId = generateId('floor_plan');
+            const insRes = await client.query(
+              `INSERT INTO planos_distribucion_naves (
+                 id, inmueble_id, alumno_id, zona_maquinaria_m2, zona_almacen_m2,
+                 almacen_materias_primas_m2, almacen_semiterminados_m2, almacen_terminados_m2,
+                 zona_admin_m2, zona_libre_m2, num_almacenes, adquisicion_id, titulo_inmueble, fecha_actualizacion
+               ) VALUES (
+                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP
+               )
+               RETURNING *`,
               [
-                txId + '-out',
-                studentRow.id,
-                totalPrice,
-                nowIso,
-                newTransfer.concept,
-                studentRow.id,
-                studentRow.alumno,
-                studentRow.account_number,
-                'corp-maquinaria-proveedor',
-                vendorName,
-                vendorAccount
+                newPlanId,
+                targetPropId,
+                effectiveSid,
+                newTotalMachineryM2,
+                initStorageM2,
+                initStorageM2,
+                0,
+                0,
+                initAdminM2,
+                initFreeM2,
+                1,
+                targetAcqId,
+                targetAcq.inmueble_titulo || 'Nave industrial'
               ]
             );
+            updatedPlanRow = insRes.rows[0];
+          }
 
-            const machAcqId = generateId('mac-acq');
-            const machAcq: MachineryAcquisition = {
-              id: machAcqId,
-              studentId: studentRow.id,
-              studentName: studentRow.alumno,
-              machineryId: machinery.id,
-              category: machinery.category,
-              lineTitle: machinery.title,
-              title: machinery.title,
-              optionTitle: option.title,
-              lathesCount: option.lathesCount,
-              productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
-              imageUrl: machinery.imageUrl,
-              basePrice,
-              financedPrice: basePrice,
-              deferredPrice: basePrice,
-              ivaAmount,
-              totalPrice,
-              paymentMethod: 'contado',
-              downPaymentPaid: totalPrice,
-              pendingBalance: 0,
-              totalRequiredM2: machinery.totalRequiredM2,
-              requiredSurfaceM2: machinery.requiredSurfaceM2,
-              installationNaveId: targetAcquisition.id,
-              installedAtNaveId: targetAcquisition.id,
-              installedNaveId: targetAcquisition.id,
-              installationNaveTitle: targetAcquisition.propertyTitle,
-              installedAtNaveTitle: targetAcquisition.propertyTitle,
-              installedNaveTitle: targetAcquisition.propertyTitle,
-              installationSurfaceM2: targetAcquisition.surfaceM2,
-              purchaseDate: nowIso,
-              assemblyDays: 5,
-              assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-              assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-              status: initialMachineryStatus,
-              requiredStaff: machinery.requiredStaff || 2,
-              requiredPowerKW: machinery.requiredPowerKW || 35,
-              powerKw: machinery.requiredPowerKW || 35,
-              equipmentList: machinery.equipmentList || machinery.equipment || [],
-              equipment: machinery.equipmentList || machinery.equipment || []
-            };
+          const mappedUpdatedPlan: NaveFloorPlan = {
+            id: String(updatedPlanRow.id),
+            propertyId: String(updatedPlanRow.inmueble_id),
+            acquisitionId: updatedPlanRow.adquisicion_id ? String(updatedPlanRow.adquisicion_id) : String(updatedPlanRow.inmueble_id),
+            propertyTitle: updatedPlanRow.titulo_inmueble ? String(updatedPlanRow.titulo_inmueble) : (targetAcq.inmueble_titulo || 'Nave industrial'),
+            studentId: String(updatedPlanRow.alumno_id),
+            machineryZoneM2: Number(updatedPlanRow.zona_maquinaria_m2 || 0),
+            storageZoneM2: Number(updatedPlanRow.zona_almacen_m2 || 0),
+            rawMaterialsStorageM2: updatedPlanRow.almacen_materias_primas_m2 !== null && updatedPlanRow.almacen_materias_primas_m2 !== undefined ? Number(updatedPlanRow.almacen_materias_primas_m2) : 30,
+            semiFinishedStorageM2: updatedPlanRow.almacen_semiterminados_m2 !== null && updatedPlanRow.almacen_semiterminados_m2 !== undefined ? Number(updatedPlanRow.almacen_semiterminados_m2) : 0,
+            finishedGoodsStorageM2: updatedPlanRow.almacen_terminados_m2 !== null && updatedPlanRow.almacen_terminados_m2 !== undefined ? Number(updatedPlanRow.almacen_terminados_m2) : 0,
+            adminZoneM2: Number(updatedPlanRow.zona_admin_m2 || 0),
+            freeZoneM2: Number(updatedPlanRow.zona_libre_m2 || 0),
+            warehousesCount: Number(updatedPlanRow.num_almacenes || 1),
+            updatedAt: updatedPlanRow.fecha_actualizacion ? new Date(updatedPlanRow.fecha_actualizacion).toISOString() : nowIso
+          };
 
-            await syncMachineryToSupabase(machAcq, client);
+          const statusMsg = paymentMethod === 'contado'
+            ? (isPowerContracted
+                ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcq.inmueble_titulo}.`
+                : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${contractedPower} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`)
+            : (isPowerContracted
+                ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 8 horas ha comenzado en ${targetAcq.inmueble_titulo}.`
+                : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`);
 
-            // Update in-memory local state
-            const currentDb = readDb();
-            const sIdx = currentDb.users.findIndex(u => u.id === studentId);
-            if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
-            currentDb.transfers.unshift(newTransfer);
-            if (!currentDb.machineryAcquisitions) currentDb.machineryAcquisitions = [];
-            currentDb.machineryAcquisitions.unshift(machAcq);
-            updateFloorPlanAfterMachineryAcquisition(currentDb, studentId, targetAcquisition, requiredSurfaceM2);
-            writeDb(currentDb);
+          return {
+            success: true,
+            message: statusMsg,
+            machineryAcquisition: machAcq,
+            updatedBalance: newBalance,
+            newTransfer,
+            generatedObligations,
+            floorPlan: mappedUpdatedPlan
+          };
+        }, key);
+      } else {
+        // Fallback in-memory (only when dbPool is absent)
+        const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
+        const targetAcquisition = acquisitions.find(a => a.id === targetNaveId || a.propertyId === targetNaveId);
+        if (!targetAcquisition) {
+          const err: any = new Error(`Para comprar esta maquinaria se requiere obligatoriamente disponer de una nave industrial de al menos ${machinery.requiredSurfaceM2} m² (superficie de producción). Por favor, adquiere o alquila una nave industrial adecuada antes de continuar.`);
+          err.statusCode = 400;
+          throw err;
+        }
 
-            const statusMsg = isPowerContracted
-              ? `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). La maquinaria ha iniciado el periodo de montaje de 8 horas en ${targetAcquisition.propertyTitle}.`
-              : `¡Adquisición de maquinaria al contado completada! Importe abonado: ${formatCurrency(totalPrice)} (IVA incl.). ⚠️ ATENCIÓN: El montaje NO se ha iniciado porque no has contratado la potencia de energía eléctrica suficiente (${totalPowerNeeded} kW requeridos vs ${elecContract ? elecContract.contractedPowerKw : 0} kW contratados). La maquinaria permanecerá almacenada sin montar hasta que contrates la luz en el apartado de Energía.`;
+        const pType = (targetAcquisition.propertyType || targetAcquisition.type || '').toLowerCase();
+        const pTitle = (targetAcquisition.propertyTitle || targetAcquisition.title || '').toLowerCase();
+        const isIndustrialNave = pType === 'nave_industrial' || pType.includes('nave') || pType === 'industrial' || pTitle.includes('nave');
+        if (!isIndustrialNave) {
+          const typeLabel = targetAcquisition.propertyType === 'local_comercial' ? 'Local comercial' : targetAcquisition.propertyType === 'almacen' ? 'Almacén' : 'Inmueble';
+          const err: any = new Error(`Requisito de ubicación incumplido: El inmueble seleccionado "${targetAcquisition.propertyTitle}" es un ${typeLabel}. La maquinaria industrial de fabricación solo puede ser instalada dentro de una nave industrial.`);
+          err.statusCode = 400;
+          throw err;
+        }
 
-            return {
-              success: true,
-              message: statusMsg,
-              machineryAcquisition: machAcq,
-              updatedBalance: newBalance
-            };
-          }, key);
-        } else {
-          // Fallback in-memory
+        const surfaceBreakdown = getNaveSurfaceBreakdownBackend(db, studentId, targetAcquisition);
+        const requiredSurfaceM2 = machinery.requiredSurfaceM2 || (machinery.category === 'metal_hierro' ? 240 : 180);
+        if (surfaceBreakdown.availableForMachineryM2 < requiredSurfaceM2) {
+          const err: any = new Error(
+            `Superficie insuficiente en la nave industrial: La nave "${targetAcquisition.propertyTitle}" dispone de ${surfaceBreakdown.totalNaveM2} m² en total. Actualmente tiene instalada(s) ${surfaceBreakdown.existingMachinery.length} máquina(s) ocupando un total de ${surfaceBreakdown.occupiedMachineryM2} m², almacén de ${surfaceBreakdown.storageZoneM2} m² y administración de ${surfaceBreakdown.adminZoneM2} m². En el plano quedan ${surfaceBreakdown.availableForMachineryM2} m² disponibles para maquinaria (${surfaceBreakdown.freeInMachineryZone} m² libres en la zona de maquinaria + ${surfaceBreakdown.freeZoneM2} m² de superficie diáfana/libre). La nueva línea "${machinery.title}" requiere ${requiredSurfaceM2} m². Por favor, amplía la superficie diáfana en el plano de distribución o adquiere una nueva nave industrial.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const targetPropId = String(targetAcquisition.id);
+        const targetPropTitle = (targetAcquisition.propertyTitle || '').toLowerCase().trim();
+        const elecContract = (db.electricityContracts || []).find(c => c.studentId === student.id && c.status === 'active' && (
+          (targetPropId && (c.propertyId === targetPropId || c.id === targetPropId)) ||
+          (targetPropTitle && c.propertyTitle && c.propertyTitle.toLowerCase().trim() === targetPropTitle)
+        )) || (db.electricityContracts || []).find(c => c.studentId === student.id && c.status === 'active' && !c.propertyId);
+
+        const targetNaveMachinery = (db.machineryAcquisitions || []).filter(m => {
+          if (m.studentId !== student.id) return false;
+          const mNaveId = String(m.installedAtNaveId || m.installedNaveId || m.installationNaveId || m.propertyId || m.acquisitionId || '');
+          if (mNaveId && mNaveId === targetPropId) return true;
+          const mNaveTitle = (m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || m.naveInstaladaTitulo || '').toLowerCase().trim();
+          if (mNaveTitle && targetPropTitle && (mNaveTitle === targetPropTitle || mNaveTitle.includes(targetPropTitle) || targetPropTitle.includes(mNaveTitle))) return true;
+          return false;
+        });
+
+        const totalMachineryPowerNeeded = targetNaveMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0) + (machinery.requiredPowerKW || 35);
+        const totalPowerNeeded = totalMachineryPowerNeeded + 10;
+        const isPowerContracted = elecContract && elecContract.contractedPowerKw >= totalPowerNeeded;
+        const initialMachineryStatus = isPowerContracted ? 'montaje' : 'pendiente_energia';
+        const assemblyFinishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+        if (paymentMethod === 'contado') {
+          const basePrice = option.basePrice;
+          const ivaAmount = Number((basePrice * 0.21).toFixed(2));
+          const totalPrice = Number((basePrice + ivaAmount).toFixed(2));
           if (student.balance < totalPrice) {
             const err: any = new Error(`Saldo insuficiente para compra al contado. Se requieren ${formatCurrency(totalPrice)} (Precio Base Llave en Mano: ${formatCurrency(basePrice)} + IVA 21%: ${formatCurrency(ivaAmount)})`);
             err.statusCode = 400;
@@ -7963,168 +9540,17 @@ app.post('/api/machinery/buy', async (req, res) => {
             machineryAcquisition: machAcq,
             updatedBalance: student.balance
           };
-        }
-      } else {
-        // aplazado_pagares
-        const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
-        const ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
-        const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
-        const downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
-        const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
-        const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2));
-        const count = 24;
-        const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
-
-        if (dbPool) {
-          return await withPostgresTransaction(async (client) => {
-            const studentLock = await client.query(
-              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-              [studentId]
-            );
-            if (!studentLock || studentLock.rows.length === 0) {
-              const err: any = new Error('Estudiante no encontrado en la base de datos');
-              err.statusCode = 404;
-              throw err;
-            }
-            const studentRow = studentLock.rows[0];
-            const currentBal = Number(studentRow.saldo);
-            if (currentBal < initialCashRequired) {
-              const err: any = new Error(`Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`);
-              err.statusCode = 400;
-              throw err;
-            }
-
-            const newBalance = Number((currentBal - initialCashRequired).toFixed(2));
-            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentId]);
-
-            const txId = generateId('tx');
-            const nowIso = now.toISOString();
-
-            const newTransfer: Transfer = {
-              id: txId,
-              senderId: studentRow.id,
-              senderName: studentRow.alumno,
-              senderAccount: studentRow.account_number,
-              receiverId: 'corp-maquinaria-proveedor',
-              receiverName: vendorName,
-              receiverAccount: vendorAccount,
-              amount: initialCashRequired,
-              concept: `Entrada (40%) + Total IVA 21% (+10% recargo aplazamiento) de ${machinery.title}`,
-              timestamp: nowIso
-            };
-
-            await client.query(
-              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-              [
-                txId + '-out',
-                studentRow.id,
-                initialCashRequired,
-                nowIso,
-                newTransfer.concept,
-                studentRow.id,
-                studentRow.alumno,
-                studentRow.account_number,
-                'corp-maquinaria-proveedor',
-                vendorName,
-                vendorAccount
-              ]
-            );
-
-            const machAcqId = generateId('mac-acq');
-            const machAcq: MachineryAcquisition = {
-              id: machAcqId,
-              studentId: studentRow.id,
-              studentName: studentRow.alumno,
-              machineryId: machinery.id,
-              category: machinery.category,
-              lineTitle: machinery.title,
-              title: machinery.title,
-              optionTitle: option.title,
-              lathesCount: option.lathesCount,
-              productionCapacityUnitsPerHour: option.productionCapacityUnitsPerHour,
-              imageUrl: machinery.imageUrl,
-              basePrice: basePriceWithSurcharge,
-              financedPrice: basePriceWithSurcharge,
-              deferredPrice: basePriceWithSurcharge,
-              ivaAmount,
-              totalPrice: totalPriceWithSurchargeAndIva,
-              paymentMethod: 'aplazado_pagares',
-              downPaymentPaid: initialCashRequired,
-              pendingBalance: pendingBaseBalance,
-              installmentsCount: count,
-              installmentCount: count,
-              installmentMonthlyAmount: installmentAmount,
-              totalRequiredM2: machinery.totalRequiredM2,
-              requiredSurfaceM2: machinery.requiredSurfaceM2,
-              installationNaveId: targetAcquisition.id,
-              installedAtNaveId: targetAcquisition.id,
-              installedNaveId: targetAcquisition.id,
-              installationNaveTitle: targetAcquisition.propertyTitle,
-              installedAtNaveTitle: targetAcquisition.propertyTitle,
-              installedNaveTitle: targetAcquisition.propertyTitle,
-              installationSurfaceM2: targetAcquisition.surfaceM2,
-              purchaseDate: nowIso,
-              assemblyDays: 5,
-              assemblyEndDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-              assemblyFinishDate: isPowerContracted ? assemblyFinishDate.toISOString() : '',
-              status: initialMachineryStatus,
-              requiredStaff: machinery.requiredStaff || 2,
-              requiredPowerKW: machinery.requiredPowerKW || 35,
-              powerKw: machinery.requiredPowerKW || 35,
-              equipmentList: machinery.equipmentList || machinery.equipment || [],
-              equipment: machinery.equipmentList || machinery.equipment || []
-            };
-
-            await syncMachineryToSupabase(machAcq, client);
-
-            const generatedObligations: PaymentObligation[] = [];
-            for (let i = 1; i <= count; i++) {
-              const dueDate = new Date();
-              dueDate.setDate(dueDate.getDate() + (i * 30));
-
-              const ob: PaymentObligation = {
-                id: generateId('obl'),
-                acquisitionId: machAcqId,
-                studentId: studentRow.id,
-                studentName: studentRow.alumno,
-                propertyTitle: `${machinery.title} (${option.title})`,
-                type: 'pagare',
-                amount: installmentAmount,
-                dueDate: dueDate.toISOString(),
-                status: 'pendiente',
-                installmentNumber: i,
-                totalInstallments: count
-              };
-              generatedObligations.push(ob);
-              await syncObligationToSupabase(ob, client);
-            }
-
-            // Update in-memory local state
-            const currentDb = readDb();
-            const sIdx = currentDb.users.findIndex(u => u.id === studentId);
-            if (sIdx !== -1) currentDb.users[sIdx].balance = newBalance;
-            currentDb.transfers.unshift(newTransfer);
-            if (!currentDb.machineryAcquisitions) currentDb.machineryAcquisitions = [];
-            currentDb.machineryAcquisitions.unshift(machAcq);
-            updateFloorPlanAfterMachineryAcquisition(currentDb, studentId, targetAcquisition, requiredSurfaceM2);
-            if (!currentDb.paymentObligations) currentDb.paymentObligations = [];
-            currentDb.paymentObligations.push(...generatedObligations);
-            writeDb(currentDb);
-
-            const defStatusMsg = isPowerContracted
-              ? `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y se han emitido 24 pagarés mensuales de ${formatNumber(installmentAmount)} €/mes. El montaje de 8 horas ha comenzado en ${targetAcquisition.propertyTitle}.`
-              : `¡Compra aplazada de maquinaria formalizada! Se han abonado ${formatCurrency(initialCashRequired)} de entrada e IVA, y emitido 24 pagarés mensuales. ⚠️ ATENCIÓN: El montaje NO se ha iniciado por falta de potencia/luz contratada (${totalPowerNeeded} kW requeridos). Contrata la potencia necesaria en Energía para iniciar el montaje.`;
-
-            return {
-              success: true,
-              message: defStatusMsg,
-              machineryAcquisition: machAcq,
-              updatedBalance: newBalance
-            };
-          }, key);
         } else {
-          // Fallback in-memory
+          // aplazado_pagares in-memory fallback
+          const basePriceWithSurcharge = Number((option.basePrice * 1.10).toFixed(2));
+          const ivaAmount = Number((basePriceWithSurcharge * 0.21).toFixed(2));
+          const totalPriceWithSurchargeAndIva = Number((basePriceWithSurcharge + ivaAmount).toFixed(2));
+          const downPaymentBase = Number((basePriceWithSurcharge * 0.40).toFixed(2));
+          const initialCashRequired = Number((downPaymentBase + ivaAmount).toFixed(2));
+          const pendingBaseBalance = Number((basePriceWithSurcharge - downPaymentBase).toFixed(2));
+          const count = 24;
+          const installmentAmount = Number((pendingBaseBalance / count).toFixed(2));
+
           if (student.balance < initialCashRequired) {
             const err: any = new Error(`Saldo insuficiente para la entrada inicial de la maquinaria. Se requieren ${formatCurrency(initialCashRequired)} (Entrada del 40%: ${formatCurrency(downPaymentBase)} + Total IVA 21%: ${formatCurrency(ivaAmount)})`);
             err.statusCode = 400;
@@ -8230,159 +9656,381 @@ app.post('/api/machinery/buy', async (req, res) => {
       }
     });
 
-    return res.json(result);
+    // Post-commit cache update in db.json for compatibility (wrapped in try/catch)
+    const anyResult = result as any;
+    if (dbPool && anyResult) {
+      try {
+        const memDb = readDb();
+        if (memDb) {
+          const sIdx = (memDb.users || []).findIndex(u => u.id === studentId || String(u.id) === String(studentId));
+          if (sIdx !== -1 && anyResult.updatedBalance !== undefined) {
+            memDb.users[sIdx].balance = anyResult.updatedBalance;
+          }
+          if (anyResult.newTransfer) {
+            if (!memDb.transfers) memDb.transfers = [];
+            memDb.transfers.unshift(anyResult.newTransfer);
+          }
+          if (anyResult.machineryAcquisition) {
+            if (!memDb.machineryAcquisitions) memDb.machineryAcquisitions = [];
+            memDb.machineryAcquisitions.unshift(anyResult.machineryAcquisition);
+          }
+          if (anyResult.generatedObligations && anyResult.generatedObligations.length > 0) {
+            if (!memDb.paymentObligations) memDb.paymentObligations = [];
+            memDb.paymentObligations.push(...anyResult.generatedObligations);
+          }
+          if (anyResult.floorPlan) {
+            if (!memDb.naveFloorPlans) memDb.naveFloorPlans = [];
+            const fpIdx = memDb.naveFloorPlans.findIndex(p =>
+              p.id === anyResult.floorPlan.id ||
+              (p.studentId === anyResult.floorPlan.studentId && (
+                (p.propertyId && anyResult.floorPlan.propertyId && String(p.propertyId) === String(anyResult.floorPlan.propertyId)) ||
+                (p.acquisitionId && anyResult.floorPlan.acquisitionId && String(p.acquisitionId) === String(anyResult.floorPlan.acquisitionId))
+              ))
+            );
+            if (fpIdx !== -1) {
+              memDb.naveFloorPlans[fpIdx] = anyResult.floorPlan;
+            } else {
+              memDb.naveFloorPlans.push(anyResult.floorPlan);
+            }
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('[Machinery Buy post-commit cache sync warning]:', cacheErr);
+      }
+    }
+
+    return res.json({
+      success: result.success,
+      message: result.message,
+      machineryAcquisition: result.machineryAcquisition,
+      updatedBalance: result.updatedBalance
+    });
   } catch (err: any) {
     console.error('[Machinery Buy Error]:', err);
     return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar la compra de maquinaria' });
   }
 });
 
-// Relocate Machinery Endpoint (5 days disassembly + 5 days reassembly = 10 days total)
-app.put('/api/student/machinery/:id/relocate', (req, res) => {
+// Relocate Machinery Endpoint (Transactional PostgreSQL Migration)
+app.put('/api/student/machinery/:id/relocate', async (req, res) => {
   const { id } = req.params;
   const { targetNaveId, studentId } = req.body;
 
-  const db = readDb();
-  if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string) || (req.body?.idempotency_key as string);
+  const idemKey = rawIdemKey || (id && targetNaveId ? `relocate_${id}_${targetNaveId}` : undefined);
 
-  const mac = db.machineryAcquisitions.find(m => m.id === id);
-  if (!mac) return res.status(404).json({ error: 'Maquinaria no encontrada' });
+  try {
+    const operation = async (key?: string) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
+      }
 
-  const sid = studentId || mac.studentId;
-  const student = (db.users || []).find((u: any) => u.id === sid || String(u.id) === String(sid));
+      return await withPostgresTransaction(async (client) => {
+        // Resolve student id if not explicitly passed
+        let studentIdToUse = studentId;
+        if (!studentIdToUse) {
+          const preRes = await client.query('SELECT alumno_id FROM maquinaria_adquisiciones WHERE id = $1', [id]);
+          studentIdToUse = preRes.rows[0]?.alumno_id;
+          if (!studentIdToUse) {
+            const err: any = new Error('Maquinaria no encontrada');
+            err.statusCode = 404;
+            throw err;
+          }
+        }
 
-  // Check target nave
-  const targetNave = (db.acquisitions || []).find(a => (a.id === targetNaveId || a.propertyId === targetNaveId) && (a.studentId === sid || String(a.studentId) === String(sid)));
-  if (!targetNave) {
-    return res.status(404).json({ error: 'Nave industrial de destino no encontrada entre tus inmuebles.' });
-  }
+        // 1. LOCK CUENTA (Lock order #1)
+        const cuentaRes = await client.query(
+          'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 OR usuario = $1 ORDER BY id FOR UPDATE',
+          [studentIdToUse]
+        );
+        const cuentaRow = cuentaRes.rows[0];
+        if (!cuentaRow) {
+          const err: any = new Error('Alumno / Empresa no encontrado para realizar el cobro.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const effectiveSid = cuentaRow.id;
 
-  // Check active electricity contract for target nave
-  const elecContracts = (db.electricityContracts || []).filter(e => (e.studentId === sid || String(e.studentId) === String(sid)) && e.status === 'active');
-  const hasElecOnTarget = elecContracts.some(e => 
-    String(e.propertyId) === String(targetNave.propertyId) || 
-    String(e.propertyId) === String(targetNave.id) ||
-    (e.propertyTitle && targetNave.propertyTitle && e.propertyTitle.toLowerCase().trim() === targetNave.propertyTitle.toLowerCase().trim())
-  );
+        // 2. LOCK MAQUINARIA (Lock order #2)
+        const machRes = await client.query(
+          'SELECT * FROM maquinaria_adquisiciones WHERE id = $1 FOR UPDATE',
+          [id]
+        );
+        const machRow = machRes.rows[0];
+        if (!machRow) {
+          const err: any = new Error('Maquinaria no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (machRow.alumno_id !== effectiveSid && machRow.alumno_id !== cuentaRow.usuario) {
+          const err: any = new Error('La maquinaria no pertenece a este alumno.');
+          err.statusCode = 403;
+          throw err;
+        }
 
-  if (!hasElecOnTarget) {
-    return res.status(400).json({
-      error: `No puedes trasladar la maquinaria a ${targetNave.propertyTitle} porque dicha nave NO tiene contrato de luz activo. Es requisito obligatorio contratar la electricidad en la nave de destino.`
-    });
-  }
+        // Check if already relocating
+        if (machRow.relocation_status && machRow.relocation_status !== 'completed') {
+          const nowTs = Date.now();
+          const finishTs = machRow.relocation_reassembly_end_date ? new Date(machRow.relocation_reassembly_end_date).getTime() : 0;
+          if (nowTs < finishTs) {
+            const err: any = new Error('Esta maquinaria ya se encuentra actualmente en proceso de traslado / montaje.');
+            err.statusCode = 400;
+            throw err;
+          }
+        }
 
-  // Check if already relocating
-  if (mac.relocationStatus && mac.relocationStatus !== 'completed') {
-    const nowTs = new Date().getTime();
-    const finishTs = mac.relocationReassemblyEndDate ? new Date(mac.relocationReassemblyEndDate).getTime() : 0;
-    if (nowTs < finishTs) {
-      return res.status(400).json({ error: 'Esta maquinaria ya se encuentra actualmente en proceso de traslado / montaje.' });
+        // 3. LOCK NAVE DESTINO (Lock order #3)
+        const targetNaveRes = await client.query(
+          'SELECT * FROM adquisiciones WHERE (id = $1 OR inmueble_id = $1) AND (alumno_id = $2 OR alumno_id = $3) FOR SHARE',
+          [targetNaveId, effectiveSid, cuentaRow.usuario]
+        );
+        const targetNave = targetNaveRes.rows[0];
+        if (!targetNave) {
+          const err: any = new Error('Nave industrial de destino no encontrada entre tus inmuebles.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // 4. CHECK CONTRATO ELÉCTRICO DESTINO (Lock order #4)
+        const elecRes = await client.query(
+          'SELECT * FROM contratos_electricos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = $3',
+          [effectiveSid, cuentaRow.usuario, 'active']
+        );
+        const targetPropertyId = targetNave.inmueble_id || targetNave.id;
+        const targetAcqId = targetNave.id;
+        const targetTitleClean = (targetNave.inmueble_titulo || '').toLowerCase().trim();
+
+        const hasElecOnTarget = elecRes.rows.some((e: any) =>
+          String(e.inmueble_id) === String(targetPropertyId) ||
+          String(e.inmueble_id) === String(targetAcqId) ||
+          (e.titulo_inmueble && targetTitleClean && e.titulo_inmueble.toLowerCase().trim() === targetTitleClean)
+        );
+
+        if (!hasElecOnTarget) {
+          const err: any = new Error(
+            `No puedes trasladar la maquinaria a ${targetNave.inmueble_titulo} porque dicha nave NO tiene contrato de luz activo. Es requisito obligatorio contratar la electricidad en la nave de destino.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 5. CÁLCULO DE COSTES
+        const sourceTitle = machRow.nave_instalada_titulo || 'Nave de origen';
+        const targetTitle = targetNave.inmueble_titulo || 'Nave de destino';
+
+        let distanceKm = 15;
+        if (sourceTitle && targetTitle) {
+          const hash = Math.abs((sourceTitle.length * 7 + targetTitle.length * 13) % 45);
+          distanceKm = 10 + hash;
+        }
+        const disassemblyFee = 1500;
+        const transportFee = Math.round(distanceKm * 28 + 350);
+        const reassemblyFee = 1800;
+        const subtotal = disassemblyFee + transportFee + reassemblyFee;
+        const ivaAmount = Math.round((subtotal * 0.21) * 100) / 100;
+        const totalAmount = Math.round((subtotal + ivaAmount) * 100) / 100;
+
+        // 6. VALIDACIÓN DE SALDO
+        const currentBal = Number(cuentaRow.saldo) || 0;
+        if (currentBal < totalAmount) {
+          const err: any = new Error(
+            `Saldo insuficiente para pagar el traslado de la maquinaria. Coste total: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${currentBal.toFixed(2)} €.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // 7. CARGO ECONÓMICO ATÓMICO EN CUENTAS
+        await client.query('UPDATE cuentas SET saldo = saldo - $1 WHERE id = $2', [totalAmount, cuentaRow.id]);
+        const newBalance = Math.round((currentBal - totalAmount) * 100) / 100;
+
+        // 8. REGISTRO DEL MOVIMIENTO EN MOVIMIENTOS
+        const now = new Date();
+        const disassemblyEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours real
+        const reassemblyEnd = new Date(now.getTime() + 8 * 60 * 60 * 1000); // 8 hours real total
+
+        const txId = generateId('mov');
+        await client.query(
+          `INSERT INTO movimientos (
+            id, cuenta_id, tipo, importe, fecha, concepto,
+            sender_id, sender_name, sender_account,
+            receiver_id, receiver_name, receiver_account
+          ) VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txId,
+            cuentaRow.id,
+            totalAmount,
+            now.toISOString(),
+            `Pago factura traslado, desmontaje y montaje de maquinaria #${machRow.id}`,
+            cuentaRow.id,
+            cuentaRow.alumno,
+            cuentaRow.account_number,
+            'corp-logistica-montajes',
+            'Logística y Montajes Industriales España S.L.',
+            'ES210001000299887755'
+          ]
+        );
+
+        // 9. ACTUALIZACIÓN ATÓMICA DE MAQUINARIA_ADQUISICIONES
+        await client.query(
+          `UPDATE maquinaria_adquisiciones
+           SET estado = 'en_traslado',
+               relocation_status = 'desmontaje',
+               relocation_start_date = $1,
+               relocation_disassembly_end_date = $2,
+               relocation_reassembly_end_date = $3,
+               relocation_target_nave_id = $4,
+               relocation_target_nave_title = $5
+           WHERE id = $6`,
+          [
+            now.toISOString(),
+            disassemblyEnd.toISOString(),
+            reassemblyEnd.toISOString(),
+            targetNave.id,
+            targetTitle,
+            machRow.id
+          ]
+        );
+
+        // Relocation invoice
+        const relocationInvoice: RelocationInvoice = {
+          id: `rel-inv-${now.getTime()}-${Math.random().toString(36).substring(2, 7)}`,
+          invoiceNumber: `FACT-TRSL-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+          issueDate: now.toISOString(),
+          studentId: String(effectiveSid),
+          studentName: cuentaRow.alumno || 'Empresa Estudiante',
+          companyName: cuentaRow.alumno || 'Empresa Estudiante',
+          cifNif: 'B-99887766',
+          machineryId: machRow.id,
+          machineryTitle: machRow.linea_titulo || 'Línea de producción',
+          sourceNaveId: machRow.nave_instalada_id || '',
+          sourceNaveTitle: sourceTitle,
+          sourceLocation: 'Instalación industrial de origen',
+          targetNaveId: targetNave.id,
+          targetNaveTitle: targetTitle,
+          targetLocation: 'Instalación industrial de destino',
+          distanceKm,
+          disassemblyFee,
+          reassemblyFee,
+          transportFee,
+          subtotal,
+          ivaRate: 21,
+          ivaAmount,
+          totalAmount,
+          status: 'pagado',
+          paymentMethod: 'transferencia_bancaria'
+        };
+
+        const equip = machRow.equipamiento ? (typeof machRow.equipamiento === 'string' ? JSON.parse(machRow.equipamiento) : machRow.equipamiento) : [];
+        const machineryResponse: any = {
+          id: String(machRow.id),
+          studentId: String(machRow.alumno_id),
+          studentName: String(machRow.alumno_nombre),
+          machineryId: String(machRow.maquinaria_id),
+          category: String(machRow.categoria),
+          lineTitle: String(machRow.linea_titulo),
+          title: String(machRow.linea_titulo),
+          optionTitle: String(machRow.linea_titulo),
+          lathesCount: 1,
+          productionCapacityUnitsPerHour: Number(machRow.capacidad_produccion_unidades_hora || 60),
+          imageUrl: '/images/machinery/maquinaria_cnc.jpg',
+          basePrice: Number(machRow.precio_base),
+          financedPrice: Number(machRow.precio_financiado || machRow.precio_base),
+          deferredPrice: Number(machRow.precio_financiado || machRow.precio_base),
+          ivaAmount: Number(machRow.importe_iva),
+          totalPrice: Number(machRow.precio_total),
+          downPaymentPaid: Number(machRow.entrada_pagada),
+          pendingBalance: Number(machRow.saldo_pendiente),
+          paymentMethod: String(machRow.metodo_pago),
+          installmentsCount: machRow.numero_cuotas ? Number(machRow.numero_cuotas) : undefined,
+          installmentCount: machRow.numero_cuotas ? Number(machRow.numero_cuotas) : undefined,
+          purchaseDate: machRow.fecha_compra ? new Date(machRow.fecha_compra).toISOString() : new Date().toISOString(),
+          assemblyDays: Number(machRow.dias_montaje || 5),
+          assemblyEndDate: machRow.fecha_fin_montaje ? new Date(machRow.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          assemblyFinishDate: machRow.fecha_fin_montaje ? new Date(machRow.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          status: 'en_traslado',
+          installedAtNaveId: String(machRow.nave_instalada_id),
+          installedNaveId: String(machRow.nave_instalada_id),
+          installationNaveId: String(machRow.nave_instalada_id),
+          installedAtNaveTitle: String(machRow.nave_instalada_titulo),
+          installedNaveTitle: String(machRow.nave_instalada_titulo),
+          installationNaveTitle: String(machRow.nave_instalada_titulo),
+          installationSurfaceM2: 300,
+          requiredStaff: Number(machRow.personal_requerido || 2),
+          requiredPowerKW: Number(machRow.potencia_kw || 35),
+          powerKw: Number(machRow.potencia_kw || 35),
+          equipmentList: equip,
+          equipment: equip,
+          relocationStatus: 'desmontaje',
+          relocationTargetNaveId: String(targetNave.id),
+          relocationTargetNaveTitle: String(targetTitle),
+          relocationStartDate: now.toISOString(),
+          relocationDisassemblyEndDate: disassemblyEnd.toISOString(),
+          relocationReassemblyEndDate: reassemblyEnd.toISOString(),
+          relocationInvoice,
+          relocationInvoices: [relocationInvoice]
+        };
+
+        return {
+          success: true,
+          message: `Iniciado el proceso de traslado de ${machRow.linea_titulo || 'Maquinaria'} a ${targetTitle}. Se han cargado ${totalAmount.toFixed(2)} € en cuenta por desmontaje, transporte (${distanceKm} km) y montaje. Se ha generado la factura correspondiente.`,
+          machinery: machineryResponse,
+          relocationInvoice,
+          newBalance
+        };
+      }, key);
+    };
+
+    const result = idemKey ? await executeWithIdempotency(idemKey, operation) : await operation();
+
+    // 10. Update db.json cache safely AFTER PostgreSQL COMMIT
+    try {
+      const db = readDb();
+      if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+      const macInMem = db.machineryAcquisitions.find((m: any) => m.id === id);
+      if (macInMem) {
+        macInMem.status = 'en_traslado';
+        macInMem.relocationStatus = 'desmontaje';
+        macInMem.relocationStartDate = result.machinery.relocationStartDate;
+        macInMem.relocationDisassemblyEndDate = result.machinery.relocationDisassemblyEndDate;
+        macInMem.relocationReassemblyEndDate = result.machinery.relocationReassemblyEndDate;
+        macInMem.relocationTargetNaveId = result.machinery.relocationTargetNaveId;
+        macInMem.relocationTargetNaveTitle = result.machinery.relocationTargetNaveTitle;
+        macInMem.relocationInvoice = result.relocationInvoice;
+        if (!macInMem.relocationInvoices) macInMem.relocationInvoices = [];
+        macInMem.relocationInvoices.unshift(result.relocationInvoice);
+      }
+
+      if (!db.relocationInvoices) db.relocationInvoices = [];
+      db.relocationInvoices.push(result.relocationInvoice);
+
+      const studentInMem = (db.users || []).find((u: any) => u.id === result.machinery.studentId || String(u.id) === String(result.machinery.studentId));
+      if (studentInMem) {
+        studentInMem.balance = result.newBalance;
+      }
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.push({
+        id: `trsl-trf-${Date.now()}`,
+        studentId: result.machinery.studentId,
+        amount: result.relocationInvoice.totalAmount,
+        concept: `Pago factura traslado, desmontaje y montaje de maquinaria #${id}`,
+        date: result.machinery.relocationStartDate,
+        type: 'egreso',
+        recipient: 'Logística y Montajes Industriales España S.L.',
+        status: 'completado'
+      } as any);
+
+      writeDb(db);
+    } catch (cacheErr) {
+      console.warn('[Relocate cache sync warning]:', cacheErr);
     }
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Machinery Relocate Error]:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al procesar la reubicación de la maquinaria' });
   }
-
-  // Calculate relocation costs
-  const sourceTitle = mac.installationNaveTitle || mac.installedAtNaveTitle || mac.installedNaveTitle || 'Nave de origen';
-  const targetTitle = targetNave.propertyTitle || 'Nave de destino';
-
-  let distanceKm = 15;
-  if (sourceTitle && targetTitle) {
-    const hash = Math.abs((sourceTitle.length * 7 + targetTitle.length * 13) % 45);
-    distanceKm = 10 + hash;
-  }
-  const disassemblyFee = 1500;
-  const transportFee = Math.round(distanceKm * 28 + 350);
-  const reassemblyFee = 1800;
-  const subtotal = disassemblyFee + transportFee + reassemblyFee;
-  const ivaAmount = Math.round((subtotal * 0.21) * 100) / 100;
-  const totalAmount = Math.round((subtotal + ivaAmount) * 100) / 100;
-
-  if (!student) {
-    return res.status(404).json({ error: 'Alumno / Empresa no encontrado para realizar el cobro.' });
-  }
-
-  const currentBal = student.balance ?? 0;
-  if (currentBal < totalAmount) {
-    return res.status(400).json({
-      error: `Saldo insuficiente para pagar el traslado de la maquinaria. Coste total: ${totalAmount.toFixed(2)} € (IVA incl.), Saldo disponible: ${currentBal.toFixed(2)} €.`
-    });
-  }
-  student.balance = Math.round((currentBal - totalAmount) * 100) / 100;
-  syncAccountToSupabase(student.id, student.name, student.balance, student.username, student.password, student.accountNumber, student.role).catch(e => console.error(e));
-
-  const now = new Date();
-  const disassemblyEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours real
-  const reassemblyEnd = new Date(now.getTime() + 8 * 60 * 60 * 1000); // 8 hours real total
-
-  mac.relocationStatus = 'desmontaje';
-  mac.relocationStartDate = now.toISOString();
-  mac.relocationDisassemblyEndDate = disassemblyEnd.toISOString();
-  mac.relocationReassemblyEndDate = reassemblyEnd.toISOString();
-  mac.relocationTargetNaveId = targetNave.id;
-  mac.relocationTargetNaveTitle = targetNave.propertyTitle;
-  mac.status = 'en_traslado';
-
-  // Bank transfer record
-  if (!db.transfers) db.transfers = [];
-  const transferRecord: any = {
-    id: `trsl-trf-${Date.now()}`,
-    studentId: sid,
-    amount: totalAmount,
-    concept: `Pago factura traslado, desmontaje y montaje de maquinaria #${mac.id}`,
-    date: now.toISOString(),
-    type: 'egreso',
-    recipient: 'Logística y Montajes Industriales España S.L.',
-    status: 'completado'
-  };
-  db.transfers.push(transferRecord);
-
-  const stuObj = student as any;
-
-  // Relocation invoice record
-  const relocationInvoice: RelocationInvoice = {
-    id: `rel-inv-${Date.now()}`,
-    invoiceNumber: `FACT-TRSL-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-    issueDate: now.toISOString(),
-    studentId: String(sid),
-    studentName: stuObj?.fullName || stuObj?.name || 'Empresa Estudiante',
-    companyName: stuObj?.companyName || stuObj?.fullName || stuObj?.name || 'Empresa Estudiante',
-    cifNif: stuObj?.cifNif || stuObj?.nif || 'B-99887766',
-    machineryId: mac.id,
-    machineryTitle: mac.lineTitle || mac.title || mac.machineryTitle || 'Línea de producción',
-    sourceNaveId: mac.installedAtNaveId || mac.installationNaveId || '',
-    sourceNaveTitle: sourceTitle,
-    sourceLocation: 'Instalación industrial de origen',
-    targetNaveId: targetNave.id,
-    targetNaveTitle: targetTitle,
-    targetLocation: 'Instalación industrial de destino',
-    distanceKm,
-    disassemblyFee,
-    reassemblyFee,
-    transportFee,
-    subtotal,
-    ivaRate: 21,
-    ivaAmount,
-    totalAmount,
-    status: 'pagado',
-    paymentMethod: 'transferencia_bancaria'
-  };
-
-  if (!db.relocationInvoices) db.relocationInvoices = [];
-  db.relocationInvoices.push(relocationInvoice);
-
-  if (!mac.relocationInvoices) mac.relocationInvoices = [];
-  mac.relocationInvoices.unshift(relocationInvoice);
-  mac.relocationInvoice = relocationInvoice;
-
-  writeDb(db);
-  syncMachineryToSupabase(mac).catch(e => console.error(e));
-
-  return res.json({
-    success: true,
-    message: `Iniciado el proceso de traslado de ${mac.lineTitle || mac.title || 'Maquinaria'} a ${targetNave.propertyTitle}. Se han cargado ${totalAmount.toFixed(2)} € en cuenta por desmontaje, transporte (${distanceKm} km) y montaje. Se ha generado la factura correspondiente.`,
-    machinery: mac,
-    relocationInvoice,
-    newBalance: student?.balance
-  });
 });
 
 // Get Company Financial & Property Assets (Mi Empresa Dashboard)
@@ -8400,6 +10048,139 @@ app.get('/api/company/:studentId', async (req, res) => {
     } catch (e) {
       console.warn('[Supabase Real-Time Sync Warning for /api/company]:', e);
     }
+
+    // Reconciliación transaccional en PostgreSQL de maquinaria en reubicación
+    try {
+      await withPostgresTransaction(async (client) => {
+        // Bloquear exclusivamente las filas de maquinaria del alumno en reubicación activa
+        const relocatingRows = await client.query(
+          `SELECT id, estado, relocation_status, relocation_disassembly_end_date, relocation_reassembly_end_date, relocation_target_nave_id, relocation_target_nave_title
+           FROM maquinaria_adquisiciones
+           WHERE alumno_id = $1
+             AND relocation_status IN ('desmontaje', 'remontaje')
+           ORDER BY id ASC
+           FOR UPDATE`,
+          [studentId]
+        );
+
+        for (const row of relocatingRows.rows) {
+          // Paso 1: Transición +4 horas (desmontaje -> remontaje)
+          if (row.relocation_status === 'desmontaje') {
+            const res4h = await client.query(
+              `UPDATE maquinaria_adquisiciones
+               SET relocation_status = 'remontaje',
+                   estado = 'en_montaje'
+               WHERE id = $1
+                 AND alumno_id = $2
+                 AND relocation_status = 'desmontaje'
+                 AND relocation_disassembly_end_date <= CURRENT_TIMESTAMP`,
+              [row.id, studentId]
+            );
+            if (res4h.rowCount && res4h.rowCount > 0) {
+              row.relocation_status = 'remontaje';
+              row.estado = 'en_montaje';
+            }
+          }
+
+          // Paso 2: Transición +8 horas (remontaje -> completed)
+          if (row.relocation_status === 'remontaje') {
+            const res8h = await client.query(
+              `UPDATE maquinaria_adquisiciones
+               SET relocation_status = 'completed',
+                   estado = 'operativa',
+                   nave_instalada_id = relocation_target_nave_id,
+                   nave_instalada_titulo = relocation_target_nave_title
+               WHERE id = $1
+                 AND alumno_id = $2
+                 AND relocation_status = 'remontaje'
+                 AND relocation_reassembly_end_date <= CURRENT_TIMESTAMP`,
+              [row.id, studentId]
+            );
+            if (res8h.rowCount && res8h.rowCount > 0) {
+              row.relocation_status = 'completed';
+              row.estado = 'operativa';
+            }
+          }
+        }
+      });
+
+      // Sincronizar representación en memoria con el estado comprometido en PostgreSQL
+      const resMachStudent = await safeDbQuery(
+        'SELECT * FROM maquinaria_adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC',
+        [studentId]
+      );
+      if (resMachStudent && resMachStudent.rows && resMachStudent.rows.length > 0) {
+        if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
+        for (const row of resMachStudent.rows) {
+          const m = db.machineryAcquisitions.find((item: any) => item.id === String(row.id));
+          const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
+          if (m) {
+            m.status = (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa'));
+            m.installedAtNaveId = String(row.nave_instalada_id);
+            m.installedAtNaveTitle = String(row.nave_instalada_titulo);
+            m.installedNaveId = String(row.nave_instalada_id);
+            m.installedNaveTitle = String(row.nave_instalada_titulo);
+            m.installationNaveId = String(row.nave_instalada_id);
+            m.installationNaveTitle = String(row.nave_instalada_titulo);
+            m.relocationStatus = row.relocation_status ? String(row.relocation_status) : undefined;
+            m.relocationTargetNaveId = row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined;
+            m.relocationTargetNaveTitle = row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined;
+            m.relocationStartDate = row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined;
+            m.relocationDisassemblyEndDate = row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined;
+            m.relocationReassemblyEndDate = row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined;
+          } else {
+            db.machineryAcquisitions.push({
+              id: String(row.id),
+              studentId: String(row.alumno_id),
+              studentName: String(row.alumno_nombre),
+              machineryId: String(row.maquinaria_id),
+              category: String(row.categoria) as any,
+              lineTitle: String(row.linea_titulo),
+              title: String(row.linea_titulo),
+              optionTitle: String(row.linea_titulo),
+              lathesCount: 1,
+              productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+              imageUrl: '/images/machinery/maquinaria_cnc.jpg',
+              basePrice: Number(row.precio_base),
+              financedPrice: Number(row.precio_financiado || row.precio_base),
+              deferredPrice: Number(row.precio_financiado || row.precio_base),
+              ivaAmount: Number(row.importe_iva),
+              totalPrice: Number(row.precio_total),
+              downPaymentPaid: Number(row.entrada_pagada),
+              pendingBalance: Number(row.saldo_pendiente),
+              paymentMethod: String(row.metodo_pago) as any,
+              installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+              installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+              purchaseDate: new Date(row.fecha_compra).toISOString(),
+              assemblyDays: Number(row.dias_montaje || 5),
+              assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+              assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+              status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
+              installedAtNaveId: String(row.nave_instalada_id),
+              installedNaveId: String(row.nave_instalada_id),
+              installationNaveId: String(row.nave_instalada_id),
+              installedAtNaveTitle: String(row.nave_instalada_titulo),
+              installedNaveTitle: String(row.nave_instalada_titulo),
+              installationNaveTitle: String(row.nave_instalada_titulo),
+              installationSurfaceM2: 300,
+              requiredStaff: Number(row.personal_requerido || 2),
+              requiredPowerKW: Number(row.potencia_kw || 35),
+              powerKw: Number(row.potencia_kw || 35),
+              equipmentList: equip,
+              equipment: equip,
+              relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
+              relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
+              relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
+              relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
+              relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
+              relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
+            });
+          }
+        }
+      }
+    } catch (relocReconErr) {
+      console.error('[Error al reconciliar reubicaciones en PostgreSQL]:', relocReconErr);
+    }
   }
 
   const user = db.users.find(u => u.id === studentId);
@@ -8414,46 +10195,17 @@ app.get('/api/company/:studentId', async (req, res) => {
   const loans = (db.loans || []).filter(l => l.studentId === studentId && l.status === 'active');
   const machineryAcquisitions = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
 
-  // Update machinery status if assembly or relocation finished
-  let statusChanged = false;
+  // Comprobar fin de montaje inicial de compra (excluyendo máquinas en reubicación)
   const now = new Date();
-  const nowTs = now.getTime();
 
   for (const m of machineryAcquisitions) {
     if (m.requiredStaff === 5 || !m.requiredStaff) {
       m.requiredStaff = 2;
     }
-    if (m.status === 'montaje' || m.status === 'en_montaje') {
+    if ((m.status === 'montaje' || m.status === 'en_montaje') && (!m.relocationStatus || m.relocationStatus === 'completed')) {
       const finishDate = new Date(m.assemblyFinishDate || m.assemblyEndDate || '');
       if (m.assemblyFinishDate && now >= finishDate) {
         m.status = 'operativa';
-        statusChanged = true;
-        syncMachineryToSupabase(m).catch(e => console.error(e));
-      }
-    }
-
-    // Check ongoing relocation status (5 days disassembly + 5 days reassembly)
-    if (m.relocationStatus && m.relocationStatus !== 'completed') {
-      const disTs = m.relocationDisassemblyEndDate ? new Date(m.relocationDisassemblyEndDate).getTime() : 0;
-      const reasTs = m.relocationReassemblyEndDate ? new Date(m.relocationReassemblyEndDate).getTime() : 0;
-
-      if (reasTs > 0 && nowTs >= reasTs) {
-        // Completed relocation
-        m.installedAtNaveId = m.relocationTargetNaveId || m.installedAtNaveId;
-        m.installedAtNaveTitle = m.relocationTargetNaveTitle || m.installedAtNaveTitle;
-        m.installedNaveId = m.relocationTargetNaveId || m.installedNaveId;
-        m.installedNaveTitle = m.relocationTargetNaveTitle || m.installedNaveTitle;
-        m.installationNaveId = m.relocationTargetNaveId || m.installationNaveId;
-        m.installationNaveTitle = m.relocationTargetNaveTitle || m.installationNaveTitle;
-        m.relocationStatus = 'completed';
-        m.status = 'operativa';
-        statusChanged = true;
-        syncMachineryToSupabase(m).catch(e => console.error(e));
-      } else if (disTs > 0 && nowTs >= disTs && m.relocationStatus === 'desmontaje') {
-        // Phase 2: Reassembly
-        m.relocationStatus = 'remontaje';
-        m.status = 'en_montaje';
-        statusChanged = true;
         syncMachineryToSupabase(m).catch(e => console.error(e));
       }
     }
@@ -8546,7 +10298,7 @@ app.get('/api/company/:studentId', async (req, res) => {
     obligations,
     loans,
     machineryAcquisitions,
-    naveFloorPlans: getStudentFloorPlans(db, studentId),
+    naveFloorPlans: await getStudentFloorPlansAsync(studentId, db),
     hiredEmployees: studentHiredEmployees,
     purchasedVehicles: (db.purchasedVehicles || []).filter(v => v.studentId === studentId),
     payrollRecords: studentPayrollRecords,
@@ -8914,8 +10666,623 @@ function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date | stri
   return Number((principal * 0.05 * monthsElapsed).toFixed(2));
 }
 
+// Automatic processing for discounted and collection promissory notes when due date arrives (PostgreSQL ACID)
+async function processDiscountedPromissoryNotesMaturityPG(db: DatabaseSchema): Promise<boolean> {
+  if (!dbPool) return false;
+  let modified = false;
+
+  try {
+    const candidateQuery = await dbPool.query(
+      `SELECT id 
+       FROM market_messages 
+       WHERE type = 'promissory_note'
+         AND (invoice_data->>'status' = 'descontado' OR invoice_data->>'status' = 'gestion_cobro')
+         AND (invoice_data->>'maturityProcessed' IS NULL OR invoice_data->>'maturityProcessed' = 'false')
+       ORDER BY id ASC`
+    );
+
+    for (const candidateRow of candidateQuery.rows) {
+      try {
+        let postCommitAction: (() => void) | null = null;
+
+        const idemKey = `maturity_promissory_${candidateRow.id}`;
+        const singleProcessed = await withPostgresTransaction(async (client) => {
+          // LOCK 1: Lock the promissory note row in market_messages
+          const msgResult = await client.query(
+            `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+             FROM market_messages
+             WHERE id = $1
+             FOR UPDATE`,
+            [candidateRow.id]
+          );
+
+          if (msgResult.rows.length === 0) return false;
+          const msgRow = msgResult.rows[0];
+          const rawInvoice = msgRow.invoice_data;
+          const pn: PromissoryNoteData = typeof rawInvoice === 'string'
+            ? JSON.parse(rawInvoice)
+            : rawInvoice;
+
+          if (!pn) return false;
+
+          // Re-verify status and maturityProcessed under exclusive row lock
+          if (pn.status !== 'descontado' && pn.status !== 'gestion_cobro') {
+            return false;
+          }
+          if (pn.maturityProcessed === true) {
+            return false;
+          }
+
+          // Check maturity date
+          const now = new Date();
+          const todayUtc = now.toISOString().slice(0, 10);
+          const todayLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+          const dueStr = (pn.dueDate || '').slice(0, 10);
+          const isMaturity = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime();
+
+          if (!isMaturity) {
+            return false;
+          }
+
+          const amount = Number(pn.amount);
+          if (!amount || isNaN(amount) || amount <= 0) return false;
+
+          // Resolve payer and beneficiary accounts from PostgreSQL
+          let payerRow: any = null;
+          const payerRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, account_number, role, level
+             FROM cuentas
+             WHERE id = $1 OR alumno = $2 OR usuario = $1 OR account_number = $3
+             LIMIT 1`,
+            [pn.issuerId, pn.issuerName, pn.bankIban]
+          );
+          if (payerRes.rows.length > 0) payerRow = payerRes.rows[0];
+
+          let beneficiaryRow: any = null;
+          const benRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, account_number, role, level
+             FROM cuentas
+             WHERE id = $1 OR alumno = $2 OR usuario = $1
+             LIMIT 1`,
+            [pn.beneficiaryId, pn.beneficiaryName]
+          );
+          if (benRes.rows.length > 0) beneficiaryRow = benRes.rows[0];
+
+          if (!payerRow || !beneficiaryRow) {
+            console.warn(`[Promissory Maturity] Cuentas no encontradas para liquidación de pagaré ${pn.promissoryNoteNumber} (emisor: ${pn.issuerId}, receptor: ${pn.beneficiaryId})`);
+            return false;
+          }
+
+          // LOCK 2: Lock accounts in deterministic ascending order
+          const idsToLock = [payerRow.id, beneficiaryRow.id].sort();
+          const accountsResult = await client.query(
+            `SELECT id, alumno, saldo, usuario, account_number, role, level
+             FROM cuentas
+             WHERE id = ANY($1)
+             ORDER BY id ASC
+             FOR UPDATE`,
+            [idsToLock]
+          );
+
+          const lockedPayer = accountsResult.rows.find((r: any) => r.id === payerRow.id);
+          const lockedBeneficiary = accountsResult.rows.find((r: any) => r.id === beneficiaryRow.id);
+
+          if (!lockedPayer || !lockedBeneficiary) {
+            throw new Error(`Cuentas bloqueadas incompletas para liquidación de pagaré ${pn.promissoryNoteNumber}`);
+          }
+
+          const currentPayerBalance = Number(lockedPayer.saldo);
+          const currentBeneficiaryBalance = Number(lockedBeneficiary.saldo);
+          const nowIso = new Date().toISOString();
+          const txId = generateId('tx');
+
+          const isDiscountedNote = pn.status === 'descontado';
+          const isCollectionNote = pn.status === 'gestion_cobro';
+
+          if (currentPayerBalance >= amount) {
+            // Case A: Debtor has sufficient funds
+            const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, lockedPayer.id]);
+
+            if (isDiscountedNote) {
+              const transferConcept = `Liquidación al vencimiento de pagaré descontado ${pn.promissoryNoteNumber} - Librador: ${lockedPayer.alumno || pn.issuerName}`;
+              const payTransfer: Transfer = {
+                id: txId,
+                senderId: lockedPayer.id,
+                senderName: lockedPayer.alumno || pn.issuerName,
+                senderAccount: lockedPayer.account_number || pn.bankIban || 'ES210001000299887700',
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Mercantil (Liquidación de descuento)',
+                receiverAccount: 'ES210001000299887700',
+                amount: amount,
+                concept: transferConcept,
+                timestamp: nowIso
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', lockedPayer.id, amount, nowIso, transferConcept, lockedPayer.id, lockedPayer.alumno || pn.issuerName, lockedPayer.account_number || pn.bankIban, 'corp-banco-central', 'Banco Central Mercantil (Liquidación de descuento)', 'ES210001000299887700']
+              );
+
+              pn.status = 'pagado';
+              pn.maturityProcessed = true;
+              pn.paidAt = nowIso;
+              pn.paidTransferId = txId;
+
+              await client.query(
+                `UPDATE market_messages SET invoice_data = $1 WHERE id = $2`,
+                [JSON.stringify(pn), candidateRow.id]
+              );
+
+              const successMaturityMsg: MarketMessage = {
+                id: generateId('msg'),
+                chatId: msgRow.chat_id,
+                senderId: lockedPayer.id,
+                senderName: lockedPayer.alumno || pn.issuerName,
+                recipientId: lockedBeneficiary.id,
+                recipientName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                content: `🏦 Pagaré descontado liquidado al vencimiento: El deudor ${lockedPayer.alumno || pn.issuerName} ha atendido el cargo del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco confirma la liquidación definitiva. No procede ningún cargo adicional para el vendedor acreedor.`,
+                timestamp: nowIso,
+                read: false,
+                type: 'text'
+              };
+
+              await client.query(
+                `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING`,
+                [successMaturityMsg.id, successMaturityMsg.chatId, successMaturityMsg.senderId, successMaturityMsg.senderName, successMaturityMsg.recipientId, successMaturityMsg.recipientName, successMaturityMsg.content, successMaturityMsg.timestamp, successMaturityMsg.read, successMaturityMsg.type, null]
+              );
+
+              const notifBenId = generateId('notif');
+              const notifBenTitle = 'Pagaré descontado atendido al vencimiento';
+              const notifBenMsg = `El deudor ${lockedPayer.alumno || pn.issuerName} ha liquidado correctamente al vencimiento el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € que habías descontado. Operación concluida con éxito sin costes adicionales.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifBenId, lockedBeneficiary.id, notifBenTitle, notifBenMsg, nowIso, txId]
+              );
+
+              const notifPayerId = generateId('notif');
+              const notifPayerTitle = 'Cargo de pagaré al vencimiento';
+              const notifPayerMsg = `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} emitido a favor de ${lockedBeneficiary.alumno || pn.beneficiaryName}.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifPayerId, lockedPayer.id, notifPayerTitle, notifPayerMsg, nowIso, txId]
+              );
+
+              postCommitAction = () => {
+                const currentDb = readDb();
+                const targetMsg = (currentDb.marketMessages || []).find(m => m.id === candidateRow.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                if (targetMsg && targetMsg.promissoryNoteData) {
+                  targetMsg.promissoryNoteData = { ...targetMsg.promissoryNoteData, ...pn };
+                } else {
+                  if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                  currentDb.marketMessages.push({
+                    id: candidateRow.id,
+                    chatId: msgRow.chat_id,
+                    senderId: msgRow.sender_id,
+                    senderName: msgRow.sender_name,
+                    recipientId: msgRow.recipient_id,
+                    recipientName: msgRow.recipient_name,
+                    content: msgRow.content,
+                    timestamp: msgRow.timestamp,
+                    read: msgRow.read,
+                    type: 'promissory_note',
+                    promissoryNoteData: pn
+                  });
+                }
+                const pUser = (currentDb.users || []).find(u => u.id === lockedPayer.id);
+                if (pUser) pUser.balance = newPayerBal;
+                if (!currentDb.transfers) currentDb.transfers = [];
+                currentDb.transfers.unshift(payTransfer);
+                if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                currentDb.marketMessages.push(successMaturityMsg);
+                addNotification(currentDb, lockedBeneficiary.id, notifBenTitle, notifBenMsg, 'transfer_received', txId);
+                addNotification(currentDb, lockedPayer.id, notifPayerTitle, notifPayerMsg, 'transfer_received', txId);
+                writeDb(currentDb);
+              };
+              return true;
+            } else if (isCollectionNote) {
+              const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, lockedBeneficiary.id]);
+
+              const transferConcept = `Cobro automático al vencimiento por gestión de cobro de pagaré ${pn.promissoryNoteNumber} - Librador: ${lockedPayer.alumno || pn.issuerName} -> Beneficiario: ${lockedBeneficiary.alumno || pn.beneficiaryName}`;
+              const collectionPayTransfer: Transfer = {
+                id: txId,
+                senderId: lockedPayer.id,
+                senderName: lockedPayer.alumno || pn.issuerName,
+                senderAccount: lockedPayer.account_number || pn.bankIban || 'ES210001000299887700',
+                receiverId: lockedBeneficiary.id,
+                receiverName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                receiverAccount: lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000',
+                amount: amount,
+                concept: transferConcept,
+                timestamp: nowIso
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', lockedPayer.id, amount, nowIso, transferConcept, lockedPayer.id, lockedPayer.alumno || pn.issuerName, lockedPayer.account_number || pn.bankIban, lockedBeneficiary.id, lockedBeneficiary.alumno || pn.beneficiaryName, lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000']
+              );
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-in', lockedBeneficiary.id, amount, nowIso, transferConcept, lockedPayer.id, lockedPayer.alumno || pn.issuerName, lockedPayer.account_number || pn.bankIban, lockedBeneficiary.id, lockedBeneficiary.alumno || pn.beneficiaryName, lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000']
+              );
+
+              pn.status = 'pagado';
+              pn.maturityProcessed = true;
+              pn.paidAt = nowIso;
+              pn.paidTransferId = txId;
+              pn.collectionAutoCollectedAt = nowIso;
+
+              await client.query(
+                `UPDATE market_messages SET invoice_data = $1 WHERE id = $2`,
+                [JSON.stringify(pn), candidateRow.id]
+              );
+
+              const successCollectionMsg: MarketMessage = {
+                id: generateId('msg'),
+                chatId: msgRow.chat_id,
+                senderId: lockedPayer.id,
+                senderName: lockedPayer.alumno || pn.issuerName,
+                recipientId: lockedBeneficiary.id,
+                recipientName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                content: `🏛️ PAGARÉ EN GESTIÓN DE COBRO LIQUIDADO AUTOMÁTICAMENTE: El banco ha tramitado con éxito el cobro automático al vencimiento del pagaré ${pn.promissoryNoteNumber}. Se han cargado ${formatNumber(amount)} € en la cuenta del comprador deudor (${lockedPayer.alumno || pn.issuerName}) y se han abonado íntegramente +${formatNumber(amount)} € en la cuenta del vendedor acreedor (${lockedBeneficiary.alumno || pn.beneficiaryName}).`,
+                timestamp: nowIso,
+                read: false,
+                type: 'text'
+              };
+
+              await client.query(
+                `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING`,
+                [successCollectionMsg.id, successCollectionMsg.chatId, successCollectionMsg.senderId, successCollectionMsg.senderName, successCollectionMsg.recipientId, successCollectionMsg.recipientName, successCollectionMsg.content, successCollectionMsg.timestamp, successCollectionMsg.read, successCollectionMsg.type, null]
+              );
+
+              const notifBenId = generateId('notif');
+              const notifBenTitle = 'Pagaré en gestión de cobro cobrado con éxito';
+              const notifBenMsg = `El pagaré oficial ${pn.promissoryNoteNumber} emitido por ${lockedPayer.alumno || pn.issuerName} ha vencido hoy y el banco ha tramitado el cobro automático. Se han ingresado +${formatNumber(amount)} € en tu cuenta corriente sin necesidad de ninguna acción adicional.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifBenId, lockedBeneficiary.id, notifBenTitle, notifBenMsg, nowIso, txId]
+              );
+
+              const notifPayerId = generateId('notif');
+              const notifPayerTitle = 'Cargo de pagaré al vencimiento (gestión de cobro)';
+              const notifPayerMsg = `El banco ha cargado en tu cuenta ${formatNumber(amount)} € correspondiente al vencimiento del pagaré oficial ${pn.promissoryNoteNumber} presentado en gestión de cobro por ${lockedBeneficiary.alumno || pn.beneficiaryName}.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifPayerId, lockedPayer.id, notifPayerTitle, notifPayerMsg, nowIso, txId]
+              );
+
+              postCommitAction = () => {
+                const currentDb = readDb();
+                const targetMsg = (currentDb.marketMessages || []).find(m => m.id === candidateRow.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                if (targetMsg && targetMsg.promissoryNoteData) {
+                  targetMsg.promissoryNoteData = { ...targetMsg.promissoryNoteData, ...pn };
+                } else {
+                  if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                  currentDb.marketMessages.push({
+                    id: candidateRow.id,
+                    chatId: msgRow.chat_id,
+                    senderId: msgRow.sender_id,
+                    senderName: msgRow.sender_name,
+                    recipientId: msgRow.recipient_id,
+                    recipientName: msgRow.recipient_name,
+                    content: msgRow.content,
+                    timestamp: msgRow.timestamp,
+                    read: msgRow.read,
+                    type: 'promissory_note',
+                    promissoryNoteData: pn
+                  });
+                }
+                const pUser = (currentDb.users || []).find(u => u.id === lockedPayer.id);
+                if (pUser) pUser.balance = newPayerBal;
+                const bUser = (currentDb.users || []).find(u => u.id === lockedBeneficiary.id);
+                if (bUser) bUser.balance = newBeneficiaryBal;
+                if (!currentDb.transfers) currentDb.transfers = [];
+                currentDb.transfers.unshift(collectionPayTransfer);
+                if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                currentDb.marketMessages.push(successCollectionMsg);
+                addNotification(currentDb, lockedBeneficiary.id, notifBenTitle, notifBenMsg, 'transfer_received', txId);
+                addNotification(currentDb, lockedPayer.id, notifPayerTitle, notifPayerMsg, 'transfer_received', txId);
+                writeDb(currentDb);
+              };
+              return true;
+            }
+          } else {
+            // Case B: Debtor does NOT have sufficient funds -> Return unpaid
+            if (isDiscountedNote) {
+              const unpaidCommission = Number((amount * 0.01).toFixed(2));
+              const totalDebitVendor = Number((amount + unpaidCommission).toFixed(2));
+              const newBeneficiaryBal = Number((currentBeneficiaryBalance - totalDebitVendor).toFixed(2));
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, lockedBeneficiary.id]);
+
+              const txNominalId = generateId('tx');
+              const txFeeId = generateId('tx');
+
+              const nominalReturnConcept = `Reintegro del nominal de pagaré descontado devuelto por impago ${pn.promissoryNoteNumber} (librador: ${lockedPayer.alumno || pn.issuerName}) - Devolución de anticipo bancario: -${formatNumber(amount)} €`;
+              const feeReturnConcept = `Comisión bancaria por devolución de pagaré descontado impagado ${pn.promissoryNoteNumber} (1% sobre ${formatNumber(amount)} €) - Falta de fondos del librador: -${formatNumber(unpaidCommission)} €`;
+
+              const nominalReturnTransfer: Transfer = {
+                id: txNominalId,
+                senderId: lockedBeneficiary.id,
+                senderName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                senderAccount: lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000',
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Mercantil (Reintegro nominal de descuento impagado)',
+                receiverAccount: 'ES210001000299887700',
+                amount: amount,
+                concept: nominalReturnConcept,
+                timestamp: nowIso
+              };
+
+              const feeReturnTransfer: Transfer = {
+                id: txFeeId,
+                senderId: lockedBeneficiary.id,
+                senderName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                senderAccount: lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000',
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Mercantil (Comisión de devolución de efectos)',
+                receiverAccount: 'ES210001000299887700',
+                amount: unpaidCommission,
+                concept: feeReturnConcept,
+                timestamp: new Date(now.getTime() + 1000).toISOString()
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txNominalId + '-out', lockedBeneficiary.id, amount, nowIso, nominalReturnConcept, lockedBeneficiary.id, lockedBeneficiary.alumno || pn.beneficiaryName, lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Reintegro nominal de descuento impagado)', 'ES210001000299887700']
+              );
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txFeeId + '-out', lockedBeneficiary.id, unpaidCommission, new Date(now.getTime() + 1000).toISOString(), feeReturnConcept, lockedBeneficiary.id, lockedBeneficiary.alumno || pn.beneficiaryName, lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Comisión de devolución de efectos)', 'ES210001000299887700']
+              );
+
+              pn.status = 'impagado';
+              pn.maturityProcessed = true;
+              pn.unpaidReturnedAt = nowIso;
+              pn.unpaidFeeRate = 1;
+              pn.unpaidFeeAmount = unpaidCommission;
+              pn.unpaidNominalReimbursed = amount;
+              pn.unpaidTotalDebited = totalDebitVendor;
+              pn.unpaidReturnTransferId = txNominalId;
+              pn.unpaidFeeTransferId = txFeeId;
+
+              await client.query(
+                `UPDATE market_messages SET invoice_data = $1 WHERE id = $2`,
+                [JSON.stringify(pn), candidateRow.id]
+              );
+
+              const protestMaturityMsg: MarketMessage = {
+                id: generateId('msg'),
+                chatId: msgRow.chat_id,
+                senderId: lockedBeneficiary.id,
+                senderName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                recipientId: lockedPayer.id,
+                recipientName: lockedPayer.alumno || pn.issuerName,
+                content: `❌ Pagaré descontado devuelto por impago: El librador ${lockedPayer.alumno || pn.issuerName} no disponía de fondos suficientes para atender el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su vencimiento. Al haber sido descontado previamente, el banco ha cargado en la cuenta del vendedor acreedor (${lockedBeneficiary.alumno || pn.beneficiaryName}):\n• Reintegro del nominal anticipado: -${formatNumber(amount)} €\n• Comisión bancaria por devolución (1%): -${formatNumber(unpaidCommission)} €\n• Total adeudado: -${formatNumber(totalDebitVendor)} €\nEl efecto queda en estado de impago con plena fuerza ejecutiva cambiaria.`,
+                timestamp: nowIso,
+                read: false,
+                type: 'text'
+              };
+
+              await client.query(
+                `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING`,
+                [protestMaturityMsg.id, protestMaturityMsg.chatId, protestMaturityMsg.senderId, protestMaturityMsg.senderName, protestMaturityMsg.recipientId, protestMaturityMsg.recipientName, protestMaturityMsg.content, protestMaturityMsg.timestamp, protestMaturityMsg.read, protestMaturityMsg.type, null]
+              );
+
+              const notifBenId = generateId('notif');
+              const notifBenTitle = 'Pagaré descontado devuelto por impago (cargo de nominal + comisión)';
+              const notifBenMsg = `El deudor ${lockedPayer.alumno || pn.issuerName} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). Al haber sido descontado anticipadamente, el banco ha adeudado en tu cuenta: 1) Reintegro del nominal adelantado: -${formatNumber(amount)} €; 2) Comisión de devolución (1%): -${formatNumber(unpaidCommission)} €. Total cargado: -${formatNumber(totalDebitVendor)} €. Puedes presentar demanda ejecutiva en el Juzgado (Portal Judicial).`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifBenId, lockedBeneficiary.id, notifBenTitle, notifBenMsg, nowIso, txNominalId]
+              );
+
+              const notifPayerId = generateId('notif');
+              const notifPayerTitle = 'Pagaré devuelto impagado al tenedor';
+              const notifPayerMsg = `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${lockedBeneficiary.alumno || pn.beneficiaryName}, quien podrá iniciar acciones ejecutivas judiciales.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifPayerId, lockedPayer.id, notifPayerTitle, notifPayerMsg, nowIso, txNominalId]
+              );
+
+              postCommitAction = () => {
+                const currentDb = readDb();
+                const targetMsg = (currentDb.marketMessages || []).find(m => m.id === candidateRow.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                if (targetMsg && targetMsg.promissoryNoteData) {
+                  targetMsg.promissoryNoteData = { ...targetMsg.promissoryNoteData, ...pn };
+                } else {
+                  if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                  currentDb.marketMessages.push({
+                    id: candidateRow.id,
+                    chatId: msgRow.chat_id,
+                    senderId: msgRow.sender_id,
+                    senderName: msgRow.sender_name,
+                    recipientId: msgRow.recipient_id,
+                    recipientName: msgRow.recipient_name,
+                    content: msgRow.content,
+                    timestamp: msgRow.timestamp,
+                    read: msgRow.read,
+                    type: 'promissory_note',
+                    promissoryNoteData: pn
+                  });
+                }
+                const bUser = (currentDb.users || []).find(u => u.id === lockedBeneficiary.id);
+                if (bUser) bUser.balance = newBeneficiaryBal;
+                if (!currentDb.transfers) currentDb.transfers = [];
+                currentDb.transfers.unshift(feeReturnTransfer);
+                currentDb.transfers.unshift(nominalReturnTransfer);
+                if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                currentDb.marketMessages.push(protestMaturityMsg);
+                addNotification(currentDb, lockedBeneficiary.id, notifBenTitle, notifBenMsg, 'transfer_received', txNominalId);
+                addNotification(currentDb, lockedPayer.id, notifPayerTitle, notifPayerMsg, 'transfer_received', txNominalId);
+                writeDb(currentDb);
+              };
+              return true;
+            } else if (isCollectionNote) {
+              const unpaidCommission = 40.00;
+              const newBeneficiaryBal = Number((currentBeneficiaryBalance - unpaidCommission).toFixed(2));
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, lockedBeneficiary.id]);
+
+              const returnConcept = `Comisión por devolución de pagaré impagado en gestión de cobro ${pn.promissoryNoteNumber} por falta de fondos del librador (${lockedPayer.alumno || pn.issuerName}) - Tarifa bancaria fija: -40,00 €`;
+              const returnTransfer: Transfer = {
+                id: txId,
+                senderId: lockedBeneficiary.id,
+                senderName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                senderAccount: lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000',
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)',
+                receiverAccount: 'ES210001000299887700',
+                amount: unpaidCommission,
+                concept: returnConcept,
+                timestamp: nowIso
+              };
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [txId + '-out', lockedBeneficiary.id, unpaidCommission, nowIso, returnConcept, lockedBeneficiary.id, lockedBeneficiary.alumno || pn.beneficiaryName, lockedBeneficiary.account_number || 'ES00 0000 0000 0000 0000', 'corp-banco-central', 'Banco Central Mercantil (Devolución de efectos en gestión de cobro)', 'ES210001000299887700']
+              );
+
+              pn.status = 'impagado';
+              pn.maturityProcessed = true;
+              pn.unpaidReturnedAt = nowIso;
+              pn.collectionUnpaidFeeAmount = unpaidCommission;
+              pn.unpaidReturnTransferId = txId;
+
+              await client.query(
+                `UPDATE market_messages SET invoice_data = $1 WHERE id = $2`,
+                [JSON.stringify(pn), candidateRow.id]
+              );
+
+              const protestCollectionMsg: MarketMessage = {
+                id: generateId('msg'),
+                chatId: msgRow.chat_id,
+                senderId: lockedBeneficiary.id,
+                senderName: lockedBeneficiary.alumno || pn.beneficiaryName,
+                recipientId: lockedPayer.id,
+                recipientName: lockedPayer.alumno || pn.issuerName,
+                content: `❌ PAGARÉ EN GESTIÓN DE COBRO DEVUELTO POR IMPAGO: El deudor ${lockedPayer.alumno || pn.issuerName} no disponía de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. El banco ha devuelto el pagaré al vendedor acreedor (${lockedBeneficiary.alumno || pn.beneficiaryName}) como IMPAGADO con un cargo de 40,00 € en concepto de comisión por efecto devuelto. El pagaré conserva plena fuerza ejecutiva cambiaria para su reclamación judicial.`,
+                timestamp: nowIso,
+                read: false,
+                type: 'text'
+              };
+
+              await client.query(
+                `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING`,
+                [protestCollectionMsg.id, protestCollectionMsg.chatId, protestCollectionMsg.senderId, protestCollectionMsg.senderName, protestCollectionMsg.recipientId, protestCollectionMsg.recipientName, protestCollectionMsg.content, protestCollectionMsg.timestamp, protestCollectionMsg.read, protestCollectionMsg.type, null]
+              );
+
+              const notifBenId = generateId('notif');
+              const notifBenTitle = 'Pagaré en gestión de cobro devuelto por impago';
+              const notifBenMsg = `El librador ${lockedPayer.alumno || pn.issuerName} no disponía de saldo para atender el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco te lo ha devuelto como IMPAGADO con un cargo de 40,00 € por comisión de devolución. Puedes interponer demanda ejecutiva en el Juzgado (Portal Judicial).`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifBenId, lockedBeneficiary.id, notifBenTitle, notifBenMsg, nowIso, txId]
+              );
+
+              const notifPayerId = generateId('notif');
+              const notifPayerTitle = 'Pagaré Devuelto Impagado al Tenedor';
+              const notifPayerMsg = `No disponías de saldo suficiente para atender el vencimiento del pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco ha devuelto el efecto como impagado a ${lockedBeneficiary.alumno || pn.beneficiaryName}, quien podrá iniciar acciones ejecutivas en los Tribunales.`;
+              await client.query(
+                `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                 VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [notifPayerId, lockedPayer.id, notifPayerTitle, notifPayerMsg, nowIso, txId]
+              );
+
+              postCommitAction = () => {
+                const currentDb = readDb();
+                const targetMsg = (currentDb.marketMessages || []).find(m => m.id === candidateRow.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber));
+                if (targetMsg && targetMsg.promissoryNoteData) {
+                  targetMsg.promissoryNoteData = { ...targetMsg.promissoryNoteData, ...pn };
+                } else {
+                  if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                  currentDb.marketMessages.push({
+                    id: candidateRow.id,
+                    chatId: msgRow.chat_id,
+                    senderId: msgRow.sender_id,
+                    senderName: msgRow.sender_name,
+                    recipientId: msgRow.recipient_id,
+                    recipientName: msgRow.recipient_name,
+                    content: msgRow.content,
+                    timestamp: msgRow.timestamp,
+                    read: msgRow.read,
+                    type: 'promissory_note',
+                    promissoryNoteData: pn
+                  });
+                }
+                const bUser = (currentDb.users || []).find(u => u.id === lockedBeneficiary.id);
+                if (bUser) bUser.balance = newBeneficiaryBal;
+                if (!currentDb.transfers) currentDb.transfers = [];
+                currentDb.transfers.unshift(returnTransfer);
+                if (!currentDb.marketMessages) currentDb.marketMessages = [];
+                currentDb.marketMessages.push(protestCollectionMsg);
+                addNotification(currentDb, lockedBeneficiary.id, notifBenTitle, notifBenMsg, 'transfer_received', txId);
+                addNotification(currentDb, lockedPayer.id, notifPayerTitle, notifPayerMsg, 'transfer_received', txId);
+                writeDb(currentDb);
+              };
+              return true;
+            }
+          }
+
+          return false;
+        });
+
+        if (singleProcessed) {
+          if (postCommitAction) {
+            postCommitAction();
+          }
+          modified = true;
+        }
+      } catch (err) {
+        console.error(`[Promissory Maturity Concurrency Error] Error processing note row ${candidateRow.id}:`, err);
+      }
+    }
+
+    return modified;
+  } catch (candidateErr) {
+    console.error('[Promissory Maturity] Error querying candidates from PostgreSQL:', candidateErr);
+    return false;
+  }
+}
+
 // Automatic processing for discounted promissory notes when due date arrives
 async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): Promise<boolean> {
+  if (dbPool) {
+    return await processDiscountedPromissoryNotesMaturityPG(db);
+  }
+
   if (!db.marketMessages || db.marketMessages.length === 0) return false;
   let modified = false;
   const now = new Date();
@@ -9626,9 +11993,36 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
     modified = true;
   }
 
-  const students = targetStudentId 
-    ? db.users.filter(u => u.id === targetStudentId && u.role === 'student')
-    : db.users.filter(u => u.role === 'student');
+  let students: User[] = [];
+  if (targetStudentId) {
+    const existing = (db.users || []).find(u => u.id === targetStudentId);
+    if (existing) {
+      students = [existing];
+    } else if (dbPool) {
+      try {
+        const uRes = await dbPool.query('SELECT id, alumno, role, account_number, saldo FROM cuentas WHERE id = $1', [targetStudentId]);
+        if (uRes.rows.length > 0) {
+          const r = uRes.rows[0];
+          const synUser: User = {
+            id: r.id,
+            name: r.alumno || r.id,
+            username: r.id,
+            role: (r.role as any) || 'student',
+            accountNumber: r.account_number || '',
+            balance: Number(r.saldo || 0),
+            level: 1
+          };
+          if (!db.users) db.users = [];
+          db.users.push(synUser);
+          students = [synUser];
+        }
+      } catch (err) {
+        console.error('[processStudentAutomaticPayments] Error loading target student from PG:', err);
+      }
+    }
+  } else {
+    students = (db.users || []).filter(u => u.role === 'student');
+  }
 
   for (const student of students) {
     interface PendingItem {
@@ -9640,6 +12034,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
       concept: string;
       instrumentName?: string;
       obligationRef?: PaymentObligation;
+      loanId?: string;
       loanRef?: BankLoan;
       loanRowIndex?: number;
       periodNum?: number;
@@ -9699,72 +12094,429 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
       }
     }
 
-    // 2. Loans
-    if (db.loans) {
-      for (const loan of db.loans) {
-        if (loan.studentId === student.id && loan.status === 'active') {
-          loan.schedule.forEach((row, idx) => {
-            if (!row.paid) {
-              const dDate = new Date(row.dueDate);
-              if (dDate <= now) {
-                const principal = row.payment;
-                const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-                const periodNum = row.period || (row as any).installmentNumber || 1;
+    // 2. Loans: source candidate active loans from PostgreSQL if dbPool is active, fallback to db.loans
+    interface CandidateLoan {
+      id: string;
+      studentId: string;
+      termMonths: number;
+      propertyTitle?: string;
+      schedule: AmortizationRow[];
+      loanRef?: BankLoan;
+    }
 
-                pendingItems.push({
-                  id: `${loan.id}-row-${periodNum}`,
-                  sourceType: 'loan',
-                  dueDate: dDate,
-                  principal,
-                  penaltyInterest: penalty,
-                  concept: `Cuota ${periodNum}/${loan.termMonths} de préstamo hipotecario (${loan.collateral?.propertyTitle || 'Garantía inmobiliaria'})`,
-                  loanRef: loan,
-                  loanRowIndex: idx,
-                  periodNum
-                });
-              }
-            }
-          });
-        }
+    let candidateLoans: CandidateLoan[] = [];
+    if (dbPool) {
+      try {
+        const pgLoansRes = await dbPool.query(
+          `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion 
+           FROM prestamos 
+           WHERE alumno_id = $1 AND estado = 'active'`,
+          [student.id]
+        );
+        candidateLoans = pgLoansRes.rows.map(r => {
+          let sched: AmortizationRow[] = [];
+          if (typeof r.tabla_amortizacion === 'string') {
+            try { sched = JSON.parse(r.tabla_amortizacion); } catch (e) { sched = []; }
+          } else if (Array.isArray(r.tabla_amortizacion)) {
+            sched = r.tabla_amortizacion;
+          }
+          const memRef = (db.loans || []).find(l => l.id === r.id);
+          return {
+            id: r.id,
+            studentId: r.alumno_id,
+            termMonths: Number(r.plazo_meses),
+            propertyTitle: r.garantia_inmueble_titulo,
+            schedule: sched,
+            loanRef: memRef
+          };
+        });
+      } catch (err) {
+        console.error('[processStudentAutomaticPayments] Error loading candidate loans from PG:', err);
       }
+    }
+
+    if (candidateLoans.length === 0 && db.loans) {
+      candidateLoans = (db.loans || []).filter(l => l.studentId === student.id && l.status === 'active').map(l => ({
+        id: l.id,
+        studentId: l.studentId,
+        termMonths: l.termMonths,
+        propertyTitle: l.collateral?.propertyTitle,
+        schedule: l.schedule || [],
+        loanRef: l
+      }));
+    }
+
+    for (const loan of candidateLoans) {
+      (loan.schedule || []).forEach((row, idx) => {
+        if (!row.paid) {
+          const dDate = new Date(row.dueDate);
+          if (dDate <= now) {
+            const principal = row.payment;
+            const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
+            const periodNum = row.period || (row as any).installmentNumber || (idx + 1);
+
+            pendingItems.push({
+              id: `${loan.id}-row-${periodNum}`,
+              sourceType: 'loan',
+              dueDate: dDate,
+              principal,
+              penaltyInterest: penalty,
+              concept: `Cuota ${periodNum}/${loan.termMonths} de préstamo hipotecario (${loan.propertyTitle || 'Garantía inmobiliaria'})`,
+              loanId: loan.id,
+              loanRef: loan.loanRef,
+              loanRowIndex: idx,
+              periodNum
+            });
+          }
+        }
+      });
     }
 
     // Sort items chronologically
     pendingItems.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
 
     for (const item of pendingItems) {
-      if (dbPool) {
-        try {
-          const itemProcessed = await withPostgresTransaction(async (client) => {
-            // Lock student account in PostgreSQL
-            const lockRes = await client.query(
-              'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-              [student.id]
-            );
-            if (!lockRes || lockRes.rows.length === 0) return false;
+      if (item.sourceType === 'loan') {
+        if (dbPool) {
+          try {
+            let postCommitLoanUpdate: (() => void) | null = null;
 
-            const studentRow = lockRes.rows[0];
-            const currentBalance = Number(studentRow.saldo);
+            const txResult = await withPostgresTransaction(async (client) => {
+              // 1. LOCK 1: Exclusive lock on the loan row in prestamos
+              const loanLockRes = await client.query(
+                `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, estado, tabla_amortizacion, plazo_meses, garantia_inmueble_titulo
+                 FROM prestamos
+                 WHERE id = $1
+                 FOR UPDATE`,
+                [item.loanId || item.loanRef?.id]
+              );
 
-            if (currentBalance < item.principal) {
-              // Insufficient balance in PostgreSQL
-              return false;
+              if (!loanLockRes || loanLockRes.rows.length === 0) {
+                return { success: false, reason: 'loan_not_found' };
+              }
+
+              const loanRow = loanLockRes.rows[0];
+
+              // Verify loan status
+              if (loanRow.estado !== 'active') {
+                return { success: false, reason: 'loan_not_active' };
+              }
+
+              // Parse tabla_amortizacion under lock
+              let currentSchedule: AmortizationRow[] = [];
+              if (typeof loanRow.tabla_amortizacion === 'string') {
+                try {
+                  currentSchedule = JSON.parse(loanRow.tabla_amortizacion);
+                } catch (e) {
+                  currentSchedule = [];
+                }
+              } else if (Array.isArray(loanRow.tabla_amortizacion)) {
+                currentSchedule = loanRow.tabla_amortizacion;
+              }
+
+              // Locate target installment row by periodNum
+              const targetRow = currentSchedule.find(r => r.period === item.periodNum) ||
+                                (item.loanRowIndex !== undefined ? currentSchedule[item.loanRowIndex] : undefined);
+              if (!targetRow) {
+                return { success: false, reason: 'row_not_found' };
+              }
+
+              // IDEMPOTENCY BARRIER: If already paid, abort immediately without any debit or movement
+              if (targetRow.paid) {
+                return { success: false, reason: 'already_paid' };
+              }
+
+              // Verify due date
+              const dDate = new Date(targetRow.dueDate);
+              if (dDate > now) {
+                return { success: false, reason: 'not_due_yet' };
+              }
+
+              // Re-calculate penalty under lock
+              const penalty = calculateMonthlyPenaltyInterest(targetRow.payment, dDate, now);
+
+              // 2. LOCK 2: Exclusive lock on student account in cuentas (Order: prestamos -> cuentas)
+              const accountLockRes = await client.query(
+                `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+                 FROM cuentas
+                 WHERE id = $1
+                 FOR UPDATE`,
+                [student.id]
+              );
+
+              if (!accountLockRes || accountLockRes.rows.length === 0) {
+                return { success: false, reason: 'account_not_found' };
+              }
+
+              const studentRow = accountLockRes.rows[0];
+              const currentBalance = Number(studentRow.saldo);
+
+              // Check balance sufficiency
+              if (currentBalance < targetRow.payment) {
+                // Insufficient balance: mark cuota overdue and update penalty in PostgreSQL atomically
+                targetRow.isOverdue = true;
+                targetRow.penaltyInterest = penalty;
+
+                await client.query(
+                  `UPDATE prestamos
+                   SET tabla_amortizacion = $1
+                   WHERE id = $2`,
+                  [JSON.stringify(currentSchedule), loanRow.id]
+                );
+
+                postCommitLoanUpdate = () => {
+                  const memLoan = (db.loans || []).find(l => l.id === loanRow.id);
+                  if (memLoan && memLoan.schedule) {
+                    const memRow = memLoan.schedule.find(r => r.period === targetRow.period);
+                    if (memRow) {
+                      memRow.isOverdue = true;
+                      memRow.penaltyInterest = penalty;
+                    }
+                  }
+                  modified = true;
+                };
+
+                return { success: false, reason: 'insufficient_balance' };
+              }
+
+              // Balance is sufficient: process atomic debit + movements + schedule update
+              const nowIso = new Date().toISOString();
+              const txId = generateId('tx');
+
+              const canPayPenalty = penalty > 0 && currentBalance >= Number((targetRow.payment + penalty).toFixed(2));
+              const penaltyPaid = canPayPenalty ? penalty : 0;
+              const totalDeduction = Number((targetRow.payment + penaltyPaid).toFixed(2));
+              const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
+
+              // A. Update student account balance in cuentas
+              await client.query(
+                `UPDATE cuentas
+                 SET saldo = $1
+                 WHERE id = $2`,
+                [newBalance, student.id]
+              );
+
+              // B. Insert main payment transfer in movimientos
+              const concept = item.concept || `Cuota ${targetRow.period}/${loanRow.plazo_meses} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
+              const senderAccount = studentRow.account_number || student.accountNumber || '';
+              const senderName = studentRow.alumno || student.name || '';
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txId + '-out',
+                  student.id,
+                  targetRow.payment,
+                  nowIso,
+                  concept,
+                  student.id,
+                  senderName,
+                  senderAccount,
+                  'corp-banco-central',
+                  'Banco Central Hipotecario S.A.',
+                  'ES210001000299887700'
+                ]
+              );
+
+              let penaltyTx: Transfer | null = null;
+              if (penaltyPaid > 0) {
+                const penaltyTxId = generateId('tx');
+                const penaltyConcept = `Intereses de demora por retraso en cuota ${targetRow.period}/${loanRow.plazo_meses} de préstamo hipotecario`;
+                const penaltyIso = new Date(Date.now() + 100).toISOString();
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [
+                    penaltyTxId + '-out',
+                    student.id,
+                    penaltyPaid,
+                    penaltyIso,
+                    penaltyConcept,
+                    student.id,
+                    senderName,
+                    senderAccount,
+                    'corp-banco-central',
+                    'Banco Central Hipotecario S.A.',
+                    'ES210001000299887700'
+                  ]
+                );
+
+                penaltyTx = {
+                  id: penaltyTxId,
+                  senderId: student.id,
+                  senderName,
+                  senderAccount,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Hipotecario S.A.',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: penaltyPaid,
+                  concept: penaltyConcept,
+                  timestamp: penaltyIso
+                };
+              }
+
+              // C. Update the target row in schedule
+              targetRow.paid = true;
+              targetRow.paidDate = nowIso;
+              targetRow.isOverdue = false;
+              targetRow.penaltyInterest = 0;
+
+              const allPaid = currentSchedule.every(r => r.paid);
+              const nextStatus = allPaid ? 'paid_off' : 'active';
+
+              // D. Update prestamos in PostgreSQL within the same transaction
+              await client.query(
+                `UPDATE prestamos
+                 SET tabla_amortizacion = $1, estado = $2
+                 WHERE id = $3`,
+                [JSON.stringify(currentSchedule), nextStatus, loanRow.id]
+              );
+
+              const newTransfer: Transfer = {
+                id: txId,
+                senderId: student.id,
+                senderName,
+                senderAccount,
+                receiverId: 'corp-banco-central',
+                receiverName: 'Banco Central Hipotecario S.A.',
+                receiverAccount: 'ES210001000299887700',
+                amount: targetRow.payment,
+                concept,
+                timestamp: nowIso
+              };
+
+              // Prepare post-commit memory updater (zero filesystem I/O inside transaction)
+              postCommitLoanUpdate = () => {
+                const memLoan = (db.loans || []).find(l => l.id === loanRow.id);
+                if (memLoan) {
+                  memLoan.schedule = currentSchedule;
+                  memLoan.status = nextStatus as any;
+                }
+                student.balance = newBalance;
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(newTransfer);
+                if (penaltyTx) db.transfers.unshift(penaltyTx);
+                modified = true;
+              };
+
+              return { success: true, newBalance };
+            });
+
+            if (txResult.success) {
+              if (postCommitLoanUpdate) {
+                postCommitLoanUpdate();
+              }
+            } else if (txResult.reason === 'insufficient_balance') {
+              if (postCommitLoanUpdate) {
+                postCommitLoanUpdate();
+              }
+              break; // Stop further deductions for this student
+            } else if (txResult.reason === 'already_paid') {
+              // Already paid in another concurrent worker; continue to next item
+              continue;
             }
+          } catch (err) {
+            console.error(`[Automatic Payment Concurrency Error] Error processing loan item ${item.id}:`, err);
+            break;
+          }
+        } else {
+          // Fallback in-memory
+          if (student.balance >= item.principal) {
+            student.balance = Number((student.balance - item.principal).toFixed(2));
+            modified = true;
 
-            const nowIso = new Date().toISOString();
-            const txId = generateId('tx');
+            const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
+            if (memLoan && memLoan.schedule) {
+              const row = memLoan.schedule.find(r => r.period === item.periodNum) ||
+                          (item.loanRowIndex !== undefined ? memLoan.schedule[item.loanRowIndex] : undefined);
+              if (row) {
+                row.paid = true;
+                row.paidDate = new Date().toISOString();
+                row.isOverdue = false;
+                row.penaltyInterest = 0;
 
-            // Check if overdue penalty can also be paid
-            const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= Number((item.principal + item.penaltyInterest).toFixed(2));
-            const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
-            const totalDeduction = Number((item.principal + penaltyPaid).toFixed(2));
-            const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
+                const newTransfer: Transfer = {
+                  id: generateId('tx'),
+                  senderId: student.id,
+                  senderName: student.name,
+                  senderAccount: student.accountNumber,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Hipotecario S.A.',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: item.principal,
+                  concept: item.concept,
+                  timestamp: new Date().toISOString()
+                };
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(newTransfer);
 
-            // Update balance directly in PostgreSQL
-            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, student.id]);
+                if (memLoan.schedule.every(r => r.paid)) {
+                  memLoan.status = 'paid_off';
+                }
 
-            if (item.sourceType === 'obligation' && item.obligationRef) {
-              const ob = item.obligationRef;
+                if (item.penaltyInterest > 0 && student.balance >= item.penaltyInterest) {
+                  student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+                  const penaltyTx: Transfer = {
+                    id: generateId('tx'),
+                    senderId: student.id,
+                    senderName: student.name,
+                    senderAccount: student.accountNumber,
+                    receiverId: 'corp-banco-central',
+                    receiverName: 'Banco Central Hipotecario S.A.',
+                    receiverAccount: 'ES210001000299887700',
+                    amount: item.penaltyInterest,
+                    concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${memLoan.termMonths} de préstamo hipotecario`,
+                    timestamp: new Date(Date.now() + 100).toISOString()
+                  };
+                  db.transfers.unshift(penaltyTx);
+                }
+              }
+            }
+          } else {
+            const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
+            if (memLoan && memLoan.schedule) {
+              const row = memLoan.schedule.find(r => r.period === item.periodNum) ||
+                          (item.loanRowIndex !== undefined ? memLoan.schedule[item.loanRowIndex] : undefined);
+              if (row) {
+                row.isOverdue = true;
+                row.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+                modified = true;
+              }
+            }
+            break;
+          }
+        }
+      } else if (item.sourceType === 'obligation' && item.obligationRef) {
+        if (dbPool) {
+          try {
+            const itemProcessed = await withPostgresTransaction(async (client) => {
+              // Lock student account in PostgreSQL
+              const lockRes = await client.query(
+                'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+                [student.id]
+              );
+              if (!lockRes || lockRes.rows.length === 0) return false;
+
+              const studentRow = lockRes.rows[0];
+              const currentBalance = Number(studentRow.saldo);
+
+              if (currentBalance < item.principal) {
+                return false;
+              }
+
+              const nowIso = new Date().toISOString();
+              const txId = generateId('tx');
+
+              const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= Number((item.principal + item.penaltyInterest).toFixed(2));
+              const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
+              const totalDeduction = Number((item.principal + penaltyPaid).toFixed(2));
+              const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, student.id]);
+
+              const ob = item.obligationRef!;
               const newTransfer: Transfer = {
                 id: txId,
                 senderId: student.id,
@@ -9831,99 +12583,30 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               if (penaltyTx) db.transfers.unshift(penaltyTx);
 
               syncObligationToSupabase(ob).catch(e => console.error(e));
-            } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-              const loan = item.loanRef;
-              const row = loan.schedule[item.loanRowIndex];
-              row.paid = true;
-              row.paidDate = nowIso;
-              row.isOverdue = false;
-              row.penaltyInterest = 0;
 
-              const newTransfer: Transfer = {
-                id: txId,
-                senderId: student.id,
-                senderName: student.name,
-                senderAccount: student.accountNumber,
-                receiverId: 'corp-banco-central',
-                receiverName: 'Banco Central Hipotecario S.A.',
-                receiverAccount: 'ES210001000299887700',
-                amount: item.principal,
-                concept: item.concept,
-                timestamp: nowIso
-              };
+              // Sync student in-memory balance to match DB
+              student.balance = newBalance;
+              modified = true;
+              return true;
+            });
 
-              await client.query(
-                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-                [txId + '-out', student.id, item.principal, nowIso, item.concept, student.id, student.name, student.accountNumber, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700']
-              );
-
-              let penaltyTx: Transfer | null = null;
-              if (penaltyPaid > 0) {
-                const penaltyTxId = generateId('tx');
-                const penaltyConcept = `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`;
-                penaltyTx = {
-                  id: penaltyTxId,
-                  senderId: student.id,
-                  senderName: student.name,
-                  senderAccount: student.accountNumber,
-                  receiverId: 'corp-banco-central',
-                  receiverName: 'Banco Central Hipotecario S.A.',
-                  receiverAccount: 'ES210001000299887700',
-                  amount: penaltyPaid,
-                  concept: penaltyConcept,
-                  timestamp: new Date(Date.now() + 100).toISOString()
-                };
-
-                await client.query(
-                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-                  [penaltyTxId + '-out', student.id, penaltyPaid, penaltyTx.timestamp, penaltyConcept, student.id, student.name, student.accountNumber, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700']
-                );
-              }
-
-              if (loan.schedule.every(r => r.paid)) {
-                loan.status = 'paid_off';
-              }
-
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift(newTransfer);
-              if (penaltyTx) db.transfers.unshift(penaltyTx);
-
-              syncLoanToSupabase(loan).catch(e => console.error(e));
-            }
-
-            // Sync student in-memory balance to match DB
-            student.balance = newBalance;
-            modified = true;
-            return true;
-          });
-
-          if (!itemProcessed) {
-            // Insufficient balance -> mark overdue with default interest
-            if (item.sourceType === 'obligation' && item.obligationRef) {
+            if (!itemProcessed) {
               item.obligationRef.status = 'vencido';
               item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
               item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
               modified = true;
-            } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-              item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
-              item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-              modified = true;
+              break;
             }
+          } catch (err) {
+            console.error(`[Automatic Payment Concurrency Error] Error processing obligation ${item.id}:`, err);
             break;
           }
-        } catch (err) {
-          console.error(`[Automatic Payment Concurrency Error] Error processing item ${item.id}:`, err);
-          break;
-        }
-      } else {
-        // Fallback in-memory
-        if (student.balance >= item.principal) {
-          student.balance = Number((student.balance - item.principal).toFixed(2));
-          modified = true;
+        } else {
+          // Fallback in-memory for obligations
+          if (student.balance >= item.principal) {
+            student.balance = Number((student.balance - item.principal).toFixed(2));
+            modified = true;
 
-          if (item.sourceType === 'obligation' && item.obligationRef) {
             const ob = item.obligationRef;
             ob.status = 'pagado';
             ob.paidDate = new Date().toISOString();
@@ -9952,6 +12635,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               concept: item.concept,
               timestamp: new Date().toISOString()
             };
+            if (!db.transfers) db.transfers = [];
             db.transfers.unshift(newTransfer);
 
             if (item.penaltyInterest > 0) {
@@ -9972,63 +12656,13 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 db.transfers.unshift(penaltyTx);
               }
             }
-          } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-            const loan = item.loanRef;
-            const row = loan.schedule[item.loanRowIndex];
-            row.paid = true;
-            row.paidDate = new Date().toISOString();
-            row.isOverdue = false;
-            row.penaltyInterest = 0;
-
-            const newTransfer: Transfer = {
-              id: generateId('tx'),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: 'corp-banco-central',
-              receiverName: 'Banco Central Hipotecario S.A.',
-              receiverAccount: 'ES210001000299887700',
-              amount: item.principal,
-              concept: item.concept,
-              timestamp: new Date().toISOString()
-            };
-            db.transfers.unshift(newTransfer);
-
-            if (loan.schedule.every(r => r.paid)) {
-              loan.status = 'paid_off';
-            }
-
-            if (item.penaltyInterest > 0) {
-              if (student.balance >= item.penaltyInterest) {
-                student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
-                const penaltyTx: Transfer = {
-                  id: generateId('tx'),
-                  senderId: student.id,
-                  senderName: student.name,
-                  senderAccount: student.accountNumber,
-                  receiverId: 'corp-banco-central',
-                  receiverName: 'Banco Central Hipotecario S.A.',
-                  receiverAccount: 'ES210001000299887700',
-                  amount: item.penaltyInterest,
-                  concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${loan.termMonths} de préstamo hipotecario`,
-                  timestamp: new Date(Date.now() + 100).toISOString()
-                };
-                db.transfers.unshift(penaltyTx);
-              }
-            }
-          }
-        } else {
-          if (item.sourceType === 'obligation' && item.obligationRef) {
+          } else {
             item.obligationRef.status = 'vencido';
             item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
             item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
             modified = true;
-          } else if (item.sourceType === 'loan' && item.loanRef && item.loanRowIndex !== undefined) {
-            item.loanRef.schedule[item.loanRowIndex].isOverdue = true;
-            item.loanRef.schedule[item.loanRowIndex].penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-            modified = true;
+            break;
           }
-          break;
         }
       }
     }
@@ -11342,11 +13976,9 @@ app.get('/api/loans', (req, res) => {
 // Student requests a loan
 app.post('/api/loans/request', async (req, res) => {
   const { studentId, requestedAmount, termMonths, collateralType, propertyId, surfaceM2, appraisalValue } = req.body;
-  const db = readDb();
 
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) {
-    return res.status(404).json({ error: 'Estudiante no encontrado' });
+  if (!studentId) {
+    return res.status(400).json({ error: 'Falta el identificador del estudiante (studentId)' });
   }
 
   const reqAmt = Number(requestedAmount);
@@ -11362,92 +13994,321 @@ app.post('/api/loans/request', async (req, res) => {
   if (!apprVal || apprVal <= 0) {
     return res.status(400).json({ error: 'Debes indicar un valor de tasación válido para la garantía' });
   }
-
-  let collateralPropertyTitle: string | undefined;
-  if (collateralType === 'property') {
-    const acq = db.acquisitions.find(a => a.id === propertyId || a.propertyId === propertyId);
-    if (!acq) {
-      return res.status(400).json({ error: 'No se encontró el inmueble seleccionado como garantía' });
-    }
-    collateralPropertyTitle = acq.propertyTitle;
+  if (!collateralType || (collateralType !== 'property' && collateralType !== 'private_residence')) {
+    return res.status(400).json({ error: 'Tipo de garantía inválido' });
   }
 
-  const euriborRate = 3.50;
-  const spread = 1.00;
-  const annualInterestRate = euriborRate + spread;
-
-  const maxLtvAmount = Number((0.80 * apprVal).toFixed(2));
-  const offeredAmount = Math.min(reqAmt, maxLtvAmount);
-
-  const existingLoans = (db.loans || []).filter(l => l.studentId === studentId && ['active', 'offered', 'teacher_offered', 'pending_teacher'].includes(l.status));
-  const hasAutoApprovedLoan = existingLoans.length > 0;
-
-  let requiresTeacherApproval = false;
-  let status: LoanStatus = 'offered';
-
-  if (hasAutoApprovedLoan) {
-    requiresTeacherApproval = true;
-    status = 'pending_teacher';
-  } else {
-    status = 'offered';
-  }
-
-  const openingFee = Number((0.001 * offeredAmount).toFixed(2));
-  const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
-
-  const newLoan: BankLoan = {
-    id: generateId('prestamo'),
-    studentId: student.id,
-    studentName: student.name,
-    studentAccount: student.accountNumber,
-    requestedAmount: reqAmt,
-    offeredAmount,
-    termMonths: termM,
-    annualInterestRate,
-    euriborRate,
-    spread,
-    openingFee,
-    monthlyPayment,
-    collateral: {
-      type: collateralType as ('property' | 'private_residence'),
-      propertyId,
-      propertyTitle: collateralPropertyTitle,
-      surfaceM2: Number(surfaceM2 || 0),
-      appraisalValue: apprVal
-    },
-    status,
-    requiresTeacherApproval,
-    createdAt: new Date().toISOString(),
-    schedule
-  };
-
-  if (!db.loans) db.loans = [];
-  db.loans.unshift(newLoan);
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `loan_req_${studentId}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
   try {
-    await syncLoanToSupabase(newLoan);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Loan Request]:', syncErr);
-    return res.status(500).json({ error: 'Error al registrar el préstamo en la base de datos central. Por favor, reintenta.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Lock student account row in 'cuentas' (Serialización por alumno)
+          const studentLock = await client.query(
+            `SELECT id, alumno, saldo, usuario, account_number, role, level
+             FROM cuentas
+             WHERE id = $1 OR usuario = $1
+             FOR UPDATE`,
+            [studentId]
+          );
 
-  let responseMessage = '';
-  if (status === 'offered') {
-    if (offeredAmount < reqAmt) {
-      responseMessage = `El banco ha concedido automáticamente una oferta por ${formatCurrency(offeredAmount)} (máximo 80% del valor de tasación de la garantía de ${formatCurrency(apprVal)}). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
-    } else {
-      responseMessage = `¡Tu solicitud de préstamo por ${formatCurrency(offeredAmount)} ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const effectiveStudentId = String(studentRow.id);
+          const studentName = String(studentRow.alumno);
+          const studentAccount = String(studentRow.account_number || '');
+
+          // 2. Validate collateral ownership directly in PostgreSQL
+          let collateralPropertyTitle: string | undefined;
+          let resolvedSurfaceM2 = Number(surfaceM2 || 0);
+
+          if (collateralType === 'property') {
+            if (!propertyId) {
+              const err: any = new Error('Debes seleccionar un inmueble como garantía');
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const acqRes = await client.query(
+              `SELECT id, inmueble_id, inmueble_titulo, superficie_m2, alumno_id
+               FROM adquisiciones
+               WHERE (id = $1 OR inmueble_id = $1)
+                 AND (alumno_id = $2 OR alumno_id = $3)`,
+              [propertyId, effectiveStudentId, studentRow.usuario || effectiveStudentId]
+            );
+
+            if (!acqRes || acqRes.rows.length === 0) {
+              // Check if the property belongs to another student
+              const otherAcqRes = await client.query(
+                `SELECT id, alumno_id FROM adquisiciones WHERE id = $1 OR inmueble_id = $1 LIMIT 1`,
+                [propertyId]
+              );
+              if (otherAcqRes && otherAcqRes.rows.length > 0) {
+                const err: any = new Error('El inmueble seleccionado como garantía no pertenece al estudiante');
+                err.statusCode = 400;
+                throw err;
+              }
+              const err: any = new Error('No se encontró el inmueble seleccionado como garantía');
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const acqRow = acqRes.rows[0];
+            collateralPropertyTitle = String(acqRow.inmueble_titulo || 'Inmueble comercial');
+            if (!resolvedSurfaceM2 && acqRow.superficie_m2) {
+              resolvedSurfaceM2 = Number(acqRow.superficie_m2);
+            }
+          }
+
+          // 3. Consult existing loans for this student in PostgreSQL (First Loan Rule)
+          const existingLoansRes = await client.query(
+            `SELECT id, estado
+             FROM prestamos
+             WHERE alumno_id = $1 OR alumno_id = $2`,
+            [effectiveStudentId, studentRow.usuario || effectiveStudentId]
+          );
+
+          const restrictiveStatuses = ['active', 'offered', 'teacher_offered', 'pending_teacher'];
+          const hasAutoApprovedLoan = existingLoansRes.rows.some((r: any) =>
+            restrictiveStatuses.includes(r.estado)
+          );
+
+          let requiresTeacherApproval = false;
+          let status: LoanStatus = 'offered';
+
+          if (hasAutoApprovedLoan) {
+            requiresTeacherApproval = true;
+            status = 'pending_teacher';
+          } else {
+            status = 'offered';
+          }
+
+          // 4. Financial Calculations (Euribor 3.50%, spread 1.00%, max LTV 80%, opening fee 1‰, French amortization)
+          const euriborRate = 3.50;
+          const spread = 1.00;
+          const annualInterestRate = euriborRate + spread;
+          const maxLtvAmount = Number((0.80 * apprVal).toFixed(2));
+          const offeredAmount = Math.min(reqAmt, maxLtvAmount);
+          const openingFee = Number((0.001 * offeredAmount).toFixed(2));
+          const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
+
+          const loanId = `prestamo-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 7)}`;
+          const nowIso = new Date().toISOString();
+
+          const newLoan: BankLoan = {
+            id: loanId,
+            studentId: effectiveStudentId,
+            studentName,
+            studentAccount,
+            requestedAmount: reqAmt,
+            offeredAmount,
+            termMonths: termM,
+            annualInterestRate,
+            euriborRate,
+            spread,
+            openingFee,
+            monthlyPayment,
+            collateral: {
+              type: collateralType as ('property' | 'private_residence'),
+              propertyId: propertyId ? String(propertyId) : undefined,
+              propertyTitle: collateralPropertyTitle,
+              surfaceM2: resolvedSurfaceM2,
+              appraisalValue: apprVal
+            },
+            status,
+            requiresTeacherApproval,
+            createdAt: nowIso,
+            schedule
+          };
+
+          // 5. INSERT INTO prestamos in PostgreSQL
+          await client.query(
+            `INSERT INTO prestamos (
+              id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
+              plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual,
+              garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion,
+              estado, requiere_profesor, notas_profesor, fecha_creacion, tabla_amortizacion
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+            )`,
+            [
+              newLoan.id,
+              effectiveStudentId,
+              studentName,
+              studentAccount,
+              reqAmt,
+              offeredAmount,
+              null,
+              termM,
+              annualInterestRate,
+              euriborRate,
+              spread,
+              openingFee,
+              monthlyPayment,
+              collateralType,
+              propertyId ? String(propertyId) : null,
+              collateralPropertyTitle || null,
+              resolvedSurfaceM2 || null,
+              apprVal,
+              status,
+              requiresTeacherApproval,
+              null,
+              nowIso,
+              JSON.stringify(schedule)
+            ]
+          );
+
+          let responseMessage = '';
+          if (status === 'offered') {
+            if (offeredAmount < reqAmt) {
+              responseMessage = `El banco ha concedido automáticamente una oferta por ${formatCurrency(offeredAmount)} (máximo 80% del valor de tasación de la garantía de ${formatCurrency(apprVal)}). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
+            } else {
+              responseMessage = `¡Tu solicitud de préstamo por ${formatCurrency(offeredAmount)} ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
+            }
+          } else {
+            responseMessage = `Solicitud registrada. Al disponer ya de un préstamo previo concedido, esta segunda solicitud requiere la revisión y aprobación manual del Profesor.`;
+          }
+
+          return {
+            success: true,
+            message: responseMessage,
+            loan: newLoan,
+            _postCommitData: {
+              newLoan
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const student = db.users.find(u => u.id === studentId || u.username === studentId);
+        if (!student) {
+          const err: any = new Error('Estudiante no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        let collateralPropertyTitle: string | undefined;
+        let resolvedSurfaceM2 = Number(surfaceM2 || 0);
+
+        if (collateralType === 'property') {
+          const acq = (db.acquisitions || []).find(a => (a.id === propertyId || a.propertyId === propertyId) && (a.studentId === student.id || a.studentId === student.username));
+          if (!acq) {
+            const err: any = new Error('No se encontró el inmueble seleccionado como garantía');
+            err.statusCode = 400;
+            throw err;
+          }
+          collateralPropertyTitle = acq.propertyTitle;
+          if (!resolvedSurfaceM2 && acq.surfaceM2) {
+            resolvedSurfaceM2 = Number(acq.surfaceM2);
+          }
+        }
+
+        const euriborRate = 3.50;
+        const spread = 1.00;
+        const annualInterestRate = euriborRate + spread;
+        const maxLtvAmount = Number((0.80 * apprVal).toFixed(2));
+        const offeredAmount = Math.min(reqAmt, maxLtvAmount);
+
+        const existingLoans = (db.loans || []).filter(l => (l.studentId === student.id || l.studentId === student.username) && ['active', 'offered', 'teacher_offered', 'pending_teacher'].includes(l.status));
+        const hasAutoApprovedLoan = existingLoans.length > 0;
+
+        let requiresTeacherApproval = false;
+        let status: LoanStatus = 'offered';
+
+        if (hasAutoApprovedLoan) {
+          requiresTeacherApproval = true;
+          status = 'pending_teacher';
+        } else {
+          status = 'offered';
+        }
+
+        const openingFee = Number((0.001 * offeredAmount).toFixed(2));
+        const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
+
+        const loanId = `prestamo-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 7)}`;
+        const nowIso = new Date().toISOString();
+
+        const newLoan: BankLoan = {
+          id: loanId,
+          studentId: student.id,
+          studentName: student.name,
+          studentAccount: student.accountNumber,
+          requestedAmount: reqAmt,
+          offeredAmount,
+          termMonths: termM,
+          annualInterestRate,
+          euriborRate,
+          spread,
+          openingFee,
+          monthlyPayment,
+          collateral: {
+            type: collateralType as ('property' | 'private_residence'),
+            propertyId: propertyId ? String(propertyId) : undefined,
+            propertyTitle: collateralPropertyTitle,
+            surfaceM2: resolvedSurfaceM2,
+            appraisalValue: apprVal
+          },
+          status,
+          requiresTeacherApproval,
+          createdAt: nowIso,
+          schedule
+        };
+
+        if (!db.loans) db.loans = [];
+        db.loans.unshift(newLoan);
+        writeDb(db);
+
+        let responseMessage = '';
+        if (status === 'offered') {
+          if (offeredAmount < reqAmt) {
+            responseMessage = `El banco ha concedido automáticamente una oferta por ${formatCurrency(offeredAmount)} (máximo 80% del valor de tasación de la garantía de ${formatCurrency(apprVal)}). Por favor, revisa las condiciones y acepta la oferta para ingresar el importe.`;
+          } else {
+            responseMessage = `¡Tu solicitud de préstamo por ${formatCurrency(offeredAmount)} ha sido pre-aprobada automáticamente al 80% LTV! Revisa las condiciones y la tabla de amortización para formalizarlo.`;
+          }
+        } else {
+          responseMessage = `Solicitud registrada. Al disponer ya de un préstamo previo concedido, esta segunda solicitud requiere la revisión y aprobación manual del Profesor.`;
+        }
+
+        return {
+          success: true,
+          message: responseMessage,
+          loan: newLoan
+        };
+      }
+    });
+
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        if (!db.loans) db.loans = [];
+        const existingIdx = db.loans.findIndex(l => l.id === pc.newLoan.id);
+        if (existingIdx !== -1) {
+          db.loans[existingIdx] = pc.newLoan;
+        } else {
+          db.loans.unshift(pc.newLoan);
+        }
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Loan Request Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
     }
-  } else {
-    responseMessage = `Solicitud registrada. Al disponer ya de un préstamo previo concedido, esta segunda solicitud requiere la revisión y aprobación manual del Profesor.`;
-  }
 
-  res.status(201).json({
-    success: true,
-    message: responseMessage,
-    loan: newLoan
-  });
+    return res.status(201).json(result);
+  } catch (err: any) {
+    console.error('[Loan Request Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la solicitud de préstamo' });
+  }
 });
 
 // Student accepts loan offer
@@ -11460,62 +14321,110 @@ app.post('/api/loans/:id/accept', async (req, res) => {
   }
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
-  const idemKey = rawIdemKey || `loan_accept_${studentId}_${id}_${Math.floor(Date.now() / 5000)}`;
+  const idemKey = rawIdemKey || `loan_accept_${studentId}_${id}`;
 
   try {
     const result = await executeWithIdempotency(idemKey, async (key) => {
       if (dbPool) {
         return await withPostgresTransaction(async (client) => {
-          // Lock student account and loan row atomically
-          const studentLock = await client.query(
-            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-            [studentId]
-          );
-          if (!studentLock || studentLock.rows.length === 0) {
-            const err: any = new Error('Estudiante no encontrado en la base de datos');
-            err.statusCode = 404;
-            throw err;
-          }
-
+          // 1. SELECT prestamos FOR UPDATE (Lock loan first - strict hierarchy PRESTAMOS -> CUENTAS)
           const loanLock = await client.query(
-            'SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion FROM prestamos WHERE id = $1 AND alumno_id = $2 FOR UPDATE',
-            [id, studentId]
+            `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
+                    plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
+                    garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+             FROM prestamos 
+             WHERE id = $1 FOR UPDATE`,
+            [id]
           );
+
           if (!loanLock || loanLock.rows.length === 0) {
             const err: any = new Error('Préstamo no encontrado en la base de datos');
             err.statusCode = 404;
             throw err;
           }
 
-          const studentRow = studentLock.rows[0];
           const loanRow = loanLock.rows[0];
 
+          if (loanRow.alumno_id !== studentId) {
+            const err: any = new Error('El préstamo no pertenece al estudiante indicado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          // 2. Validate loan state
           if (loanRow.estado !== 'offered' && loanRow.estado !== 'teacher_offered') {
             const err: any = new Error('Este préstamo no se encuentra pendiente de aceptación');
             err.statusCode = 400;
             throw err;
           }
 
-          const openingFee = Number(loanRow.comision_apertura);
-          const offeredAmount = Number(loanRow.importe_ofrecido);
-          const studentBalance = Number(studentRow.saldo);
+          const openingFee = Number(Number(loanRow.comision_apertura).toFixed(2));
+          const offeredAmount = Number(Number(loanRow.importe_ofrecido).toFixed(2));
 
+          if (offeredAmount <= 0) {
+            const err: any = new Error('Importe ofrecido inválido en el préstamo');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Ensure valid amortization schedule
+          let schedule = loanRow.tabla_amortizacion;
+          if (typeof schedule === 'string') {
+            try {
+              schedule = JSON.parse(schedule);
+            } catch (e) {
+              schedule = null;
+            }
+          }
+          if (!Array.isArray(schedule) || schedule.length === 0) {
+            const amort = calculateFrenchAmortization(
+              offeredAmount,
+              Number(loanRow.tipo_interes),
+              Number(loanRow.plazo_meses),
+              new Date().toISOString()
+            );
+            schedule = amort.schedule;
+          }
+
+          // 3. SELECT cuentas FOR UPDATE (Lock student account second)
+          const studentLock = await client.query(
+            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
+            [loanRow.alumno_id]
+          );
+
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const studentBalance = Number(Number(studentRow.saldo).toFixed(2));
+
+          // 4. Validate sufficient balance for opening fee
           if (studentBalance < openingFee) {
             const err: any = new Error(`Saldo insuficiente para abonar la comisión de apertura del 1 por mil (${formatCurrency(openingFee)}). Saldo disponible actual: ${formatCurrency(studentBalance)}.`);
             err.statusCode = 400;
             throw err;
           }
 
+          // 5. Calculate final balance strictly: saldo final = saldo actual - comisión de apertura + importe concedido
           const newBalance = Number((studentBalance - openingFee + offeredAmount).toFixed(2));
           const nowIso = new Date().toISOString();
 
-          // Update student balance and loan status atomically
+          // 6. UPDATE cuentas
           await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+
+          // 7. UPDATE prestamos
           await client.query(
-            'UPDATE prestamos SET estado = $1, importe_concedido = $2, fecha_aceptacion = $3 WHERE id = $4',
-            ['active', offeredAmount, nowIso, loanRow.id]
+            `UPDATE prestamos 
+             SET estado = 'active', importe_concedido = $1, fecha_aceptacion = $2, tabla_amortizacion = $3 
+             WHERE id = $4`,
+            [offeredAmount, nowIso, JSON.stringify(schedule), loanRow.id]
           );
 
+          // 8. INSERT movimientos
           const feeTxId = generateId('tx');
           const disbTxId = generateId('tx');
 
@@ -11545,7 +14454,6 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             timestamp: nowIso
           };
 
-          // Record fee and disbursement movements
           await client.query(
             `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
              VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -11558,27 +14466,51 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             [disbTxId + '-in', studentRow.id, offeredAmount, nowIso, loanDisbursementTransfer.concept, 'corp-banco-central', 'Banco Central Hipotecario S.A.', 'ES210001000299887700', studentRow.id, studentRow.alumno, studentRow.account_number]
           );
 
-          // Update in-memory DB snapshot
-          const db = readDb();
-          const sIdx = db.users.findIndex(u => u.id === studentId);
-          if (sIdx !== -1) db.users[sIdx].balance = newBalance;
-          const lIdx = (db.loans || []).findIndex(l => l.id === id);
-          let updatedLoan = null;
-          if (lIdx !== -1) {
-            db.loans[lIdx].status = 'active';
-            db.loans[lIdx].approvedAmount = offeredAmount;
-            db.loans[lIdx].acceptedAt = nowIso;
-            updatedLoan = db.loans[lIdx];
-          }
-          db.transfers.unshift(feeTransfer);
-          db.transfers.unshift(loanDisbursementTransfer);
-          writeDb(db);
+          const updatedLoanData = {
+            id: loanRow.id,
+            studentId: studentRow.id,
+            studentName: studentRow.alumno,
+            studentAccount: studentRow.account_number,
+            requestedAmount: Number(loanRow.importe_solicitado),
+            offeredAmount: offeredAmount,
+            approvedAmount: offeredAmount,
+            termMonths: Number(loanRow.plazo_meses),
+            annualInterestRate: Number(loanRow.tipo_interes),
+            euriborRate: Number(loanRow.euribor),
+            spread: Number(loanRow.diferencial),
+            openingFee: openingFee,
+            monthlyPayment: Number(loanRow.cuota_mensual),
+            collateral: {
+              type: loanRow.garantia_tipo,
+              propertyId: loanRow.garantia_inmueble_id,
+              propertyTitle: loanRow.garantia_inmueble_titulo,
+              surfaceM2: loanRow.garantia_superficie_m2 ? Number(loanRow.garantia_superficie_m2) : undefined,
+              appraisalValue: Number(loanRow.garantia_valor_tasacion)
+            },
+            status: 'active' as const,
+            requiresTeacherApproval: Boolean(loanRow.requiere_profesor),
+            teacherNotes: loanRow.notas_profesor,
+            createdAt: loanRow.fecha_creacion,
+            acceptedAt: nowIso,
+            schedule: schedule
+          };
 
           return {
             success: true,
             message: `¡Préstamo de ${formatCurrency(offeredAmount)} formalizado! Se ha ingresado el principal en tu cuenta y cobrado ${formatCurrency(openingFee)} de comisión de apertura (1‰).`,
             updatedBalance: newBalance,
-            loan: updatedLoan || { ...loanRow, status: 'active', approvedAmount: offeredAmount, acceptedAt: nowIso }
+            loan: updatedLoanData,
+            _postCommitData: {
+              studentId: studentRow.id,
+              loanId: loanRow.id,
+              newBalance,
+              offeredAmount,
+              openingFee,
+              nowIso,
+              feeTransfer,
+              loanDisbursementTransfer,
+              updatedLoanData
+            }
           };
         }, key);
       } else {
@@ -11602,6 +14534,33 @@ app.post('/api/loans/:id/accept', async (req, res) => {
       }
     });
 
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        const sIdx = db.users.findIndex(u => u.id === pc.studentId);
+        if (sIdx !== -1) db.users[sIdx].balance = pc.newBalance;
+        const lIdx = (db.loans || []).findIndex(l => l.id === pc.loanId);
+        if (lIdx !== -1) {
+          db.loans[lIdx].status = 'active';
+          db.loans[lIdx].approvedAmount = pc.offeredAmount;
+          db.loans[lIdx].acceptedAt = pc.nowIso;
+          db.loans[lIdx].schedule = pc.updatedLoanData.schedule;
+        } else {
+          if (!db.loans) db.loans = [];
+          db.loans.push(pc.updatedLoanData);
+        }
+        if (!db.transfers) db.transfers = [];
+        db.transfers.unshift(pc.feeTransfer);
+        db.transfers.unshift(pc.loanDisbursementTransfer);
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Loan Accept Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
+    }
+
     res.json(result);
   } catch (err: any) {
     console.error('[Loan Accept Concurrency Error]:', err);
@@ -11613,74 +14572,441 @@ app.post('/api/loans/:id/accept', async (req, res) => {
 app.post('/api/loans/:id/reject', async (req, res) => {
   const { id } = req.params;
   const { studentId } = req.body;
-  const db = readDb();
 
-  const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
-  if (!loan) {
-    return res.status(404).json({ error: 'Préstamo no encontrado' });
+  if (!studentId) {
+    return res.status(400).json({ error: 'Falta el ID del estudiante (studentId)' });
   }
 
-  loan.status = 'rejected';
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `loan_reject_${studentId}_${id}`;
 
   try {
-    await syncLoanToSupabase(loan);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Loan Reject]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar el rechazo del préstamo con la base de datos central.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. SELECT prestamos FOR UPDATE (Lock loan exclusively)
+          const loanLock = await client.query(
+            `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
+                    plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
+                    garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+             FROM prestamos 
+             WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
 
-  res.json({
-    success: true,
-    message: 'Oferta de préstamo rechazada correctamente.',
-    loan
-  });
+          if (!loanLock || loanLock.rows.length === 0) {
+            const err: any = new Error('Préstamo no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const loanRow = loanLock.rows[0];
+
+          // 2. Validate loan ownership
+          if (loanRow.alumno_id !== studentId) {
+            const err: any = new Error('El préstamo no pertenece al estudiante indicado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          // 3. Validate state machine - Active or paid_off loans CANNOT be rejected
+          if (loanRow.estado === 'active') {
+            const err: any = new Error('No se puede rechazar un préstamo que ya ha sido formalizado y desembolsado');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'paid_off') {
+            const err: any = new Error('No se puede rechazar un préstamo que ya ha sido amortizado en su totalidad');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'rejected') {
+            const err: any = new Error('Este préstamo ya se encuentra rechazado');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'denied_teacher') {
+            const err: any = new Error('Este préstamo fue denegado por el profesor');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Allowed states for rejection: 'offered', 'teacher_offered', 'pending_teacher'
+          if (loanRow.estado !== 'offered' && loanRow.estado !== 'teacher_offered' && loanRow.estado !== 'pending_teacher') {
+            const err: any = new Error(`Estado de préstamo no válido para rechazo: ${loanRow.estado}`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 4. UPDATE prestamos in PostgreSQL
+          await client.query(
+            `UPDATE prestamos 
+             SET estado = 'rejected' 
+             WHERE id = $1`,
+            [loanRow.id]
+          );
+
+          let schedule = loanRow.tabla_amortizacion;
+          if (typeof schedule === 'string') {
+            try {
+              schedule = JSON.parse(schedule);
+            } catch (e) {
+              schedule = [];
+            }
+          }
+
+          const updatedLoanData = {
+            id: loanRow.id,
+            studentId: loanRow.alumno_id,
+            studentName: loanRow.alumno_nombre,
+            studentAccount: loanRow.alumno_cuenta || '',
+            requestedAmount: Number(loanRow.importe_solicitado),
+            offeredAmount: Number(loanRow.importe_ofrecido),
+            approvedAmount: loanRow.importe_concedido ? Number(loanRow.importe_concedido) : undefined,
+            termMonths: Number(loanRow.plazo_meses),
+            annualInterestRate: Number(loanRow.tipo_interes),
+            euriborRate: Number(loanRow.euribor || 3.50),
+            spread: Number(loanRow.diferencial || 1.00),
+            openingFee: Number(loanRow.comision_apertura),
+            monthlyPayment: Number(loanRow.cuota_mensual),
+            collateral: {
+              type: loanRow.garantia_tipo,
+              propertyId: loanRow.garantia_inmueble_id,
+              propertyTitle: loanRow.garantia_inmueble_titulo,
+              surfaceM2: loanRow.garantia_superficie_m2 ? Number(loanRow.garantia_superficie_m2) : undefined,
+              appraisalValue: Number(loanRow.garantia_valor_tasacion)
+            },
+            status: 'rejected' as const,
+            requiresTeacherApproval: Boolean(loanRow.requiere_profesor),
+            teacherNotes: loanRow.notas_profesor,
+            createdAt: loanRow.fecha_creacion,
+            acceptedAt: loanRow.fecha_aceptacion,
+            schedule: schedule || []
+          };
+
+          return {
+            success: true,
+            message: 'Oferta de préstamo rechazada correctamente.',
+            loan: updatedLoanData,
+            _postCommitData: {
+              loanId: loanRow.id,
+              studentId: loanRow.alumno_id,
+              status: 'rejected' as const
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+        if (!loan) {
+          const err: any = new Error('Préstamo no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (loan.status === 'active' || loan.status === 'paid_off') {
+          const err: any = new Error('No se puede rechazar un préstamo formalizado o amortizado');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (loan.status === 'rejected') {
+          const err: any = new Error('Este préstamo ya se encuentra rechazado');
+          err.statusCode = 400;
+          throw err;
+        }
+        loan.status = 'rejected';
+        writeDb(db);
+        return {
+          success: true,
+          message: 'Oferta de préstamo rechazada correctamente.',
+          loan
+        };
+      }
+    });
+
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        const lIdx = (db.loans || []).findIndex(l => l.id === pc.loanId);
+        if (lIdx !== -1) {
+          db.loans[lIdx].status = pc.status;
+        }
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Loan Reject Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Loan Reject Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al rechazar el préstamo' });
+  }
 });
 
 // Teacher reviews / modifies / approves loan request
 app.post('/api/teacher/loans/:id/review', async (req, res) => {
   const { id } = req.params;
   const { action, offeredAmount, annualInterestRate, termMonths, teacherNotes } = req.body;
-  const db = readDb();
 
-  const loan = (db.loans || []).find(l => l.id === id);
-  if (!loan) {
-    return res.status(404).json({ error: 'Préstamo no encontrado' });
-  }
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `loan_review_${id}_${action || 'approve'}`;
 
-  if (action === 'deny') {
-    loan.status = 'denied_teacher';
-    loan.teacherNotes = teacherNotes || 'Solicitud denegada por el Profesor.';
-  } else {
-    const finalAmount = offeredAmount ? Number(offeredAmount) : loan.offeredAmount;
-    const finalRate = annualInterestRate ? Number(annualInterestRate) : loan.annualInterestRate;
-    const finalTerm = termMonths ? Number(termMonths) : loan.termMonths;
-
-    loan.offeredAmount = finalAmount;
-    loan.annualInterestRate = finalRate;
-    loan.termMonths = finalTerm;
-    loan.openingFee = Number((0.001 * finalAmount).toFixed(2));
-    loan.teacherNotes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
-
-    const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
-    loan.monthlyPayment = monthlyPayment;
-    loan.schedule = schedule;
-    loan.status = 'teacher_offered';
-  }
-
-  writeDb(db);
   try {
-    await syncLoanToSupabase(loan);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Teacher Loan Review]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar la revisión del préstamo con la base de datos central.' });
-  }
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. SELECT prestamos FOR UPDATE (Lock loan exclusively)
+          const loanLock = await client.query(
+            `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
+                    plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
+                    garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+             FROM prestamos 
+             WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
 
-  res.json({
-    success: true,
-    message: action === 'deny' ? 'Préstamo denegado.' : 'Préstamo aprobado con condiciones notificadas al alumno.',
-    loan
-  });
+          if (!loanLock || loanLock.rows.length === 0) {
+            const err: any = new Error('Préstamo no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const loanRow = loanLock.rows[0];
+
+          // 2. Validate state machine - Active, paid_off, rejected or already denied loans CANNOT be reviewed
+          if (loanRow.estado === 'active') {
+            const err: any = new Error('No se puede revisar ni modificar un préstamo que ya ha sido formalizado y desembolsado');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'paid_off') {
+            const err: any = new Error('No se puede revisar ni modificar un préstamo que ya ha sido amortizado en su totalidad');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'rejected') {
+            const err: any = new Error('No se puede revisar un préstamo que ha sido rechazado por el estudiante');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (loanRow.estado === 'denied_teacher') {
+            const err: any = new Error('Este préstamo ya ha sido denegado previamente por el profesor');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Allowed states for teacher review: 'pending_teacher', 'offered', 'teacher_offered'
+          if (loanRow.estado !== 'pending_teacher' && loanRow.estado !== 'offered' && loanRow.estado !== 'teacher_offered') {
+            const err: any = new Error(`El estado del préstamo no permite revisión docente: ${loanRow.estado}`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          let updatedLoanData: any;
+          let responseMessage = '';
+
+          if (action === 'deny') {
+            // 3A. Action: DENY
+            const notes = teacherNotes || 'Solicitud denegada por el Profesor.';
+            await client.query(
+              `UPDATE prestamos 
+               SET estado = 'denied_teacher', notas_profesor = $1 
+               WHERE id = $2`,
+              [notes, loanRow.id]
+            );
+
+            let schedule = loanRow.tabla_amortizacion;
+            if (typeof schedule === 'string') {
+              try { schedule = JSON.parse(schedule); } catch (e) { schedule = []; }
+            }
+
+            updatedLoanData = {
+              id: loanRow.id,
+              studentId: loanRow.alumno_id,
+              studentName: loanRow.alumno_nombre,
+              studentAccount: loanRow.alumno_cuenta || '',
+              requestedAmount: Number(loanRow.importe_solicitado),
+              offeredAmount: Number(loanRow.importe_ofrecido),
+              approvedAmount: loanRow.importe_concedido ? Number(loanRow.importe_concedido) : undefined,
+              termMonths: Number(loanRow.plazo_meses),
+              annualInterestRate: Number(loanRow.tipo_interes),
+              euriborRate: Number(loanRow.euribor || 3.50),
+              spread: Number(loanRow.diferencial || 1.00),
+              openingFee: Number(loanRow.comision_apertura),
+              monthlyPayment: Number(loanRow.cuota_mensual),
+              collateral: {
+                type: loanRow.garantia_tipo,
+                propertyId: loanRow.garantia_inmueble_id,
+                propertyTitle: loanRow.garantia_inmueble_titulo,
+                surfaceM2: loanRow.garantia_superficie_m2 ? Number(loanRow.garantia_superficie_m2) : undefined,
+                appraisalValue: Number(loanRow.garantia_valor_tasacion)
+              },
+              status: 'denied_teacher' as const,
+              requiresTeacherApproval: Boolean(loanRow.requiere_profesor),
+              teacherNotes: notes,
+              createdAt: loanRow.fecha_creacion,
+              acceptedAt: loanRow.fecha_aceptacion,
+              schedule: schedule || []
+            };
+
+            responseMessage = 'Préstamo denegado.';
+          } else {
+            // 3B. Action: APPROVE / MODIFY CONDITIONS
+            const finalAmount = offeredAmount ? Number(Number(offeredAmount).toFixed(2)) : Number(loanRow.importe_ofrecido);
+            const finalRate = annualInterestRate ? Number(annualInterestRate) : Number(loanRow.tipo_interes);
+            const finalTerm = termMonths ? Number(termMonths) : Number(loanRow.plazo_meses);
+
+            if (finalAmount <= 0) {
+              const err: any = new Error('El importe del préstamo debe ser superior a 0');
+              err.statusCode = 400;
+              throw err;
+            }
+            if (finalRate < 0) {
+              const err: any = new Error('El tipo de interés no puede ser negativo');
+              err.statusCode = 400;
+              throw err;
+            }
+            if (finalTerm <= 0) {
+              const err: any = new Error('El plazo en meses debe ser mayor a 0');
+              err.statusCode = 400;
+              throw err;
+            }
+
+            const openingFee = Number((0.001 * finalAmount).toFixed(2));
+            const notes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
+
+            const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
+
+            await client.query(
+              `UPDATE prestamos 
+               SET estado = 'teacher_offered', 
+                   importe_ofrecido = $1, 
+                   plazo_meses = $2, 
+                   tipo_interes = $3, 
+                   comision_apertura = $4, 
+                   cuota_mensual = $5, 
+                   notas_profesor = $6, 
+                   tabla_amortizacion = $7 
+               WHERE id = $8`,
+              [finalAmount, finalTerm, finalRate, openingFee, monthlyPayment, notes, JSON.stringify(schedule), loanRow.id]
+            );
+
+            updatedLoanData = {
+              id: loanRow.id,
+              studentId: loanRow.alumno_id,
+              studentName: loanRow.alumno_nombre,
+              studentAccount: loanRow.alumno_cuenta || '',
+              requestedAmount: Number(loanRow.importe_solicitado),
+              offeredAmount: finalAmount,
+              approvedAmount: undefined,
+              termMonths: finalTerm,
+              annualInterestRate: finalRate,
+              euriborRate: Number(loanRow.euribor || 3.50),
+              spread: Number(loanRow.diferencial || 1.00),
+              openingFee: openingFee,
+              monthlyPayment: monthlyPayment,
+              collateral: {
+                type: loanRow.garantia_tipo,
+                propertyId: loanRow.garantia_inmueble_id,
+                propertyTitle: loanRow.garantia_inmueble_titulo,
+                surfaceM2: loanRow.garantia_superficie_m2 ? Number(loanRow.garantia_superficie_m2) : undefined,
+                appraisalValue: Number(loanRow.garantia_valor_tasacion)
+              },
+              status: 'teacher_offered' as const,
+              requiresTeacherApproval: Boolean(loanRow.requiere_profesor),
+              teacherNotes: notes,
+              createdAt: loanRow.fecha_creacion,
+              acceptedAt: undefined,
+              schedule: schedule
+            };
+
+            responseMessage = 'Préstamo aprobado con condiciones notificadas al alumno.';
+          }
+
+          return {
+            success: true,
+            message: responseMessage,
+            loan: updatedLoanData,
+            _postCommitData: {
+              loanId: loanRow.id,
+              updatedLoanData
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory
+        const db = readDb();
+        const loan = (db.loans || []).find(l => l.id === id);
+        if (!loan) {
+          const err: any = new Error('Préstamo no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (loan.status === 'active' || loan.status === 'paid_off') {
+          const err: any = new Error('No se puede revisar un préstamo formalizado o amortizado');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (action === 'deny') {
+          loan.status = 'denied_teacher';
+          loan.teacherNotes = teacherNotes || 'Solicitud denegada por el Profesor.';
+        } else {
+          const finalAmount = offeredAmount ? Number(offeredAmount) : loan.offeredAmount;
+          const finalRate = annualInterestRate ? Number(annualInterestRate) : loan.annualInterestRate;
+          const finalTerm = termMonths ? Number(termMonths) : loan.termMonths;
+
+          loan.offeredAmount = finalAmount;
+          loan.annualInterestRate = finalRate;
+          loan.termMonths = finalTerm;
+          loan.openingFee = Number((0.001 * finalAmount).toFixed(2));
+          loan.teacherNotes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
+
+          const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
+          loan.monthlyPayment = monthlyPayment;
+          loan.schedule = schedule;
+          loan.status = 'teacher_offered';
+        }
+
+        writeDb(db);
+        return {
+          success: true,
+          message: action === 'deny' ? 'Préstamo denegado.' : 'Préstamo aprobado con condiciones notificadas al alumno.',
+          loan
+        };
+      }
+    });
+
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        const lIdx = (db.loans || []).findIndex(l => l.id === pc.loanId);
+        if (lIdx !== -1) {
+          Object.assign(db.loans[lIdx], pc.updatedLoanData);
+        } else {
+          if (!db.loans) db.loans = [];
+          db.loans.push(pc.updatedLoanData);
+        }
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Teacher Loan Review Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Teacher Loan Review Concurrency Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la revisión del préstamo' });
+  }
 });
 
 // ================= STUDENT CHANGE PASSWORD =================
@@ -12474,17 +15800,32 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
 });
 
 // ================= TEACHER ASSET ADMINISTRATION & DELETES =================
-app.delete('/api/obligations/:id', (req, res) => {
+app.delete('/api/obligations/:id', async (req, res) => {
   const { id } = req.params;
   const db = readDb();
+  if (!db.paymentObligations) db.paymentObligations = [];
   const ob = db.paymentObligations.find(o => o.id === id);
   if (!ob) return res.status(404).json({ error: 'Obligación no encontrada' });
 
-  db.paymentObligations = db.paymentObligations.filter(o => o.id !== id);
   if (dbPool) {
-    dbPool.query('DELETE FROM obligaciones_pago WHERE id = $1', [id]).catch(e => console.error(e));
+    try {
+      await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT id, alumno_id, estado, importe FROM obligaciones_pago WHERE id = $1 FOR UPDATE', [id]);
+        if (lockRes.rows.length === 0) {
+          const err: any = new Error('Obligación no encontrada en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+        await client.query('DELETE FROM obligaciones_pago WHERE id = $1', [id]);
+      });
+    } catch (err: any) {
+      console.error('[Delete Obligation Error]:', err);
+      return res.status(err.statusCode || 500).json({ error: err.message || 'Error al eliminar obligación' });
+    }
   }
 
+  db.paymentObligations = db.paymentObligations.filter(o => o.id !== id);
+  if (!db.systemLogs) db.systemLogs = [];
   db.systemLogs.unshift({
     id: generateId('log'),
     action: 'DELETE_OBLIGATION',
@@ -12496,17 +15837,50 @@ app.delete('/api/obligations/:id', (req, res) => {
   res.json({ success: true, message: 'Deuda eliminada' });
 });
 
-app.delete('/api/acquisitions/:id', (req, res) => {
+app.delete('/api/acquisitions/:id', async (req, res) => {
   const { id } = req.params;
   const db = readDb();
+  if (!db.acquisitions) db.acquisitions = [];
   const acq = db.acquisitions.find(a => a.id === id);
   if (!acq) return res.status(404).json({ error: 'Inmueble no encontrado' });
 
-  db.acquisitions = db.acquisitions.filter(a => a.id !== id);
   if (dbPool) {
-    dbPool.query('DELETE FROM adquisiciones WHERE id = $1', [id]).catch(e => console.error(e));
+    try {
+      await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT id, inmueble_id, alumno_id FROM adquisiciones WHERE id = $1 FOR UPDATE', [id]);
+        if (lockRes.rows.length === 0) {
+          const err: any = new Error('Inmueble no encontrado en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const machCheck = await client.query(
+          'SELECT id, linea_titulo FROM maquinaria_adquisiciones WHERE nave_instalada_id = $1 LIMIT 1',
+          [id]
+        );
+        if (machCheck.rows.length > 0) {
+          const err: any = new Error(
+            `No se puede eliminar el inmueble: tiene líneas de maquinaria instaladas (${machCheck.rows[0].linea_titulo || machCheck.rows[0].id}). Reubique o desinstale la maquinaria previamente.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        await client.query('DELETE FROM obligaciones_pago WHERE adquisicion_id = $1', [id]);
+        await client.query('DELETE FROM adquisiciones WHERE id = $1', [id]);
+      });
+    } catch (err: any) {
+      console.error('[Delete Acquisition Error]:', err);
+      return res.status(err.statusCode || 500).json({ error: err.message || 'Error al eliminar adquisición' });
+    }
   }
 
+  db.acquisitions = db.acquisitions.filter(a => a.id !== id);
+  if (db.paymentObligations) {
+    db.paymentObligations = db.paymentObligations.filter(o => o.acquisitionId !== id);
+  }
+
+  if (!db.systemLogs) db.systemLogs = [];
   db.systemLogs.unshift({
     id: generateId('log'),
     action: 'DELETE_ACQUISITION',
@@ -12518,10 +15892,11 @@ app.delete('/api/acquisitions/:id', (req, res) => {
   res.json({ success: true, message: 'Inmueble eliminado' });
 });
 
-app.put('/api/acquisitions/:id', (req, res) => {
+app.put('/api/acquisitions/:id', async (req, res) => {
   const { id } = req.params;
   const { basePrice, propertyTitle, location, landPercentage, monthlyRent } = req.body;
   const db = readDb();
+  if (!db.acquisitions) db.acquisitions = [];
   const acq = db.acquisitions.find(a => a.id === id);
   if (!acq) return res.status(404).json({ error: 'Inmueble no encontrado' });
 
@@ -12531,23 +15906,61 @@ app.put('/api/acquisitions/:id', (req, res) => {
   if (landPercentage !== undefined) acq.landPercentage = Number(landPercentage);
   if (monthlyRent !== undefined) acq.monthlyRent = Number(monthlyRent);
 
-  syncAcquisitionToSupabase(acq).catch(e => console.error(e));
+  if (dbPool) {
+    try {
+      await withPostgresTransaction(async (client) => {
+        await syncAcquisitionToSupabase(acq, client);
+      });
+    } catch (err: any) {
+      console.error('[Update Acquisition Error]:', err);
+      return res.status(500).json({ error: 'Error al actualizar inmueble en base de datos' });
+    }
+  }
+
   writeDb(db);
   res.json({ success: true, acquisition: acq });
 });
 
-app.delete('/api/machinery/acquisitions/:id', (req, res) => {
+app.delete('/api/machinery/acquisitions/:id', async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
   const mac = db.machineryAcquisitions.find(m => m.id === id);
   if (!mac) return res.status(404).json({ error: 'Maquinaria no encontrada' });
 
-  db.machineryAcquisitions = db.machineryAcquisitions.filter(m => m.id !== id);
   if (dbPool) {
-    dbPool.query('DELETE FROM maquinaria_adquisiciones WHERE id = $1', [id]).catch(e => console.error(e));
+    try {
+      await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT id, alumno_id, linea_titulo FROM maquinaria_adquisiciones WHERE id = $1 FOR UPDATE', [id]);
+        if (lockRes.rows.length === 0) {
+          const err: any = new Error('Maquinaria no encontrada en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        await client.query(
+          'UPDATE empleados_contratados SET maquinaria_asignada_id = NULL, maquinaria_asignada_titulo = NULL WHERE maquinaria_asignada_id = $1',
+          [id]
+        );
+        await client.query('DELETE FROM maquinaria_adquisiciones WHERE id = $1', [id]);
+      });
+    } catch (err: any) {
+      console.error('[Delete Machinery Error]:', err);
+      return res.status(err.statusCode || 500).json({ error: err.message || 'Error al eliminar maquinaria' });
+    }
   }
 
+  if (db.hiredEmployees) {
+    db.hiredEmployees.forEach(e => {
+      if (e.assignedMachineryId === id) {
+        e.assignedMachineryId = undefined;
+        e.assignedMachineryTitle = undefined;
+      }
+    });
+  }
+
+  db.machineryAcquisitions = db.machineryAcquisitions.filter(m => m.id !== id);
+  if (!db.systemLogs) db.systemLogs = [];
   db.systemLogs.unshift({
     id: generateId('log'),
     action: 'DELETE_MACHINERY',
@@ -12559,7 +15972,7 @@ app.delete('/api/machinery/acquisitions/:id', (req, res) => {
   res.json({ success: true, message: 'Maquinaria eliminada' });
 });
 
-app.put('/api/machinery/acquisitions/:id', (req, res) => {
+app.put('/api/machinery/acquisitions/:id', async (req, res) => {
   const { id } = req.params;
   const { basePrice, status, requiredStaff } = req.body;
   const db = readDb();
@@ -12571,53 +15984,378 @@ app.put('/api/machinery/acquisitions/:id', (req, res) => {
   if (status) mac.status = status;
   if (requiredStaff !== undefined) mac.requiredStaff = Number(requiredStaff);
 
-  syncMachineryToSupabase(mac).catch(e => console.error(e));
+  if (dbPool) {
+    try {
+      await withPostgresTransaction(async (client) => {
+        await syncMachineryToSupabase(mac, client);
+      });
+    } catch (err: any) {
+      console.error('[Update Machinery Error]:', err);
+      return res.status(500).json({ error: 'Error al actualizar maquinaria en base de datos' });
+    }
+  }
+
   writeDb(db);
   res.json({ success: true, machinery: mac });
 });
 
-app.delete('/api/loans/:id', (req, res) => {
+app.delete('/api/loans/:id', async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
-  const loan = db.loans.find(l => l.id === id);
-  if (!loan) return res.status(404).json({ error: 'Préstamo no encontrado' });
-
-  db.loans = db.loans.filter(l => l.id !== id);
-  if (dbPool) {
-    dbPool.query('DELETE FROM prestamos WHERE id = $1', [id]).catch(e => console.error(e));
+  if (!id) {
+    return res.status(400).json({ error: 'Falta el identificador del préstamo' });
   }
 
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'DELETE_LOAN',
-    details: `Profesor ha eliminado el préstamo ${loan.id} de ${loan.studentName}`,
-    timestamp: new Date().toISOString()
-  });
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body && req.body.idempotencyKey);
+  const idemKey = rawIdemKey || `loan_del_${id}`;
 
-  writeDb(db);
-  res.json({ success: true, message: 'Préstamo eliminado' });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. SELECT prestamos FOR UPDATE (Lock loan exclusively)
+          const loanLock = await client.query(
+            `SELECT id, alumno_id, alumno_nombre, estado
+             FROM prestamos
+             WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+
+          if (!loanLock || loanLock.rows.length === 0) {
+            const err: any = new Error('Préstamo no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const loanRow = loanLock.rows[0];
+          const estado = loanRow.estado;
+
+          // 2. Validate states - active or paid_off cannot be deleted physically
+          if (estado === 'active' || estado === 'paid_off') {
+            const err: any = new Error(
+              `No se puede eliminar el préstamo en estado '${estado}' porque ya cuenta con actividad financiera e historial contable.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Allowed states for physical deletion: offered, pending_teacher, rejected, denied_teacher
+          const allowedStates = ['offered', 'pending_teacher', 'rejected', 'denied_teacher'];
+          if (!allowedStates.includes(estado)) {
+            const err: any = new Error(`No se permite eliminar un préstamo en estado '${estado}'.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. Delete from PostgreSQL inside transaction
+          await client.query('DELETE FROM prestamos WHERE id = $1', [id]);
+
+          return {
+            success: true,
+            message: 'Préstamo eliminado',
+            _postCommitData: {
+              loanId: loanRow.id,
+              studentName: loanRow.alumno_nombre || 'estudiante'
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory mode
+        const db = readDb();
+        const loan = (db.loans || []).find(l => l.id === id);
+        if (!loan) {
+          const err: any = new Error('Préstamo no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (loan.status === 'active' || loan.status === 'paid_off') {
+          const err: any = new Error(
+            `No se puede eliminar el préstamo en estado '${loan.status}' porque ya cuenta con actividad financiera e historial contable.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const allowedStates = ['offered', 'pending_teacher', 'rejected', 'denied_teacher'];
+        if (!allowedStates.includes(loan.status)) {
+          const err: any = new Error(`No se permite eliminar un préstamo en estado '${loan.status}'.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        db.loans = db.loans.filter(l => l.id !== id);
+        if (!db.systemLogs) db.systemLogs = [];
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'DELETE_LOAN',
+          details: `Profesor ha eliminado el préstamo ${loan.id} de ${loan.studentName}`,
+          timestamp: new Date().toISOString()
+        });
+        writeDb(db);
+        return { success: true, message: 'Préstamo eliminado' };
+      }
+    });
+
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        if (db.loans) {
+          db.loans = db.loans.filter(l => l.id !== pc.loanId);
+        }
+        if (!db.systemLogs) db.systemLogs = [];
+        db.systemLogs.unshift({
+          id: generateId('log'),
+          action: 'DELETE_LOAN',
+          details: `Profesor ha eliminado el préstamo ${pc.loanId} de ${pc.studentName}`,
+          timestamp: new Date().toISOString()
+        });
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Loan Delete Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
+    }
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Loan Delete Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al eliminar el préstamo' });
+  }
 });
 
 app.put('/api/loans/:id', async (req, res) => {
   const { id } = req.params;
   const { offeredAmount, annualInterestRate, termMonths, status } = req.body;
-  const db = readDb();
-  const loan = db.loans.find(l => l.id === id);
-  if (!loan) return res.status(404).json({ error: 'Préstamo no encontrado' });
 
-  if (offeredAmount !== undefined) loan.offeredAmount = Number(offeredAmount);
-  if (annualInterestRate !== undefined) loan.annualInterestRate = Number(annualInterestRate);
-  if (termMonths !== undefined) loan.termMonths = Number(termMonths);
-  if (status) loan.status = status;
-
-  writeDb(db);
-  try {
-    await syncLoanToSupabase(loan);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Loan Update]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar el préstamo con la base de datos central.' });
+  if (!id) {
+    return res.status(400).json({ error: 'Falta el identificador del préstamo' });
   }
-  res.json({ success: true, loan });
+
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body && req.body.idempotencyKey);
+  const idemKey = rawIdemKey || `loan_put_${id}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. SELECT prestamos FOR UPDATE (Lock loan exclusively)
+          const loanLock = await client.query(
+            `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
+                    plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
+                    garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+             FROM prestamos 
+             WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+
+          if (!loanLock || loanLock.rows.length === 0) {
+            const err: any = new Error('Préstamo no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const loanRow = loanLock.rows[0];
+          const currentStatus = loanRow.estado;
+
+          // 2. Validate state machine - active or paid_off cannot be modified
+          if (currentStatus === 'active' || currentStatus === 'paid_off') {
+            const err: any = new Error(
+              `El préstamo ya está en estado '${currentStatus}' y no puede modificarse mediante este endpoint.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Allowed states for modification: offered, pending_teacher
+          const allowedEditStates = ['offered', 'pending_teacher'];
+          if (!allowedEditStates.includes(currentStatus)) {
+            const err: any = new Error(`No se permite modificar un préstamo en estado '${currentStatus}'.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. Validate status changes: arbitrary status mutation through PUT is prohibited
+          if (status !== undefined && status !== currentStatus) {
+            const err: any = new Error(
+              `No se permite cambiar el estado del préstamo mediante este endpoint. Las transiciones de estado deben realizarse mediante la revisión docente (/api/teacher/loans/:id/review) o el flujo de aceptación/rechazo.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 4. Validate and determine financial parameters
+          const newOfferedAmount = offeredAmount !== undefined ? Number(offeredAmount) : Number(loanRow.importe_ofrecido);
+          const newRate = annualInterestRate !== undefined ? Number(annualInterestRate) : Number(loanRow.tipo_interes);
+          const newTerm = termMonths !== undefined ? Number(termMonths) : Number(loanRow.plazo_meses);
+
+          if (newOfferedAmount <= 0 || isNaN(newOfferedAmount)) {
+            const err: any = new Error('El importe del préstamo debe ser superior a 0');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (newRate < 0 || isNaN(newRate)) {
+            const err: any = new Error('El tipo de interés no puede ser negativo');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (newTerm <= 0 || !Number.isInteger(newTerm) || isNaN(newTerm)) {
+            const err: any = new Error('El plazo en meses debe ser un número entero mayor a 0');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 5. Recalculate French amortization schedule and opening fee (1‰ = 0.001 * offeredAmount)
+          const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
+          const startDate = loanRow.fecha_creacion ? new Date(loanRow.fecha_creacion).toISOString() : new Date().toISOString();
+          const { monthlyPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate);
+
+          // 6. Update in PostgreSQL
+          await client.query(
+            `UPDATE prestamos 
+             SET importe_ofrecido = $1, 
+                 plazo_meses = $2, 
+                 tipo_interes = $3, 
+                 comision_apertura = $4, 
+                 cuota_mensual = $5, 
+                 tabla_amortizacion = $6 
+             WHERE id = $7`,
+            [newOfferedAmount, newTerm, newRate, openingFee, monthlyPayment, JSON.stringify(schedule), loanRow.id]
+          );
+
+          const updatedLoan: BankLoan = {
+            id: loanRow.id,
+            studentId: loanRow.alumno_id,
+            studentName: loanRow.alumno_nombre,
+            studentAccount: loanRow.alumno_cuenta || '',
+            requestedAmount: Number(loanRow.importe_solicitado),
+            offeredAmount: newOfferedAmount,
+            approvedAmount: loanRow.importe_concedido ? Number(loanRow.importe_concedido) : undefined,
+            termMonths: newTerm,
+            annualInterestRate: newRate,
+            euriborRate: Number(loanRow.euribor || 3.50),
+            spread: Number(loanRow.diferencial || 1.00),
+            openingFee,
+            monthlyPayment,
+            collateral: {
+              type: loanRow.garantia_tipo,
+              propertyId: loanRow.garantia_inmueble_id,
+              propertyTitle: loanRow.garantia_inmueble_titulo,
+              surfaceM2: loanRow.garantia_superficie_m2 ? Number(loanRow.garantia_superficie_m2) : undefined,
+              appraisalValue: Number(loanRow.garantia_valor_tasacion)
+            },
+            status: currentStatus as any,
+            requiresTeacherApproval: Boolean(loanRow.requiere_profesor),
+            teacherNotes: loanRow.notas_profesor,
+            createdAt: loanRow.fecha_creacion,
+            acceptedAt: loanRow.fecha_aceptacion,
+            schedule
+          };
+
+          return {
+            success: true,
+            loan: updatedLoan,
+            _postCommitData: {
+              loan: updatedLoan
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory mode
+        const db = readDb();
+        const loan = (db.loans || []).find(l => l.id === id);
+        if (!loan) {
+          const err: any = new Error('Préstamo no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (loan.status === 'active' || loan.status === 'paid_off') {
+          const err: any = new Error(
+            `El préstamo ya está en estado '${loan.status}' y no puede modificarse mediante este endpoint.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const allowedEditStates = ['offered', 'pending_teacher'];
+        if (!allowedEditStates.includes(loan.status)) {
+          const err: any = new Error(`No se permite modificar un préstamo en estado '${loan.status}'.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (status !== undefined && status !== loan.status) {
+          const err: any = new Error(
+            `No se permite cambiar el estado del préstamo mediante este endpoint. Las transiciones de estado deben realizarse mediante la revisión docente (/api/teacher/loans/:id/review) o el flujo de aceptación/rechazo.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const newOfferedAmount = offeredAmount !== undefined ? Number(offeredAmount) : Number(loan.offeredAmount);
+        const newRate = annualInterestRate !== undefined ? Number(annualInterestRate) : Number(loan.annualInterestRate);
+        const newTerm = termMonths !== undefined ? Number(termMonths) : Number(loan.termMonths);
+
+        if (newOfferedAmount <= 0 || isNaN(newOfferedAmount)) {
+          const err: any = new Error('El importe del préstamo debe ser superior a 0');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (newRate < 0 || isNaN(newRate)) {
+          const err: any = new Error('El tipo de interés no puede ser negativo');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (newTerm <= 0 || !Number.isInteger(newTerm) || isNaN(newTerm)) {
+          const err: any = new Error('El plazo en meses debe ser un número entero mayor a 0');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
+        const startDate = loan.createdAt || new Date().toISOString();
+        const { monthlyPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate);
+
+        loan.offeredAmount = newOfferedAmount;
+        loan.annualInterestRate = newRate;
+        loan.termMonths = newTerm;
+        loan.openingFee = openingFee;
+        loan.monthlyPayment = monthlyPayment;
+        loan.schedule = schedule;
+
+        writeDb(db);
+        return { success: true, loan };
+      }
+    });
+
+    // POST-COMMIT: synchronize in-memory cache and db.json ONLY after PostgreSQL transaction has committed
+    if (result && (result as any)._postCommitData) {
+      try {
+        const pc = (result as any)._postCommitData;
+        const db = readDb();
+        if (db.loans) {
+          const lIdx = db.loans.findIndex(l => l.id === pc.loan.id);
+          if (lIdx !== -1) {
+            db.loans[lIdx] = pc.loan;
+          } else {
+            db.loans.push(pc.loan);
+          }
+        }
+        writeDb(db);
+      } catch (cacheErr) {
+        console.warn('[Loan PUT Post-Commit Cache Warning]:', cacheErr);
+      }
+      delete (result as any)._postCommitData;
+    }
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Loan PUT Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al actualizar el préstamo' });
+  }
 });
 
 // ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
@@ -12643,105 +16381,265 @@ app.get('/api/electricity/contract', (req, res) => {
 
 app.post('/api/electricity/contract', async (req, res) => {
   const { studentId, propertyId, acquisitionId, propertyTitle, contractedPowerKw, powerKw } = req.body;
-  const db = readDb();
-  const student = db.users.find(u => u.id === studentId);
-  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+  const reqStudentId = String(studentId || req.query.studentId || '').trim();
 
-  if (!db.electricityContracts) db.electricityContracts = [];
+  if (!reqStudentId) {
+    return res.status(400).json({ error: 'Falta el identificador del alumno (studentId)' });
+  }
 
-  const targetPropId = propertyId || acquisitionId || '';
-  const targetPropTitle = propertyTitle || '';
+  const targetPropId = String(propertyId || acquisitionId || '').trim();
+  const targetPropTitle = String(propertyTitle || '').trim();
   const pKw = Number(contractedPowerKw || powerKw) || 30;
 
-  // Find existing active contract for this student and property
-  let contract = db.electricityContracts.find(c =>
-    c.studentId === studentId && c.status === 'active' && (
-      (targetPropId && (c.propertyId === targetPropId || c.id === targetPropId)) ||
-      (targetPropTitle && c.propertyTitle && c.propertyTitle.toLowerCase().trim() === targetPropTitle.toLowerCase().trim())
-    )
-  );
-
-  // Fallback: If no property-specific contract found, but there's a contract without propertyId and targetPropId is provided
-  if (!contract && targetPropId) {
-    contract = db.electricityContracts.find(c => c.studentId === studentId && c.status === 'active' && !c.propertyId);
-  }
-
-  if (contract) {
-    contract.contractedPowerKw = pKw;
-    if (targetPropId) contract.propertyId = targetPropId;
-    if (targetPropTitle) contract.propertyTitle = targetPropTitle;
-  } else {
-    const cups = `ES003140${Math.floor(1000000000 + Math.random() * 9000000000)}F`;
-    contract = {
-      id: generateId('elec_contract'),
-      studentId: student.id,
-      studentName: student.name,
-      propertyId: targetPropId,
-      propertyTitle: targetPropTitle,
-      contractedPowerKw: pKw,
-      tariffName: 'IberLuz 3.0TD Industrial',
-      pricePerKwDay: 0.11,
-      pricePerKwh: 0.14,
-      status: 'active',
-      contractDate: new Date().toISOString(),
-      cupsCode: cups
-    };
-    db.electricityContracts.push(contract);
-  }
-
-  // Unblock machinery installed in this specific property that was waiting for electricity/power
-  const normTargetPropId = String(targetPropId || '');
-  const normTargetPropTitle = String(targetPropTitle || '').toLowerCase().trim();
-
-  const studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
-  const studentProperties = (db.acquisitions || []).filter(p => p.studentId === studentId);
-
-  const propMachinery = studentMachinery.filter(m => {
-    const mNaveId = String(m.installedAtNaveId || m.installedNaveId || m.installationNaveId || m.propertyId || m.acquisitionId || '');
-    if (mNaveId && mNaveId === normTargetPropId) return true;
-    const mNaveTitle = (m.installationNaveTitle || m.installedAtNaveTitle || m.installedNaveTitle || m.naveInstaladaTitulo || '').toLowerCase().trim();
-    if (mNaveTitle && normTargetPropTitle && (mNaveTitle === normTargetPropTitle || mNaveTitle.includes(normTargetPropTitle) || normTargetPropTitle.includes(mNaveTitle))) return true;
-    if (!mNaveId && !mNaveTitle && studentProperties.length <= 1) return true;
-    return false;
-  });
-
-  const propMachineryPowerNeeded = propMachinery.reduce((sum, m) => sum + (m.requiredPowerKW || m.powerKw || 35), 0);
-  const propPowerNeeded = propMachineryPowerNeeded + 10;
-
-  let unblockedCount = 0;
-  const machinerySyncPromises: Promise<any>[] = [];
-  if (pKw >= propPowerNeeded) {
-    const now = new Date();
-    const finishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-    for (const m of propMachinery) {
-      if (m.status === 'pendiente_energia') {
-        m.status = 'montaje';
-        m.assemblyFinishDate = finishDate.toISOString();
-        m.assemblyEndDate = finishDate.toISOString();
-        unblockedCount++;
-        machinerySyncPromises.push(syncMachineryToSupabase(m));
-      }
-    }
-  }
-
-  checkAndProcessAutomatedElectricity(db);
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `elec_contract_${reqStudentId}_${targetPropId || 'global'}_${pKw}`;
 
   try {
-    await Promise.all([
-      syncElectricityContractToSupabase(contract),
-      ...machinerySyncPromises
-    ]);
-  } catch (syncErr) {
-    console.error('[Supabase Sync Error - Electricity Contract]:', syncErr);
-    return res.status(500).json({ error: 'Error al sincronizar el contrato eléctrico con la base de datos central.' });
+    const txResult = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no está configurada');
+      }
+
+      return await withPostgresTransaction(async (client) => {
+        // 1. Validar y bloquear cuenta de alumno para serialización
+        const studentRes = await client.query(
+          'SELECT id, alumno, saldo, usuario FROM cuentas WHERE id = $1 FOR UPDATE',
+          [reqStudentId]
+        );
+        if (!studentRes || studentRes.rows.length === 0) {
+          const err: any = new Error('Alumno no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const studentName = studentRes.rows[0].alumno || studentRes.rows[0].usuario || 'Estudiante';
+
+        // 2. Si se especifica inmueble, validar y bloquear en adquisiciones (FOR SHARE)
+        let resolvedPropTitle = targetPropTitle;
+        let resolvedPropId = targetPropId;
+        if (targetPropId) {
+          const propRes = await client.query(
+            `SELECT id, inmueble_id, alumno_id, inmueble_titulo
+             FROM adquisiciones
+             WHERE (id = $1 OR inmueble_id = $1)
+             FOR SHARE`,
+            [targetPropId]
+          );
+          if (!propRes || propRes.rows.length === 0) {
+            const err: any = new Error('Inmueble no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const propRow = propRes.rows[0];
+          if (String(propRow.alumno_id) !== String(reqStudentId)) {
+            const err: any = new Error('El inmueble no pertenece al alumno');
+            err.statusCode = 403;
+            throw err;
+          }
+          resolvedPropId = propRow.inmueble_id || propRow.id;
+          if (!resolvedPropTitle && propRow.inmueble_titulo) {
+            resolvedPropTitle = propRow.inmueble_titulo;
+          }
+        } else if (targetPropTitle) {
+          const propRes = await client.query(
+            `SELECT id, inmueble_id, alumno_id, inmueble_titulo
+             FROM adquisiciones
+             WHERE alumno_id = $1 AND LOWER(TRIM(inmueble_titulo)) = LOWER(TRIM($2))
+             FOR SHARE`,
+            [reqStudentId, targetPropTitle]
+          );
+          if (propRes && propRes.rows.length > 0) {
+            resolvedPropId = propRes.rows[0].inmueble_id || propRes.rows[0].id;
+            if (!resolvedPropTitle) resolvedPropTitle = propRes.rows[0].inmueble_titulo;
+          }
+        }
+
+        // 3. Bloquear contrato eléctrico existente si existe (FOR UPDATE)
+        const contractRes = await client.query(
+          `SELECT * FROM contratos_electricos
+           WHERE alumno_id = $1 AND estado = 'active' AND (
+             ($2 != '' AND (inmueble_id = $2 OR id = $2)) OR
+             ($3 != '' AND LOWER(TRIM(COALESCE(titulo_inmueble, ''))) = LOWER(TRIM($3)))
+           )
+           FOR UPDATE`,
+          [reqStudentId, resolvedPropId, resolvedPropTitle]
+        );
+
+        let existingContract = contractRes.rows.length > 0 ? contractRes.rows[0] : null;
+
+        if (!existingContract && resolvedPropId) {
+          const fallbackRes = await client.query(
+            `SELECT * FROM contratos_electricos
+             WHERE alumno_id = $1 AND estado = 'active' AND (inmueble_id IS NULL OR inmueble_id = '')
+             FOR UPDATE`,
+            [reqStudentId]
+          );
+          if (fallbackRes.rows.length > 0) {
+            existingContract = fallbackRes.rows[0];
+          }
+        }
+
+        // 4. Actualizar o insertar contrato eléctrico en contratos_electricos
+        let finalContractRow: any = null;
+        if (existingContract) {
+          const updateRes = await client.query(
+            `UPDATE contratos_electricos
+             SET potencia_contratada_kw = $1,
+                 inmueble_id = COALESCE(NULLIF($2, ''), inmueble_id),
+                 titulo_inmueble = COALESCE(NULLIF($3, ''), titulo_inmueble)
+             WHERE id = $4
+             RETURNING *`,
+            [pKw, resolvedPropId, resolvedPropTitle, existingContract.id]
+          );
+          finalContractRow = updateRes.rows[0];
+        } else {
+          const newId = generateId('elec_contract');
+          const cups = `ES003140${Math.floor(1000000000 + Math.random() * 9000000000)}F`;
+          const insertRes = await client.query(
+            `INSERT INTO contratos_electricos (
+               id, alumno_id, alumno_nombre, inmueble_id, titulo_inmueble,
+               potencia_contratada_kw, nombre_tarifa, precio_kw_dia, precio_kwh,
+               estado, fecha_contrato, cups_code
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, $11)
+             RETURNING *`,
+            [
+              newId,
+              reqStudentId,
+              studentName,
+              resolvedPropId || null,
+              resolvedPropTitle || null,
+              pKw,
+              'IberLuz 3.0TD Industrial',
+              0.11,
+              0.14,
+              'active',
+              cups
+            ]
+          );
+          finalContractRow = insertRes.rows[0];
+        }
+
+        // 5. Bloqueo determinista de maquinaria (ORDER BY id ASC FOR UPDATE) y cálculo de desbloqueo
+        const propCountRes = await client.query(
+          `SELECT COUNT(*) as count FROM adquisiciones WHERE alumno_id = $1`,
+          [reqStudentId]
+        );
+        const studentPropCount = parseInt(propCountRes.rows[0]?.count || '0', 10);
+
+        const machRes = await client.query(
+          `SELECT * FROM maquinaria_adquisiciones
+           WHERE alumno_id = $1
+           ORDER BY id ASC
+           FOR UPDATE`,
+          [reqStudentId]
+        );
+
+        const normTargetPropId = String(resolvedPropId || '');
+        const normTargetPropTitle = String(resolvedPropTitle || '').toLowerCase().trim();
+
+        const propMachinery = machRes.rows.filter((m: any) => {
+          const mNaveId = String(m.nave_instalada_id || '');
+          const mNaveTitle = String(m.nave_instalada_titulo || '').toLowerCase().trim();
+          if (mNaveId && normTargetPropId && mNaveId === normTargetPropId) return true;
+          if (mNaveTitle && normTargetPropTitle && (mNaveTitle === normTargetPropTitle || mNaveTitle.includes(normTargetPropTitle) || normTargetPropTitle.includes(mNaveTitle))) return true;
+          if (!mNaveId && !mNaveTitle && studentPropCount <= 1) return true;
+          return false;
+        });
+
+        const propMachineryPowerNeeded = propMachinery.reduce((sum: number, m: any) => sum + (Number(m.potencia_kw) || 35), 0);
+        const propPowerNeeded = propMachineryPowerNeeded + 10;
+
+        let unblockedCount = 0;
+        const unblockedMachineIds: string[] = [];
+        const now = new Date();
+        const finishDate = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+        if (pKw >= propPowerNeeded) {
+          for (const m of propMachinery) {
+            if (m.estado === 'pendiente_energia') {
+              await client.query(
+                `UPDATE maquinaria_adquisiciones
+                 SET estado = 'montaje',
+                     fecha_fin_montaje = $1
+                 WHERE id = $2`,
+                [finishDate.toISOString(), m.id]
+              );
+              unblockedCount++;
+              unblockedMachineIds.push(String(m.id));
+            }
+          }
+        }
+
+        const mappedContract: ElectricityContract = {
+          id: String(finalContractRow.id),
+          studentId: String(finalContractRow.alumno_id),
+          studentName: String(finalContractRow.alumno_nombre),
+          propertyId: finalContractRow.inmueble_id ? String(finalContractRow.inmueble_id) : '',
+          propertyTitle: finalContractRow.titulo_inmueble ? String(finalContractRow.titulo_inmueble) : '',
+          contractedPowerKw: Number(finalContractRow.potencia_contratada_kw),
+          tariffName: String(finalContractRow.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+          pricePerKwDay: Number(finalContractRow.precio_kw_dia || 0.11),
+          pricePerKwh: Number(finalContractRow.precio_kwh || 0.14),
+          status: String(finalContractRow.estado || 'active') as any,
+          contractDate: new Date(finalContractRow.fecha_contrato).toISOString(),
+          cupsCode: String(finalContractRow.cups_code || '')
+        };
+
+        return {
+          contract: mappedContract,
+          unblockedCount,
+          unblockedMachineIds,
+          finishDate: finishDate.toISOString(),
+          pKw
+        };
+      });
+    });
+
+    // 6. Actualización en memoria post-commit para compatibilidad (sin writeDb ni syncs asíncronos)
+    try {
+      const currentDb = readDb();
+      if (currentDb) {
+        if (!currentDb.electricityContracts) currentDb.electricityContracts = [];
+        const cIdx = currentDb.electricityContracts.findIndex(c => c.id === txResult.contract.id);
+        if (cIdx !== -1) {
+          currentDb.electricityContracts[cIdx] = txResult.contract;
+        } else {
+          currentDb.electricityContracts.push(txResult.contract);
+        }
+        if (txResult.unblockedMachineIds && txResult.unblockedMachineIds.length > 0 && currentDb.machineryAcquisitions) {
+          const finishIso = txResult.finishDate;
+          for (const mId of txResult.unblockedMachineIds) {
+            const m = currentDb.machineryAcquisitions.find(x => x.id === mId);
+            if (m) {
+              m.status = 'montaje';
+              m.assemblyFinishDate = finishIso;
+              m.assemblyEndDate = finishIso;
+            }
+          }
+        }
+        checkAndProcessAutomatedElectricity(currentDb);
+      }
+    } catch (memErr) {
+      console.warn('[Electricity Contract] Warning updating in-memory cache:', memErr);
+    }
+
+    const message = txResult.unblockedCount > 0
+      ? `¡Suministro eléctrico contratado (${txResult.pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 8 horas para ${txResult.unblockedCount} línea(s) de maquinaria.`
+      : `¡Suministro eléctrico de ${txResult.pKw} kW contratado correctamente!`;
+
+    res.json({
+      success: true,
+      contract: txResult.contract,
+      message,
+      unblockedCount: txResult.unblockedCount
+    });
+  } catch (error: any) {
+    console.error('[Electricity Contract Error]:', error);
+    const statusCode = error?.statusCode || 500;
+    res.status(statusCode).json({
+      error: error?.message || 'Error al procesar el contrato eléctrico'
+    });
   }
-
-  const message = unblockedCount > 0 
-    ? `¡Suministro eléctrico contratado (${pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 8 horas para ${unblockedCount} línea(s) de maquinaria.`
-    : `¡Suministro eléctrico de ${pKw} kW contratado correctamente!`;
-
-  res.json({ success: true, contract, message, unblockedCount });
 });
 
 app.get('/api/electricity/bills', (req, res) => {
@@ -12806,14 +16704,151 @@ function getStudentFloorPlans(db: any, studentId: string): NaveFloorPlan[] {
   return plans;
 }
 
-app.get('/api/electricity/floor-plans', (req, res) => {
+async function getStudentFloorPlansAsync(studentId: string, fallbackDb?: any): Promise<NaveFloorPlan[]> {
+  const db = fallbackDb || readDb();
+  if (!studentId) return [];
+  if (!dbPool) {
+    return getStudentFloorPlans(db, studentId);
+  }
+
+  try {
+    const studentUser = (db.users || []).find((u: any) => u.id === studentId || u.username === studentId);
+    const effectiveSid = studentUser ? studentUser.id : studentId;
+    const studentUsername = studentUser ? studentUser.username : studentId;
+
+    // 1. Consultar planos persistidos en PostgreSQL para el alumno (1 query directa)
+    const planRes = await safeDbQuery(
+      `SELECT * FROM planos_distribucion_naves
+       WHERE alumno_id = $1 OR alumno_id = $2
+       ORDER BY fecha_actualizacion DESC`,
+      [effectiveSid, studentUsername]
+    );
+
+    // 2. Consultar naves industriales del alumno en PostgreSQL (1 query directa)
+    const acqRes = await safeDbQuery(
+      `SELECT * FROM adquisiciones
+       WHERE (alumno_id = $1 OR alumno_id = $2)
+         AND (
+           LOWER(COALESCE(inmueble_tipo, '')) LIKE '%nave%'
+           OR LOWER(COALESCE(inmueble_tipo, '')) LIKE '%industrial%'
+           OR LOWER(COALESCE(inmueble_titulo, '')) LIKE '%nave%'
+           OR LOWER(COALESCE(inmueble_titulo, '')) LIKE '%industrial%'
+         )
+       ORDER BY fecha_compra ASC`,
+      [effectiveSid, studentUsername]
+    );
+
+    const persistedPlans: NaveFloorPlan[] = (planRes?.rows || []).map((row: any) => ({
+      id: String(row.id),
+      propertyId: String(row.inmueble_id),
+      acquisitionId: row.adquisicion_id ? String(row.adquisicion_id) : String(row.inmueble_id),
+      propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : '',
+      studentId: String(row.alumno_id),
+      machineryZoneM2: Number(row.zona_maquinaria_m2 || 0),
+      storageZoneM2: Number(row.zona_almacen_m2 || 0),
+      rawMaterialsStorageM2: row.almacen_materias_primas_m2 !== null && row.almacen_materias_primas_m2 !== undefined ? Number(row.almacen_materias_primas_m2) : 30,
+      semiFinishedStorageM2: row.almacen_semiterminados_m2 !== null && row.almacen_semiterminados_m2 !== undefined ? Number(row.almacen_semiterminados_m2) : 5,
+      finishedGoodsStorageM2: row.almacen_terminados_m2 !== null && row.almacen_terminados_m2 !== undefined ? Number(row.almacen_terminados_m2) : 30,
+      adminZoneM2: Number(row.zona_admin_m2 || 0),
+      freeZoneM2: Number(row.zona_libre_m2 || 0),
+      warehousesCount: Number(row.num_almacenes || 2),
+      updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+    }));
+
+    const plans: NaveFloorPlan[] = [...persistedPlans];
+
+    // Combinar naves de PostgreSQL con adquisiciones en memoria para máxima robustez sin duplicar
+    const combinedNaveAcquisitions: Array<{ id: string; inmueble_id: string; inmueble_titulo: string; superficie_m2: number }> = [];
+    const seenAcqIds = new Set<string>();
+
+    for (const row of (acqRes?.rows || [])) {
+      const id = String(row.id);
+      seenAcqIds.add(id);
+      combinedNaveAcquisitions.push({
+        id,
+        inmueble_id: String(row.inmueble_id || row.id),
+        inmueble_titulo: String(row.inmueble_titulo || ''),
+        superficie_m2: Number(row.superficie_m2) || 1000
+      });
+    }
+
+    for (const a of (db.acquisitions || [])) {
+      if (a.studentId === effectiveSid || a.studentId === studentUsername) {
+        const t = (a.type || a.propertyType || '').toLowerCase();
+        const title = (a.propertyTitle || a.title || '').toLowerCase();
+        const isNave = t.includes('nave') || t.includes('industrial') || title.includes('nave') || title.includes('industrial');
+        if (isNave && a.id && !seenAcqIds.has(String(a.id))) {
+          seenAcqIds.add(String(a.id));
+          combinedNaveAcquisitions.push({
+            id: String(a.id),
+            inmueble_id: String(a.propertyId || a.id),
+            inmueble_titulo: String(a.propertyTitle || a.title || 'Nave industrial'),
+            superficie_m2: Number(a.surfaceM2) || 1000
+          });
+        }
+      }
+    }
+
+    // 3. Completar con auto_plan_* únicamente aquellas naves sin plano persistido
+    for (const acq of combinedNaveAcquisitions) {
+      const targetId = String(acq.inmueble_id || acq.id);
+      const acqId = String(acq.id);
+      const propTitle = (acq.inmueble_titulo || '').toLowerCase().trim();
+
+      const hasPlan = plans.some((p: any) =>
+        (p.propertyId && targetId && String(p.propertyId) === String(targetId)) ||
+        (p.propertyId && acqId && String(p.propertyId) === String(acqId)) ||
+        (p.acquisitionId && acqId && String(p.acquisitionId) === String(acqId)) ||
+        (p.acquisitionId && targetId && String(p.acquisitionId) === String(targetId)) ||
+        (p.propertyTitle && propTitle && p.propertyTitle.toLowerCase().trim() === propTitle)
+      );
+
+      if (!hasPlan) {
+        const naveSurface = Number(acq.superficie_m2) || 1000;
+        const defaultAdminM2 = Math.max(40, Math.round(naveSurface * 0.10));
+        const rawMaterialsStorageM2 = 30;
+        const semiFinishedStorageM2 = 5;
+        const finishedGoodsStorageM2 = 30;
+        const storageZoneM2 = rawMaterialsStorageM2 + semiFinishedStorageM2 + finishedGoodsStorageM2;
+        const machineryZoneM2 = Math.min(240, Math.max(0, naveSurface - storageZoneM2 - defaultAdminM2));
+        const usedM2 = machineryZoneM2 + storageZoneM2 + defaultAdminM2;
+        const freeZoneM2 = Math.max(0, naveSurface - usedM2);
+
+        const defaultPlan: NaveFloorPlan = {
+          id: `auto_plan_${acq.id}`,
+          propertyId: targetId,
+          acquisitionId: acq.id,
+          propertyTitle: acq.inmueble_titulo || 'Nave industrial',
+          studentId: effectiveSid,
+          machineryZoneM2,
+          storageZoneM2,
+          rawMaterialsStorageM2,
+          semiFinishedStorageM2,
+          finishedGoodsStorageM2,
+          adminZoneM2: defaultAdminM2,
+          freeZoneM2,
+          warehousesCount: 3,
+          updatedAt: new Date().toISOString()
+        };
+        plans.push(defaultPlan);
+      }
+    }
+
+    return plans;
+  } catch (err) {
+    console.error('[getStudentFloorPlansAsync Error]:', err);
+    return getStudentFloorPlans(db, studentId);
+  }
+}
+
+app.get('/api/electricity/floor-plans', async (req, res) => {
   const { studentId } = req.query;
   const db = readDb();
-  const plans = getStudentFloorPlans(db, String(studentId || ''));
+  const plans = await getStudentFloorPlansAsync(String(studentId || ''), db);
   res.json({ success: true, floorPlans: plans });
 });
 
-app.post('/api/electricity/floor-plan', (req, res) => {
+app.post('/api/electricity/floor-plan', async (req, res) => {
   const {
     studentId,
     propertyId,
@@ -12828,56 +16863,244 @@ app.post('/api/electricity/floor-plan', (req, res) => {
     freeZoneM2,
     warehousesCount
   } = req.body;
-  const db = readDb();
 
-  if (!db.naveFloorPlans) db.naveFloorPlans = [];
-
-  const targetPropId = propertyId || acquisitionId || '';
-
-  let plan = db.naveFloorPlans.find(p => p.studentId === studentId && (
-    (p.propertyId && targetPropId && String(p.propertyId) === String(targetPropId)) ||
-    (p.acquisitionId && targetPropId && String(p.acquisitionId) === String(targetPropId)) ||
-    (p.propertyId && propertyId && String(p.propertyId) === String(propertyId)) ||
-    (p.acquisitionId && acquisitionId && String(p.acquisitionId) === String(acquisitionId)) ||
-    (p.propertyTitle && propertyTitle && p.propertyTitle.toLowerCase().trim() === propertyTitle.toLowerCase().trim())
-  ));
-
-  if (plan) {
-    plan.propertyId = propertyId || plan.propertyId || targetPropId;
-    if (acquisitionId) plan.acquisitionId = acquisitionId;
-    if (propertyTitle) plan.propertyTitle = propertyTitle;
-    plan.machineryZoneM2 = Number(machineryZoneM2) || 0;
-    plan.storageZoneM2 = Number(storageZoneM2) || 0;
-    plan.rawMaterialsStorageM2 = rawMaterialsStorageM2 !== undefined ? Number(rawMaterialsStorageM2) : 30;
-    plan.semiFinishedStorageM2 = semiFinishedStorageM2 !== undefined ? Number(semiFinishedStorageM2) : 5;
-    plan.finishedGoodsStorageM2 = finishedGoodsStorageM2 !== undefined ? Number(finishedGoodsStorageM2) : 30;
-    plan.adminZoneM2 = Number(adminZoneM2) || 0;
-    plan.freeZoneM2 = Number(freeZoneM2) || 0;
-    plan.warehousesCount = Number(warehousesCount) || 2;
-    plan.updatedAt = new Date().toISOString();
-  } else {
-    plan = {
-      id: generateId('floor_plan'),
-      propertyId: targetPropId,
-      acquisitionId: acquisitionId || targetPropId,
-      propertyTitle: propertyTitle || '',
-      studentId,
-      machineryZoneM2: Number(machineryZoneM2) || 0,
-      storageZoneM2: Number(storageZoneM2) || 0,
-      rawMaterialsStorageM2: rawMaterialsStorageM2 !== undefined ? Number(rawMaterialsStorageM2) : 30,
-      semiFinishedStorageM2: semiFinishedStorageM2 !== undefined ? Number(semiFinishedStorageM2) : 5,
-      finishedGoodsStorageM2: finishedGoodsStorageM2 !== undefined ? Number(finishedGoodsStorageM2) : 30,
-      adminZoneM2: Number(adminZoneM2) || 0,
-      freeZoneM2: Number(freeZoneM2) || 0,
-      warehousesCount: Number(warehousesCount) || 2,
-      updatedAt: new Date().toISOString()
-    };
-    db.naveFloorPlans.push(plan);
+  const reqStudentId = String(studentId || req.query.studentId || '').trim();
+  if (!reqStudentId) {
+    return res.status(400).json({ error: 'Falta el identificador del alumno (studentId)' });
   }
 
-  syncFloorPlanToSupabase(plan).catch(e => console.error(e));
-  writeDb(db);
-  res.json({ success: true, floorPlan: plan });
+  const targetPropId = String(propertyId || acquisitionId || '').trim();
+  const targetPropTitle = String(propertyTitle || '').trim();
+
+  if (!targetPropId && !targetPropTitle) {
+    return res.status(400).json({ error: 'Falta el identificador del inmueble (propertyId o acquisitionId)' });
+  }
+
+  // Safe numerical parsing keeping defaults
+  const parsedMachinery = Math.max(0, Number(machineryZoneM2) || 0);
+  let parsedStorage = Math.max(0, Number(storageZoneM2) || 0);
+  const parsedRaw = rawMaterialsStorageM2 !== undefined ? Math.max(0, Number(rawMaterialsStorageM2) || 0) : 30;
+  const parsedSemi = semiFinishedStorageM2 !== undefined ? Math.max(0, Number(semiFinishedStorageM2) || 0) : 5;
+  const parsedFinished = finishedGoodsStorageM2 !== undefined ? Math.max(0, Number(finishedGoodsStorageM2) || 0) : 30;
+  if (parsedStorage === 0 && (parsedRaw + parsedSemi + parsedFinished > 0)) {
+    parsedStorage = parsedRaw + parsedSemi + parsedFinished;
+  }
+  const parsedAdmin = Math.max(0, Number(adminZoneM2) || 0);
+  const parsedFree = freeZoneM2 !== undefined ? Math.max(0, Number(freeZoneM2) || 0) : 0;
+  const parsedWarehouses = Math.max(1, Math.min(10, Number(warehousesCount) || 2));
+
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `floor_plan_${reqStudentId}_${targetPropId || 'nave'}_${parsedMachinery}_${parsedStorage}`;
+
+  try {
+    const txResult = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no está configurada');
+      }
+
+      return await withPostgresTransaction(async (client) => {
+        // 1. Validar y bloquear cuenta de alumno (FOR UPDATE) para serializar operaciones por alumno
+        const studentRes = await client.query(
+          'SELECT id, alumno, usuario FROM cuentas WHERE id = $1 FOR UPDATE',
+          [reqStudentId]
+        );
+        if (!studentRes || studentRes.rows.length === 0) {
+          const err: any = new Error('Alumno no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // 2. Validar inmueble / adquisición y bloquear (FOR SHARE)
+        let propRes: any = null;
+        if (targetPropId) {
+          propRes = await client.query(
+            `SELECT id, inmueble_id, alumno_id, inmueble_tipo, inmueble_titulo, superficie_m2
+             FROM adquisiciones
+             WHERE (id = $1 OR inmueble_id = $1)
+             FOR SHARE`,
+            [targetPropId]
+          );
+        }
+
+        if ((!propRes || propRes.rows.length === 0) && targetPropTitle) {
+          propRes = await client.query(
+            `SELECT id, inmueble_id, alumno_id, inmueble_tipo, inmueble_titulo, superficie_m2
+             FROM adquisiciones
+             WHERE alumno_id = $1 AND LOWER(TRIM(inmueble_titulo)) = LOWER(TRIM($2))
+             FOR SHARE`,
+            [reqStudentId, targetPropTitle]
+          );
+        }
+
+        if (!propRes || propRes.rows.length === 0) {
+          const err: any = new Error('Inmueble no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const propRow = propRes.rows[0];
+
+        // 3. Validar autorización de titularidad
+        if (String(propRow.alumno_id) !== String(reqStudentId)) {
+          const err: any = new Error('El inmueble no pertenece al alumno');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 4. Validar tipo de inmueble (debe ser nave o almacén industrial/logístico)
+        const t = (propRow.inmueble_tipo || '').toLowerCase();
+        const title = (propRow.inmueble_titulo || '').toLowerCase();
+        const isNave = t.includes('nave') || t.includes('industrial') || t.includes('almacen') ||
+                       title.includes('nave') || title.includes('industrial') || title.includes('almacén') || title.includes('almacen');
+        if (!isNave) {
+          const err: any = new Error('El inmueble seleccionado no es una nave industrial o almacén logístico');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const resolvedInmuebleId = String(propRow.inmueble_id || propRow.id);
+        const resolvedAcquisitionId = String(propRow.id);
+        const resolvedPropTitle = String(propRow.inmueble_titulo || targetPropTitle || 'Nave industrial');
+
+        // 5. Buscar y bloquear plano existente en planos_distribucion_naves (FOR UPDATE)
+        const planRes = await client.query(
+          `SELECT * FROM planos_distribucion_naves
+           WHERE alumno_id = $1 AND (
+             inmueble_id = $2 OR
+             adquisicion_id = $3 OR
+             (inmueble_id = $3 AND $3 != '') OR
+             (adquisicion_id = $2 AND $2 != '') OR
+             ($4 != '' AND id = $4) OR
+             ($5 != '' AND LOWER(TRIM(COALESCE(titulo_inmueble, ''))) = LOWER(TRIM($5)))
+           )
+           FOR UPDATE`,
+          [reqStudentId, resolvedInmuebleId, resolvedAcquisitionId, String(req.body.id || ''), resolvedPropTitle]
+        );
+
+        let finalPlanRow: any = null;
+        if (planRes.rows.length > 0) {
+          // UPDATE plano existente
+          const existingPlan = planRes.rows[0];
+          const updateRes = await client.query(
+            `UPDATE planos_distribucion_naves
+             SET inmueble_id = $1,
+                 adquisicion_id = $2,
+                 titulo_inmueble = $3,
+                 zona_maquinaria_m2 = $4,
+                 zona_almacen_m2 = $5,
+                 almacen_materias_primas_m2 = $6,
+                 almacen_semiterminados_m2 = $7,
+                 almacen_terminados_m2 = $8,
+                 zona_admin_m2 = $9,
+                 zona_libre_m2 = $10,
+                 num_almacenes = $11,
+                 fecha_actualizacion = CURRENT_TIMESTAMP
+             WHERE id = $12
+             RETURNING *`,
+            [
+              resolvedInmuebleId,
+              resolvedAcquisitionId,
+              resolvedPropTitle,
+              parsedMachinery,
+              parsedStorage,
+              parsedRaw,
+              parsedSemi,
+              parsedFinished,
+              parsedAdmin,
+              parsedFree,
+              parsedWarehouses,
+              existingPlan.id
+            ]
+          );
+          finalPlanRow = updateRes.rows[0];
+        } else {
+          // INSERT nuevo plano
+          const planId = (req.body.id && !String(req.body.id).startsWith('auto_plan_'))
+            ? String(req.body.id)
+            : generateId('floor_plan');
+
+          const insertRes = await client.query(
+            `INSERT INTO planos_distribucion_naves (
+               id, inmueble_id, alumno_id, zona_maquinaria_m2, zona_almacen_m2,
+               almacen_materias_primas_m2, almacen_semiterminados_m2, almacen_terminados_m2,
+               zona_admin_m2, zona_libre_m2, num_almacenes, adquisicion_id, titulo_inmueble, fecha_actualizacion
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP
+             )
+             RETURNING *`,
+            [
+              planId,
+              resolvedInmuebleId,
+              reqStudentId,
+              parsedMachinery,
+              parsedStorage,
+              parsedRaw,
+              parsedSemi,
+              parsedFinished,
+              parsedAdmin,
+              parsedFree,
+              parsedWarehouses,
+              resolvedAcquisitionId,
+              resolvedPropTitle
+            ]
+          );
+          finalPlanRow = insertRes.rows[0];
+        }
+
+        const mappedPlan: NaveFloorPlan = {
+          id: String(finalPlanRow.id),
+          propertyId: String(finalPlanRow.inmueble_id),
+          acquisitionId: finalPlanRow.adquisicion_id ? String(finalPlanRow.adquisicion_id) : String(finalPlanRow.inmueble_id),
+          propertyTitle: finalPlanRow.titulo_inmueble ? String(finalPlanRow.titulo_inmueble) : resolvedPropTitle,
+          studentId: String(finalPlanRow.alumno_id),
+          machineryZoneM2: Number(finalPlanRow.zona_maquinaria_m2 || 0),
+          storageZoneM2: Number(finalPlanRow.zona_almacen_m2 || 0),
+          rawMaterialsStorageM2: finalPlanRow.almacen_materias_primas_m2 !== null && finalPlanRow.almacen_materias_primas_m2 !== undefined ? Number(finalPlanRow.almacen_materias_primas_m2) : 30,
+          semiFinishedStorageM2: finalPlanRow.almacen_semiterminados_m2 !== null && finalPlanRow.almacen_semiterminados_m2 !== undefined ? Number(finalPlanRow.almacen_semiterminados_m2) : 5,
+          finishedGoodsStorageM2: finalPlanRow.almacen_terminados_m2 !== null && finalPlanRow.almacen_terminados_m2 !== undefined ? Number(finalPlanRow.almacen_terminados_m2) : 30,
+          adminZoneM2: Number(finalPlanRow.zona_admin_m2 || 0),
+          freeZoneM2: Number(finalPlanRow.zona_libre_m2 || 0),
+          warehousesCount: Number(finalPlanRow.num_almacenes || 2),
+          updatedAt: finalPlanRow.fecha_actualizacion ? new Date(finalPlanRow.fecha_actualizacion).toISOString() : new Date().toISOString()
+        };
+
+        return { floorPlan: mappedPlan };
+      });
+    });
+
+    // 6. Actualización en memoria post-commit para compatibilidad (sin writeDb ni syncs asíncronos)
+    try {
+      const currentDb = readDb();
+      if (currentDb) {
+        if (!currentDb.naveFloorPlans) currentDb.naveFloorPlans = [];
+        const pIdx = currentDb.naveFloorPlans.findIndex(p =>
+          p.id === txResult.floorPlan.id ||
+          (p.studentId === txResult.floorPlan.studentId && (
+            (p.propertyId && txResult.floorPlan.propertyId && String(p.propertyId) === String(txResult.floorPlan.propertyId)) ||
+            (p.acquisitionId && txResult.floorPlan.acquisitionId && String(p.acquisitionId) === String(txResult.floorPlan.acquisitionId))
+          ))
+        );
+        if (pIdx !== -1) {
+          currentDb.naveFloorPlans[pIdx] = txResult.floorPlan;
+        } else {
+          currentDb.naveFloorPlans.push(txResult.floorPlan);
+        }
+      }
+    } catch (memErr) {
+      console.warn('[Floor Plan] Warning updating in-memory cache:', memErr);
+    }
+
+    res.json({
+      success: true,
+      floorPlan: txResult.floorPlan
+    });
+  } catch (error: any) {
+    console.error('[Floor Plan Error]:', error);
+    const statusCode = error?.statusCode || 500;
+    res.status(statusCode).json({
+      error: error?.message || 'Error al procesar el plano de distribución'
+    });
+  }
 });
 
 // ================= TELECOM & OFFICE STORE ENDPOINTS =================
@@ -12902,66 +17125,172 @@ app.get('/api/telecom/invoices', (req, res) => {
   res.json({ success: true, invoices });
 });
 
-app.post('/api/telecom/contract', (req, res) => {
+app.post('/api/telecom/contract', async (req, res) => {
   const { studentId, planId, propertyId, propertyTitle } = req.body;
-  const db = readDb();
+  const reqStudentId = String(studentId || req.query.studentId || '').trim();
 
-  const student = db.users.find((u: any) => u.id === studentId || String(u.id) === String(studentId));
-  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+  if (!reqStudentId) {
+    return res.status(400).json({ error: 'Falta el identificador del alumno (studentId)' });
+  }
 
   const plan = TELECOM_PLANS.find(p => p.id === planId);
   if (!plan) return res.status(404).json({ error: 'Plan de telecomunicaciones no encontrado' });
 
-  if (!db.telecomContracts) db.telecomContracts = [];
-  if (!db.telecomInvoices) db.telecomInvoices = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `tel_contract_${reqStudentId}_${plan.id}_${propertyId || 'global'}`;
 
-  // Deactivate any existing active telecom contracts for this student
-  db.telecomContracts.forEach((c: any) => {
-    if (c.studentId === studentId || String(c.studentId) === String(studentId)) {
-      c.status = 'cancelled';
+  try {
+    const txResult = await executeWithIdempotency(idemKey, async (key) => {
+      if (!dbPool) {
+        throw new Error('DATABASE_URL no está configurada');
+      }
+
+      return await withPostgresTransaction(async (client) => {
+        // 1. Lock student account for update
+        const studentRes = await client.query(
+          'SELECT id, alumno, saldo, usuario, role FROM cuentas WHERE id = $1 FOR UPDATE',
+          [reqStudentId]
+        );
+        if (!studentRes || studentRes.rows.length === 0) {
+          const err: any = new Error('Alumno no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const studentName = studentRes.rows[0].alumno || studentRes.rows[0].usuario || 'Estudiante';
+        const studentBalance = Number(studentRes.rows[0].saldo);
+
+        // 2. Validate property if provided
+        let resolvedPropId = propertyId ? String(propertyId).trim() : '';
+        let resolvedPropTitle = propertyTitle ? String(propertyTitle).trim() : '';
+        if (resolvedPropId) {
+          const propRes = await client.query(
+            `SELECT id, inmueble_id, alumno_id, inmueble_titulo
+             FROM adquisiciones
+             WHERE (id = $1 OR inmueble_id = $1)
+             FOR SHARE`,
+            [resolvedPropId]
+          );
+          if (propRes && propRes.rows.length > 0) {
+            resolvedPropId = propRes.rows[0].inmueble_id || propRes.rows[0].id;
+            if (!resolvedPropTitle && propRes.rows[0].inmueble_titulo) {
+              resolvedPropTitle = propRes.rows[0].inmueble_titulo;
+            }
+          }
+        }
+
+        // 3. Deactivate any existing active telecom contracts in PostgreSQL
+        await client.query(
+          `UPDATE contratos_telecom
+           SET estado = 'cancelled'
+           WHERE alumno_id = $1 AND estado = 'active'`,
+          [reqStudentId]
+        );
+
+        // 4. Artificial test rollback support
+        if (req.headers['x-test-force-rollback'] === 'true' || req.body?.forceRollback) {
+          throw new Error('Simulated telecom contract creation rollback failure');
+        }
+
+        // 5. Insert new contract directly into PostgreSQL
+        const newId = generateId('tel_contract');
+        const now = new Date();
+        const phoneNumber = `+34 91${Math.floor(1000000 + Math.random() * 9000000)}`;
+
+        await client.query(
+          `INSERT INTO contratos_telecom (
+             id, alumno_id, alumno_nombre, plan_id, plan_nombre, proveedor,
+             inmueble_id, inmueble_titulo, precio_mensual, fecha_contrato,
+             numero_telefono, estado, velocidad_mbps, lineas_moviles
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13)
+           RETURNING *`,
+          [
+            newId,
+            reqStudentId,
+            studentName,
+            plan.id,
+            plan.name,
+            plan.provider,
+            resolvedPropId || null,
+            resolvedPropTitle || null,
+            plan.monthlyPrice,
+            now.toISOString(),
+            phoneNumber,
+            plan.speedMbps,
+            plan.mobileLinesCount
+          ]
+        );
+
+        const cMonth = now.getMonth() + 1;
+        const cYear = now.getFullYear();
+        const daysInMonth = new Date(cYear, cMonth, 0).getDate();
+        const startDay = now.getDate();
+        const activeDays = Math.max(1, daysInMonth - startDay + 1);
+        const baseAmount = Math.round((plan.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
+        const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
+        const totalProrated = Math.round((baseAmount + ivaAmount) * 100) / 100;
+
+        const nextMonthRef = new Date(cYear, cMonth, 1);
+        const nextMonthStr = nextMonthRef.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+
+        const mappedContract: TelecomContract = {
+          id: newId,
+          studentId: reqStudentId,
+          studentName,
+          planId: plan.id,
+          planName: plan.name,
+          provider: plan.provider,
+          monthlyPrice: plan.monthlyPrice,
+          speedMbps: plan.speedMbps,
+          mobileLinesCount: plan.mobileLinesCount,
+          propertyId: resolvedPropId,
+          propertyTitle: resolvedPropTitle,
+          status: 'active',
+          contractDate: now.toISOString(),
+          phoneNumber
+        };
+
+        return {
+          contract: mappedContract,
+          studentBalance,
+          message: `Servicio ${plan.name} contratado con éxito. El servicio queda activo inmediatamente. La primera cuota proporcional (${activeDays}/${daysInMonth} días: ${totalProrated.toFixed(2)} € IVA incl.) se cargará automáticamente en tu cuenta el 1 de ${nextMonthStr}.`
+        };
+      });
+    });
+
+    // 6. Post-commit memory cache update
+    try {
+      const currentDb = readDb();
+      if (currentDb) {
+        if (!currentDb.telecomContracts) currentDb.telecomContracts = [];
+        currentDb.telecomContracts.forEach((c: any) => {
+          if (c.studentId === reqStudentId || String(c.studentId) === String(reqStudentId)) {
+            c.status = 'cancelled';
+          }
+        });
+        const cIdx = currentDb.telecomContracts.findIndex(c => c.id === txResult.contract.id);
+        if (cIdx !== -1) {
+          currentDb.telecomContracts[cIdx] = txResult.contract;
+        } else {
+          currentDb.telecomContracts.push(txResult.contract);
+        }
+        writeDb(currentDb);
+      }
+    } catch (memErr) {
+      console.warn('[Telecom Contract] Warning updating in-memory cache:', memErr);
     }
-  });
 
-  const now = new Date();
-  const contract: TelecomContract = {
-    id: generateId('tel_contract'),
-    studentId: student.id,
-    studentName: student.name,
-    planId: plan.id,
-    planName: plan.name,
-    provider: plan.provider,
-    monthlyPrice: plan.monthlyPrice,
-    speedMbps: plan.speedMbps,
-    mobileLinesCount: plan.mobileLinesCount,
-    propertyId: propertyId || '',
-    propertyTitle: propertyTitle || '',
-    status: 'active',
-    contractDate: now.toISOString()
-  };
-
-  db.telecomContracts.push(contract);
-  syncTelecomContractToSupabase(contract).catch(e => console.error(e));
-
-  writeDb(db);
-
-  const cMonth = now.getMonth() + 1;
-  const cYear = now.getFullYear();
-  const daysInMonth = new Date(cYear, cMonth, 0).getDate();
-  const startDay = now.getDate();
-  const activeDays = Math.max(1, daysInMonth - startDay + 1);
-  const baseAmount = Math.round((plan.monthlyPrice * (activeDays / daysInMonth)) * 100) / 100;
-  const ivaAmount = Math.round((baseAmount * 0.21) * 100) / 100;
-  const totalProrated = Math.round((baseAmount + ivaAmount) * 100) / 100;
-
-  const nextMonthRef = new Date(cYear, cMonth, 1);
-  const nextMonthStr = nextMonthRef.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
-
-  res.json({
-    success: true,
-    contract,
-    newBalance: student.balance,
-    message: `Servicio ${plan.name} contratado con éxito. El servicio queda activo inmediatamente. La primera cuota proporcional (${activeDays}/${daysInMonth} días: ${totalProrated.toFixed(2)} € IVA incl.) se cargará automáticamente en tu cuenta el 1 de ${nextMonthStr}.`
-  });
+    return res.json({
+      success: true,
+      contract: txResult.contract,
+      newBalance: txResult.studentBalance,
+      message: txResult.message
+    });
+  } catch (err: any) {
+    console.error('[Telecom Contract Error]:', err);
+    const statusCode = err?.statusCode || 500;
+    return res.status(statusCode).json({ error: err?.message || 'Error al contratar servicio de telecomunicaciones' });
+  }
 });
 
 // OFFICE STORE API ENDPOINTS
@@ -13643,29 +17972,187 @@ app.post('/api/vehicles/buy-cart', async (req, res) => {
   }
 });
 
-app.put('/api/student/vehicles/:id/assign-warehouse', (req, res) => {
+app.put('/api/student/vehicles/:id/assign-warehouse', async (req, res) => {
   const { id } = req.params;
-  const { warehouseIndex, propertyId, propertyTitle, warehouseName } = req.body;
+  const { warehouseIndex, propertyId, propertyTitle, warehouseName } = req.body || {};
+  const reqStudentId = req.body?.studentId || (req.query?.studentId as string);
 
-  const db = readDb();
-  if (!db.purchasedVehicles) db.purchasedVehicles = [];
-
-  const veh = db.purchasedVehicles.find(v => v.id === id);
-  if (!veh) return res.status(404).json({ error: 'Vehículo no encontrado' });
-
-  if (warehouseIndex !== undefined && warehouseIndex !== null && warehouseIndex !== '') {
-    veh.assignedWarehouseIndex = Number(warehouseIndex);
-  } else {
-    veh.assignedWarehouseIndex = undefined;
+  if (!id) {
+    return res.status(400).json({ error: 'ID de vehículo no especificado' });
   }
-  veh.assignedPropertyId = propertyId || undefined;
-  veh.assignedPropertyTitle = propertyTitle || undefined;
-  veh.assignedWarehouseName = warehouseName || undefined;
 
-  syncVehicleToSupabase(veh).catch(e => console.error(e));
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `assign_veh_wh_${id}_${propertyId || 'none'}_${warehouseIndex ?? 'none'}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  res.json({ success: true, vehicle: veh });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        const txResult = await withPostgresTransaction(async (client) => {
+          // 1. Bloquear el vehículo con FOR UPDATE
+          const vehRes = await client.query(
+            `SELECT * FROM vehiculos_comprados WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          if (!vehRes || vehRes.rows.length === 0) {
+            const err: any = new Error('Vehículo no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const vehRow = vehRes.rows[0];
+
+          // 2. Verificar autorización sobre el vehículo
+          if (reqStudentId && String(vehRow.alumno_id) !== String(reqStudentId)) {
+            const err: any = new Error('El vehículo no pertenece al alumno especificado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          const studentOwnerId = vehRow.alumno_id;
+
+          // 3. Si se proporciona propertyId, verificar en adquisiciones con FOR SHARE
+          let resolvedPropertyTitle: string | null = propertyTitle ? String(propertyTitle) : null;
+          let newPropertyId: string | null = null;
+          if (propertyId && String(propertyId).trim() !== '') {
+            const propRes = await client.query(
+              `SELECT id, inmueble_id, alumno_id, inmueble_titulo, inmueble_tipo
+               FROM adquisiciones
+               WHERE (id = $1 OR inmueble_id = $1)
+               FOR SHARE`,
+              [String(propertyId)]
+            );
+            if (!propRes || propRes.rows.length === 0) {
+              const err: any = new Error('Inmueble / almacén no encontrado');
+              err.statusCode = 404;
+              throw err;
+            }
+            const propRow = propRes.rows[0];
+            if (String(propRow.alumno_id) !== String(studentOwnerId)) {
+              const err: any = new Error('El inmueble no pertenece al alumno');
+              err.statusCode = 403;
+              throw err;
+            }
+            newPropertyId = String(propertyId);
+            if (!resolvedPropertyTitle && propRow.inmueble_titulo) {
+              resolvedPropertyTitle = String(propRow.inmueble_titulo);
+            }
+          }
+
+          // 4. Normalizar warehouseIndex
+          let newWarehouseIndex: number | null = null;
+          if (warehouseIndex !== undefined && warehouseIndex !== null && warehouseIndex !== '') {
+            const parsed = Number(warehouseIndex);
+            if (!isNaN(parsed)) {
+              newWarehouseIndex = parsed;
+            }
+          }
+
+          const newWarehouseName: string | null = warehouseName ? String(warehouseName) : null;
+
+          // 5. Ejecutar UPDATE directamente en PostgreSQL
+          const updateRes = await client.query(
+            `UPDATE vehiculos_comprados
+             SET
+               almacen_asignado_index = $1,
+               propiedad_asignada_id = $2,
+               propiedad_asignada_titulo = $3,
+               almacen_asignado_nombre = $4
+             WHERE id = $5
+             RETURNING *`,
+            [newWarehouseIndex, newPropertyId, resolvedPropertyTitle, newWarehouseName, vehRow.id]
+          );
+
+          const updatedRow = updateRes.rows[0];
+          const updatedVehicle: PurchasedVehicle = {
+            id: String(updatedRow.id),
+            studentId: String(updatedRow.alumno_id),
+            studentName: String(updatedRow.alumno_nombre),
+            vehicleType: String(updatedRow.vehiculo_tipo) as any,
+            title: String(updatedRow.titulo),
+            basePrice: Number(updatedRow.precio_base),
+            ivaAmount: Number(updatedRow.importe_iva),
+            totalPrice: Number(updatedRow.precio_total),
+            paymentMethod: String(updatedRow.metodo_pago) as any,
+            purchaseDate: updatedRow.fecha_compra ? new Date(updatedRow.fecha_compra).toISOString() : new Date().toISOString(),
+            assignedDriverId: updatedRow.conductor_asignado_id ? String(updatedRow.conductor_asignado_id) : undefined,
+            assignedDriverName: updatedRow.conductor_asignado_nombre ? String(updatedRow.conductor_asignado_nombre) : undefined,
+            assignedShift: updatedRow.turno_asignado ? Number(updatedRow.turno_asignado) : undefined,
+            assignedWarehouseIndex: updatedRow.almacen_asignado_index !== null && updatedRow.almacen_asignado_index !== undefined ? Number(updatedRow.almacen_asignado_index) : undefined,
+            assignedPropertyId: updatedRow.propiedad_asignada_id ? String(updatedRow.propiedad_asignada_id) : undefined,
+            assignedPropertyTitle: updatedRow.propiedad_asignada_titulo ? String(updatedRow.propiedad_asignada_titulo) : undefined,
+            assignedWarehouseName: updatedRow.almacen_asignado_nombre ? String(updatedRow.almacen_asignado_nombre) : undefined,
+            status: String(updatedRow.estado || 'activo') as 'activo' | 'mantenimiento',
+            imageUrl: updatedRow.imagen_url ? String(updatedRow.imagen_url) : (updatedRow.vehiculo_tipo === 'camion_trailer' ? '/images/vehicles/camion_trailer.jpg' : updatedRow.vehiculo_tipo === 'coche_empresa' ? '/images/vehicles/coche_empresa.jpg' : '/images/vehicles/carretilla_elevadora.jpg')
+          };
+
+          return { success: true, vehicle: updatedVehicle };
+        }, key);
+
+        // 6. Actualizar puntualmente la caché en memoria ÚNICAMENTE tras el commit exitoso (sin writeDb)
+        try {
+          const currentDb = readDb();
+          if (currentDb && currentDb.purchasedVehicles) {
+            const vIdx = currentDb.purchasedVehicles.findIndex(v => v.id === txResult.vehicle.id);
+            if (vIdx !== -1) {
+              currentDb.purchasedVehicles[vIdx] = txResult.vehicle;
+            } else {
+              currentDb.purchasedVehicles.push(txResult.vehicle);
+            }
+          }
+        } catch (memErr) {
+          console.warn('[Assign Vehicle Warehouse] Warning updating in-memory cache:', memErr);
+        }
+
+        return txResult;
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.purchasedVehicles) db.purchasedVehicles = [];
+        const veh = db.purchasedVehicles.find(v => v.id === id);
+        if (!veh) {
+          const err: any = new Error('Vehículo no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (reqStudentId && String(veh.studentId) !== String(reqStudentId)) {
+          const err: any = new Error('El vehículo no pertenece al alumno especificado');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        if (propertyId && String(propertyId).trim() !== '') {
+          const acq = (db.acquisitions || []).find(a => a.id === propertyId || a.propertyId === propertyId);
+          if (!acq) {
+            const err: any = new Error('Inmueble / almacén no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (String(acq.studentId) !== String(veh.studentId)) {
+            const err: any = new Error('El inmueble no pertenece al alumno');
+            err.statusCode = 403;
+            throw err;
+          }
+        }
+
+        if (warehouseIndex !== undefined && warehouseIndex !== null && warehouseIndex !== '') {
+          const parsed = Number(warehouseIndex);
+          veh.assignedWarehouseIndex = isNaN(parsed) ? undefined : parsed;
+        } else {
+          veh.assignedWarehouseIndex = undefined;
+        }
+        veh.assignedPropertyId = propertyId || undefined;
+        veh.assignedPropertyTitle = propertyTitle || undefined;
+        veh.assignedWarehouseName = warehouseName || undefined;
+
+        return { success: true, vehicle: veh };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Assign Vehicle Warehouse Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al asignar almacén al vehículo' });
+  }
 });
 
 app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
@@ -15161,7 +19648,7 @@ app.get('/api/raw-materials/orders', async (req, res) => {
     }
   }
 
-  ensureTransportInvoicesForTransfers(db);
+  // GET is strictly read-only: no synthetic mutations or background sync side-effects
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
 
   let orders = db.rawMaterialOrders;
@@ -15446,27 +19933,30 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       });
     }
 
-    const inv = checkAndCalculateProduction(db, buyer.id);
-    const ironPallets = (inv.ironKg || 0) / 1000;
-    const plasticPallets = (inv.plasticKg || 0) / 1000;
-    const epoxiPallets = (inv.epoxiKg || 0) / 1000;
-    const currentRawStockPallets = ironPallets + plasticPallets + epoxiPallets;
+    // Memory-based capacity validation fallback ONLY when PostgreSQL is not configured
+    if (!dbPool) {
+      const inv = checkAndCalculateProduction(db, buyer.id);
+      const ironPallets = (inv.ironKg || 0) / 1000;
+      const plasticPallets = (inv.plasticKg || 0) / 1000;
+      const epoxiPallets = (inv.epoxiKg || 0) / 1000;
+      const currentRawStockPallets = ironPallets + plasticPallets + epoxiPallets;
 
-    const starRods = ((inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0);
-    const flatRods = ((inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0);
-    const starScrewdrivers = ((inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0);
-    const flatScrewdrivers = ((inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0);
+      const starRods = ((inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0);
+      const flatRods = ((inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0);
+      const starScrewdrivers = ((inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0);
+      const flatScrewdrivers = ((inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0);
 
-    const rodsPallets = (buyerLevel === 1 ? (starRods + flatRods) : 0) / 10000;
-    const screwdriversPallets = (starScrewdrivers + flatScrewdrivers) / 10000;
-    const currentTotalStockPallets = currentRawStockPallets + rodsPallets + screwdriversPallets;
+      const rodsPallets = (buyerLevel === 1 ? (starRods + flatRods) : 0) / 10000;
+      const screwdriversPallets = (starScrewdrivers + flatScrewdrivers) / 10000;
+      const currentTotalStockPallets = currentRawStockPallets + rodsPallets + screwdriversPallets;
 
-    // Check warehouse capacity (identically aligned with Existencias in CompanyDashboard and Superficie y capacidad in Mercado)
-    if (totalRequestedPallets > 0 && (currentTotalStockPallets + totalRequestedPallets) > (maxTotalPalletsAllowed + 0.001)) {
-      const freePallets = Math.max(0, maxTotalPalletsAllowed - currentTotalStockPallets);
-      return res.status(400).json({
-        error: `Exceso de capacidad en almacén: Tienes ${totalStorageM2} m² de zona de almacén (${maxTotalPalletsAllowed} palets de capacidad máxima). Tu stock actual ocupa ${currentTotalStockPallets.toFixed(2)} palets y el pedido suma ${totalRequestedPallets.toFixed(2)} palets, superando la capacidad máxima de ${maxTotalPalletsAllowed} palets (espacio libre actual: ${freePallets.toFixed(2)} palets).`
-      });
+      // Check warehouse capacity (identically aligned with Existencias in CompanyDashboard and Superficie y capacidad in Mercado)
+      if (totalRequestedPallets > 0 && (currentTotalStockPallets + totalRequestedPallets) > (maxTotalPalletsAllowed + 0.001)) {
+        const freePallets = Math.max(0, maxTotalPalletsAllowed - currentTotalStockPallets);
+        return res.status(400).json({
+          error: `Exceso de capacidad en almacén: Tienes ${totalStorageM2} m² de zona de almacén (${maxTotalPalletsAllowed} palets de capacidad máxima). Tu stock actual ocupa ${currentTotalStockPallets.toFixed(2)} palets y el pedido suma ${totalRequestedPallets.toFixed(2)} palets, superando la capacidad máxima de ${maxTotalPalletsAllowed} palets (espacio libre actual: ${freePallets.toFixed(2)} palets).`
+        });
+      }
     }
   }
 
@@ -15745,24 +20235,144 @@ app.post('/api/raw-materials/orders', async (req, res) => {
               }
             }
 
-            // 2. CHECK AND DEDUCT SELLER STUDENT INVENTORY (IF SELLER IS STUDENT)
-            if (isStudentSeller) {
+            // 2. DETERMINISTIC LOCKING OF INVENTORIES (BEFORE ANY ACCOUNTS LOCK)
+            const studentsInvToLock: string[] = [];
+            if (isStudentSeller && sellerId) {
+              studentsInvToLock.push(sellerId);
+            }
+            if (buyer.id) {
+              if (!studentsInvToLock.includes(buyer.id)) {
+                studentsInvToLock.push(buyer.id);
+              }
+            }
+            studentsInvToLock.sort();
+
+            const invMap = new Map<string, RawMaterialInventory>();
+            for (const sid of studentsInvToLock) {
+              const sidName = sid === buyer.id ? buyerName : sellerName;
               await client.query(
                 `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
                  VALUES ($1, $2, '{}'::jsonb)
                  ON CONFLICT (alumno_id) DO NOTHING`,
-                [sellerId, sellerName]
+                [sid, sidName || 'Estudiante']
               );
-              const sellerInvRes = await client.query(
+
+              const invRes = await client.query(
                 `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
-                [sellerId]
+                [sid]
               );
-              if (!sellerInvRes || sellerInvRes.rows.length === 0) {
-                const err: any = new Error(`Inventario no encontrado para el alumno vendedor ${sellerId}`);
+              if (!invRes || invRes.rows.length === 0) {
+                const err: any = new Error(`Inventario no encontrado para el alumno ${sid}`);
                 err.statusCode = 404;
                 throw err;
               }
-              savedSellerInv = parseInventoryRow(sellerInvRes.rows[0]);
+              invMap.set(sid, parseInventoryRow(invRes.rows[0]));
+            }
+
+            // CHECK BUYER WAREHOUSE STORAGE CAPACITY IN POSTGRESQL (TRANSACTIONAL CHECK)
+            if (!isTeacher && buyerLevel === 1) {
+              const buyerInvForCap = invMap.get(buyer.id);
+              if (!buyerInvForCap) {
+                const err: any = new Error(`Inventario no encontrado para el alumno ${buyer.id}`);
+                err.statusCode = 404;
+                throw err;
+              }
+
+              // 1. Fetch buyer warehouse acquisitions from PostgreSQL
+              const acqRes = await client.query(
+                `SELECT id, alumno_id, inmueble_id, inmueble_tipo, inmueble_titulo, superficie_m2
+                 FROM adquisiciones
+                 WHERE (alumno_id = $1 OR alumno_id = $2)
+                   AND (
+                     LOWER(COALESCE(inmueble_tipo, '')) IN ('nave_industrial', 'almacen', 'almacen_logistico', 'industrial', 'warehouse')
+                     OR LOWER(COALESCE(inmueble_tipo, '')) LIKE '%nave%'
+                     OR LOWER(COALESCE(inmueble_tipo, '')) LIKE '%industrial%'
+                     OR LOWER(COALESCE(inmueble_titulo, '')) LIKE '%nave%'
+                     OR LOWER(COALESCE(inmueble_titulo, '')) LIKE '%almacen%'
+                     OR LOWER(COALESCE(inmueble_titulo, '')) LIKE '%almacén%'
+                   )`,
+                [buyer.id, buyer.username || buyer.id]
+              );
+
+              // 2. Fetch buyer floor plans from PostgreSQL
+              const planRes = await client.query(
+                `SELECT id, inmueble_id, alumno_id, almacen_materias_primas_m2, almacen_semiterminados_m2, almacen_terminados_m2, zona_almacen_m2, adquisicion_id, titulo_inmueble
+                 FROM planos_distribucion_naves
+                 WHERE alumno_id = $1 OR alumno_id = $2`,
+                [buyer.id, buyer.username || buyer.id]
+              );
+
+              let txTotalStorageM2 = 0;
+              let txMaxTotalPalletsAllowed = 0;
+
+              if (acqRes.rows.length === 0) {
+                txTotalStorageM2 = 65;
+                txMaxTotalPalletsAllowed = Math.max(1, Math.floor((txTotalStorageM2 / 30) * 25));
+              } else {
+                acqRes.rows.forEach((acqRow: any) => {
+                  const pType = (acqRow.inmueble_tipo || '').toLowerCase();
+                  const isLogisticsWarehouse = pType.includes('almacen') || pType.includes('almacén');
+                  let storageM2 = 0;
+                  if (isLogisticsWarehouse) {
+                    storageM2 = Number(acqRow.superficie_m2 || 300);
+                  } else {
+                    const matchedPlan = planRes.rows.find((p: any) =>
+                      (p.adquisicion_id && acqRow.id && String(p.adquisicion_id) === String(acqRow.id)) ||
+                      (p.inmueble_id && acqRow.inmueble_id && String(p.inmueble_id) === String(acqRow.inmueble_id)) ||
+                      (p.inmueble_id && acqRow.id && String(p.inmueble_id) === String(acqRow.id)) ||
+                      (p.titulo_inmueble && acqRow.inmueble_titulo && p.titulo_inmueble.trim().toLowerCase() === acqRow.inmueble_titulo.trim().toLowerCase())
+                    );
+                    if (matchedPlan) {
+                      const raw = Number(matchedPlan.almacen_materias_primas_m2);
+                      const fin = Number(matchedPlan.almacen_terminados_m2);
+                      const semi = Number(matchedPlan.almacen_semiterminados_m2);
+                      const totalPlanStorage = (isNaN(raw) ? 0 : raw) + (isNaN(fin) ? 0 : fin) + (isNaN(semi) ? 0 : semi);
+                      storageM2 = totalPlanStorage > 0 ? totalPlanStorage : (Number(matchedPlan.zona_almacen_m2) || 65);
+                    } else {
+                      storageM2 = 65;
+                    }
+                  }
+                  if (!storageM2 || storageM2 <= 0) {
+                    storageM2 = 65;
+                  }
+                  txTotalStorageM2 += storageM2;
+                  txMaxTotalPalletsAllowed += Math.max(1, Math.floor((storageM2 / 30) * 25));
+                });
+              }
+
+              if (txTotalStorageM2 <= 0) {
+                txTotalStorageM2 = 65;
+                txMaxTotalPalletsAllowed = Math.max(1, Math.floor((txTotalStorageM2 / 30) * 25));
+              }
+
+              // Calculate pallets from current locked PostgreSQL buyer inventory
+              const ironPallets = (buyerInvForCap.ironKg || 0) / 1000;
+              const plasticPallets = (buyerInvForCap.plasticKg || 0) / 1000;
+              const epoxiPallets = (buyerInvForCap.epoxiKg || 0) / 1000;
+              const currentRawStockPallets = ironPallets + plasticPallets + epoxiPallets;
+
+              const starRods = ((buyerInvForCap as any).producedStarRodsUnits || (buyerInvForCap as any).producedIronRodsUnits || 0);
+              const flatRods = ((buyerInvForCap as any).producedFlatRodsUnits || (buyerInvForCap as any).producedMetalRodsUnits || 0);
+              const starScrewdrivers = ((buyerInvForCap as any).starScrewdriversUnits || (buyerInvForCap as any).ironScrewdriversUnits || 0);
+              const flatScrewdrivers = ((buyerInvForCap as any).flatScrewdriversUnits || (buyerInvForCap as any).metalScrewdriversUnits || 0);
+
+              const rodsPallets = (buyerLevel === 1 ? (starRods + flatRods) : 0) / 10000;
+              const screwdriversPallets = (starScrewdrivers + flatScrewdrivers) / 10000;
+              const currentTotalStockPallets = currentRawStockPallets + rodsPallets + screwdriversPallets;
+
+              if (totalRequestedPallets > 0 && (currentTotalStockPallets + totalRequestedPallets) > (txMaxTotalPalletsAllowed + 0.001)) {
+                const freePallets = Math.max(0, txMaxTotalPalletsAllowed - currentTotalStockPallets);
+                const err: any = new Error(
+                  `Exceso de capacidad en almacén: Tienes ${txTotalStorageM2} m² de zona de almacén (${txMaxTotalPalletsAllowed} palets de capacidad máxima). Tu stock actual ocupa ${currentTotalStockPallets.toFixed(2)} palets y el pedido suma ${totalRequestedPallets.toFixed(2)} palets, superando la capacidad máxima de ${txMaxTotalPalletsAllowed} palets (espacio libre actual: ${freePallets.toFixed(2)} palets).`
+                );
+                err.statusCode = 400;
+                throw err;
+              }
+            }
+
+            // CHECK AND DEDUCT SELLER STUDENT INVENTORY (IF SELLER IS STUDENT)
+            if (isStudentSeller && sellerId) {
+              savedSellerInv = invMap.get(sellerId)!;
 
               // Check availability in PostgreSQL
               for (const item of itemsToProcess) {
@@ -15949,29 +20559,14 @@ app.post('/api/raw-materials/orders', async (req, res) => {
               }
             }
 
-            // Credit buyer inventory directly in PostgreSQL
-            await client.query(
-              `INSERT INTO materias_primas_inventario (alumno_id, alumno_nombre, desglose_almacenes)
-               VALUES ($1, $2, '{}'::jsonb)
-               ON CONFLICT (alumno_id) DO NOTHING`,
-              [buyer.id, buyerName]
-            );
-            const buyerInvRes = await client.query(
-              `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
-              [buyer.id]
-            );
-            if (!buyerInvRes || buyerInvRes.rows.length === 0) {
-              const err: any = new Error(`Inventario no encontrado para el alumno comprador ${buyer.id}`);
-              err.statusCode = 404;
-              throw err;
-            }
-            const buyerInv = parseInventoryRow(buyerInvRes.rows[0]);
+            // 4. CREDIT BUYER INVENTORY IN POSTGRESQL (ALREADY LOCKED IN STEP 2 BEFORE ACCOUNTS)
+            const buyerInv = invMap.get(buyer.id)!;
             creditOrderMaterialsToInventory(buyerInv, order, order.destinationNaveId);
             buyerInv.updatedAt = now.toISOString();
             await syncInventoryToSupabase(buyerInv, buyerName, client);
             savedBuyerInv = buyerInv;
 
-            // 4. SYNC ORDER INTO POSTGRESQL WITHIN TRANSACTION
+            // 5. SYNC ORDER INTO POSTGRESQL WITHIN TRANSACTION
             await syncRawMaterialOrderToSupabase(order, client);
 
             if (transportInvoiceOrder) {
@@ -20514,7 +25109,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
   });
 });
 
-app.post('/api/market/messages/sign-promissory-note', (req, res) => {
+app.post('/api/market/messages/sign-promissory-note', async (req, res) => {
   const {
     senderId,
     recipientId,
@@ -20526,7 +25121,9 @@ app.post('/api/market/messages/sign-promissory-note', (req, res) => {
     orderType: rawOrderType,
     bankIban: rawBankIban,
     bankName: rawBankName,
-    linkedInvoiceNumber
+    linkedInvoiceNumber,
+    issuerNif: rawIssuerNif,
+    beneficiaryNif: rawBeneficiaryNif
   } = req.body;
 
   if (!senderId || !recipientId) {
@@ -20542,103 +25139,368 @@ app.post('/api/market/messages/sign-promissory-note', (req, res) => {
     return res.status(400).json({ error: 'La fecha de vencimiento es un requisito indispensable por la Ley Cambiaria.' });
   }
 
-  const db = readDb();
-  const sender = db.users.find(u => u.id === senderId);
-  const recipient = db.users.find(u => u.id === recipientId);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
 
-  if (!sender || !recipient) {
-    return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
+  // Early check: si la operación ya se completó con esta clave de idempotencia, retornar la respuesta guardada
+  if (dbPool && rawIdemKey) {
+    try {
+      const existing = await safeDbQuery('SELECT respuesta FROM operaciones_idempotencia WHERE clave = $1', [rawIdemKey]);
+      if (existing && existing.rows && existing.rows.length > 0) {
+        const resp = existing.rows[0].respuesta;
+        if (resp && resp.__status !== 'pending') {
+          return res.json(resp);
+        }
+      }
+    } catch (e) {
+      // Non-fatal, continuar con la ejecución transaccional
+    }
   }
 
-  if (!db.paymentObligations) db.paymentObligations = [];
-  if (!db.marketMessages) db.marketMessages = [];
+  const runSignPromissoryNote = async (idemKey?: string) => {
+    if (dbPool) {
+      return await withPostgresTransaction(async (client) => {
+        // 1. Obtener emisor y receptor desde PostgreSQL
+        const senderRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR usuario = $1 OR alumno = $1
+           LIMIT 1`,
+          [senderId]
+        );
+        const recipientRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR usuario = $1 OR alumno = $1
+           LIMIT 1`,
+          [recipientId]
+        );
 
-  const now = new Date();
-  const year = now.getFullYear();
-  const randomNum = Math.floor(10000 + Math.random() * 90000);
-  const promissoryNum = `PAG-${year}-${randomNum}`;
-  const amountWords = numberToSpanishWords(amount);
-  const formattedDueDate = new Date(rawDueDate).toISOString();
-  const formattedIssueDate = rawIssueDate ? new Date(rawIssueDate).toISOString() : now.toISOString();
-  const issuePlace = String(rawIssuePlace || 'Madrid').trim();
-  const orderType = rawOrderType === 'a_la_orden' ? 'a_la_orden' : 'no_a_la_orden';
-  const concept = String(rawConcept || (linkedInvoiceNumber ? `Pago aplazado Factura ${linkedInvoiceNumber}` : 'Compromiso cambiario de pago comercial')).trim();
+        let senderUser = senderRes.rows[0];
+        let recipientUser = recipientRes.rows[0];
 
-  const senderIban = String(rawBankIban || sender.accountNumber || `ES21 0049 1500 05 1234567890`).trim();
-  const bankName = String(rawBankName || 'Banco Central Mercantil S.A.').trim();
+        // Fallback a db.json local en caso de que algún usuario solo exista en memoria
+        if (!senderUser || !recipientUser) {
+          const localDb = readDb();
+          if (!senderUser) {
+            const u = localDb.users?.find(x => x.id === senderId);
+            if (u) senderUser = { id: u.id, alumno: u.name, account_number: u.accountNumber, level: u.level };
+          }
+          if (!recipientUser) {
+            const u = localDb.users?.find(x => x.id === recipientId);
+            if (u) recipientUser = { id: u.id, alumno: u.name, account_number: u.accountNumber, level: u.level };
+          }
+        }
 
-  const senderNif = String(req.body.issuerNif || (sender.id?.startsWith('user-') ? sender.id : `user-${sender.id}`)).trim();
-  const recipientNif = String(req.body.beneficiaryNif || (recipient.id?.startsWith('user-') ? recipient.id : `user-${recipient.id}`)).trim();
-  const senderAddress = (sender as any).address || 'Domicilio social registrado, Madrid';
+        if (!senderUser || !recipientUser) {
+          const err: any = new Error('Usuario o empresa no encontrada.');
+          err.statusCode = 404;
+          throw err;
+        }
 
-  // 1. Generate unique Promissory Note ID
-  const promissoryId = generateId('pn');
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const year = now.getFullYear();
+        const amountWords = numberToSpanishWords(amount);
+        const formattedDueDate = new Date(rawDueDate).toISOString();
+        const formattedIssueDate = rawIssueDate ? new Date(rawIssueDate).toISOString() : nowIso;
+        const issuePlace = String(rawIssuePlace || 'Madrid').trim();
+        const orderType = rawOrderType === 'a_la_orden' ? 'a_la_orden' : 'no_a_la_orden';
+        const concept = String(rawConcept || (linkedInvoiceNumber ? `Pago aplazado Factura ${linkedInvoiceNumber}` : 'Compromiso cambiario de pago comercial')).trim();
 
-  // 2. Create MarketMessage
-  const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+        const senderIban = String(rawBankIban || senderUser.account_number || 'ES21 0049 1500 05 1234567890').trim();
+        const bankName = String(rawBankName || 'Banco Central Mercantil S.A.').trim();
 
-  const msgContent = `📑 PAGARÉ FIRMADO: ${promissoryNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} en favor de ${recipient.name} (Librador: ${sender.name}). Pago manual por transferencia.`;
+        const senderNif = String(rawIssuerNif || (senderUser.id?.startsWith('user-') ? senderUser.id : `user-${senderUser.id}`)).trim();
+        const recipientNif = String(rawBeneficiaryNif || (recipientUser.id?.startsWith('user-') ? recipientUser.id : `user-${recipientUser.id}`)).trim();
+        const senderAddress = (senderUser as any).address || 'Domicilio social registrado, Madrid';
 
-  const promissoryData = {
-    id: promissoryId,
-    promissoryNoteNumber: promissoryNum,
-    concept,
-    amount,
-    amountInWords: amountWords,
-    issueDate: formattedIssueDate,
-    issuePlace,
-    dueDate: formattedDueDate,
-    orderType: orderType as 'no_a_la_orden' | 'a_la_orden',
-    beneficiaryId: recipient.id,
-    beneficiaryName: recipient.name,
-    beneficiaryNifCif: recipientNif,
-    beneficiaryLevel: recipient.level || 1,
-    issuerId: sender.id,
-    issuerName: sender.name,
-    issuerNifCif: senderNif,
-    issuerAddress: senderAddress,
-    issuerLevel: sender.level || 1,
-    bankName,
-    bankIban: senderIban,
-    signatureTimestamp: now.toISOString(),
-    signatureHash,
-    status: 'pendiente' as const
+        const promissoryId = req.body.promissoryId || generateId('pn');
+        const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+        const messageId = req.body.messageId || generateId('msg');
+        const chatId = [senderUser.id, recipientUser.id].sort().join('_');
+
+        // 2. Generación segura del número de pagaré con garantía de unicidad y SAVEPOINT
+        let finalPromissoryNum = '';
+        let finalPromissoryData: PromissoryNoteData | null = null;
+        let finalMsgContent = '';
+        let inserted = false;
+
+        const maxAttempts = 15;
+        let candidateNum = req.body.promissoryNoteNumber
+          ? String(req.body.promissoryNoteNumber).trim()
+          : `PAG-${year}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          // Si no se proporcionó número fijo, verificar si ya existe antes del insert
+          if (!req.body.promissoryNoteNumber) {
+            const checkExist = await client.query(
+              `SELECT 1 FROM market_messages 
+               WHERE type = 'promissory_note' AND invoice_data->>'promissoryNoteNumber' = $1 
+               LIMIT 1`,
+              [candidateNum]
+            );
+            if (checkExist.rows.length > 0) {
+              candidateNum = `PAG-${year}-${Math.floor(10000 + Math.random() * 90000)}`;
+              continue;
+            }
+          }
+
+          const currentPromissoryData: PromissoryNoteData = {
+            id: promissoryId,
+            promissoryNoteNumber: candidateNum,
+            concept,
+            amount,
+            amountInWords: amountWords,
+            issueDate: formattedIssueDate,
+            issuePlace,
+            dueDate: formattedDueDate,
+            orderType: orderType as 'no_a_la_orden' | 'a_la_orden',
+            beneficiaryId: recipientUser.id,
+            beneficiaryName: recipientUser.alumno,
+            beneficiaryNifCif: recipientNif,
+            beneficiaryLevel: recipientUser.level || 1,
+            issuerId: senderUser.id,
+            issuerName: senderUser.alumno,
+            issuerNifCif: senderNif,
+            issuerAddress: senderAddress,
+            issuerLevel: senderUser.level || 1,
+            bankName,
+            bankIban: senderIban,
+            signatureTimestamp: nowIso,
+            signatureHash,
+            status: 'pendiente'
+          };
+
+          const currentMsgContent = `📑 PAGARÉ FIRMADO: ${candidateNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} en favor de ${recipientUser.alumno} (Librador: ${senderUser.alumno}). Pago manual por transferencia.`;
+
+          await client.query('SAVEPOINT sp_insert_promissory');
+          try {
+            await client.query(
+              `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                messageId,
+                chatId,
+                senderUser.id,
+                senderUser.alumno,
+                recipientUser.id,
+                recipientUser.alumno,
+                currentMsgContent,
+                nowIso,
+                false,
+                'promissory_note',
+                JSON.stringify(currentPromissoryData)
+              ]
+            );
+            await client.query('RELEASE SAVEPOINT sp_insert_promissory');
+            inserted = true;
+            finalPromissoryNum = candidateNum;
+            finalPromissoryData = currentPromissoryData;
+            finalMsgContent = currentMsgContent;
+            break;
+          } catch (insertErr: any) {
+            await client.query('ROLLBACK TO SAVEPOINT sp_insert_promissory');
+            if (insertErr.code === '23505' && !req.body.promissoryNoteNumber) {
+              candidateNum = `PAG-${year}-${Math.floor(10000 + Math.random() * 90000)}`;
+              continue;
+            }
+            throw insertErr;
+          }
+        }
+
+        if (!inserted || !finalPromissoryData) {
+          const err: any = new Error('No fue posible asignar un número de pagaré único tras varios intentos.');
+          err.statusCode = 500;
+          throw err;
+        }
+
+        // 3. Notificación atómica en PostgreSQL
+        const notifId = generateId('notif');
+        const notifTitle = 'Nuevo pagaré cambiario recibido';
+        const notifMessage = `${senderUser.alumno} ha firmado y emitido a tu favor el pagaré cambiario oficial ${finalPromissoryNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} (pago directo por transferencia al vencimiento).`;
+
+        await client.query(
+          `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+           VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            notifId,
+            recipientUser.id,
+            notifTitle,
+            notifMessage,
+            nowIso,
+            promissoryId
+          ]
+        );
+
+        const finalMsg: MarketMessage = {
+          id: messageId,
+          chatId,
+          senderId: senderUser.id,
+          senderName: senderUser.alumno,
+          recipientId: recipientUser.id,
+          recipientName: recipientUser.alumno,
+          content: finalMsgContent,
+          timestamp: nowIso,
+          read: false,
+          type: 'promissory_note',
+          promissoryNoteData: finalPromissoryData,
+          invoiceData: finalPromissoryData as any
+        };
+
+        return {
+          success: true,
+          message: finalMsg,
+          promissoryNoteNumber: finalPromissoryNum,
+          _meta: {
+            notif: {
+              id: notifId,
+              userId: recipientUser.id,
+              title: notifTitle,
+              message: notifMessage,
+              type: 'transfer_received' as const,
+              read: false,
+              createdAt: nowIso,
+              relatedOrderId: promissoryId
+            }
+          }
+        };
+      }, idemKey);
+    } else {
+      // Fallback in-memory cuando no hay base de datos conectada
+      const db = readDb();
+      const sender = db.users.find(u => u.id === senderId);
+      const recipient = db.users.find(u => u.id === recipientId);
+
+      if (!sender || !recipient) {
+        const err: any = new Error('Usuario o empresa no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      if (!db.paymentObligations) db.paymentObligations = [];
+      if (!db.marketMessages) db.marketMessages = [];
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const randomNum = Math.floor(10000 + Math.random() * 90000);
+      const promissoryNum = req.body.promissoryNoteNumber || `PAG-${year}-${randomNum}`;
+      const amountWords = numberToSpanishWords(amount);
+      const formattedDueDate = new Date(rawDueDate).toISOString();
+      const formattedIssueDate = rawIssueDate ? new Date(rawIssueDate).toISOString() : now.toISOString();
+      const issuePlace = String(rawIssuePlace || 'Madrid').trim();
+      const orderType = rawOrderType === 'a_la_orden' ? 'a_la_orden' : 'no_a_la_orden';
+      const concept = String(rawConcept || (linkedInvoiceNumber ? `Pago aplazado Factura ${linkedInvoiceNumber}` : 'Compromiso cambiario de pago comercial')).trim();
+
+      const senderIban = String(rawBankIban || sender.accountNumber || `ES21 0049 1500 05 1234567890`).trim();
+      const bankName = String(rawBankName || 'Banco Central Mercantil S.A.').trim();
+
+      const senderNif = String(rawIssuerNif || (sender.id?.startsWith('user-') ? sender.id : `user-${sender.id}`)).trim();
+      const recipientNif = String(rawBeneficiaryNif || (recipient.id?.startsWith('user-') ? recipient.id : `user-${recipient.id}`)).trim();
+      const senderAddress = (sender as any).address || 'Domicilio social registrado, Madrid';
+
+      const promissoryId = req.body.promissoryId || generateId('pn');
+      const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+      const msgContent = `📑 PAGARÉ FIRMADO: ${promissoryNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} en favor de ${recipient.name} (Librador: ${sender.name}). Pago manual por transferencia.`;
+
+      const promissoryData: PromissoryNoteData = {
+        id: promissoryId,
+        promissoryNoteNumber: promissoryNum,
+        concept,
+        amount,
+        amountInWords: amountWords,
+        issueDate: formattedIssueDate,
+        issuePlace,
+        dueDate: formattedDueDate,
+        orderType: orderType as 'no_a_la_orden' | 'a_la_orden',
+        beneficiaryId: recipient.id,
+        beneficiaryName: recipient.name,
+        beneficiaryNifCif: recipientNif,
+        beneficiaryLevel: recipient.level || 1,
+        issuerId: sender.id,
+        issuerName: sender.name,
+        issuerNifCif: senderNif,
+        issuerAddress: senderAddress,
+        issuerLevel: sender.level || 1,
+        bankName,
+        bankIban: senderIban,
+        signatureTimestamp: now.toISOString(),
+        signatureHash,
+        status: 'pendiente'
+      };
+
+      const msg: MarketMessage = {
+        id: req.body.messageId || generateId('msg'),
+        chatId: [senderId, recipientId].sort().join('_'),
+        senderId,
+        senderName: sender.name,
+        recipientId,
+        recipientName: recipient.name,
+        content: msgContent,
+        timestamp: now.toISOString(),
+        read: false,
+        type: 'promissory_note',
+        promissoryNoteData: promissoryData,
+        invoiceData: promissoryData as any
+      };
+
+      db.marketMessages.push(msg);
+
+      addNotification(
+        db,
+        recipientId,
+        'Nuevo pagaré cambiario recibido',
+        `${sender.name} ha firmado y emitido a tu favor el pagaré cambiario oficial ${promissoryNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} (pago directo por transferencia al vencimiento).`,
+        'transfer_received',
+        promissoryId
+      );
+
+      writeDb(db);
+
+      return {
+        success: true,
+        message: msg,
+        promissoryNoteNumber: promissoryNum
+      };
+    }
   };
 
-  const msg: MarketMessage = {
-    id: generateId('msg'),
-    chatId: [senderId, recipientId].sort().join('_'),
-    senderId,
-    senderName: sender.name,
-    recipientId,
-    recipientName: recipient.name,
-    content: msgContent,
-    timestamp: now.toISOString(),
-    read: false,
-    type: 'promissory_note',
-    promissoryNoteData: promissoryData
-  };
+  try {
+    let result: any;
+    if (rawIdemKey) {
+      result = await executeWithIdempotency(rawIdemKey, async (key) => {
+        return await runSignPromissoryNote(key);
+      });
+    } else {
+      result = await runSignPromissoryNote(undefined);
+    }
 
-  db.marketMessages.push(msg);
-  syncMarketMessageToSupabase(msg).catch(e => console.error('[Supabase DB] Error syncing promissory message:', e));
+    // Post-commit cache update
+    if (result && result.success) {
+      try {
+        const currentDb = readDb();
+        if (!currentDb.marketMessages) currentDb.marketMessages = [];
+        if (result.message && !currentDb.marketMessages.some(m => m.id === result.message.id)) {
+          currentDb.marketMessages.push(result.message);
+        }
+        if (result._meta?.notif) {
+          if (!currentDb.notifications) currentDb.notifications = [];
+          if (!currentDb.notifications.some(n => n.id === result._meta.notif.id)) {
+            currentDb.notifications.unshift(result._meta.notif);
+          }
+        }
+        writeDb(currentDb);
+      } catch (cacheErr) {
+        console.warn('[PostCommit Cache Update Warning]:', cacheErr);
+      }
+      delete result._meta;
+    }
 
-  // 3. Notification to the seller (recipient)
-  addNotification(
-    db,
-    recipientId,
-    'Nuevo pagaré cambiario recibido',
-    `${sender.name} ha firmado y emitido a tu favor el pagaré cambiario oficial ${promissoryNum} por ${formatNumber(amount)} € con vencimiento el ${new Date(formattedDueDate).toLocaleDateString('es-ES')} (pago directo por transferencia al vencimiento).`,
-    'transfer_received',
-    promissoryId
-  );
-
-  writeDb(db);
-
-  res.json({
-    success: true,
-    message: msg,
-    promissoryNoteNumber: promissoryNum
-  });
+    return res.json(result);
+  } catch (err: any) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ error: err.message || 'Error interno procesando la firma del pagaré.' });
+  }
 });
 
 // Endpoint for beneficiary/vendor to discount a promissory note early at bank
@@ -20648,90 +25510,427 @@ app.post('/api/market/messages/discount-promissory-note', async (req, res) => {
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
   }
 
-  const db = readDb();
-  if (!db.marketMessages) db.marketMessages = [];
-
-  let msg = db.marketMessages.find(m => 
-    m.id === messageId || 
-    m.promissoryNoteData?.id === messageId || 
-    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
-    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
-  );
-
-  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
-    return res.status(404).json({ error: 'Pagaré cambiario no encontrado en el sistema de mensajería.' });
-  }
-
-  const pn = msg.promissoryNoteData;
-  if (pn.status === 'pagado') {
-    return res.status(400).json({ error: 'Este pagaré ya ha sido cobrado previamente.' });
-  }
-  if (pn.status === 'descontado') {
-    return res.status(400).json({ error: 'Este pagaré ya ha sido descontado previamente en el banco.' });
-  }
-  if (pn.status === 'impagado') {
-    return res.status(400).json({ error: 'Este pagaré figura como impagado y no puede ser descontado.' });
-  }
-
-  const beneficiary = db.users.find(u => 
-    u.id === beneficiaryId || 
-    u.username === beneficiaryId || 
-    u.name === beneficiaryId ||
-    u.id === pn.beneficiaryId
-  );
-  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
-  const isAuthorized = isTeacher || 
-                       pn.beneficiaryId === beneficiaryId || 
-                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
-                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
-
-  if (!isAuthorized) {
-    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar el descuento bancario.' });
-  }
-
-  let payer = db.users.find(u => u.id === pn.issuerId);
-  if (!payer) {
-    payer = db.users.find(u => 
-      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
-      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
-      u.username === pn.issuerId
-    );
-  }
-
-  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria (acreedor vendedor) no encontrada.' });
-  if (!payer) return res.status(404).json({ error: 'Empresa libradora (comprador deudor) no encontrada.' });
-
-  const amount = Number(pn.amount);
-  if (!amount || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Importe del pagaré no válido.' });
-  }
-
-  // Calculate days remaining until due date
-  const now = new Date();
-  const dueDate = new Date(pn.dueDate);
-  const diffTime = dueDate.getTime() - now.getTime();
-  const daysRemaining = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
-
-  // Financial discount calculation:
-  // 6% nominal annual discount applied proportionally to days remaining (base 360 commercial days)
-  const discountRate = 0.06;
-  const discountInterest = Number(((amount * discountRate * daysRemaining) / 360).toFixed(2));
-
-  // Commission: 0.5% over nominal amount
-  const commissionRate = 0.005;
-  const discountCommission = Number((amount * commissionRate).toFixed(2));
-
-  // Net advance amount credited to creditor seller
-  const netAmount = Number((amount - discountInterest - discountCommission).toFixed(2));
-
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
-  const idemKey = rawIdemKey || `discount_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
 
-  try {
-    const result = await executeWithIdempotency(idemKey, async (key) => {
+  // Core execution function
+  const runDiscountOperation = async (idemKey?: string) => {
+    if (dbPool) {
+      return await withPostgresTransaction(async (client) => {
+        // PASO 2: Cargar y bloquear el pagaré directamente desde PostgreSQL con SELECT ... FOR UPDATE
+        const noteRes = await client.query(
+          `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+           FROM market_messages
+           WHERE type = 'promissory_note'
+             AND (
+               ($1::text IS NOT NULL AND (id = $1::text OR invoice_data->>'id' = $1::text OR invoice_data->>'promissoryNoteNumber' = $1::text))
+               OR
+               ($2::text IS NOT NULL AND invoice_data->>'promissoryNoteNumber' = $2::text)
+             )
+           LIMIT 1
+           FOR UPDATE`,
+          [messageId || null, noteNumber || null]
+        );
+
+        if (!noteRes || noteRes.rows.length === 0) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const msgRow = noteRes.rows[0];
+        const pn: PromissoryNoteData = msgRow.invoice_data;
+
+        if (!pn) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // PASO 3: Validaciones desde PostgreSQL
+        if (pn.status === 'pagado') {
+          const err: any = new Error('Este pagaré ya ha sido cobrado previamente.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'descontado') {
+          const err: any = new Error('Este pagaré ya ha sido descontado previamente en el banco.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'impagado') {
+          const err: any = new Error('Este pagaré figura como impagado y no puede ser descontado.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'gestion_cobro') {
+          const err: any = new Error('Este pagaré ya se encuentra en gestión de cobro bancario y no puede ser descontado.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // PASO 4: Autorización
+        let requesterUser: any = null;
+        if (beneficiaryId) {
+          const reqRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, role, account_number, level
+             FROM cuentas
+             WHERE id = $1 OR usuario = $1 OR alumno = $1
+             LIMIT 1`,
+            [beneficiaryId]
+          );
+          if (reqRes && reqRes.rows.length > 0) {
+            requesterUser = reqRes.rows[0];
+          }
+        }
+
+        const isTeacher = requesterUser?.role === 'teacher' || 
+                          requesterUser?.usuario === 'pupdaniel' || 
+                          beneficiaryId === 'pupdaniel';
+
+        const isAuthorized = isTeacher ||
+                             pn.beneficiaryId === beneficiaryId ||
+                             (requesterUser && (pn.beneficiaryId === requesterUser.id || 
+                                                (pn.beneficiaryName && requesterUser.alumno && pn.beneficiaryName.toLowerCase() === requesterUser.alumno.toLowerCase())));
+
+        if (!isAuthorized) {
+          const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar el descuento bancario.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // PASO 5: Lock de la Cuenta del Beneficiario
+        const targetBeneficiaryId = pn.beneficiaryId || requesterUser?.id;
+        const targetBeneficiaryName = pn.beneficiaryName || requesterUser?.alumno;
+
+        const benRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1
+           FOR UPDATE`,
+          [targetBeneficiaryId, targetBeneficiaryName]
+        );
+
+        if (!benRes || benRes.rows.length === 0) {
+          const err: any = new Error('Empresa beneficiaria (acreedor vendedor) no encontrada.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const beneficiaryRow = benRes.rows[0];
+
+        // Resolver pagador (librador) para descripciones y notificaciones
+        let payerName = pn.issuerName || 'Empresa libradora';
+        const payerRes = await client.query(
+          `SELECT id, alumno, usuario, account_number
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1`,
+          [pn.issuerId, pn.issuerName]
+        );
+        if (payerRes && payerRes.rows.length > 0) {
+          payerName = payerRes.rows[0].alumno || payerName;
+        }
+
+        const amount = Number(pn.amount);
+        if (!amount || isNaN(amount) || amount <= 0) {
+          const err: any = new Error('Importe del pagaré no válido.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // PASO 1: Reglas financieras exactas conservadas
+        const now = new Date();
+        const dueDate = new Date(pn.dueDate);
+        const diffTime = dueDate.getTime() - now.getTime();
+        const daysRemaining = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+
+        // Descuento financiero comercial (6% anual, base 360 días)
+        const discountRate = 0.06;
+        const discountInterest = Number(((amount * discountRate * daysRemaining) / 360).toFixed(2));
+
+        // Comisión de descuento comercial (0,5% sobre nominal)
+        const commissionRate = 0.005;
+        const discountCommission = Number((amount * commissionRate).toFixed(2));
+
+        // Líquido abonado en cuenta al vendedor acreedor
+        const netAmount = Number((amount - discountInterest - discountCommission).toFixed(2));
+
+        const currentBalance = Number(beneficiaryRow.saldo);
+        const newBalance = Number((currentBalance + netAmount).toFixed(2));
+
+        const txId = generateId('tx');
+        const nowIso = new Date().toISOString();
+        const transferConcept = `Anticipo de descuento de pagaré ${pn.promissoryNoteNumber} (nominal: ${formatNumber(amount)} €, dto. 6% [${daysRemaining} d.]: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €, líquido: ${formatNumber(netAmount)} €)`;
+
+        // PASO 6: Abono Atómico en Cuentas y Asiento Contable en Movimientos
+        await client.query(
+          'UPDATE cuentas SET saldo = $1 WHERE id = $2',
+          [newBalance, beneficiaryRow.id]
+        );
+
+        await client.query(
+          `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+           VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txId + '-in',
+            beneficiaryRow.id,
+            netAmount,
+            nowIso,
+            transferConcept,
+            'corp-banco-central',
+            'Banco Central Mercantil (Descuento comercial de efectos)',
+            'ES210001000299887700',
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000'
+          ]
+        );
+
+        // PASO 7: Actualizar invoice_data en market_messages de forma atómica
+        const discountUpdate = {
+          status: 'descontado',
+          isDiscounted: true,
+          discountedAt: nowIso,
+          discountDays: daysRemaining,
+          discountRate: 6,
+          discountInterest: discountInterest,
+          discountCommissionRate: 0.5,
+          discountCommission: discountCommission,
+          discountNetReceived: netAmount,
+          discountTransferId: txId
+        };
+
+        await client.query(
+          `UPDATE market_messages
+           SET invoice_data = invoice_data || $1::jsonb
+           WHERE id = $2`,
+          [JSON.stringify(discountUpdate), msgRow.id]
+        );
+
+        // Mensaje informativo para el chat en market_messages
+        const discountMsgId = generateId('msg');
+        const discountMsgContent = `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiaryRow.alumno} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payerName}).`;
+
+        await client.query(
+          `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'text')`,
+          [
+            discountMsgId,
+            msgRow.chat_id,
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            pn.issuerId,
+            payerName,
+            discountMsgContent,
+            nowIso
+          ]
+        );
+
+        // Notificaciones atómicas en PostgreSQL
+        const notifBenId = generateId('notif');
+        const notifPayerId = generateId('notif');
+
+        await client.query(
+          `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+           VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            notifBenId,
+            beneficiaryRow.id,
+            'Pagaré descontado con éxito',
+            `Has anticipado el cobro del pagaré ${pn.promissoryNoteNumber}. Se han abonado ${formatNumber(netAmount)} € netos en tu cuenta bancaria (nominal: ${formatNumber(amount)} €, dto. 6%: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €).`,
+            nowIso,
+            txId
+          ]
+        );
+
+        if (pn.issuerId) {
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              notifPayerId,
+              pn.issuerId,
+              'Pagaré descontado por el proveedor',
+              `El acreedor ${beneficiaryRow.alumno} ha descontado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco cargará el importe nominal en tu cuenta en la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+              nowIso,
+              txId
+            ]
+          );
+        }
+
+        const newTransfer: Transfer = {
+          id: txId,
+          senderId: 'corp-banco-central',
+          senderName: 'Banco Central Mercantil (Descuento comercial de efectos)',
+          senderAccount: 'ES210001000299887700',
+          receiverId: beneficiaryRow.id,
+          receiverName: beneficiaryRow.alumno,
+          receiverAccount: beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000',
+          amount: netAmount,
+          concept: transferConcept,
+          timestamp: nowIso
+        };
+
+        const updatedPromissoryNoteData = {
+          ...pn,
+          ...discountUpdate
+        };
+
+        const updatedMessage = {
+          ...msgRow,
+          chatId: msgRow.chat_id,
+          senderId: msgRow.sender_id,
+          senderName: msgRow.sender_name,
+          recipientId: msgRow.recipient_id,
+          recipientName: msgRow.recipient_name,
+          invoice_data: updatedPromissoryNoteData,
+          promissoryNoteData: updatedPromissoryNoteData
+        };
+
+        const discountChatMsg: MarketMessage = {
+          id: discountMsgId,
+          chatId: msgRow.chat_id,
+          senderId: beneficiaryRow.id,
+          senderName: beneficiaryRow.alumno,
+          recipientId: pn.issuerId,
+          recipientName: payerName,
+          content: discountMsgContent,
+          timestamp: nowIso,
+          read: false,
+          type: 'text'
+        };
+
+        return {
+          success: true,
+          message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
+          transfer: newTransfer,
+          updatedMessage,
+          newBalance,
+          calculation: {
+            nominalAmount: amount,
+            daysRemaining,
+            annualDiscountRate: 6,
+            discountInterest,
+            commissionRate: 0.5,
+            discountCommission,
+            netAmount
+          },
+          _meta: {
+            discountChatMsg,
+            beneficiaryId: beneficiaryRow.id,
+            payerId: pn.issuerId,
+            beneficiaryName: beneficiaryRow.alumno,
+            promissoryNoteNumber: pn.promissoryNoteNumber,
+            amount,
+            txId,
+            nowIso
+          }
+        };
+      }, idemKey);
+    } else {
+      // Fallback in-memory cuando no hay base de datos conectada
+      const db = readDb();
+      if (!db.marketMessages) db.marketMessages = [];
+
+      let msg = db.marketMessages.find(m => 
+        m.id === messageId || 
+        m.promissoryNoteData?.id === messageId || 
+        m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+        (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+      );
+
+      if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+        const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const pn = msg.promissoryNoteData;
+      if (pn.status === 'pagado') {
+        const err: any = new Error('Este pagaré ya ha sido cobrado previamente.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'descontado') {
+        const err: any = new Error('Este pagaré ya ha sido descontado previamente en el banco.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'impagado') {
+        const err: any = new Error('Este pagaré figura como impagado y no puede ser descontado.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'gestion_cobro') {
+        const err: any = new Error('Este pagaré ya se encuentra en gestión de cobro bancario y no puede ser descontado.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const beneficiary = (db.users || []).find(u => 
+        u.id === beneficiaryId || 
+        u.username === beneficiaryId || 
+        u.name === beneficiaryId ||
+        u.id === pn.beneficiaryId
+      );
+      const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+      const isAuthorized = isTeacher || 
+                           pn.beneficiaryId === beneficiaryId || 
+                           (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                           (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+      if (!isAuthorized) {
+        const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar el descuento bancario.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      let payer = (db.users || []).find(u => u.id === pn.issuerId);
+      if (!payer) {
+        payer = (db.users || []).find(u => 
+          u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+          (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+          u.username === pn.issuerId
+        );
+      }
+
+      if (!beneficiary) {
+        const err: any = new Error('Empresa beneficiaria (acreedor vendedor) no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (!payer) {
+        const err: any = new Error('Empresa libradora (comprador deudor) no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const amount = Number(pn.amount);
+      if (!amount || isNaN(amount) || amount <= 0) {
+        const err: any = new Error('Importe del pagaré no válido.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const now = new Date();
+      const dueDate = new Date(pn.dueDate);
+      const diffTime = dueDate.getTime() - now.getTime();
+      const daysRemaining = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+
+      const discountRate = 0.06;
+      const discountInterest = Number(((amount * discountRate * daysRemaining) / 360).toFixed(2));
+      const commissionRate = 0.005;
+      const discountCommission = Number((amount * commissionRate).toFixed(2));
+      const netAmount = Number((amount - discountInterest - discountCommission).toFixed(2));
+
       const txId = generateId('tx');
       const nowIso = new Date().toISOString();
       const transferConcept = `Anticipo de descuento de pagaré ${pn.promissoryNoteNumber} (nominal: ${formatNumber(amount)} €, dto. 6% [${daysRemaining} d.]: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €, líquido: ${formatNumber(netAmount)} €)`;
+
+      beneficiary.balance = Number(((beneficiary.balance || 0) + netAmount).toFixed(2));
 
       const newTransfer: Transfer = {
         id: txId,
@@ -20746,177 +25945,101 @@ app.post('/api/market/messages/discount-promissory-note', async (req, res) => {
         timestamp: nowIso
       };
 
-      if (dbPool) {
-        return await withPostgresTransaction(async (client) => {
-          // Lock beneficiary account row
-          const lockRes = await client.query(
-            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-            [beneficiary.id]
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(newTransfer);
+
+      pn.status = 'descontado';
+      pn.isDiscounted = true;
+      pn.discountedAt = nowIso;
+      pn.discountDays = daysRemaining;
+      pn.discountRate = 6;
+      pn.discountInterest = discountInterest;
+      pn.discountCommissionRate = 0.5;
+      pn.discountCommission = discountCommission;
+      pn.discountNetReceived = netAmount;
+      pn.discountTransferId = txId;
+
+      const discountMsg: MarketMessage = {
+        id: generateId('msg'),
+        chatId: msg.chatId,
+        senderId: beneficiary.id,
+        senderName: beneficiary.name,
+        recipientId: payer.id,
+        recipientName: payer.name,
+        content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
+        timestamp: nowIso,
+        read: false,
+        type: 'text'
+      };
+      db.marketMessages.push(discountMsg);
+      writeDb(db);
+
+      return {
+        success: true,
+        message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
+        transfer: newTransfer,
+        updatedMessage: msg,
+        newBalance: beneficiary.balance,
+        calculation: {
+          nominalAmount: amount,
+          daysRemaining,
+          annualDiscountRate: 6,
+          discountInterest,
+          commissionRate: 0.5,
+          discountCommission,
+          netAmount
+        }
+      };
+    }
+  };
+
+  try {
+    let result: any;
+    if (rawIdemKey) {
+      result = await executeWithIdempotency(rawIdemKey, async (key) => {
+        return await runDiscountOperation(key);
+      });
+    } else {
+      result = await runDiscountOperation(undefined);
+    }
+
+    // PASO 9: Memoria como cache postcommit (actualización DESPUÉS del commit en PostgreSQL)
+    if (result && result.success) {
+      try {
+        const currentDb = readDb();
+        if (currentDb.marketMessages) {
+          const targetMsg = currentDb.marketMessages.find(m =>
+            m.id === result.updatedMessage?.id ||
+            m.promissoryNoteData?.id === result.updatedMessage?.promissoryNoteData?.id ||
+            m.promissoryNoteData?.promissoryNoteNumber === result.updatedMessage?.promissoryNoteData?.promissoryNoteNumber
           );
-          if (!lockRes || lockRes.rows.length === 0) {
-            const err: any = new Error('Cuenta beneficiaria no encontrada en la base de datos');
-            err.statusCode = 404;
-            throw err;
+          if (targetMsg && targetMsg.promissoryNoteData && result.updatedMessage?.promissoryNoteData) {
+            Object.assign(targetMsg.promissoryNoteData, result.updatedMessage.promissoryNoteData);
           }
-
-          const beneficiaryRow = lockRes.rows[0];
-          const currentBalance = Number(beneficiaryRow.saldo);
-          const newBalance = Number((currentBalance + netAmount).toFixed(2));
-
-          // Credit balance in PostgreSQL
-          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, beneficiary.id]);
-
-          // Insert movimiento on client
-          await client.query(
-            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [
-              txId + '-in',
-              beneficiary.id,
-              netAmount,
-              nowIso,
-              transferConcept,
-              'corp-banco-central',
-              'Banco Central Mercantil (Descuento comercial de efectos)',
-              'ES210001000299887700',
-              beneficiary.id,
-              beneficiary.name,
-              beneficiary.accountNumber || 'ES00 0000 0000 0000 0000'
-            ]
-          );
-
-          // Update in-memory DB snapshot
-          const currentDb = readDb();
-          const targetMsg = (currentDb.marketMessages || []).find(m =>
-            m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber)
-          );
-          if (targetMsg && targetMsg.promissoryNoteData) {
-            const currentPn = targetMsg.promissoryNoteData;
-            currentPn.status = 'descontado';
-            currentPn.isDiscounted = true;
-            currentPn.discountedAt = nowIso;
-            currentPn.discountDays = daysRemaining;
-            currentPn.discountRate = 6;
-            currentPn.discountInterest = discountInterest;
-            currentPn.discountCommissionRate = 0.5;
-            currentPn.discountCommission = discountCommission;
-            currentPn.discountNetReceived = netAmount;
-            currentPn.discountTransferId = txId;
+        }
+        if (result._meta?.discountChatMsg && currentDb.marketMessages) {
+          if (!currentDb.marketMessages.some(m => m.id === result._meta.discountChatMsg.id)) {
+            currentDb.marketMessages.push(result._meta.discountChatMsg);
           }
-
-          const benUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
+        }
+        if (result.transfer && currentDb.transfers) {
+          if (!currentDb.transfers.some(t => t.id === result.transfer.id)) {
+            currentDb.transfers.unshift(result.transfer);
+          }
+        }
+        if (currentDb.users && result._meta?.beneficiaryId) {
+          const benUser = currentDb.users.find(u => u.id === result._meta.beneficiaryId);
           if (benUser) {
-            benUser.balance = newBalance;
+            benUser.balance = result.newBalance;
           }
-
-          if (!currentDb.transfers) currentDb.transfers = [];
-          currentDb.transfers.unshift(newTransfer);
-
-          const discountMsg: MarketMessage = {
-            id: generateId('msg'),
-            chatId: msg.chatId,
-            senderId: beneficiary.id,
-            senderName: beneficiary.name,
-            recipientId: payer.id,
-            recipientName: payer.name,
-            content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
-            timestamp: nowIso,
-            read: false,
-            type: 'text'
-          };
-          currentDb.marketMessages.push(discountMsg);
-
-          addNotification(
-            currentDb,
-            beneficiary.id,
-            'Pagaré descontado con éxito',
-            `Has anticipado el cobro del pagaré ${pn.promissoryNoteNumber}. Se han abonado ${formatNumber(netAmount)} € netos en tu cuenta bancaria (nominal: ${formatNumber(amount)} €, dto. 6%: -${formatNumber(discountInterest)} €, com. 0,5%: -${formatNumber(discountCommission)} €).`,
-            'transfer_received',
-            txId
-          );
-
-          addNotification(
-            currentDb,
-            payer.id,
-            'Pagaré descontado por el proveedor',
-            `El acreedor ${beneficiary.name} ha descontado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €). El banco cargará el importe nominal en tu cuenta en la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-            'transfer_received',
-            txId
-          );
-
-          writeDb(currentDb);
-          syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
-          syncMarketMessageToSupabase(discountMsg).catch(e => console.error(e));
-
-          return {
-            success: true,
-            message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
-            transfer: newTransfer,
-            updatedMessage: targetMsg || msg,
-            newBalance,
-            calculation: {
-              nominalAmount: amount,
-              daysRemaining,
-              annualDiscountRate: 6,
-              discountInterest,
-              commissionRate: 0.5,
-              discountCommission,
-              netAmount
-            }
-          };
-        }, key);
-      } else {
-        // Fallback in-memory
-        beneficiary.balance = Number((beneficiary.balance + netAmount).toFixed(2));
-        if (!db.transfers) db.transfers = [];
-        db.transfers.unshift(newTransfer);
-
-        pn.status = 'descontado';
-        pn.isDiscounted = true;
-        pn.discountedAt = nowIso;
-        pn.discountDays = daysRemaining;
-        pn.discountRate = 6;
-        pn.discountInterest = discountInterest;
-        pn.discountCommissionRate = 0.5;
-        pn.discountCommission = discountCommission;
-        pn.discountNetReceived = netAmount;
-        pn.discountTransferId = txId;
-
-        const discountMsg: MarketMessage = {
-          id: generateId('msg'),
-          chatId: msg.chatId,
-          senderId: beneficiary.id,
-          senderName: beneficiary.name,
-          recipientId: payer.id,
-          recipientName: payer.name,
-          content: `🏦 Pagaré descontado en banco: El acreedor vendedor ${beneficiary.name} ha anticipado el cobro del pagaré oficial ${pn.promissoryNoteNumber} en su entidad financiera.\n• Importe nominal: ${formatNumber(amount)} €\n• Descuento financiero (6,00% nominal anual, ${daysRemaining} días hasta vencimiento): -${formatNumber(discountInterest)} €\n• Comisión de descuento (0,50% sobre nominal): -${formatNumber(discountCommission)} €\n• Líquido ingresado en cuenta: ${formatNumber(netAmount)} €.\nAl vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}), el banco cargará el importe íntegro (${formatNumber(amount)} €) en la cuenta del comprador deudor (${payer.name}).`,
-          timestamp: nowIso,
-          read: false,
-          type: 'text'
-        };
-        db.marketMessages.push(discountMsg);
-
-        writeDb(db);
-        return {
-          success: true,
-          message: `Pagaré ${pn.promissoryNoteNumber} descontado con éxito. Se han ingresado +${formatNumber(netAmount)} € líquidos en tu cuenta.`,
-          transfer: newTransfer,
-          updatedMessage: msg,
-          newBalance: beneficiary.balance,
-          calculation: {
-            nominalAmount: amount,
-            daysRemaining,
-            annualDiscountRate: 6,
-            discountInterest,
-            commissionRate: 0.5,
-            discountCommission,
-            netAmount
-          }
-        };
+        }
+        delete result._meta;
+      } catch (cacheErr) {
+        console.warn('[PostCommit Cache Update Warning]:', cacheErr);
       }
-    });
+    }
 
-    res.json(result);
+    return res.json(result);
   } catch (err: any) {
     console.error('[Discount Promissory Note Concurrency Error]:', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Error al descontar el pagaré en el banco' });
@@ -20930,77 +26053,408 @@ const handleCollectionManagementPromissoryNote = async (req: express.Request, re
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
   }
 
-  const db = readDb();
-  if (!db.marketMessages) db.marketMessages = [];
-
-  let msg = db.marketMessages.find(m => 
-    m.id === messageId || 
-    m.promissoryNoteData?.id === messageId || 
-    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
-    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
-  );
-
-  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
-    return res.status(404).json({ error: 'Pagaré cambiario no encontrado en el sistema de mensajería.' });
-  }
-
-  const pn = msg.promissoryNoteData;
-  if (pn.status === 'pagado') {
-    return res.status(400).json({ error: 'Este pagaré ya ha sido cobrado previamente.' });
-  }
-  if (pn.status === 'descontado') {
-    return res.status(400).json({ error: 'Este pagaré ya ha sido descontado previamente en el banco.' });
-  }
-  if (pn.status === 'gestion_cobro') {
-    return res.status(400).json({ error: 'Este pagaré ya se encuentra entregado en gestión de cobro bancario.' });
-  }
-  if (pn.status === 'impagado') {
-    return res.status(400).json({ error: 'Este pagaré figura como impagado y no puede ser gestionado.' });
-  }
-
-  const beneficiary = db.users.find(u => 
-    u.id === beneficiaryId || 
-    u.username === beneficiaryId || 
-    u.name === beneficiaryId ||
-    u.id === pn.beneficiaryId
-  );
-  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
-  const isAuthorized = isTeacher || 
-                       pn.beneficiaryId === beneficiaryId || 
-                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
-                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
-
-  if (!isAuthorized) {
-    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar la gestión de cobro bancario.' });
-  }
-
-  let payer = db.users.find(u => u.id === pn.issuerId);
-  if (!payer) {
-    payer = db.users.find(u => 
-      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
-      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
-      u.username === pn.issuerId
-    );
-  }
-
-  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria (acreedor vendedor) no encontrada.' });
-  if (!payer) return res.status(404).json({ error: 'Empresa libradora (comprador deudor) no encontrada.' });
-
-  const amount = Number(pn.amount);
-  if (!amount || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Importe del pagaré no válido.' });
-  }
-
-  // Commission: 0.5% over nominal amount with minimum of 20.00 €
-  const commission = Math.max(20, Number((amount * 0.005).toFixed(2)));
-
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
-  const idemKey = rawIdemKey || `col_mgmt_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
 
-  try {
-    const result = await executeWithIdempotency(idemKey, async (key) => {
-      const nowIso = new Date().toISOString();
+  // Core execution function
+  const runCollectionOperation = async (idemKey?: string) => {
+    if (dbPool) {
+      return await withPostgresTransaction(async (client) => {
+        // PASO 1: Cargar y bloquear el pagaré directamente desde PostgreSQL con SELECT ... FOR UPDATE
+        const noteRes = await client.query(
+          `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+           FROM market_messages
+           WHERE type = 'promissory_note'
+             AND (
+               ($1::text IS NOT NULL AND (id = $1::text OR invoice_data->>'id' = $1::text OR invoice_data->>'promissoryNoteNumber' = $1::text))
+               OR
+               ($2::text IS NOT NULL AND invoice_data->>'promissoryNoteNumber' = $2::text)
+             )
+           LIMIT 1
+           FOR UPDATE`,
+          [messageId || null, noteNumber || null]
+        );
+
+        if (!noteRes || noteRes.rows.length === 0) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const msgRow = noteRes.rows[0];
+        const pn: PromissoryNoteData = typeof msgRow.invoice_data === 'string'
+          ? JSON.parse(msgRow.invoice_data)
+          : msgRow.invoice_data;
+
+        if (!pn) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // PASO 2: Validaciones de estado desde PostgreSQL
+        if (pn.status === 'pagado') {
+          const err: any = new Error('Este pagaré ya ha sido cobrado previamente.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'descontado') {
+          const err: any = new Error('Este pagaré ya ha sido descontado previamente en el banco.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'gestion_cobro') {
+          const err: any = new Error('Este pagaré ya se encuentra entregado en gestión de cobro bancario.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'impagado') {
+          const err: any = new Error('Este pagaré figura como impagado y no puede ser gestionado.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // PASO 3: Autorización del solicitante
+        let requesterUser: any = null;
+        if (beneficiaryId) {
+          const reqRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, role, account_number, level
+             FROM cuentas
+             WHERE id = $1 OR usuario = $1 OR alumno = $1
+             LIMIT 1`,
+            [beneficiaryId]
+          );
+          if (reqRes && reqRes.rows.length > 0) {
+            requesterUser = reqRes.rows[0];
+          }
+        }
+
+        const isTeacher = requesterUser?.role === 'teacher' || 
+                          requesterUser?.usuario === 'pupdaniel' || 
+                          beneficiaryId === 'pupdaniel';
+
+        const isAuthorized = isTeacher || 
+                             pn.beneficiaryId === beneficiaryId || 
+                             (requesterUser && (pn.beneficiaryId === requesterUser.id || 
+                                                (pn.beneficiaryName && requesterUser.alumno && pn.beneficiaryName.toLowerCase() === requesterUser.alumno.toLowerCase())));
+
+        if (!isAuthorized) {
+          const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar la gestión de cobro bancario.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // PASO 4: Lock de la Cuenta del Beneficiario
+        const targetBeneficiaryId = pn.beneficiaryId || requesterUser?.id;
+        const targetBeneficiaryName = pn.beneficiaryName || requesterUser?.alumno;
+
+        const benRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1
+           FOR UPDATE`,
+          [targetBeneficiaryId, targetBeneficiaryName]
+        );
+
+        if (!benRes || benRes.rows.length === 0) {
+          const err: any = new Error('Empresa beneficiaria (acreedor vendedor) no encontrada.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const beneficiaryRow = benRes.rows[0];
+
+        // Resolver pagador (librador) para descripciones y notificaciones
+        let payerName = pn.issuerName || 'Empresa libradora';
+        const payerRes = await client.query(
+          `SELECT id, alumno, usuario, account_number
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1`,
+          [pn.issuerId, pn.issuerName]
+        );
+        if (payerRes && payerRes.rows.length > 0) {
+          payerName = payerRes.rows[0].alumno || payerName;
+        } else {
+          const currentDb = readDb();
+          const payerInDb = (currentDb.users || []).find(u => u.id === pn.issuerId || u.name?.toLowerCase() === pn.issuerName?.toLowerCase());
+          if (!payerInDb && !pn.issuerId) {
+            const err: any = new Error('Empresa libradora (comprador deudor) no encontrada.');
+            err.statusCode = 404;
+            throw err;
+          }
+        }
+
+        const amount = Number(pn.amount);
+        if (!amount || isNaN(amount) || amount <= 0) {
+          const err: any = new Error('Importe del pagaré no válido.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // PASO 5: Comisión bancaria (0,5% mínimo 20 €)
+        const commission = Math.max(20, Number((amount * 0.005).toFixed(2)));
+
+        const currentBalance = Number(beneficiaryRow.saldo);
+        if (currentBalance < commission) {
+          const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(currentBalance)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const newBalance = Number((currentBalance - commission).toFixed(2));
+        const txId = generateId('tx');
+        const nowIso = new Date().toISOString();
+        const transferConcept = `Comisión de servicio de gestión de cobro de pagaré ${pn.promissoryNoteNumber} (0,5% sobre ${formatNumber(amount)} €, mínimo 20,00 €)`;
+
+        // PASO 6: Débito atómico en cuentas y asiento contable en movimientos
+        await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, beneficiaryRow.id]);
+
+        await client.query(
+          `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+           VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txId + '-out',
+            beneficiaryRow.id,
+            commission,
+            nowIso,
+            transferConcept,
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000',
+            'corp-banco-central',
+            'Banco Central Mercantil (Servicio de gestión de cobro)',
+            'ES210001000299887700'
+          ]
+        );
+
+        // PASO 7: Actualizar invoice_data en market_messages de forma atómica
+        const collectionUpdate = {
+          status: 'gestion_cobro',
+          isCollectionManagement: true,
+          collectionManagementAt: nowIso,
+          collectionCommissionRate: 0.005,
+          collectionCommission: commission,
+          collectionTransferId: txId
+        };
+
+        await client.query(
+          `UPDATE market_messages
+           SET invoice_data = invoice_data || $1::jsonb
+           WHERE id = $2`,
+          [JSON.stringify(collectionUpdate), msgRow.id]
+        );
+
+        // PASO 8: Mensaje de chat informativo persistente
+        const collectionMsgId = generateId('msg');
+        const collectionMsgContent = `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiaryRow.alumno}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`;
+
+        await client.query(
+          `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'text')`,
+          [
+            collectionMsgId,
+            msgRow.chat_id,
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            pn.issuerId,
+            payerName,
+            collectionMsgContent,
+            nowIso
+          ]
+        );
+
+        // PASO 9: Notificaciones atómicas en PostgreSQL
+        const notifBenId = generateId('notif');
+        const notifPayerId = generateId('notif');
+
+        await client.query(
+          `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+           VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            notifBenId,
+            beneficiaryRow.id,
+            'Pagaré entregado en gestión de cobro',
+            `Has cedido el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. Se ha cargado la comisión de ${formatNumber(commission)} € (0,5%, mín. 20 €). El banco ingresará automáticamente los ${formatNumber(amount)} € al vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+            nowIso,
+            txId
+          ]
+        );
+
+        if (pn.issuerId) {
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              notifPayerId,
+              pn.issuerId,
+              'Pagaré entregado en gestión de cobro por el proveedor',
+              `El acreedor ${beneficiaryRow.alumno} ha entregado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. El banco cargará el importe nominal en tu cuenta a la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
+              nowIso,
+              txId
+            ]
+          );
+        }
+
+        const collectionCommissionTransfer: Transfer = {
+          id: txId,
+          senderId: beneficiaryRow.id,
+          senderName: beneficiaryRow.alumno,
+          senderAccount: beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000',
+          receiverId: 'corp-banco-central',
+          receiverName: 'Banco Central Mercantil (Servicio de gestión de cobro)',
+          receiverAccount: 'ES210001000299887700',
+          amount: commission,
+          concept: transferConcept,
+          timestamp: nowIso
+        };
+
+        const updatedPromissoryNoteData = {
+          ...pn,
+          ...collectionUpdate
+        };
+
+        const updatedMessage = {
+          ...msgRow,
+          chatId: msgRow.chat_id,
+          senderId: msgRow.sender_id,
+          senderName: msgRow.sender_name,
+          recipientId: msgRow.recipient_id,
+          recipientName: msgRow.recipient_name,
+          invoice_data: updatedPromissoryNoteData,
+          promissoryNoteData: updatedPromissoryNoteData
+        };
+
+        return {
+          success: true,
+          message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
+          transfer: collectionCommissionTransfer,
+          updatedMessage,
+          newBalance,
+          commission,
+          _meta: {
+            collectionChatMsg: {
+              id: collectionMsgId,
+              chatId: msgRow.chat_id,
+              senderId: beneficiaryRow.id,
+              senderName: beneficiaryRow.alumno,
+              recipientId: pn.issuerId,
+              recipientName: payerName,
+              content: collectionMsgContent,
+              timestamp: nowIso,
+              read: false,
+              type: 'text'
+            },
+            beneficiaryId: beneficiaryRow.id,
+            payerId: pn.issuerId,
+            beneficiaryName: beneficiaryRow.alumno,
+            promissoryNoteNumber: pn.promissoryNoteNumber,
+            amount,
+            commission,
+            txId,
+            nowIso
+          }
+        };
+      }, idemKey);
+    } else {
+      // Fallback in-memory
+      const db = readDb();
+      if (!db.marketMessages) db.marketMessages = [];
+
+      let msg = db.marketMessages.find(m => 
+        m.id === messageId || 
+        m.promissoryNoteData?.id === messageId || 
+        m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+        (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+      );
+
+      if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+        const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const pn = msg.promissoryNoteData;
+      if (pn.status === 'pagado') {
+        const err: any = new Error('Este pagaré ya ha sido cobrado previamente.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'descontado') {
+        const err: any = new Error('Este pagaré ya ha sido descontado previamente en el banco.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'gestion_cobro') {
+        const err: any = new Error('Este pagaré ya se encuentra entregado en gestión de cobro bancario.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'impagado') {
+        const err: any = new Error('Este pagaré figura como impagado y no puede ser gestionado.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const beneficiary = (db.users || []).find(u => 
+        u.id === beneficiaryId || 
+        u.username === beneficiaryId || 
+        u.name === beneficiaryId ||
+        u.id === pn.beneficiaryId
+      );
+      const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+      const isAuthorized = isTeacher || 
+                           pn.beneficiaryId === beneficiaryId || 
+                           (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                           (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+      if (!isAuthorized) {
+        const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré (acreedor vendedor) puede solicitar la gestión de cobro bancario.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      let payer = (db.users || []).find(u => u.id === pn.issuerId);
+      if (!payer) {
+        payer = (db.users || []).find(u => 
+          u.name?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+          (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() ||
+          u.username === pn.issuerId
+        );
+      }
+
+      if (!beneficiary) {
+        const err: any = new Error('Empresa beneficiaria (acreedor vendedor) no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (!payer) {
+        const err: any = new Error('Empresa libradora (comprador deudor) no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const amount = Number(pn.amount);
+      if (!amount || isNaN(amount) || amount <= 0) {
+        const err: any = new Error('Importe del pagaré no válido.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Commission: 0.5% over nominal amount with minimum of 20.00 €
+      const commission = Math.max(20, Number((amount * 0.005).toFixed(2)));
+
+      if ((beneficiary.balance || 0) < commission) {
+        const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(beneficiary.balance || 0)} €.`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      beneficiary.balance = Number(((beneficiary.balance || 0) - commission).toFixed(2));
       const txId = generateId('tx');
+      const nowIso = new Date().toISOString();
       const transferConcept = `Comisión de servicio de gestión de cobro de pagaré ${pn.promissoryNoteNumber} (0,5% sobre ${formatNumber(amount)} €, mínimo 20,00 €)`;
 
       const collectionCommissionTransfer: Transfer = {
@@ -21016,166 +26470,90 @@ const handleCollectionManagementPromissoryNote = async (req: express.Request, re
         timestamp: nowIso
       };
 
-      if (dbPool) {
-        return await withPostgresTransaction(async (client) => {
-          // Lock beneficiary account row
-          const lockRes = await client.query(
-            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-            [beneficiary.id]
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(collectionCommissionTransfer);
+
+      pn.status = 'gestion_cobro';
+      pn.isCollectionManagement = true;
+      pn.collectionManagementAt = nowIso;
+      pn.collectionCommissionRate = 0.005;
+      pn.collectionCommission = commission;
+      pn.collectionTransferId = txId;
+
+      const collectionMsg: MarketMessage = {
+        id: generateId('msg'),
+        chatId: msg.chatId,
+        senderId: beneficiary.id,
+        senderName: beneficiary.name,
+        recipientId: payer.id,
+        recipientName: payer.name,
+        content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
+        timestamp: nowIso,
+        read: false,
+        type: 'text'
+      };
+      db.marketMessages.push(collectionMsg);
+
+      writeDb(db);
+      return {
+        success: true,
+        message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
+        transfer: collectionCommissionTransfer,
+        updatedMessage: msg,
+        newBalance: beneficiary.balance,
+        commission
+      };
+    }
+  };
+
+  try {
+    let result: any;
+    if (rawIdemKey) {
+      result = await executeWithIdempotency(rawIdemKey, async (key) => {
+        return await runCollectionOperation(key);
+      });
+    } else {
+      result = await runCollectionOperation(undefined);
+    }
+
+    // Post-commit cache update
+    if (result && result.success) {
+      try {
+        const currentDb = readDb();
+        if (currentDb.marketMessages) {
+          const targetMsg = currentDb.marketMessages.find(m =>
+            m.id === result.updatedMessage?.id ||
+            m.promissoryNoteData?.id === result.updatedMessage?.promissoryNoteData?.id ||
+            m.promissoryNoteData?.promissoryNoteNumber === result.updatedMessage?.promissoryNoteData?.promissoryNoteNumber
           );
-          if (!lockRes || lockRes.rows.length === 0) {
-            const err: any = new Error('Empresa beneficiaria no encontrada en la base de datos');
-            err.statusCode = 404;
-            throw err;
+          if (targetMsg && targetMsg.promissoryNoteData && result.updatedMessage?.promissoryNoteData) {
+            Object.assign(targetMsg.promissoryNoteData, result.updatedMessage.promissoryNoteData);
           }
-
-          const beneficiaryRow = lockRes.rows[0];
-          const currentBalance = Number(beneficiaryRow.saldo);
-
-          if (currentBalance < commission) {
-            const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(currentBalance)} €.`);
-            err.statusCode = 400;
-            throw err;
-          }
-
-          const newBalance = Number((currentBalance - commission).toFixed(2));
-
-          // Debit commission in PostgreSQL
-          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, beneficiary.id]);
-
-          // Insert movimiento on client
-          await client.query(
-            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [
-              txId + '-out',
-              beneficiary.id,
-              commission,
-              nowIso,
-              transferConcept,
-              beneficiary.id,
-              beneficiary.name,
-              beneficiary.accountNumber || 'ES00 0000 0000 0000 0000',
-              'corp-banco-central',
-              'Banco Central Mercantil (Servicio de gestión de cobro)',
-              'ES210001000299887700'
-            ]
-          );
-
-          // Update in-memory DB snapshot
-          const currentDb = readDb();
-          const targetMsg = (currentDb.marketMessages || []).find(m =>
-            m.id === msg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === pn.promissoryNoteNumber)
-          );
-          if (targetMsg && targetMsg.promissoryNoteData) {
-            const currentPn = targetMsg.promissoryNoteData;
-            currentPn.status = 'gestion_cobro';
-            currentPn.isCollectionManagement = true;
-            currentPn.collectionManagementAt = nowIso;
-            currentPn.collectionCommissionRate = 0.005;
-            currentPn.collectionCommission = commission;
-            currentPn.collectionTransferId = txId;
-          }
-
-          const benUser = (currentDb.users || []).find(u => u.id === beneficiary.id);
-          if (benUser) {
-            benUser.balance = newBalance;
-          }
-
-          if (!currentDb.transfers) currentDb.transfers = [];
-          currentDb.transfers.unshift(collectionCommissionTransfer);
-
-          const collectionMsg: MarketMessage = {
-            id: generateId('msg'),
-            chatId: msg.chatId,
-            senderId: beneficiary.id,
-            senderName: beneficiary.name,
-            recipientId: payer.id,
-            recipientName: payer.name,
-            content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
-            timestamp: nowIso,
-            read: false,
-            type: 'text'
-          };
-          currentDb.marketMessages.push(collectionMsg);
-
-          addNotification(
-            currentDb,
-            beneficiary.id,
-            'Pagaré entregado en gestión de cobro',
-            `Has cedido el pagaré ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. Se ha cargado la comisión de ${formatNumber(commission)} € (0,5%, mín. 20 €). El banco ingresará automáticamente los ${formatNumber(amount)} € al vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-            'transfer_received',
-            txId
-          );
-
-          addNotification(
-            currentDb,
-            payer.id,
-            'Pagaré entregado en gestión de cobro por el proveedor',
-            `El acreedor ${beneficiary.name} ha entregado el pagaré oficial ${pn.promissoryNoteNumber} (${formatNumber(amount)} €) en gestión de cobro bancaria. El banco cargará el importe nominal en tu cuenta a la fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`,
-            'transfer_received',
-            txId
-          );
-
-          writeDb(currentDb);
-          syncMarketMessageToSupabase(targetMsg || msg).catch(e => console.error(e));
-          syncMarketMessageToSupabase(collectionMsg).catch(e => console.error(e));
-
-          return {
-            success: true,
-            message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
-            transfer: collectionCommissionTransfer,
-            updatedMessage: targetMsg || msg,
-            newBalance,
-            commission
-          };
-        }, key);
-      } else {
-        // Fallback in-memory
-        if (beneficiary.balance < commission) {
-          const err: any = new Error(`Saldo insuficiente para abonar la comisión de gestión de cobro (${formatNumber(commission)} €). Saldo actual en cuenta: ${formatNumber(beneficiary.balance)} €.`);
-          err.statusCode = 400;
-          throw err;
         }
-
-        beneficiary.balance = Number((beneficiary.balance - commission).toFixed(2));
-        if (!db.transfers) db.transfers = [];
-        db.transfers.unshift(collectionCommissionTransfer);
-
-        pn.status = 'gestion_cobro';
-        pn.isCollectionManagement = true;
-        pn.collectionManagementAt = nowIso;
-        pn.collectionCommissionRate = 0.005;
-        pn.collectionCommission = commission;
-        pn.collectionTransferId = txId;
-
-        const collectionMsg: MarketMessage = {
-          id: generateId('msg'),
-          chatId: msg.chatId,
-          senderId: beneficiary.id,
-          senderName: beneficiary.name,
-          recipientId: payer.id,
-          recipientName: payer.name,
-          content: `🏛️ Pagaré en gestión de cobro: El vendedor acreedor (${beneficiary.name}) ha entregado el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € a su banco en gestión de cobro (comisión abonada: ${formatNumber(commission)} €). El banco tramitará e ingresará automáticamente el nominal en cuenta al llegar su vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}) sin necesidad de pulsar cobrar.`,
-          timestamp: nowIso,
-          read: false,
-          type: 'text'
-        };
-        db.marketMessages.push(collectionMsg);
-
-        writeDb(db);
-        return {
-          success: true,
-          message: `Pagaré ${pn.promissoryNoteNumber} entregado en gestión de cobro con éxito. Comisión abonada: ${formatNumber(commission)} €. El banco liquidará el cobro automáticamente a su vencimiento.`,
-          transfer: collectionCommissionTransfer,
-          updatedMessage: msg,
-          newBalance: beneficiary.balance,
-          commission
-        };
+        if (result._meta?.collectionChatMsg && currentDb.marketMessages) {
+          if (!currentDb.marketMessages.some(m => m.id === result._meta.collectionChatMsg.id)) {
+            currentDb.marketMessages.push(result._meta.collectionChatMsg);
+          }
+        }
+        if (result.transfer && currentDb.transfers) {
+          if (!currentDb.transfers.some(t => t.id === result.transfer.id)) {
+            currentDb.transfers.unshift(result.transfer);
+          }
+        }
+        if (currentDb.users && result._meta?.beneficiaryId) {
+          const benUser = currentDb.users.find(u => u.id === result._meta.beneficiaryId);
+          if (benUser) {
+            benUser.balance = result.newBalance;
+          }
+        }
+        delete result._meta;
+        writeDb(currentDb);
+      } catch (cacheErr) {
+        console.warn('[PostCommit Cache Update Warning]:', cacheErr);
       }
-    });
+    }
 
-    res.json(result);
+    return res.json(result);
   } catch (err: any) {
     console.error('[Collection Management Promissory Note Concurrency Error]:', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Error al solicitar la gestión de cobro del pagaré' });
@@ -21192,266 +26570,631 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
     return res.status(400).json({ error: 'messageId o noteNumber son requeridos.' });
   }
 
-  const db = readDb();
-  if (!db.marketMessages) db.marketMessages = [];
-
-  let msg = db.marketMessages.find(m => 
-    m.id === messageId || 
-    m.promissoryNoteData?.id === messageId || 
-    m.promissoryNoteData?.promissoryNoteNumber === messageId ||
-    (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
-  );
-
-  if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
-    return res.status(404).json({ error: 'Pagaré cambiario no encontrado en el sistema de mensajería.' });
-  }
-
-  const pn = msg.promissoryNoteData;
-  if (pn.status === 'pagado') {
-    return res.status(400).json({ error: 'Este pagaré ya ha sido cobrado y liquidado previamente en el banco.' });
-  }
-  if (pn.status === 'descontado') {
-    return res.status(400).json({ error: 'Este pagaré ya fue descontado por anticipado en el banco. La liquidación con el deudor se efectuará automáticamente al vencimiento.' });
-  }
-
-  const beneficiary = db.users.find(u => 
-    u.id === beneficiaryId || 
-    u.username === beneficiaryId || 
-    u.name === beneficiaryId ||
-    u.id === pn.beneficiaryId
-  );
-  const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
-  const isAuthorized = isTeacher || 
-                       pn.beneficiaryId === beneficiaryId || 
-                       (beneficiary && pn.beneficiaryId === beneficiary.id) ||
-                       (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
-
-  if (!isAuthorized) {
-    return res.status(403).json({ error: 'Solo la empresa tomadora/beneficiaria del pagaré puede presentar el pagaré al cobro.' });
-  }
-
-  // Check due date: must be today or past
-  const now = new Date();
-  const todayUtc = now.toISOString().slice(0, 10);
-  const todayLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  const dueStr = (pn.dueDate || '').slice(0, 10);
-  const isPastOrToday = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime() || isTeacher;
-
-  if (!isPastOrToday) {
-    return res.status(400).json({
-      error: `No es posible cobrar el pagaré antes de su fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`
-    });
-  }
-
-  let payer = db.users.find(u => u.id === pn.issuerId);
-  if (!payer) {
-    payer = db.users.find(u => 
-      u.name?.toLowerCase() === pn.issuerName?.toLowerCase() || 
-      (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() || 
-      u.username === pn.issuerId
-    );
-  }
-
-  if (!beneficiary) return res.status(404).json({ error: 'Empresa beneficiaria no encontrada.' });
-  if (!payer) return res.status(404).json({ error: 'Empresa libradora/compradora no encontrada.' });
-
-  const amount = Number(pn.amount);
-  if (!amount || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Importe del pagaré no válido.' });
-  }
-
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
-  const idemKey = rawIdemKey || `collect_pn_${pn.promissoryNoteNumber}_${Math.floor(Date.now() / 4000)}`;
 
-  try {
-    const result = await executeWithIdempotency(idemKey, async (key) => {
-      if (dbPool) {
-        return await withPostgresTransaction(async (client) => {
-          // Lock accounts in alphabetical order to prevent deadlocks
-          const idsToLock = [payer.id, beneficiary.id].sort();
-          const accountsResult = await client.query(
-            `SELECT id, alumno, saldo, usuario, password, account_number, role, level 
-             FROM cuentas 
-             WHERE id = ANY($1) 
-             ORDER BY id ASC 
-             FOR UPDATE`,
-            [idsToLock]
+  // Core execution function
+  const runCollectOperation = async (idemKey?: string) => {
+    if (dbPool) {
+      return await withPostgresTransaction(async (client) => {
+        // PASO 1: Cargar y bloquear el pagaré directamente desde PostgreSQL con SELECT ... FOR UPDATE
+        const noteRes = await client.query(
+          `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+           FROM market_messages
+           WHERE type = 'promissory_note'
+             AND (
+               ($1::text IS NOT NULL AND (id = $1::text OR invoice_data->>'id' = $1::text OR invoice_data->>'promissoryNoteNumber' = $1::text))
+               OR
+               ($2::text IS NOT NULL AND invoice_data->>'promissoryNoteNumber' = $2::text)
+             )
+           LIMIT 1
+           FOR UPDATE`,
+          [messageId || null, noteNumber || null]
+        );
+
+        if (!noteRes || noteRes.rows.length === 0) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const msgRow = noteRes.rows[0];
+        const pn: PromissoryNoteData = msgRow.invoice_data;
+
+        if (!pn) {
+          const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // PASO 2: Validaciones de estado desde PostgreSQL
+        if (pn.status === 'pagado') {
+          const err: any = new Error('Este pagaré ya ha sido cobrado y liquidado previamente en el banco.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'descontado') {
+          const err: any = new Error('Este pagaré ya fue descontado por anticipado en el banco. La liquidación con el deudor se efectuará automáticamente al vencimiento.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'gestion_cobro') {
+          const err: any = new Error('Este pagaré está entregado en gestión de cobro bancario. La liquidación se efectuará automáticamente al vencimiento.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (pn.status === 'impagado') {
+          const err: any = new Error('Este pagaré figura como impagado y no puede ser cobrado por ventanilla. Debe reclamarse judicialmente.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // PASO 3: Autorización del solicitante
+        let requesterUser: any = null;
+        if (beneficiaryId) {
+          const reqRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, role, account_number, level
+             FROM cuentas
+             WHERE id = $1 OR usuario = $1 OR alumno = $1
+             LIMIT 1`,
+            [beneficiaryId]
           );
-
-          const payerRow = accountsResult.rows.find(r => r.id === payer.id);
-          const beneficiaryRow = accountsResult.rows.find(r => r.id === beneficiary.id);
-
-          if (!payerRow || !beneficiaryRow) {
-            const err: any = new Error('No se encontraron las cuentas de los participantes en la base de datos');
-            err.statusCode = 404;
-            throw err;
+          if (reqRes && reqRes.rows.length > 0) {
+            requesterUser = reqRes.rows[0];
           }
+        }
 
-          const currentPayerBalance = Number(payerRow.saldo);
-          const currentBeneficiaryBalance = Number(beneficiaryRow.saldo);
+        const isTeacher = requesterUser?.role === 'teacher' || 
+                          requesterUser?.usuario === 'pupdaniel' || 
+                          beneficiaryId === 'pupdaniel';
 
-          if (currentPayerBalance < amount) {
-            // Insufficient funds -> Mark as impagado
-            pn.status = 'impagado';
-            pn.collectRequested = true;
-            pn.collectRequestedAt = now.toISOString();
+        const isAuthorized = isTeacher || 
+                             pn.beneficiaryId === beneficiaryId || 
+                             (requesterUser && (pn.beneficiaryId === requesterUser.id || 
+                                                (pn.beneficiaryName && requesterUser.alumno && pn.beneficiaryName.toLowerCase() === requesterUser.alumno.toLowerCase())));
 
-            const protestMsg: MarketMessage = {
-              id: generateId('msg'),
-              chatId: msg.chatId,
-              senderId: beneficiary.id,
-              senderName: beneficiary.name,
-              recipientId: payer.id,
-              recipientName: payer.name,
-              content: `❌ Pagaré impagado por falta de fondos: El tomador ${beneficiary.name} ha presentado al cobro bancario el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero la cuenta del librador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)} disponibles). El efecto queda en estado de impago con fuerza ejecutiva.`,
-              timestamp: now.toISOString(),
-              read: false,
-              type: 'text'
-            };
-            db.marketMessages.push(protestMsg);
+        if (!isAuthorized) {
+          const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré puede presentar el pagaré al cobro.');
+          err.statusCode = 403;
+          throw err;
+        }
 
-            addNotification(
-              db,
-              beneficiary.id,
-              'Pagaré impagado por falta de fondos',
-              `El pagaré ${pn.promissoryNoteNumber} de ${formatNumber(amount)} € emitido por ${payer.name} ha resultado impagado por saldo insuficiente.`,
-              'transfer_received',
-              pn.id || messageId
-            );
+        // PASO 4: Comprobación de fecha de vencimiento (hoy o posterior)
+        const now = new Date();
+        const todayUtc = now.toISOString().slice(0, 10);
+        const todayLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+        const dueStr = (pn.dueDate || '').slice(0, 10);
+        const isPastOrToday = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime() || isTeacher;
 
-            addNotification(
-              db,
-              payer.id,
-              'Aviso de pagaré impagado',
-              `El proveedor ${beneficiary.name} ha presentado al cobro el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero tu cuenta no dispone de saldo suficiente. Efecto impagado.`,
-              'transfer_received',
-              pn.id || messageId
-            );
+        if (!isPastOrToday) {
+          const err: any = new Error(`No es posible cobrar el pagaré antes de su fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`);
+          err.statusCode = 400;
+          throw err;
+        }
 
-            writeDb(db);
-            syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-            syncMarketMessageToSupabase(protestMsg).catch(e => console.error(e));
+        const amount = Number(pn.amount);
+        if (!amount || isNaN(amount) || amount <= 0) {
+          const err: any = new Error('Importe del pagaré no válido.');
+          err.statusCode = 400;
+          throw err;
+        }
 
-            return {
-              success: false,
-              isImpagado: true,
-              error: `Pagaré impagado: El comprador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)}) en su cuenta bancaria.`,
-              updatedMessage: msg
-            };
-          }
+        // PASO 5: Localizar cuentas de beneficiario y pagador
+        const targetBeneficiaryId = pn.beneficiaryId || requesterUser?.id;
+        const targetBeneficiaryName = pn.beneficiaryName || requesterUser?.alumno;
 
-          // Sufficient funds -> Settle in PostgreSQL
-          const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
-          const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
+        const benAccRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1`,
+          [targetBeneficiaryId, targetBeneficiaryName]
+        );
 
-          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
-          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
+        if (!benAccRes || benAccRes.rows.length === 0) {
+          const err: any = new Error('Empresa beneficiaria no encontrada.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const benAccount = benAccRes.rows[0];
 
-          const txId = generateId('tx');
-          const transferConcept = `Cobro de pagaré bancario ${pn.promissoryNoteNumber} - ${pn.concept || 'Compensación cambiaria'}`;
+        const payerAccRes = await client.query(
+          `SELECT id, alumno, saldo, usuario, role, account_number, level
+           FROM cuentas
+           WHERE id = $1 OR alumno = $2 OR usuario = $1
+           LIMIT 1`,
+          [pn.issuerId, pn.issuerName]
+        );
 
-          const newTransfer: Transfer = {
-            id: txId,
-            senderId: payer.id,
-            senderName: payer.name,
-            senderAccount: payer.accountNumber || pn.bankIban,
-            receiverId: beneficiary.id,
-            receiverName: beneficiary.name,
-            receiverAccount: beneficiary.accountNumber || `ES00 0000 0000 0000 0000`,
-            amount: amount,
-            concept: transferConcept,
-            timestamp: now.toISOString()
+        if (!payerAccRes || payerAccRes.rows.length === 0) {
+          const err: any = new Error('Empresa libradora/compradora no encontrada.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const payerAccount = payerAccRes.rows[0];
+
+        // PASO 6: Bloqueo de cuentas en orden alfabético estricto (ORDER BY id ASC FOR UPDATE)
+        const idsToLock = [payerAccount.id, benAccount.id].sort();
+        const accountsResult = await client.query(
+          `SELECT id, alumno, saldo, usuario, account_number, role, level
+           FROM cuentas
+           WHERE id = ANY($1)
+           ORDER BY id ASC
+           FOR UPDATE`,
+          [idsToLock]
+        );
+
+        const payerRow = accountsResult.rows.find(r => r.id === payerAccount.id);
+        const beneficiaryRow = accountsResult.rows.find(r => r.id === benAccount.id);
+
+        if (!payerRow || !beneficiaryRow) {
+          const err: any = new Error('No se encontraron las cuentas de los participantes en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const currentPayerBalance = Number(payerRow.saldo);
+        const currentBeneficiaryBalance = Number(beneficiaryRow.saldo);
+        const nowIso = now.toISOString();
+
+        // PASO 7A: Caso de fondos insuficientes en la cuenta del librador
+        if (currentPayerBalance < amount) {
+          const impagadoUpdate = {
+            status: 'impagado',
+            collectRequested: true,
+            collectRequestedAt: nowIso
           };
 
           await client.query(
-            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [txId + '-out', payerRow.id, amount, now.toISOString(), transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+            `UPDATE market_messages
+             SET invoice_data = invoice_data || $1::jsonb
+             WHERE id = $2`,
+            [JSON.stringify(impagadoUpdate), msgRow.id]
+          );
+
+          const protestMsgId = generateId('msg');
+          const protestContent = `❌ Pagaré impagado por falta de fondos: El tomador ${beneficiaryRow.alumno} ha presentado al cobro bancario el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero la cuenta del librador (${payerRow.alumno}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)} disponibles). El efecto queda en estado de impago con fuerza ejecutiva.`;
+
+          await client.query(
+            `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'text')`,
+            [
+              protestMsgId,
+              msgRow.chat_id,
+              beneficiaryRow.id,
+              beneficiaryRow.alumno,
+              payerRow.id,
+              payerRow.alumno,
+              protestContent,
+              nowIso
+            ]
+          );
+
+          const notifBenId = generateId('notif');
+          const notifPayerId = generateId('notif');
+
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              notifBenId,
+              beneficiaryRow.id,
+              'Pagaré impagado por falta de fondos',
+              `El pagaré ${pn.promissoryNoteNumber} de ${formatNumber(amount)} € emitido por ${payerRow.alumno} ha resultado impagado por saldo insuficiente.`,
+              nowIso,
+              pn.id || messageId
+            ]
           );
 
           await client.query(
-            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-             VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [txId + '-in', beneficiaryRow.id, amount, now.toISOString(), transferConcept, payer.id, payer.name, payer.accountNumber || pn.bankIban, beneficiary.id, beneficiary.name, beneficiary.accountNumber || 'ES00 0000 0000 0000 0000']
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              notifPayerId,
+              payerRow.id,
+              'Aviso de pagaré impagado',
+              `El proveedor ${beneficiaryRow.alumno} ha presentado al cobro el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €, pero tu cuenta no dispone de saldo suficiente. Efecto impagado.`,
+              nowIso,
+              pn.id || messageId
+            ]
           );
 
-          // Update in-memory DB snapshot
-          payer.balance = newPayerBal;
-          beneficiary.balance = newBeneficiaryBal;
+          const updatedPromissoryNoteData = {
+            ...pn,
+            ...impagadoUpdate
+          };
 
-          if (!db.transfers) db.transfers = [];
-          db.transfers.unshift(newTransfer);
+          const updatedMessage = {
+            ...msgRow,
+            chatId: msgRow.chat_id,
+            senderId: msgRow.sender_id,
+            senderName: msgRow.sender_name,
+            recipientId: msgRow.recipient_id,
+            recipientName: msgRow.recipient_name,
+            invoice_data: updatedPromissoryNoteData,
+            promissoryNoteData: updatedPromissoryNoteData
+          };
 
-          pn.status = 'pagado';
-          pn.paidAt = now.toISOString();
-          pn.paidTransferId = txId;
-          pn.collectRequested = true;
-          pn.collectRequestedAt = now.toISOString();
-
-          const successMsg: MarketMessage = {
-            id: generateId('msg'),
-            chatId: msg.chatId,
-            senderId: beneficiary.id,
-            senderName: beneficiary.name,
-            recipientId: payer.id,
-            recipientName: payer.name,
-            content: `🏦 Pagaré cobrado en banco: El beneficiario ${beneficiary.name} ha presentado al cobro el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. Se ha cargado en la cuenta del librador y abonado en la cuenta del tomador (Ref. bancaria: ${txId}).`,
-            timestamp: now.toISOString(),
+          const protestChatMsg: MarketMessage = {
+            id: protestMsgId,
+            chatId: msgRow.chat_id,
+            senderId: beneficiaryRow.id,
+            senderName: beneficiaryRow.alumno,
+            recipientId: payerRow.id,
+            recipientName: payerRow.alumno,
+            content: protestContent,
+            timestamp: nowIso,
             read: false,
             type: 'text'
           };
-          db.marketMessages.push(successMsg);
-
-          addNotification(
-            db,
-            beneficiary.id,
-            'Pagaré cobrado exitosamente',
-            `Has cobrado en el banco el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € de ${payer.name}. Saldo abonado en tu cuenta.`,
-            'transfer_received',
-            txId
-          );
-
-          addNotification(
-            db,
-            payer.id,
-            'Cargo de pagaré al vencimiento',
-            `El banco ha liquidado el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € presentado al cobro por ${beneficiary.name}.`,
-            'transfer_received',
-            txId
-          );
-
-          writeDb(db);
-          syncMarketMessageToSupabase(msg).catch(e => console.error(e));
-          syncMarketMessageToSupabase(successMsg).catch(e => console.error(e));
 
           return {
-            success: true,
-            message: `Pagaré cobrado con éxito por ${formatNumber(amount)} €. Saldo actualizado.`,
-            transfer: newTransfer,
-            updatedMessage: msg,
-            newBalance: newBeneficiaryBal
+            success: false,
+            isImpagado: true,
+            error: `Pagaré impagado: El comprador (${payerRow.alumno}) no dispone de saldo suficiente (${formatCurrency(currentPayerBalance)}) en su cuenta bancaria.`,
+            updatedMessage,
+            _meta: {
+              protestChatMsg,
+              beneficiaryId: beneficiaryRow.id,
+              payerId: payerRow.id,
+              isImpagado: true
+            }
           };
-        }, key);
-      } else {
-        // Fallback in-memory
-        if (payer.balance < amount) {
-          pn.status = 'impagado';
-          pn.collectRequested = true;
-          pn.collectRequestedAt = now.toISOString();
-          writeDb(db);
-          return { success: false, isImpagado: true, error: 'Pagaré impagado por saldo insuficiente', updatedMessage: msg };
         }
 
-        payer.balance = Number((payer.balance - amount).toFixed(2));
-        beneficiary.balance = Number((beneficiary.balance + amount).toFixed(2));
-        pn.status = 'pagado';
-        pn.paidAt = now.toISOString();
-        writeDb(db);
-        return { success: true, updatedMessage: msg, newBalance: beneficiary.balance };
-      }
-    });
+        // PASO 7B: Caso de fondos suficientes -> Liquidación transaccional
+        const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+        const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
 
-    res.json(result);
+        await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
+        await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBeneficiaryBal, beneficiaryRow.id]);
+
+        const txId = generateId('tx');
+        const transferConcept = `Cobro de pagaré bancario ${pn.promissoryNoteNumber} - ${pn.concept || 'Compensación cambiaria'}`;
+
+        const newTransfer: Transfer = {
+          id: txId,
+          senderId: payerRow.id,
+          senderName: payerRow.alumno,
+          senderAccount: payerRow.account_number || pn.bankIban || 'ES00 0000 0000 0000 0000',
+          receiverId: beneficiaryRow.id,
+          receiverName: beneficiaryRow.alumno,
+          receiverAccount: beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000',
+          amount: amount,
+          concept: transferConcept,
+          timestamp: nowIso
+        };
+
+        await client.query(
+          `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+           VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txId + '-out',
+            payerRow.id,
+            amount,
+            nowIso,
+            transferConcept,
+            payerRow.id,
+            payerRow.alumno,
+            payerRow.account_number || pn.bankIban || 'ES00 0000 0000 0000 0000',
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000'
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+           VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            txId + '-in',
+            beneficiaryRow.id,
+            amount,
+            nowIso,
+            transferConcept,
+            payerRow.id,
+            payerRow.alumno,
+            payerRow.account_number || pn.bankIban || 'ES00 0000 0000 0000 0000',
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            beneficiaryRow.account_number || 'ES00 0000 0000 0000 0000'
+          ]
+        );
+
+        const paidUpdate = {
+          status: 'pagado',
+          paidAt: nowIso,
+          paidTransferId: txId,
+          collectRequested: true,
+          collectRequestedAt: nowIso
+        };
+
+        await client.query(
+          `UPDATE market_messages
+           SET invoice_data = invoice_data || $1::jsonb
+           WHERE id = $2`,
+          [JSON.stringify(paidUpdate), msgRow.id]
+        );
+
+        const successMsgId = generateId('msg');
+        const successContent = `🏦 Pagaré cobrado en banco: El beneficiario ${beneficiaryRow.alumno} ha presentado al cobro el pagaré oficial ${pn.promissoryNoteNumber} por ${formatNumber(amount)} €. Se ha cargado en la cuenta del librador y abonado en la cuenta del tomador (Ref. bancaria: ${txId}).`;
+
+        await client.query(
+          `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'text')`,
+          [
+            successMsgId,
+            msgRow.chat_id,
+            beneficiaryRow.id,
+            beneficiaryRow.alumno,
+            payerRow.id,
+            payerRow.alumno,
+            successContent,
+            nowIso
+          ]
+        );
+
+        const notifBenId = generateId('notif');
+        const notifPayerId = generateId('notif');
+
+        await client.query(
+          `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+           VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            notifBenId,
+            beneficiaryRow.id,
+            'Pagaré cobrado exitosamente',
+            `Has cobrado en el banco el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € de ${payerRow.alumno}. Saldo abonado en tu cuenta.`,
+            nowIso,
+            txId
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+           VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            notifPayerId,
+            payerRow.id,
+            'Cargo de pagaré al vencimiento',
+            `El banco ha liquidado el pagaré ${pn.promissoryNoteNumber} por ${formatNumber(amount)} € presentado al cobro por ${beneficiaryRow.alumno}.`,
+            nowIso,
+            txId
+          ]
+        );
+
+        const updatedPromissoryNoteData = {
+          ...pn,
+          ...paidUpdate
+        };
+
+        const updatedMessage = {
+          ...msgRow,
+          chatId: msgRow.chat_id,
+          senderId: msgRow.sender_id,
+          senderName: msgRow.sender_name,
+          recipientId: msgRow.recipient_id,
+          recipientName: msgRow.recipient_name,
+          invoice_data: updatedPromissoryNoteData,
+          promissoryNoteData: updatedPromissoryNoteData
+        };
+
+        const successChatMsg: MarketMessage = {
+          id: successMsgId,
+          chatId: msgRow.chat_id,
+          senderId: beneficiaryRow.id,
+          senderName: beneficiaryRow.alumno,
+          recipientId: payerRow.id,
+          recipientName: payerRow.alumno,
+          content: successContent,
+          timestamp: nowIso,
+          read: false,
+          type: 'text'
+        };
+
+        return {
+          success: true,
+          message: `Pagaré cobrado con éxito por ${formatNumber(amount)} €. Saldo actualizado.`,
+          transfer: newTransfer,
+          updatedMessage,
+          newBalance: newBeneficiaryBal,
+          _meta: {
+            successChatMsg,
+            beneficiaryId: beneficiaryRow.id,
+            payerId: payerRow.id,
+            newPayerBal,
+            newBeneficiaryBal,
+            isPaid: true
+          }
+        };
+      }, idemKey);
+    } else {
+      // Fallback in-memory cuando no hay base de datos conectada
+      const db = readDb();
+      if (!db.marketMessages) db.marketMessages = [];
+
+      let msg = db.marketMessages.find(m => 
+        m.id === messageId || 
+        m.promissoryNoteData?.id === messageId || 
+        m.promissoryNoteData?.promissoryNoteNumber === messageId ||
+        (noteNumber && m.promissoryNoteData?.promissoryNoteNumber === noteNumber)
+      );
+
+      if (!msg || msg.type !== 'promissory_note' || !msg.promissoryNoteData) {
+        const err: any = new Error('Pagaré cambiario no encontrado en el sistema de mensajería.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const pn = msg.promissoryNoteData;
+      if (pn.status === 'pagado') {
+        const err: any = new Error('Este pagaré ya ha sido cobrado y liquidado previamente en el banco.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'descontado') {
+        const err: any = new Error('Este pagaré ya fue descontado por anticipado en el banco. La liquidación con el deudor se efectuará automáticamente al vencimiento.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'gestion_cobro') {
+        const err: any = new Error('Este pagaré está entregado en gestión de cobro bancario. La liquidación se efectuará automáticamente al vencimiento.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (pn.status === 'impagado') {
+        const err: any = new Error('Este pagaré figura como impagado y no puede ser cobrado por ventanilla. Debe reclamarse judicialmente.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const beneficiary = (db.users || []).find(u => 
+        u.id === beneficiaryId || 
+        u.username === beneficiaryId || 
+        u.name === beneficiaryId ||
+        u.id === pn.beneficiaryId
+      );
+      const isTeacher = beneficiary?.role === 'teacher' || beneficiary?.username === 'pupdaniel' || beneficiaryId === 'pupdaniel';
+      const isAuthorized = isTeacher || 
+                           pn.beneficiaryId === beneficiaryId || 
+                           (beneficiary && pn.beneficiaryId === beneficiary.id) ||
+                           (beneficiary && pn.beneficiaryName && beneficiary.name && pn.beneficiaryName.toLowerCase() === beneficiary.name.toLowerCase());
+
+      if (!isAuthorized) {
+        const err: any = new Error('Solo la empresa tomadora/beneficiaria del pagaré puede presentar el pagaré al cobro.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      const now = new Date();
+      const todayUtc = now.toISOString().slice(0, 10);
+      const todayLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      const dueStr = (pn.dueDate || '').slice(0, 10);
+      const isPastOrToday = todayUtc >= dueStr || todayLocal >= dueStr || now.getTime() >= new Date(pn.dueDate).getTime() || isTeacher;
+
+      if (!isPastOrToday) {
+        const err: any = new Error(`No es posible cobrar el pagaré antes de su fecha de vencimiento (${new Date(pn.dueDate).toLocaleDateString('es-ES')}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      let payer = (db.users || []).find(u => u.id === pn.issuerId);
+      if (!payer) {
+        payer = (db.users || []).find(u => 
+          u.name?.toLowerCase() === pn.issuerName?.toLowerCase() || 
+          (u as any).companyName?.toLowerCase() === pn.issuerName?.toLowerCase() || 
+          u.username === pn.issuerId
+        );
+      }
+
+      if (!beneficiary) {
+        const err: any = new Error('Empresa beneficiaria no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (!payer) {
+        const err: any = new Error('Empresa libradora/compradora no encontrada.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const amount = Number(pn.amount);
+      if (!amount || isNaN(amount) || amount <= 0) {
+        const err: any = new Error('Importe del pagaré no válido.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      if ((payer.balance || 0) < amount) {
+        pn.status = 'impagado';
+        pn.collectRequested = true;
+        pn.collectRequestedAt = now.toISOString();
+        writeDb(db);
+        return {
+          success: false,
+          isImpagado: true,
+          error: `Pagaré impagado: El comprador (${payer.name}) no dispone de saldo suficiente (${formatCurrency(payer.balance || 0)}) en su cuenta bancaria.`,
+          updatedMessage: msg
+        };
+      }
+
+      payer.balance = Number(((payer.balance || 0) - amount).toFixed(2));
+      beneficiary.balance = Number(((beneficiary.balance || 0) + amount).toFixed(2));
+      pn.status = 'pagado';
+      pn.paidAt = now.toISOString();
+      pn.collectRequested = true;
+      pn.collectRequestedAt = now.toISOString();
+      writeDb(db);
+      return { success: true, updatedMessage: msg, newBalance: beneficiary.balance };
+    }
+  };
+
+  try {
+    let result: any;
+    if (rawIdemKey) {
+      result = await executeWithIdempotency(rawIdemKey, async (key) => {
+        return await runCollectOperation(key);
+      });
+    } else {
+      result = await runCollectOperation(undefined);
+    }
+
+    // Actualización de memoria como caché postcommit
+    if (result && result.updatedMessage) {
+      try {
+        const currentDb = readDb();
+        if (currentDb.marketMessages) {
+          const targetMsg = currentDb.marketMessages.find(m =>
+            m.id === result.updatedMessage?.id ||
+            m.promissoryNoteData?.id === result.updatedMessage?.promissoryNoteData?.id ||
+            m.promissoryNoteData?.promissoryNoteNumber === result.updatedMessage?.promissoryNoteData?.promissoryNoteNumber
+          );
+          if (targetMsg && targetMsg.promissoryNoteData && result.updatedMessage?.promissoryNoteData) {
+            Object.assign(targetMsg.promissoryNoteData, result.updatedMessage.promissoryNoteData);
+          } else if (result.updatedMessage) {
+            currentDb.marketMessages.push(result.updatedMessage);
+          }
+        }
+        if (result._meta?.successChatMsg && currentDb.marketMessages) {
+          if (!currentDb.marketMessages.some(m => m.id === result._meta.successChatMsg.id)) {
+            currentDb.marketMessages.push(result._meta.successChatMsg);
+          }
+        }
+        if (result._meta?.protestChatMsg && currentDb.marketMessages) {
+          if (!currentDb.marketMessages.some(m => m.id === result._meta.protestChatMsg.id)) {
+            currentDb.marketMessages.push(result._meta.protestChatMsg);
+          }
+        }
+        if (result.transfer && currentDb.transfers) {
+          if (!currentDb.transfers.some(t => t.id === result.transfer.id)) {
+            currentDb.transfers.unshift(result.transfer);
+          }
+        }
+        if (currentDb.users) {
+          if (result._meta?.beneficiaryId && result._meta.newBeneficiaryBal !== undefined) {
+            const benUser = currentDb.users.find(u => u.id === result._meta.beneficiaryId);
+            if (benUser) {
+              benUser.balance = result._meta.newBeneficiaryBal;
+            }
+          }
+          if (result._meta?.payerId && result._meta.newPayerBal !== undefined) {
+            const payerUser = currentDb.users.find(u => u.id === result._meta.payerId);
+            if (payerUser) {
+              payerUser.balance = result._meta.newPayerBal;
+            }
+          }
+        }
+        writeDb(currentDb);
+        delete result._meta;
+      } catch (cacheErr) {
+        console.warn('[PostCommit Cache Update Warning (Collect)]:', cacheErr);
+      }
+    }
+
+    return res.json(result);
   } catch (err: any) {
     console.error('[Collect Promissory Note Concurrency Error]:', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Error al cobrar el pagaré' });
@@ -21499,7 +27242,7 @@ app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentI
   });
 });
 
-app.post('/api/raw-materials/rod-production-mode', (req, res) => {
+app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
   const { studentId, mode } = req.body;
   if (!studentId || !mode) {
     return res.status(400).json({ error: 'studentId y mode son requeridos' });
@@ -21507,37 +27250,118 @@ app.post('/api/raw-materials/rod-production-mode', (req, res) => {
   if (mode !== 'estrella' && mode !== 'plana') {
     return res.status(400).json({ error: 'mode debe ser estrella o plana' });
   }
-  const db = readDb();
-  const inv = checkAndCalculateProduction(db, studentId);
-  (inv as any).rodProductionMode = mode;
-  inv.updatedAt = new Date().toISOString();
 
-  const student = db.users.find(u => u.id === studentId);
-  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
-  writeDb(db);
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `rod_mode_${studentId}_${mode}_${Math.floor(Date.now() / 3000)}`;
 
-  const rawMaterials = {
-    fragmentos_hierro_kg: inv.ironKg || 0,
-    pellets_plastico_kg: inv.plasticKg || 0,
-    pegamento_epoxi_kg: inv.epoxiKg || 0
-  };
+  try {
+    const result = await executeWithIdempotency(idemKey, async () => {
+      if (dbPool) {
+        const txResult = await withPostgresTransaction(async (client) => {
+          // Lock row in materias_primas_inventario
+          let invRowRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [studentId]
+          );
 
-  const producedGoods = {
-    rodProductionMode: (inv as any).rodProductionMode || null,
-    varillas_punta: inv.producedRodsUnits || 0,
-    varillas_punta_estrella: (inv as any).producedStarRodsUnits || 0,
-    varillas_punta_plana: (inv as any).producedFlatRodsUnits || 0,
-    productos_ensamblados: inv.producedScrewdriversUnits || 0,
-    destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || 0,
-    destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || 0,
-  };
+          if (!invRowRes || invRowRes.rows.length === 0) {
+            const db = readDb();
+            const student = (db.users || []).find(u => u.id === studentId);
+            const studentName = student ? student.name : 'Estudiante';
+            await client.query(
+              `INSERT INTO materias_primas_inventario (
+                alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+                pellets_plastico_kg, pegamento_epoxi_kg, rod_production_mode,
+                varillas_punta, productos_ensamblados, fecha_actualizacion
+              ) VALUES ($1, $2, 0, 0, 0, 0, $3, 0, 0, NOW())
+              ON CONFLICT (alumno_id) DO NOTHING`,
+              [studentId, studentName, mode]
+            );
+            invRowRes = await client.query(
+              `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+              [studentId]
+            );
+          }
 
-  res.json({
-    success: true,
-    inventory: inv,
-    rawMaterials,
-    producedGoods
-  });
+          const nowIso = new Date().toISOString();
+          await client.query(
+            `UPDATE materias_primas_inventario 
+             SET rod_production_mode = $1, fecha_actualizacion = $2 
+             WHERE alumno_id = $3`,
+            [mode, nowIso, studentId]
+          );
+
+          const updatedRow = (await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1`,
+            [studentId]
+          )).rows[0];
+
+          return updatedRow;
+        });
+
+        // POST-COMMIT: Update memory and db.json
+        const db = readDb();
+        const inv = checkAndCalculateProduction(db, studentId);
+        (inv as any).rodProductionMode = mode;
+        inv.updatedAt = new Date().toISOString();
+        writeDb(db);
+
+        const rawMaterials = {
+          fragmentos_hierro_kg: Number(txResult?.fragmentos_hierro_kg || inv.ironKg || 0),
+          pellets_plastico_kg: Number(txResult?.pellets_plastico_kg || inv.plasticKg || 0),
+          pegamento_epoxi_kg: Number(txResult?.pegamento_epoxi_kg || inv.epoxiKg || 0)
+        };
+
+        const producedGoods = {
+          rodProductionMode: mode,
+          varillas_punta: Number(txResult?.varillas_punta || inv.producedRodsUnits || 0),
+          varillas_punta_estrella: Number(txResult?.varillas_punta_estrella || (inv as any).producedStarRodsUnits || 0),
+          varillas_punta_plana: Number(txResult?.varillas_punta_plana || (inv as any).producedFlatRodsUnits || 0),
+          productos_ensamblados: Number(txResult?.productos_ensamblados || inv.producedScrewdriversUnits || 0),
+          destornilladores_punta_estrella: Number(txResult?.destornilladores_punta_estrella || (inv as any).starScrewdriversUnits || 0),
+          destornilladores_punta_plana: Number(txResult?.destornilladores_punta_plana || (inv as any).flatScrewdriversUnits || 0),
+        };
+
+        return {
+          success: true,
+          inventory: inv,
+          rawMaterials,
+          producedGoods
+        };
+      } else {
+        // In-memory fallback
+        const db = readDb();
+        const inv = checkAndCalculateProduction(db, studentId);
+        (inv as any).rodProductionMode = mode;
+        inv.updatedAt = new Date().toISOString();
+        writeDb(db);
+
+        return {
+          success: true,
+          inventory: inv,
+          rawMaterials: {
+            fragmentos_hierro_kg: inv.ironKg || 0,
+            pellets_plastico_kg: inv.plasticKg || 0,
+            pegamento_epoxi_kg: inv.epoxiKg || 0
+          },
+          producedGoods: {
+            rodProductionMode: mode,
+            varillas_punta: inv.producedRodsUnits || 0,
+            varillas_punta_estrella: (inv as any).producedStarRodsUnits || 0,
+            varillas_punta_plana: (inv as any).producedFlatRodsUnits || 0,
+            productos_ensamblados: inv.producedScrewdriversUnits || 0,
+            destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || 0,
+            destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || 0,
+          }
+        };
+      }
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Rod Production Mode Error]:', err);
+    res.status(500).json({ error: 'Error al cambiar modo de producción: ' + (err.message || String(err)) });
+  }
 });
 
 // -------------------------------------------------------------
@@ -21878,7 +27702,7 @@ app.post('/api/court/lawsuits', async (req, res) => {
 });
 
 // Teacher / Judge: Auto de admisión a trámite o Inadmisión de Demanda
-app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
+app.post('/api/court/lawsuits/:id/judge-admission', async (req, res) => {
   const { id } = req.params;
   const { admission, notes, judgeId } = req.body;
 
@@ -21886,75 +27710,292 @@ app.post('/api/court/lawsuits/:id/judge-admission', (req, res) => {
     return res.status(400).json({ error: 'admission debe ser "admitir" o "rechazar"' });
   }
 
-  const db = readDb();
-  if (!db.courtLawsuits) db.courtLawsuits = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_judge_admission_${id}_${admission}`;
 
-  const lawsuit = db.courtLawsuits.find(l => l.id === id);
-  if (!lawsuit) {
-    return res.status(404).json({ error: 'Procedimiento judicial no encontrado' });
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      return await withPostgresTransaction(async (client) => {
+        // ================= LOCK: DEMANDA JUDICIAL =================
+        const lawsuitLockRes = await client.query(
+          `SELECT id, numero_autos, juzgado, tipo, subtipo,
+                  demandante_id, demandante_nombre, demandante_nif, demandante_iban,
+                  demandado_id, demandado_nombre, demandado_nif, demandado_iban,
+                  cuantia_reclamada, intereses_costas, cuantia_total, fecha_contrato,
+                  descripcion_bienes, hechos, fundamentos_derecho, petitum, resumen_prueba,
+                  archivos_adjuntos, pedido_relacionado_id, pagare_numero, pagare_id,
+                  pagare_vencimiento, pagare_datos, estado, fecha_creacion, fecha_actualizacion,
+                  fecha_admision, notas_admision, fecha_resolucion, notas_resolucion,
+                  comentarios_juez, transferencia_ejecucion_id, minuta_abogado, minuta_iva,
+                  minuta_total, minuta_factura_num, embargo_fecha, embargo_importe,
+                  embargo_transfer_id, embargo_notas, contestacion_realizada, contestacion_fecha,
+                  contestacion_tipo, contestacion_hechos, contestacion_adjuntos,
+                  plazo_limite_contestacion, minuta_demandado_base, minuta_demandado_iva,
+                  minuta_demandado_total, minuta_demandado_factura_num
+           FROM demandas_judiciales
+           WHERE id = $1
+           FOR UPDATE`,
+          [id]
+        );
+
+        if (lawsuitLockRes.rows.length === 0) {
+          const err: any = new Error('Procedimiento judicial no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const row = lawsuitLockRes.rows[0];
+        const currentStatus = String(row.estado);
+
+        const mapRowToLawsuit = (r: any): CourtLawsuit => {
+          const atts = r.archivos_adjuntos
+            ? (typeof r.archivos_adjuntos === 'string' ? JSON.parse(r.archivos_adjuntos) : r.archivos_adjuntos)
+            : [];
+          const pnData = r.pagare_datos
+            ? (typeof r.pagare_datos === 'string' ? JSON.parse(r.pagare_datos) : r.pagare_datos)
+            : undefined;
+          return {
+            id: String(r.id),
+            caseNumber: String(r.numero_autos),
+            courtName: String(r.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
+            type: String(r.tipo) as any,
+            subtype: r.subtipo ? String(r.subtipo) as any : undefined,
+            plaintiffId: String(r.demandante_id),
+            plaintiffName: String(r.demandante_nombre),
+            plaintiffNif: r.demandante_nif ? String(r.demandante_nif) : undefined,
+            plaintiffIban: r.demandante_iban ? String(r.demandante_iban) : undefined,
+            defendantId: String(r.demandado_id),
+            defendantName: String(r.demandado_nombre),
+            defendantNif: r.demandado_nif ? String(r.demandado_nif) : undefined,
+            defendantIban: r.demandado_iban ? String(r.demandado_iban) : undefined,
+            claimedAmount: Number(r.cuantia_reclamada || 0),
+            interestAndCostsAmount: Number(r.intereses_costas || 0),
+            totalClaimAmount: Number(r.cuantia_total || r.cuantia_reclamada || 0),
+            contractDate: r.fecha_contrato ? new Date(r.fecha_contrato).toISOString() : undefined,
+            goodsDescription: String(r.descripcion_bienes || ''),
+            facts: String(r.hechos || ''),
+            legalBasis: String(r.fundamentos_derecho || ''),
+            petitum: String(r.petitum || ''),
+            evidenceSummary: String(r.resumen_prueba || ''),
+            attachments: atts,
+            relatedOrderId: r.pedido_relacionado_id ? String(r.pedido_relacionado_id) : undefined,
+            promissoryNoteNumber: r.pagare_numero ? String(r.pagare_numero) : undefined,
+            promissoryNoteId: r.pagare_id ? String(r.pagare_id) : undefined,
+            promissoryNoteDueDate: r.pagare_vencimiento ? new Date(r.pagare_vencimiento).toISOString() : undefined,
+            promissoryNoteData: pnData,
+            status: String(r.estado) as any,
+            createdAt: r.fecha_creacion ? new Date(r.fecha_creacion).toISOString() : new Date().toISOString(),
+            updatedAt: r.fecha_actualizacion ? new Date(r.fecha_actualizacion).toISOString() : new Date().toISOString(),
+            admissionDate: r.fecha_admision ? new Date(r.fecha_admision).toISOString() : undefined,
+            admissionNotes: r.notas_admision ? String(r.notas_admision) : undefined,
+            defendantDeadlineDate: r.plazo_limite_contestacion ? new Date(r.plazo_limite_contestacion).toISOString() : undefined,
+            resolutionDate: r.fecha_resolucion ? new Date(r.fecha_resolucion).toISOString() : undefined,
+            resolutionNotes: r.notas_resolucion ? String(r.notas_resolucion) : undefined,
+            judgeComments: r.comentarios_juez ? String(r.comentarios_juez) : undefined,
+            executionTransferId: r.transferencia_ejecucion_id ? String(r.transferencia_ejecucion_id) : undefined,
+            lawyerFeeAmount: r.minuta_abogado ? Number(r.minuta_abogado) : undefined,
+            lawyerFeeIva: r.minuta_iva ? Number(r.minuta_iva) : undefined,
+            lawyerFeeTotal: r.minuta_total ? Number(r.minuta_total) : undefined,
+            lawyerFeeInvoiceNumber: r.minuta_factura_num ? String(r.minuta_factura_num) : undefined,
+            embargoDate: r.embargo_fecha ? new Date(r.embargo_fecha).toISOString() : undefined,
+            embargoAmount: r.embargo_importe ? Number(r.embargo_importe) : undefined,
+            embargoTransferId: r.embargo_transfer_id ? String(r.embargo_transfer_id) : undefined,
+            embargoNotes: r.embargo_notas ? String(r.embargo_notas) : undefined,
+            defendantAnswered: Boolean(r.contestacion_realizada),
+            defendantAnswerDate: r.contestacion_fecha ? new Date(r.contestacion_fecha).toISOString() : undefined,
+            defendantAnswerType: r.contestacion_tipo ? String(r.contestacion_tipo) as any : undefined,
+            defendantAnswerFacts: r.contestacion_hechos ? String(r.contestacion_hechos) : undefined,
+            defendantLawyerFeeAmount: r.minuta_demandado_base ? Number(r.minuta_demandado_base) : undefined,
+            defendantLawyerFeeIva: r.minuta_demandado_iva ? Number(r.minuta_demandado_iva) : undefined,
+            defendantLawyerFeeTotal: r.minuta_demandado_total ? Number(r.minuta_demandado_total) : undefined,
+            defendantLawyerFeeInvoiceNumber: r.minuta_demandado_factura_num ? String(r.minuta_demandado_factura_num) : undefined
+          };
+        };
+
+        // If already in target state, return idempotently without duplicate transitions or notifications
+        if (admission === 'admitir' && currentStatus === 'admitida') {
+          const currentLawsuit = mapRowToLawsuit(row);
+          return {
+            success: true,
+            message: `Auto de admisión a trámite dictado con éxito en los Autos ${currentLawsuit.caseNumber}. Demandado emplazado.`,
+            lawsuit: currentLawsuit,
+            notificationsCreated: []
+          };
+        }
+
+        if (admission === 'rechazar' && currentStatus === 'inadmitida') {
+          const currentLawsuit = mapRowToLawsuit(row);
+          return {
+            success: true,
+            message: `Auto de Inadmisión dictado en los Autos ${currentLawsuit.caseNumber}. Procedimiento archivado.`,
+            lawsuit: currentLawsuit,
+            notificationsCreated: []
+          };
+        }
+
+        // Validate state machine: only 'pendiente_admision' can be admitted or rejected
+        if (currentStatus !== 'pendiente_admision') {
+          const err: any = new Error(`El procedimiento judicial no se encuentra en estado pendiente de admisión (estado actual: ${currentStatus}).`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const now = new Date();
+        const nowIso = now.toISOString();
+        let updatedLawsuit: CourtLawsuit;
+        const notificationsCreated: AppNotification[] = [];
+
+        if (admission === 'admitir') {
+          const deadline = addBusinessDays(now, 20);
+          const deadlineIso = deadline.toISOString();
+          const admNotes = notes || 'Auto de admisión a trámite dictado por el Magistrado-Juez del Juzgado de 1ª Instancia al concurrir los presupuestos procesales y aportación de principios de prueba (LEC). Plazo legal de 20 días hábiles conferido para contestación.';
+
+          await client.query(
+            `UPDATE demandas_judiciales
+             SET estado = 'admitida',
+                 fecha_admision = $2,
+                 notas_admision = $3,
+                 plazo_limite_contestacion = $4,
+                 fecha_actualizacion = $2
+             WHERE id = $1`,
+            [id, now, admNotes, deadline]
+          );
+
+          // Atomic notification 1: plaintiff
+          const notif1Id = generateId('notif');
+          const notif1Msg = `El Magistrado-Juez ha dictado Auto admitiendo a trámite tu demanda en los Autos ${row.numero_autos}. Se ha conferido traslado y emplazado al demandado ${row.demandado_nombre || 'demandado'} (Plazo: 20 días hábiles).`;
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET read = EXCLUDED.read`,
+            [notif1Id, row.demandante_id, '⚖️ Auto de admisión a trámite', notif1Msg, now, id]
+          );
+          notificationsCreated.push({
+            id: notif1Id,
+            userId: row.demandante_id,
+            title: '⚖️ Auto de admisión a trámite',
+            message: notif1Msg,
+            type: 'transfer_received',
+            read: false,
+            createdAt: nowIso,
+            relatedOrderId: id
+          });
+
+          // Atomic notification 2: defendant
+          const notif2Id = generateId('notif');
+          const lawsuitTypeStr = String(row.tipo);
+          const claimedAmt = Number(row.cuantia_reclamada || 0);
+          const notif2Msg = `Se ha admitido a trámite la ${lawsuitTypeStr === 'cambiaria' ? 'Demanda de juicio cambiario' : 'Demanda ordinaria'} (${row.numero_autos}) promovida por ${row.demandante_nombre} por ${formatNumber(claimedAmt)} € (+costas). Dispones de 20 días hábiles para contestar a la demanda o personarte en los autos.`;
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET read = EXCLUDED.read`,
+            [notif2Id, row.demandado_id, '⚖️ Emplazamiento de demanda judicial', notif2Msg, now, id]
+          );
+          notificationsCreated.push({
+            id: notif2Id,
+            userId: row.demandado_id,
+            title: '⚖️ Emplazamiento de demanda judicial',
+            message: notif2Msg,
+            type: 'transfer_received',
+            read: false,
+            createdAt: nowIso,
+            relatedOrderId: id
+          });
+
+          row.estado = 'admitida';
+          row.fecha_admision = now;
+          row.notas_admision = admNotes;
+          row.plazo_limite_contestacion = deadline;
+          row.fecha_actualizacion = now;
+          updatedLawsuit = mapRowToLawsuit(row);
+        } else {
+          const resNotes = notes || 'Auto de Inadmisión dictado por el Magistrado-Juez del Juzgado de 1ª Instancia por falta de acreditación documental o defecto procesal insubsanable.';
+
+          await client.query(
+            `UPDATE demandas_judiciales
+             SET estado = 'inadmitida',
+                 fecha_resolucion = $2,
+                 notas_resolucion = $3,
+                 fecha_actualizacion = $2
+             WHERE id = $1`,
+            [id, now, resNotes]
+          );
+
+          // Atomic notification: plaintiff
+          const notif1Id = generateId('notif');
+          const notif1Msg = `El Magistrado-Juez ha rechazado la admisión a trámite de la demanda ${row.numero_autos}. Motivo: ${resNotes}.`;
+          await client.query(
+            `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+             VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET read = EXCLUDED.read`,
+            [notif1Id, row.demandante_id, '⚖️ Auto de inadmisión de demanda', notif1Msg, now, id]
+          );
+          notificationsCreated.push({
+            id: notif1Id,
+            userId: row.demandante_id,
+            title: '⚖️ Auto de inadmisión de demanda',
+            message: notif1Msg,
+            type: 'transfer_received',
+            read: false,
+            createdAt: nowIso,
+            relatedOrderId: id
+          });
+
+          row.estado = 'inadmitida';
+          row.fecha_resolucion = now;
+          row.notas_resolucion = resNotes;
+          row.fecha_actualizacion = now;
+          updatedLawsuit = mapRowToLawsuit(row);
+        }
+
+        return {
+          success: true,
+          message: admission === 'admitir'
+            ? `Auto de admisión a trámite dictado con éxito en los Autos ${updatedLawsuit.caseNumber}. Demandado emplazado.`
+            : `Auto de Inadmisión dictado en los Autos ${updatedLawsuit.caseNumber}. Procedimiento archivado.`,
+          lawsuit: updatedLawsuit,
+          notificationsCreated
+        };
+      }, key);
+    });
+
+    // POST-COMMIT: Synchronize local db.courtLawsuits, db.notifications, and db.json cache
+    try {
+      const db = readDb();
+      if (!db.courtLawsuits) db.courtLawsuits = [];
+      if (!db.notifications) db.notifications = [];
+
+      const memIdx = db.courtLawsuits.findIndex(l => l.id === id);
+      if (memIdx >= 0) {
+        db.courtLawsuits[memIdx] = { ...db.courtLawsuits[memIdx], ...result.lawsuit };
+      } else {
+        db.courtLawsuits.push(result.lawsuit);
+      }
+
+      if (result.notificationsCreated && result.notificationsCreated.length > 0) {
+        for (const notif of result.notificationsCreated) {
+          if (!db.notifications.some(n => n.id === notif.id)) {
+            db.notifications.unshift(notif);
+          }
+        }
+      }
+
+      writeDb(db);
+    } catch (cacheErr) {
+      console.error('[Judge Admission] Post-commit cache update error:', cacheErr);
+    }
+
+    return res.json({
+      success: true,
+      message: result.message,
+      lawsuit: result.lawsuit
+    });
+  } catch (err: any) {
+    console.error('[Judge Admission Error]:', err);
+    const statusCode = err.statusCode || (err.message && err.message.includes('no encontrado') ? 404 : 400);
+    return res.status(statusCode).json({ error: err.message || 'Error al tramitar la admisión judicial de la demanda' });
   }
-
-  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
-  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
-
-  const now = new Date();
-
-  if (admission === 'admitir') {
-    lawsuit.status = 'admitida';
-    lawsuit.admissionDate = now.toISOString();
-    lawsuit.defendantDeadlineDate = addBusinessDays(now, 20).toISOString();
-    lawsuit.admissionNotes = notes || 'Auto de admisión a trámite dictado por el Magistrado-Juez del Juzgado de 1ª Instancia al concurrir los presupuestos procesales y aportación de principios de prueba (LEC). Plazo legal de 20 días hábiles conferido para contestación.';
-    lawsuit.updatedAt = now.toISOString();
-
-    if (plaintiff) {
-      addNotification(
-        db,
-        plaintiff.id,
-        '⚖️ Auto de admisión a trámite',
-        `El Magistrado-Juez ha dictado Auto admitiendo a trámite tu demanda en los Autos ${lawsuit.caseNumber}. Se ha conferido traslado y emplazado al demandado ${defendant?.name || 'demandado'} (Plazo: 20 días hábiles).`,
-        'transfer_received',
-        lawsuit.id
-      );
-    }
-
-    if (defendant) {
-      addNotification(
-        db,
-        defendant.id,
-        '⚖️ Emplazamiento de demanda judicial',
-        `Se ha admitido a trámite la ${lawsuit.type === 'cambiaria' ? 'Demanda de juicio cambiario' : 'Demanda ordinaria'} (${lawsuit.caseNumber}) promovida por ${lawsuit.plaintiffName} por ${formatNumber(lawsuit.claimedAmount)} € (+costas). Dispones de 20 días hábiles para contestar a la demanda o personarte en los autos.`,
-        'transfer_received',
-        lawsuit.id
-      );
-    }
-  } else {
-    lawsuit.status = 'inadmitida';
-    lawsuit.resolutionDate = now.toISOString();
-    lawsuit.resolutionNotes = notes || 'Auto de Inadmisión dictado por el Magistrado-Juez del Juzgado de 1ª Instancia por falta de acreditación documental o defecto procesal insubsanable.';
-    lawsuit.updatedAt = now.toISOString();
-
-    if (plaintiff) {
-      addNotification(
-        db,
-        plaintiff.id,
-        '⚖️ Auto de inadmisión de demanda',
-        `El Magistrado-Juez ha rechazado la admisión a trámite de la demanda ${lawsuit.caseNumber}. Motivo: ${lawsuit.resolutionNotes}.`,
-        'transfer_received',
-        lawsuit.id
-      );
-    }
-  }
-
-  writeDb(db);
-  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: admission === 'admitir' 
-      ? `Auto de admisión a trámite dictado con éxito en los Autos ${lawsuit.caseNumber}. Demandado emplazado.`
-      : `Auto de Inadmisión dictado en los Autos ${lawsuit.caseNumber}. Procedimiento archivado.`,
-    lawsuit
-  });
 });
 
 // Teacher / Judge: Embargo Preventivo Cautelar (Juicio Cambiario - Art. 821 LEC)
@@ -22297,7 +28338,7 @@ app.post('/api/court/lawsuits/:id/pay-settle', async (req, res) => {
 });
 
 // Defendant response / contestación a la demanda (LEC)
-app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
+app.post('/api/court/lawsuits/:id/defendant-answer', async (req, res) => {
   const { id } = req.params;
   const { defendantId, answerType, facts, attachments } = req.body;
 
@@ -22309,40 +28350,22 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     return res.status(400).json({ error: 'Tipo de contestación no válido.' });
   }
 
-  const db = readDb();
-  if (!db.courtLawsuits) db.courtLawsuits = [];
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_defendant_answer_${id}_${answerType}_${Math.floor(Date.now() / 4000)}`;
 
-  const lawsuit = db.courtLawsuits.find(l => l.id === id);
-  if (!lawsuit) {
-    return res.status(404).json({ error: 'Procedimiento judicial no encontrado.' });
-  }
-
-  if (lawsuit.defendantId !== defendantId) {
-    return res.status(403).json({ error: 'Solo la parte demandada de estos autos puede formular contestación o alegaciones.' });
-  }
-
-  if (lawsuit.status !== 'admitida' && lawsuit.status !== 'embargo_preventivo') {
-    return res.status(400).json({ error: 'El procedimiento debe estar admitido a trámite para contestar a la demanda.' });
-  }
-
-  if (lawsuit.defendantAnswered) {
-    return res.status(400).json({ error: 'Ya se ha formulado contestación o alegaciones en este procedimiento judicial.' });
-  }
-
-  // Type-specific validation
-  if (lawsuit.type === 'ordinaria' && answerType !== 'ordinaria_contestacion') {
-    return res.status(400).json({ error: 'En demanda ordinaria, debe presentarse el escrito de contestación a la demanda.' });
-  }
-
-  if (lawsuit.type === 'cambiaria' && answerType !== 'cambiaria_ya_pagado' && answerType !== 'cambiaria_paga_ahora') {
-    return res.status(400).json({ error: 'En demanda cambiaria, el demandado solo puede alegar: que ya ha pagado o que no ha pagado pero que lo hace en ese momento.' });
-  }
-
-  const defendant = db.users.find(u => u.id === lawsuit.defendantId);
-  const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
-
-  if (!defendant || !plaintiff) {
-    return res.status(404).json({ error: 'Partes procesales no encontradas.' });
+  // Early check: si la operación ya se completó con esta clave de idempotencia, retornar la respuesta guardada
+  if (dbPool && rawIdemKey) {
+    try {
+      const existing = await safeDbQuery('SELECT respuesta FROM operaciones_idempotencia WHERE clave = $1', [idemKey]);
+      if (existing && existing.rows && existing.rows.length > 0) {
+        const resp = existing.rows[0].respuesta;
+        if (resp && resp.__status !== 'pending') {
+          return res.status(200).json(resp);
+        }
+      }
+    } catch (e) {
+      // Continuar ejecución normal
+    }
   }
 
   // Validate attachments: strictly PDF files only
@@ -22357,220 +28380,732 @@ app.post('/api/court/lawsuits/:id/defendant-answer', (req, res) => {
     }
   }
 
-  const now = new Date();
+  const db = readDb();
+  if (!db.courtLawsuits) db.courtLawsuits = [];
 
-  // Case 1: ordinaria_contestacion OR cambiaria_ya_pagado (Requires Lawyer fee charge: 15% of claimed amount + 21% IVA)
-  if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
-    const lawyerFeeBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
-    const lawyerFeeIva = Number((lawyerFeeBase * 0.21).toFixed(2));
-    const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
-    const invNum = `FRA-ABOG-DEF-${lawsuit.caseNumber.replace(/[^0-9]/g, '').slice(0, 8)}`;
-
-    if (defendant.balance < lawyerFeeTotal) {
-      return res.status(400).json({
-        error: `Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant.balance)} disponibles) para abonar la minuta del letrado de la defensa (${formatCurrency(lawyerFeeTotal)} con IVA 21%).`
-      });
-    }
-
-    // Deduct lawyer fee from defendant
-    defendant.balance = Number((defendant.balance - lawyerFeeTotal).toFixed(2));
-
-    const feeTxId = generateId('tx');
-    const feeConcept = answerType === 'ordinaria_contestacion'
-      ? `Minuta Letrado Defensa (15% s/ ${formatNumber(lawsuit.claimedAmount)} €) + IVA 21% - Contestación Demanda ordinaria ${lawsuit.caseNumber} [Factura ${invNum}]`
-      : `Minuta Letrado Oposición Cambiaria (15% s/ ${formatNumber(lawsuit.claimedAmount)} €) + IVA 21% - Oposición Juicio Cambiario ${lawsuit.caseNumber} [Factura ${invNum}]`;
-
-    const lawyerTransfer: Transfer = {
-      id: feeTxId,
-      senderId: defendant.id,
-      senderName: defendant.name,
-      senderAccount: defendant.accountNumber,
-      receiverId: 'corp-despacho-abogados',
-      receiverName: 'Despacho Jurídico & Letrados Procesales S.L.P.',
-      receiverAccount: 'ES980001004455667788',
-      amount: lawyerFeeTotal,
-      concept: feeConcept,
-      timestamp: now.toISOString()
-    };
-
-    if (!db.transfers) db.transfers = [];
-    db.transfers.unshift(lawyerTransfer);
-
-    lawsuit.defendantAnswered = true;
-    lawsuit.defendantAnswerDate = now.toISOString();
-    lawsuit.defendantAnswerType = answerType;
-    lawsuit.defendantAnswerFacts = facts || (answerType === 'ordinaria_contestacion' ? 'Contestación a la demanda presentada por la representación procesal de la parte demandada.' : 'Oposición al juicio cambiario: El demandado alega que ya ha satisfecho el pagaré reclamado.');
-    lawsuit.defendantAnswerAttachments = validAttachments;
-    lawsuit.defendantLawyerFeeAmount = lawyerFeeBase;
-    lawsuit.defendantLawyerFeeIva = lawyerFeeIva;
-    lawsuit.defendantLawyerFeeTotal = lawyerFeeTotal;
-    lawsuit.defendantLawyerFeeInvoiceNumber = invNum;
-    lawsuit.updatedAt = now.toISOString();
-
-    addNotification(
-      db,
-      defendant.id,
-      answerType === 'ordinaria_contestacion' ? '⚖️ Contestación a la demanda presentada' : '⚖️ Oposición cambiaria presentada',
-      `Has presentado la contestación en los Autos ${lawsuit.caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${invNum}).`,
-      'transfer_received',
-      feeTxId
-    );
-
-    addNotification(
-      db,
-      plaintiff.id,
-      '⚖️ Traslado de contestación de demanda',
-      `El demandado ${defendant.name} ha formalizado su contestación en los Autos ${lawsuit.caseNumber} con alegaciones y ${validAttachments.length} documento(s) PDF.`,
-      'transfer_received',
-      lawsuit.id
-    );
-
-    const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
-    if (judgeUser && judgeUser.id !== plaintiff.id && judgeUser.id !== defendant.id) {
-      addNotification(
-        db,
-        judgeUser.id,
-        '⚖️ Contestación a la Demanda en Autos',
-        `El demandado ${defendant.name} ha formulado contestación en los Autos ${lawsuit.caseNumber}. Procedimiento listo para dictar Resolución / Sentencia.`,
-        'transfer_received',
-        lawsuit.id
-      );
-    }
-
-    writeDb(db);
-    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-    syncMovimientoToSupabase(feeTxId + '-out', defendant.id, 'TRANSFER_OUT', lawyerFeeTotal, now.toISOString(), feeConcept, lawyerTransfer).catch(e => console.error(e));
-    syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
-
-    return res.json({
-      success: true,
-      message: `Contestación formalizada con éxito en los Autos ${lawsuit.caseNumber}. Minuta de abogado (${formatNumber(lawyerFeeTotal)} €) abonada.`,
-      lawsuit,
-      newBalance: defendant.balance,
-      lawyerFee: {
-        amount: lawyerFeeBase,
-        iva: lawyerFeeIva,
-        total: lawyerFeeTotal,
-        invoiceNumber: invNum
+  let lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit && dbPool) {
+    try {
+      const qRes = await safeDbQuery('SELECT * FROM demandas_judiciales WHERE id = $1', [id]);
+      if (qRes && qRes.rows.length > 0) {
+        const row = qRes.rows[0];
+        const atts = row.archivos_adjuntos
+          ? (typeof row.archivos_adjuntos === 'string' ? JSON.parse(row.archivos_adjuntos) : row.archivos_adjuntos)
+          : [];
+        const pnData = row.pagare_datos
+          ? (typeof row.pagare_datos === 'string' ? JSON.parse(row.pagare_datos) : row.pagare_datos)
+          : undefined;
+        lawsuit = {
+          id: String(row.id),
+          caseNumber: String(row.numero_autos),
+          courtName: String(row.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
+          type: String(row.tipo) as any,
+          subtype: row.subtipo ? String(row.subtipo) as any : undefined,
+          plaintiffId: String(row.demandante_id),
+          plaintiffName: String(row.demandante_nombre),
+          plaintiffNif: row.demandante_nif ? String(row.demandante_nif) : undefined,
+          plaintiffIban: row.demandante_iban ? String(row.demandante_iban) : undefined,
+          defendantId: String(row.demandado_id),
+          defendantName: String(row.demandado_nombre),
+          defendantNif: row.demandado_nif ? String(row.demandado_nif) : undefined,
+          defendantIban: row.demandado_iban ? String(row.demandado_iban) : undefined,
+          claimedAmount: Number(row.cuantia_reclamada || 0),
+          interestAndCostsAmount: Number(row.intereses_costas || 0),
+          totalClaimAmount: Number(row.cuantia_total || row.cuantia_reclamada || 0),
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : undefined,
+          goodsDescription: String(row.descripcion_bienes || ''),
+          facts: String(row.hechos || ''),
+          legalBasis: String(row.fundamentos_derecho || ''),
+          petitum: String(row.petitum || ''),
+          evidenceSummary: String(row.resumen_prueba || ''),
+          attachments: atts,
+          status: String(row.estado) as any,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString(),
+          admissionDate: row.fecha_admision ? new Date(row.fecha_admision).toISOString() : undefined,
+          defendantDeadlineDate: row.plazo_limite_contestacion ? new Date(row.plazo_limite_contestacion).toISOString() : undefined,
+          defendantAnswered: Boolean(row.contestacion_realizada),
+          defendantAnswerDate: row.contestacion_fecha ? new Date(row.contestacion_fecha).toISOString() : undefined,
+          defendantAnswerType: row.contestacion_tipo ? String(row.contestacion_tipo) as any : undefined,
+          defendantAnswerFacts: row.contestacion_hechos ? String(row.contestacion_hechos) : undefined,
+          promissoryNoteId: row.pagare_id ? String(row.pagare_id) : undefined,
+          promissoryNoteNumber: row.pagare_numero ? String(row.pagare_numero) : undefined,
+          promissoryNoteData: pnData,
+          embargoDate: row.embargo_fecha ? new Date(row.embargo_fecha).toISOString() : undefined,
+          embargoAmount: row.embargo_importe ? Number(row.embargo_importe) : undefined,
+          embargoTransferId: row.embargo_transfer_id ? String(row.embargo_transfer_id) : undefined,
+          embargoNotes: row.embargo_notas ? String(row.embargo_notas) : undefined,
+          lawyerFeeAmount: row.minuta_base ? Number(row.minuta_base) : undefined,
+          lawyerFeeIva: row.minuta_iva ? Number(row.minuta_iva) : undefined,
+          lawyerFeeTotal: row.minuta_total ? Number(row.minuta_total) : undefined,
+          lawyerFeeInvoiceNumber: row.minuta_factura_num ? String(row.minuta_factura_num) : undefined,
+          defendantLawyerFeeAmount: row.minuta_demandado_base ? Number(row.minuta_demandado_base) : undefined,
+          defendantLawyerFeeIva: row.minuta_demandado_iva ? Number(row.minuta_demandado_iva) : undefined,
+          defendantLawyerFeeTotal: row.minuta_demandado_total ? Number(row.minuta_demandado_total) : undefined,
+          defendantLawyerFeeInvoiceNumber: row.minuta_demandado_factura_num ? String(row.minuta_demandado_factura_num) : undefined,
+          resolutionDate: row.fecha_resolucion ? new Date(row.fecha_resolucion).toISOString() : undefined,
+          resolutionNotes: row.resolucion_notas ? String(row.resolucion_notas) : undefined,
+          judgeComments: row.comentarios_juez ? String(row.comentarios_juez) : undefined,
+          executionTransferId: row.transferencia_ejecucion_id ? String(row.transferencia_ejecucion_id) : undefined
+        };
+        db.courtLawsuits.push(lawsuit);
       }
-    });
+    } catch (err) {
+      console.warn('[Defendant Answer] Error reading lawsuit from PG:', err);
+    }
   }
 
-  // Case 2: cambiaria_paga_ahora (Defendant pays the full promissory note amount immediately)
-  if (answerType === 'cambiaria_paga_ahora') {
-    const amountToPay = lawsuit.claimedAmount;
-    const payTxId = generateId('tx');
-    const payConcept = `Abono y Liquidación Inmediata de Pagaré Reclamado - Autos Cambiarios ${lawsuit.caseNumber}`;
-    let paymentTransfer: Transfer;
+  if (!lawsuit) {
+    return res.status(404).json({ error: 'Procedimiento judicial no encontrado.' });
+  }
 
-    // If preventatively embargoed, transfer from judicial escrow
-    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
-      plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
-      // Refund any excess interest escrow to defendant
-      const excess = Number((lawsuit.embargoAmount - amountToPay).toFixed(2));
-      if (excess > 0) {
-        defendant.balance = Number((defendant.balance + excess).toFixed(2));
+  if (lawsuit.defendantId !== defendantId) {
+    return res.status(403).json({ error: 'Solo la parte demandada de estos autos puede formular contestación o alegaciones.' });
+  }
+
+  const lawsuitStatusStr = lawsuit.status as string;
+  if (lawsuitStatusStr !== 'admitida' && lawsuitStatusStr !== 'admitida_a_tramite' && lawsuitStatusStr !== 'embargo_preventivo') {
+    return res.status(400).json({ error: 'El procedimiento debe estar admitido a trámite para contestar a la demanda.' });
+  }
+
+  if (lawsuit.defendantAnswered) {
+    return res.status(400).json({ error: 'Ya se ha formulado contestación o alegaciones en este procedimiento judicial.' });
+  }
+
+  // Type-specific validation
+  const lawsuitTypeStr = lawsuit.type as string;
+  if (lawsuitTypeStr === 'ordinaria' && answerType !== 'ordinaria_contestacion') {
+    return res.status(400).json({ error: 'En demanda ordinaria, debe presentarse el escrito de contestación a la demanda.' });
+  }
+
+  if ((lawsuitTypeStr === 'cambiaria' || lawsuitTypeStr === 'juicio_cambiario') && answerType !== 'cambiaria_ya_pagado' && answerType !== 'cambiaria_paga_ahora') {
+    return res.status(400).json({ error: 'En demanda cambiaria, el demandado solo puede alegar: que ya ha pagado o que no ha pagado pero que lo hace en ese momento.' });
+  }
+
+  let defendant = db.users.find(u => u.id === lawsuit!.defendantId);
+  let plaintiff = db.users.find(u => u.id === lawsuit!.plaintiffId);
+
+  if ((!defendant || !plaintiff) && dbPool) {
+    try {
+      const uRes = await safeDbQuery('SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = ANY($1)', [[lawsuit.defendantId, lawsuit.plaintiffId]]);
+      if (uRes && uRes.rows) {
+        for (const uRow of uRes.rows) {
+          let uObj = db.users.find(u => u.id === uRow.id);
+          if (!uObj) {
+            uObj = {
+              id: uRow.id,
+              name: uRow.alumno || uRow.id,
+              username: uRow.usuario || uRow.id,
+              password: uRow.password || 'password123',
+              balance: Number(uRow.saldo || 0),
+              accountNumber: uRow.account_number || 'ES0000000000',
+              role: uRow.role || 'student',
+              level: uRow.level || 1
+            };
+            db.users.push(uObj);
+          }
+          if (uObj.id === lawsuit.defendantId) defendant = uObj;
+          if (uObj.id === lawsuit.plaintiffId) plaintiff = uObj;
+        }
+      }
+    } catch (e) {
+      console.warn('[Defendant Answer] Error querying missing users from PG:', e);
+    }
+  }
+
+  if (!defendant || !plaintiff) {
+    return res.status(404).json({ error: 'Partes procesales no encontradas.' });
+  }
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+
+      let newDefendantBalance = defendant!.balance;
+      let newPlaintiffBalance = plaintiff!.balance;
+      let createdTransfers: Transfer[] = [];
+      let lawyerFeeDetails: any = null;
+      let paymentTransfer: Transfer | null = null;
+
+      if (dbPool) {
+        await withPostgresTransaction(async (client) => {
+          // ================= LOCK 1: DEMANDA JUDICIAL =================
+          const lawsuitLockRes = await client.query(
+            `SELECT id, estado, demandado_id, demandante_id, cuantia_reclamada, cuantia_total,
+                    embargo_transfer_id, embargo_importe, pagare_numero, pagare_id, numero_autos,
+                    contestacion_realizada, tipo
+             FROM demandas_judiciales
+             WHERE id = $1
+             FOR UPDATE`,
+            [id]
+          );
+
+          if (lawsuitLockRes.rows.length === 0) {
+            const err: any = new Error('Procedimiento judicial no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const dbLawsuitRow = lawsuitLockRes.rows[0];
+
+          if (dbLawsuitRow.demandado_id !== defendantId) {
+            const err: any = new Error('Solo la parte demandada de estos autos puede formular contestación o alegaciones.');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          const currentStatus = String(dbLawsuitRow.estado);
+          if (currentStatus !== 'admitida' && currentStatus !== 'admitida_a_tramite' && currentStatus !== 'embargo_preventivo') {
+            const err: any = new Error('El procedimiento debe estar admitido a trámite para contestar a la demanda.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          if (dbLawsuitRow.contestacion_realizada) {
+            const err: any = new Error('Ya se ha formulado contestación o alegaciones en este procedimiento judicial.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const rowType = String(dbLawsuitRow.tipo);
+          if (rowType === 'ordinaria' && answerType !== 'ordinaria_contestacion') {
+            const err: any = new Error('En demanda ordinaria, debe presentarse el escrito de contestación a la demanda.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          if ((rowType === 'cambiaria' || rowType === 'juicio_cambiario') && answerType !== 'cambiaria_ya_pagado' && answerType !== 'cambiaria_paga_ahora') {
+            const err: any = new Error('En demanda cambiaria, el demandado solo puede alegar: que ya ha pagado o que no ha pagado pero que lo hace en ese momento.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // ================= LOCK 2: PAGARÉ EN MARKET_MESSAGES (SI EXISTE) =================
+          const pnNum = lawsuit!.promissoryNoteNumber || dbLawsuitRow.pagare_numero || null;
+          const pnId = lawsuit!.promissoryNoteId || dbLawsuitRow.pagare_id || null;
+          let pnMsgRow: any = null;
+          let pnData: PromissoryNoteData | null = null;
+
+          if (pnNum || pnId) {
+            const noteRes = await client.query(
+              `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+               FROM market_messages
+               WHERE type = 'promissory_note'
+                 AND (
+                   ($1::text IS NOT NULL AND (id = $1::text OR invoice_data->>'id' = $1::text OR invoice_data->>'promissoryNoteNumber' = $1::text))
+                   OR
+                   ($2::text IS NOT NULL AND invoice_data->>'promissoryNoteNumber' = $2::text)
+                 )
+               LIMIT 1
+               FOR UPDATE`,
+              [pnId, pnNum]
+            );
+
+            if (noteRes && noteRes.rows.length > 0) {
+              pnMsgRow = noteRes.rows[0];
+              const rawInv = pnMsgRow.invoice_data;
+              pnData = typeof rawInv === 'string' ? JSON.parse(rawInv) : rawInv;
+            }
+          }
+
+          if (answerType === 'cambiaria_paga_ahora' && pnData && pnData.status === 'pagado') {
+            const err: any = new Error('Este pagaré ya ha sido cobrado o pagado previamente.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // ================= LOCK 3: CUENTAS ORDENADAS LEXICOGRÁFICAMENTE =================
+          const accountIdsToLock = answerType === 'cambiaria_paga_ahora'
+            ? [defendant!.id, plaintiff!.id].sort()
+            : [defendant!.id];
+
+          const accountsLockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+             FROM cuentas
+             WHERE id = ANY($1)
+             ORDER BY id ASC
+             FOR UPDATE`,
+            [accountIdsToLock]
+          );
+
+          const defRow = accountsLockRes.rows.find(r => r.id === defendant!.id);
+          const plainRow = accountsLockRes.rows.find(r => r.id === plaintiff!.id);
+
+          if (!defRow) {
+            const err: any = new Error(`Cuenta bancaria del demandado (${defendant!.id}) no encontrada en PostgreSQL.`);
+            err.statusCode = 404;
+            throw err;
+          }
+
+          if (answerType === 'cambiaria_paga_ahora' && !plainRow) {
+            const err: any = new Error(`Cuenta bancaria del demandante (${plaintiff!.id}) no encontrada en PostgreSQL.`);
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const claimedAmount = Number(dbLawsuitRow.cuantia_reclamada || lawsuit!.claimedAmount || 0);
+
+          if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
+            const lawyerFeeBase = Number((claimedAmount * 0.15).toFixed(2));
+            const lawyerFeeIva = Number((lawyerFeeBase * 0.21).toFixed(2));
+            const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
+            const invNum = `FRA-ABOG-DEF-${(lawsuit!.caseNumber || dbLawsuitRow.numero_autos || '').replace(/[^0-9]/g, '').slice(0, 8)}`;
+
+            const defBal = Number(defRow.saldo);
+            if (defBal < lawyerFeeTotal) {
+              const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defBal)} disponibles) para abonar la minuta del letrado de la defensa (${formatCurrency(lawyerFeeTotal)} con IVA 21%).`);
+              err.statusCode = 400;
+              throw err;
+            }
+
+            newDefendantBalance = Number((defBal - lawyerFeeTotal).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant!.id]);
+
+            const feeTxId = generateId('tx');
+            const feeConcept = answerType === 'ordinaria_contestacion'
+              ? `Minuta Letrado Defensa (15% s/ ${formatNumber(claimedAmount)} €) + IVA 21% - Contestación Demanda ordinaria ${lawsuit!.caseNumber || dbLawsuitRow.numero_autos} [Factura ${invNum}]`
+              : `Minuta Letrado Oposición Cambiaria (15% s/ ${formatNumber(claimedAmount)} €) + IVA 21% - Oposición Juicio Cambiario ${lawsuit!.caseNumber || dbLawsuitRow.numero_autos} [Factura ${invNum}]`;
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                feeTxId + '-out',
+                defendant!.id,
+                lawyerFeeTotal,
+                nowIso,
+                feeConcept,
+                defendant!.id,
+                defendant!.name,
+                defRow.account_number || defendant!.accountNumber,
+                'corp-despacho-abogados',
+                'Despacho Jurídico & Letrados Procesales S.L.P.',
+                'ES980001004455667788'
+              ]
+            );
+
+            const lawyerTransfer: Transfer = {
+              id: feeTxId,
+              senderId: defendant!.id,
+              senderName: defendant!.name,
+              senderAccount: defRow.account_number || defendant!.accountNumber,
+              receiverId: 'corp-despacho-abogados',
+              receiverName: 'Despacho Jurídico & Letrados Procesales S.L.P.',
+              receiverAccount: 'ES980001004455667788',
+              amount: lawyerFeeTotal,
+              concept: feeConcept,
+              timestamp: nowIso
+            };
+            createdTransfers.push(lawyerTransfer);
+
+            lawsuit!.defendantAnswered = true;
+            lawsuit!.defendantAnswerDate = nowIso;
+            lawsuit!.defendantAnswerType = answerType;
+            lawsuit!.defendantAnswerFacts = facts || (answerType === 'ordinaria_contestacion' ? 'Contestación a la demanda presentada por la representación procesal de la parte demandada.' : 'Oposición al juicio cambiario: El demandado alega que ya ha satisfecho el pagaré reclamado.');
+            lawsuit!.defendantAnswerAttachments = validAttachments;
+            lawsuit!.defendantLawyerFeeAmount = lawyerFeeBase;
+            lawsuit!.defendantLawyerFeeIva = lawyerFeeIva;
+            lawsuit!.defendantLawyerFeeTotal = lawyerFeeTotal;
+            lawsuit!.defendantLawyerFeeInvoiceNumber = invNum;
+            lawsuit!.updatedAt = nowIso;
+
+            await syncCourtLawsuitToSupabase(lawsuit!, client);
+
+            lawyerFeeDetails = {
+              amount: lawyerFeeBase,
+              iva: lawyerFeeIva,
+              total: lawyerFeeTotal,
+              invoiceNumber: invNum
+            };
+          } else {
+            // answerType === 'cambiaria_paga_ahora'
+            const amountToPay = claimedAmount;
+            const payTxId = generateId('tx');
+            const payConcept = `Abono y Liquidación Inmediata de Pagaré Reclamado - Autos Cambiarios ${lawsuit!.caseNumber || dbLawsuitRow.numero_autos}`;
+            const embargoTxId = lawsuit!.embargoTransferId || dbLawsuitRow.embargo_transfer_id;
+            const embargoAmt = Number(lawsuit!.embargoAmount || dbLawsuitRow.embargo_importe || 0);
+
+            if (embargoTxId && embargoAmt > 0) {
+              // Fondos ya retenidos preventivamente en depósito judicial
+              newPlaintiffBalance = Number((Number(plainRow!.saldo) + amountToPay).toFixed(2));
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff!.id]);
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  payTxId + '-in',
+                  plaintiff!.id,
+                  amountToPay,
+                  nowIso,
+                  payConcept,
+                  'corp-deposito-judicial',
+                  'Cuenta General de Depósitos Judiciales (Juzgado)',
+                  'ES990001009988776655',
+                  plaintiff!.id,
+                  plaintiff!.name,
+                  plainRow!.account_number || plaintiff!.accountNumber
+                ]
+              );
+
+              const excess = Number((embargoAmt - amountToPay).toFixed(2));
+              if (excess > 0) {
+                newDefendantBalance = Number((Number(defRow.saldo) + excess).toFixed(2));
+                await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant!.id]);
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [
+                    payTxId + '-excess-in',
+                    defendant!.id,
+                    excess,
+                    nowIso,
+                    `Devolución de exceso de retención cautelar preventiva judicial - Autos ${lawsuit!.caseNumber || dbLawsuitRow.numero_autos}`,
+                    'corp-deposito-judicial',
+                    'Cuenta General de Depósitos Judiciales (Juzgado)',
+                    'ES990001009988776655',
+                    defendant!.id,
+                    defendant!.name,
+                    defRow.account_number || defendant!.accountNumber
+                  ]
+                );
+              }
+
+              paymentTransfer = {
+                id: payTxId,
+                senderId: 'corp-deposito-judicial',
+                senderName: 'Cuenta General de Depósitos Judiciales (Juzgado)',
+                senderAccount: 'ES990001009988776655',
+                receiverId: plaintiff!.id,
+                receiverName: plaintiff!.name,
+                receiverAccount: plainRow!.account_number || plaintiff!.accountNumber,
+                amount: amountToPay,
+                concept: payConcept,
+                timestamp: nowIso
+              };
+              createdTransfers.push(paymentTransfer);
+            } else {
+              // Sin embargo preventivo: cargo al demandado y abono al demandante
+              const defBal = Number(defRow.saldo);
+              if (defBal < amountToPay) {
+                const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defBal)} disponibles) para abonar el importe del pagaré (${formatCurrency(amountToPay)}).`);
+                err.statusCode = 400;
+                throw err;
+              }
+
+              newDefendantBalance = Number((defBal - amountToPay).toFixed(2));
+              newPlaintiffBalance = Number((Number(plainRow!.saldo) + amountToPay).toFixed(2));
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant!.id]);
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff!.id]);
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  payTxId + '-out',
+                  defendant!.id,
+                  amountToPay,
+                  nowIso,
+                  payConcept,
+                  defendant!.id,
+                  defendant!.name,
+                  defRow.account_number || defendant!.accountNumber,
+                  plaintiff!.id,
+                  plaintiff!.name,
+                  plainRow!.account_number || plaintiff!.accountNumber
+                ]
+              );
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  payTxId + '-in',
+                  plaintiff!.id,
+                  amountToPay,
+                  nowIso,
+                  payConcept,
+                  defendant!.id,
+                  defendant!.name,
+                  defRow.account_number || defendant!.accountNumber,
+                  plaintiff!.id,
+                  plaintiff!.name,
+                  plainRow!.account_number || plaintiff!.accountNumber
+                ]
+              );
+
+              paymentTransfer = {
+                id: payTxId,
+                senderId: defendant!.id,
+                senderName: defendant!.name,
+                senderAccount: defRow.account_number || defendant!.accountNumber,
+                receiverId: plaintiff!.id,
+                receiverName: plaintiff!.name,
+                receiverAccount: plainRow!.account_number || plaintiff!.accountNumber,
+                amount: amountToPay,
+                concept: payConcept,
+                timestamp: nowIso
+              };
+              createdTransfers.push(paymentTransfer);
+            }
+
+            // Actualizar pagaré vinculado en PostgreSQL
+            if (pnMsgRow) {
+              const noteUpdate = {
+                status: 'pagado',
+                paidAt: nowIso,
+                paidTransferId: payTxId
+              };
+              await client.query(
+                `UPDATE market_messages
+                 SET invoice_data = invoice_data || $1::jsonb
+                 WHERE id = $2`,
+                [JSON.stringify(noteUpdate), pnMsgRow.id]
+              );
+            }
+
+            lawsuit!.defendantAnswered = true;
+            lawsuit!.defendantAnswerDate = nowIso;
+            lawsuit!.defendantAnswerType = 'cambiaria_paga_ahora';
+            lawsuit!.defendantAnswerFacts = facts || 'El demandado comparece manifestando que no había pagado el pagaré y procediendo en este acto a su abono voluntario e íntegro en autos.';
+            lawsuit!.defendantAnswerAttachments = validAttachments;
+            lawsuit!.status = 'allanada_pagada';
+            lawsuit!.resolutionDate = nowIso;
+            lawsuit!.resolutionNotes = `Allanamiento y pago voluntario del demandado (${defendant!.name}) abonando ${formatNumber(amountToPay)} € en autos.`;
+            lawsuit!.executionTransferId = payTxId;
+            lawsuit!.updatedAt = nowIso;
+
+            await syncCourtLawsuitToSupabase(lawsuit!, client);
+          }
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está activo
+        const claimedAmount = lawsuit!.claimedAmount || 0;
+        if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
+          const lawyerFeeBase = Number((claimedAmount * 0.15).toFixed(2));
+          const lawyerFeeIva = Number((lawyerFeeBase * 0.21).toFixed(2));
+          const lawyerFeeTotal = Number((lawyerFeeBase + lawyerFeeIva).toFixed(2));
+          const invNum = `FRA-ABOG-DEF-${lawsuit!.caseNumber.replace(/[^0-9]/g, '').slice(0, 8)}`;
+
+          if (defendant!.balance < lawyerFeeTotal) {
+            const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant!.balance)} disponibles) para abonar la minuta del letrado de la defensa (${formatCurrency(lawyerFeeTotal)} con IVA 21%).`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          newDefendantBalance = Number((defendant!.balance - lawyerFeeTotal).toFixed(2));
+          const feeTxId = generateId('tx');
+          const feeConcept = answerType === 'ordinaria_contestacion'
+            ? `Minuta Letrado Defensa (15% s/ ${formatNumber(claimedAmount)} €) + IVA 21% - Contestación Demanda ordinaria ${lawsuit!.caseNumber} [Factura ${invNum}]`
+            : `Minuta Letrado Oposición Cambiaria (15% s/ ${formatNumber(claimedAmount)} €) + IVA 21% - Oposición Juicio Cambiario ${lawsuit!.caseNumber} [Factura ${invNum}]`;
+
+          const lawyerTransfer: Transfer = {
+            id: feeTxId,
+            senderId: defendant!.id,
+            senderName: defendant!.name,
+            senderAccount: defendant!.accountNumber,
+            receiverId: 'corp-despacho-abogados',
+            receiverName: 'Despacho Jurídico & Letrados Procesales S.L.P.',
+            receiverAccount: 'ES980001004455667788',
+            amount: lawyerFeeTotal,
+            concept: feeConcept,
+            timestamp: nowIso
+          };
+          createdTransfers.push(lawyerTransfer);
+
+          lawsuit!.defendantAnswered = true;
+          lawsuit!.defendantAnswerDate = nowIso;
+          lawsuit!.defendantAnswerType = answerType;
+          lawsuit!.defendantAnswerFacts = facts || (answerType === 'ordinaria_contestacion' ? 'Contestación a la demanda presentada por la representación procesal de la parte demandada.' : 'Oposición al juicio cambiario: El demandado alega que ya ha satisfecho el pagaré reclamado.');
+          lawsuit!.defendantAnswerAttachments = validAttachments;
+          lawsuit!.defendantLawyerFeeAmount = lawyerFeeBase;
+          lawsuit!.defendantLawyerFeeIva = lawyerFeeIva;
+          lawsuit!.defendantLawyerFeeTotal = lawyerFeeTotal;
+          lawsuit!.defendantLawyerFeeInvoiceNumber = invNum;
+          lawsuit!.updatedAt = nowIso;
+
+          lawyerFeeDetails = {
+            amount: lawyerFeeBase,
+            iva: lawyerFeeIva,
+            total: lawyerFeeTotal,
+            invoiceNumber: invNum
+          };
+        } else {
+          const amountToPay = claimedAmount;
+          const payTxId = generateId('tx');
+          const payConcept = `Abono y Liquidación Inmediata de Pagaré Reclamado - Autos Cambiarios ${lawsuit!.caseNumber}`;
+
+          if (lawsuit!.embargoTransferId && lawsuit!.embargoAmount) {
+            newPlaintiffBalance = Number((plaintiff!.balance + amountToPay).toFixed(2));
+            const excess = Number((lawsuit!.embargoAmount - amountToPay).toFixed(2));
+            if (excess > 0) {
+              newDefendantBalance = Number((defendant!.balance + excess).toFixed(2));
+            }
+            paymentTransfer = {
+              id: payTxId,
+              senderId: 'corp-deposito-judicial',
+              senderName: 'Cuenta General de Depósitos Judiciales (Juzgado)',
+              senderAccount: 'ES990001009988776655',
+              receiverId: plaintiff!.id,
+              receiverName: plaintiff!.name,
+              receiverAccount: plaintiff!.accountNumber,
+              amount: amountToPay,
+              concept: payConcept,
+              timestamp: nowIso
+            };
+            createdTransfers.push(paymentTransfer);
+          } else {
+            if (defendant!.balance < amountToPay) {
+              const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant!.balance)} disponibles) para abonar el importe del pagaré (${formatCurrency(amountToPay)}).`);
+              err.statusCode = 400;
+              throw err;
+            }
+
+            newDefendantBalance = Number((defendant!.balance - amountToPay).toFixed(2));
+            newPlaintiffBalance = Number((plaintiff!.balance + amountToPay).toFixed(2));
+
+            paymentTransfer = {
+              id: payTxId,
+              senderId: defendant!.id,
+              senderName: defendant!.name,
+              senderAccount: defendant!.accountNumber,
+              receiverId: plaintiff!.id,
+              receiverName: plaintiff!.name,
+              receiverAccount: plaintiff!.accountNumber,
+              amount: amountToPay,
+              concept: payConcept,
+              timestamp: nowIso
+            };
+            createdTransfers.push(paymentTransfer);
+          }
+
+          lawsuit!.defendantAnswered = true;
+          lawsuit!.defendantAnswerDate = nowIso;
+          lawsuit!.defendantAnswerType = 'cambiaria_paga_ahora';
+          lawsuit!.defendantAnswerFacts = facts || 'El demandado comparece manifestando que no había pagado el pagaré y procediendo en este acto a su abono voluntario e íntegro en autos.';
+          lawsuit!.defendantAnswerAttachments = validAttachments;
+          lawsuit!.status = 'allanada_pagada';
+          lawsuit!.resolutionDate = nowIso;
+          lawsuit!.resolutionNotes = `Allanamiento y pago voluntario del demandado (${defendant!.name}) abonando ${formatNumber(amountToPay)} € en autos.`;
+          lawsuit!.executionTransferId = payTxId;
+          lawsuit!.updatedAt = nowIso;
+        }
       }
 
-      paymentTransfer = {
-        id: payTxId,
-        senderId: 'corp-deposito-judicial',
-        senderName: 'Cuenta General de Depósitos Judiciales (Juzgado)',
-        senderAccount: 'ES990001009988776655',
-        receiverId: plaintiff.id,
-        receiverName: plaintiff.name,
-        receiverAccount: plaintiff.accountNumber,
-        amount: amountToPay,
-        concept: payConcept,
-        timestamp: now.toISOString()
-      };
+      // ================= POST-COMMIT ACTUALIZACIÓN DE ESTADO EN MEMORIA =================
+      defendant!.balance = newDefendantBalance;
+      if (answerType === 'cambiaria_paga_ahora') {
+        plaintiff!.balance = newPlaintiffBalance;
+      }
+
       if (!db.transfers) db.transfers = [];
-      db.transfers.unshift(paymentTransfer);
-      syncMovimientoToSupabase(payTxId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
-    } else {
-      if (defendant.balance < amountToPay) {
-        return res.status(400).json({
-          error: `Saldo insuficiente en tu cuenta bancaria (${formatCurrency(defendant.balance)} disponibles) para abonar el importe del pagaré (${formatCurrency(amountToPay)}).`
+      for (const t of createdTransfers) {
+        db.transfers.unshift(t);
+      }
+
+      if (answerType === 'cambiaria_paga_ahora' && lawsuit!.promissoryNoteNumber && db.marketMessages) {
+        db.marketMessages.forEach(m => {
+          if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit!.promissoryNoteNumber) {
+            m.promissoryNoteData.status = 'pagado';
+            m.promissoryNoteData.paidAt = nowIso;
+            m.promissoryNoteData.paidTransferId = lawsuit!.executionTransferId;
+          }
         });
       }
 
-      defendant.balance = Number((defendant.balance - amountToPay).toFixed(2));
-      plaintiff.balance = Number((plaintiff.balance + amountToPay).toFixed(2));
+      // Notifications
+      if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
+        const feeTxId = createdTransfers[0]?.id;
+        const lawyerFeeBase = lawsuit!.defendantLawyerFeeAmount || 0;
+        const lawyerFeeIva = lawsuit!.defendantLawyerFeeIva || 0;
+        const lawyerFeeTotal = lawsuit!.defendantLawyerFeeTotal || 0;
+        const invNum = lawsuit!.defendantLawyerFeeInvoiceNumber || '';
 
-      paymentTransfer = {
-        id: payTxId,
-        senderId: defendant.id,
-        senderName: defendant.name,
-        senderAccount: defendant.accountNumber,
-        receiverId: plaintiff.id,
-        receiverName: plaintiff.name,
-        receiverAccount: plaintiff.accountNumber,
-        amount: amountToPay,
-        concept: payConcept,
-        timestamp: now.toISOString()
-      };
-      if (!db.transfers) db.transfers = [];
-      db.transfers.unshift(paymentTransfer);
-      syncMovimientoToSupabase(payTxId + '-out', defendant.id, 'TRANSFER_OUT', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
-      syncMovimientoToSupabase(payTxId + '-in', plaintiff.id, 'TRANSFER_IN', amountToPay, now.toISOString(), payConcept, paymentTransfer).catch(e => console.error(e));
-    }
+        addNotification(
+          db,
+          defendant!.id,
+          answerType === 'ordinaria_contestacion' ? '⚖️ Contestación a la demanda presentada' : '⚖️ Oposición cambiaria presentada',
+          `Has presentado la contestación en los Autos ${lawsuit!.caseNumber}. Se ha cargado en tu cuenta la minuta del abogado por importe de ${formatNumber(lawyerFeeTotal)} € (${formatNumber(lawyerFeeBase)} € + ${formatNumber(lawyerFeeIva)} € IVA - Fra: ${invNum}).`,
+          'transfer_received',
+          feeTxId
+        );
 
-    lawsuit.defendantAnswered = true;
-    lawsuit.defendantAnswerDate = now.toISOString();
-    lawsuit.defendantAnswerType = 'cambiaria_paga_ahora';
-    lawsuit.defendantAnswerFacts = facts || 'El demandado comparece manifestando que no había pagado el pagaré y procediendo en este acto a su abono voluntario e íntegro en autos.';
-    lawsuit.defendantAnswerAttachments = validAttachments;
-    lawsuit.status = 'allanada_pagada';
-    lawsuit.resolutionDate = now.toISOString();
-    lawsuit.resolutionNotes = `Allanamiento y pago voluntario del demandado (${defendant.name}) abonando ${formatNumber(amountToPay)} € en autos.`;
-    lawsuit.executionTransferId = payTxId;
-    lawsuit.updatedAt = now.toISOString();
+        addNotification(
+          db,
+          plaintiff!.id,
+          '⚖️ Traslado de contestación de demanda',
+          `El demandado ${defendant!.name} ha formalizado su contestación en los Autos ${lawsuit!.caseNumber} con alegaciones y ${validAttachments.length} documento(s) PDF.`,
+          'transfer_received',
+          lawsuit!.id
+        );
 
-    if (lawsuit.promissoryNoteNumber && db.marketMessages) {
-      db.marketMessages.forEach(m => {
-        if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
-          m.promissoryNoteData.status = 'pagado';
-          m.promissoryNoteData.paidAt = now.toISOString();
-          m.promissoryNoteData.paidTransferId = payTxId;
+        const judgeUser = db.users.find(u => u.username?.toLowerCase() === 'pupdaniel' || u.role === 'teacher' || u.id === 'pupdaniel');
+        if (judgeUser && judgeUser.id !== plaintiff!.id && judgeUser.id !== defendant!.id) {
+          addNotification(
+            db,
+            judgeUser.id,
+            '⚖️ Contestación a la Demanda en Autos',
+            `El demandado ${defendant!.name} ha formulado contestación en los Autos ${lawsuit!.caseNumber}. Procedimiento listo para dictar Resolución / Sentencia.`,
+            'transfer_received',
+            lawsuit!.id
+          );
         }
-      });
-    }
+      } else {
+        const amountToPay = lawsuit!.claimedAmount;
+        const payTxId = lawsuit!.executionTransferId;
 
-    addNotification(
-      db,
-      plaintiff.id,
-      '⚖️ Pago judicial de pagaré recibido',
-      `El demandado ${defendant.name} ha comparecido abonando íntegramente los ${formatNumber(amountToPay)} € del pagaré en los Autos ${lawsuit.caseNumber}. Saldo ingresado en tu cuenta.`,
-      'transfer_received',
-      payTxId
-    );
+        addNotification(
+          db,
+          plaintiff!.id,
+          '⚖️ Pago judicial de pagaré recibido',
+          `El demandado ${defendant!.name} ha comparecido abonando íntegramente los ${formatNumber(amountToPay)} € del pagaré en los Autos ${lawsuit!.caseNumber}. Saldo ingresado en tu cuenta.`,
+          'transfer_received',
+          payTxId
+        );
 
-    addNotification(
-      db,
-      defendant.id,
-      '⚖️ Pagaré judicial abonado y autos archivados',
-      `Has abonado ${formatNumber(amountToPay)} € en los Autos Cambiarios ${lawsuit.caseNumber}. Procedimiento archivado por allanamiento y pago.`,
-      'transfer_received',
-      payTxId
-    );
+        addNotification(
+          db,
+          defendant!.id,
+          '⚖️ Pagaré judicial abonado y autos archivados',
+          `Has abonado ${formatNumber(amountToPay)} € en los Autos Cambiarios ${lawsuit!.caseNumber}. Procedimiento archivado por allanamiento y pago.`,
+          'transfer_received',
+          payTxId
+        );
+      }
 
-    writeDb(db);
-    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
-    syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
+      writeDb(db);
 
-    return res.json({
-      success: true,
-      message: `Pagaré abonado con éxito en los Autos ${lawsuit.caseNumber}. Procedimiento archivado por allanamiento.`,
-      lawsuit,
-      transfer: paymentTransfer,
-      newBalance: defendant.balance
+      if (answerType === 'ordinaria_contestacion' || answerType === 'cambiaria_ya_pagado') {
+        return {
+          success: true,
+          message: `Contestación formalizada con éxito en los Autos ${lawsuit!.caseNumber}. Minuta de abogado (${formatNumber(lawsuit!.defendantLawyerFeeTotal || 0)} €) abonada.`,
+          lawsuit,
+          newBalance: defendant!.balance,
+          lawyerFee: lawyerFeeDetails
+        };
+      } else {
+        return {
+          success: true,
+          message: `Pagaré abonado con éxito en los Autos ${lawsuit!.caseNumber}. Procedimiento archivado por allanamiento.`,
+          lawsuit,
+          transfer: paymentTransfer,
+          newBalance: defendant!.balance
+        };
+      }
     });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Defendant Answer] Error processing defendant answer:', err);
+    return res.status(err.statusCode || 400).json({ error: err.message || 'Error al formular la contestación a la demanda.' });
   }
 });
 
 // Judge / Teacher ruling (Sentencia judicial o decreto de ejecución forzosa)
-app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
+app.post('/api/court/lawsuits/:id/judge-ruling', async (req, res) => {
   const { id } = req.params;
   const { ruling, comments, judgeId } = req.body;
 
@@ -22581,12 +29116,89 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
   const db = readDb();
   if (!db.courtLawsuits) db.courtLawsuits = [];
 
-  const lawsuit = db.courtLawsuits.find(l => l.id === id);
+  let lawsuit = db.courtLawsuits.find(l => l.id === id);
+  if (!lawsuit && dbPool) {
+    try {
+      const qRes = await safeDbQuery('SELECT * FROM demandas_judiciales WHERE id = $1', [id]);
+      if (qRes && qRes.rows.length > 0) {
+        const row = qRes.rows[0];
+        const atts = row.archivos_adjuntos
+          ? (typeof row.archivos_adjuntos === 'string' ? JSON.parse(row.archivos_adjuntos) : row.archivos_adjuntos)
+          : [];
+        const pnData = row.pagare_datos
+          ? (typeof row.pagare_datos === 'string' ? JSON.parse(row.pagare_datos) : row.pagare_datos)
+          : undefined;
+        lawsuit = {
+          id: String(row.id),
+          caseNumber: String(row.numero_autos),
+          courtName: String(row.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
+          type: String(row.tipo) as any,
+          subtype: row.subtipo ? String(row.subtipo) as any : undefined,
+          plaintiffId: String(row.demandante_id),
+          plaintiffName: String(row.demandante_nombre),
+          plaintiffNif: row.demandante_nif ? String(row.demandante_nif) : undefined,
+          plaintiffIban: row.demandante_iban ? String(row.demandante_iban) : undefined,
+          defendantId: String(row.demandado_id),
+          defendantName: String(row.demandado_nombre),
+          defendantNif: row.demandado_nif ? String(row.demandado_nif) : undefined,
+          defendantIban: row.demandado_iban ? String(row.demandado_iban) : undefined,
+          claimedAmount: Number(row.cuantia_reclamada || 0),
+          interestAndCostsAmount: Number(row.intereses_costas || 0),
+          totalClaimAmount: Number(row.cuantia_total || row.cuantia_reclamada || 0),
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : undefined,
+          goodsDescription: String(row.descripcion_bienes || ''),
+          facts: String(row.hechos || ''),
+          legalBasis: String(row.fundamentos_derecho || ''),
+          petitum: String(row.petitum || ''),
+          evidenceSummary: String(row.resumen_prueba || ''),
+          attachments: atts,
+          relatedOrderId: row.pedido_relacionado_id ? String(row.pedido_relacionado_id) : undefined,
+          promissoryNoteNumber: row.pagare_numero ? String(row.pagare_numero) : undefined,
+          promissoryNoteId: row.pagare_id ? String(row.pagare_id) : undefined,
+          promissoryNoteDueDate: row.pagare_vencimiento ? new Date(row.pagare_vencimiento).toISOString() : undefined,
+          promissoryNoteData: pnData,
+          status: String(row.estado) as any,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString(),
+          admissionDate: row.fecha_admision ? new Date(row.fecha_admision).toISOString() : undefined,
+          admissionNotes: row.notas_admision ? String(row.notas_admision) : undefined,
+          resolutionDate: row.fecha_resolucion ? new Date(row.fecha_resolucion).toISOString() : undefined,
+          resolutionNotes: row.notas_resolucion ? String(row.notas_resolucion) : undefined,
+          judgeComments: row.comentarios_juez ? String(row.comentarios_juez) : undefined,
+          executionTransferId: row.transferencia_ejecucion_id ? String(row.transferencia_ejecucion_id) : undefined,
+          lawyerFeeAmount: row.minuta_abogado ? Number(row.minuta_abogado) : undefined,
+          lawyerFeeIva: row.minuta_iva ? Number(row.minuta_iva) : undefined,
+          lawyerFeeTotal: row.minuta_total ? Number(row.minuta_total) : undefined,
+          lawyerFeeInvoiceNumber: row.minuta_factura_num ? String(row.minuta_factura_num) : undefined,
+          embargoDate: row.embargo_fecha ? new Date(row.embargo_fecha).toISOString() : undefined,
+          embargoAmount: row.embargo_importe ? Number(row.embargo_importe) : undefined,
+          embargoTransferId: row.embargo_transfer_id ? String(row.embargo_transfer_id) : undefined,
+          embargoNotes: row.embargo_notas ? String(row.embargo_notas) : undefined,
+          defendantAnswered: Boolean(row.contestacion_realizada),
+          defendantAnswerDate: row.contestacion_fecha ? new Date(row.contestacion_fecha).toISOString() : undefined,
+          defendantAnswerType: row.contestacion_tipo ? String(row.contestacion_tipo) as any : undefined,
+          defendantAnswerFacts: row.contestacion_hechos ? String(row.contestacion_hechos) : undefined,
+          defendantDeadlineDate: row.plazo_limite_contestacion ? new Date(row.plazo_limite_contestacion).toISOString() : undefined,
+          defendantLawyerFeeAmount: row.minuta_demandado_base ? Number(row.minuta_demandado_base) : undefined,
+          defendantLawyerFeeIva: row.minuta_demandado_iva ? Number(row.minuta_demandado_iva) : undefined,
+          defendantLawyerFeeTotal: row.minuta_demandado_total ? Number(row.minuta_demandado_total) : undefined,
+          defendantLawyerFeeInvoiceNumber: row.minuta_demandado_factura_num ? String(row.minuta_demandado_factura_num) : undefined
+        };
+        db.courtLawsuits.push(lawsuit);
+      }
+    } catch (e) {
+      console.error('[Judge Ruling] Error reading lawsuit from DB:', e);
+    }
+  }
+
   if (!lawsuit) {
     return res.status(404).json({ error: 'Procedimiento judicial no encontrado' });
   }
 
-  const now = new Date();
+  if (lawsuit.status === 'ejecutada' || lawsuit.status === 'desestimada' || lawsuit.status === 'allanada_pagada') {
+    return res.status(400).json({ error: `Este procedimiento judicial ya ha sido resuelto y ejecutado previamente (estado actual: ${lawsuit.status}).` });
+  }
+
   const defendant = db.users.find(u => u.id === lawsuit.defendantId);
   const plaintiff = db.users.find(u => u.id === lawsuit.plaintiffId);
 
@@ -22594,191 +29206,476 @@ app.post('/api/court/lawsuits/:id/judge-ruling', (req, res) => {
     return res.status(404).json({ error: 'Partes procesales no encontradas' });
   }
 
-  if (ruling === 'estimatoria') {
-    const totalToDebit = lawsuit.totalClaimAmount || lawsuit.claimedAmount;
-    let txId = generateId('tx');
-    let concept = `Ejecución Judicial Forzosa - Sentencia Estimatoria Autos ${lawsuit.caseNumber}`;
-    let newTransfer: Transfer;
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
+  const idemKey = rawIdemKey || `court_judge_ruling_${id}_${ruling}_${Math.floor(Date.now() / 4000)}`;
 
-    // Check if embargo was previously executed
-    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
-      // Funds are already in Escrow account; transfer from Escrow to plaintiff
-      const embargoAmt = lawsuit.embargoAmount;
-      plaintiff.balance = Number((plaintiff.balance + embargoAmt).toFixed(2));
-      concept = `Entrega de Fondos Embargados - Sentencia Estimatoria Firme Autos ${lawsuit.caseNumber}`;
-      newTransfer = {
-        id: txId,
-        senderId: 'corp-deposito-judicial',
-        senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
-        senderAccount: 'ES990001009988776655',
-        receiverId: plaintiff.id,
-        receiverName: plaintiff.name,
-        receiverAccount: plaintiff.accountNumber,
-        amount: embargoAmt,
-        concept,
-        timestamp: now.toISOString()
-      };
-      if (!db.transfers) db.transfers = [];
-      db.transfers.unshift(newTransfer);
-      syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', embargoAmt, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
-    } else {
-      // Direct execution: debit defendant, credit plaintiff
-      defendant.balance = Number((defendant.balance - totalToDebit).toFixed(2));
-      plaintiff.balance = Number((plaintiff.balance + totalToDebit).toFixed(2));
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const nowIso = now.toISOString();
 
-      newTransfer = {
-        id: txId,
-        senderId: defendant.id,
-        senderName: defendant.name,
-        senderAccount: defendant.accountNumber,
-        receiverId: plaintiff.id,
-        receiverName: plaintiff.name,
-        receiverAccount: plaintiff.accountNumber,
-        amount: totalToDebit,
-        concept,
-        timestamp: now.toISOString()
-      };
+      let newDefendantBalance = defendant.balance;
+      let newPlaintiffBalance = plaintiff.balance;
+      let createdTransfers: Transfer[] = [];
 
-      if (!db.transfers) db.transfers = [];
-      db.transfers.unshift(newTransfer);
+      if (dbPool) {
+        await withPostgresTransaction(async (client) => {
+          // ================= LOCK 1: DEMANDA JUDICIAL =================
+          const lawsuitLockRes = await client.query(
+            `SELECT id, estado, demandado_id, demandante_id, cuantia_reclamada, cuantia_total,
+                    embargo_transfer_id, embargo_importe, pagare_numero, pagare_id, numero_autos
+             FROM demandas_judiciales
+             WHERE id = $1
+             FOR UPDATE`,
+            [id]
+          );
 
-      syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-      syncMovimientoToSupabase(txId + '-out', defendant.id, 'TRANSFER_OUT', totalToDebit, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
-      syncMovimientoToSupabase(txId + '-in', plaintiff.id, 'TRANSFER_IN', totalToDebit, now.toISOString(), concept, newTransfer).catch(e => console.error(e));
-    }
+          if (lawsuitLockRes.rows.length === 0) {
+            const err: any = new Error('Procedimiento judicial no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
 
-    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
+          const dbLawsuitRow = lawsuitLockRes.rows[0];
+          const currentDbStatus = dbLawsuitRow.estado;
+          if (currentDbStatus === 'ejecutada' || currentDbStatus === 'desestimada' || currentDbStatus === 'allanada_pagada') {
+            const err: any = new Error(`Este procedimiento judicial ya ha sido resuelto y ejecutado previamente (estado actual: ${currentDbStatus}).`);
+            err.statusCode = 400;
+            throw err;
+          }
 
-    lawsuit.status = 'ejecutada';
-    lawsuit.updatedAt = now.toISOString();
-    lawsuit.resolutionDate = now.toISOString();
-    lawsuit.resolutionNotes = `Sentencia estimatoria firme dictada por el Magistrado-Juez del Juzgado de 1ª Instancia con ejecución forzosa por ${formatNumber(totalToDebit)} € (Principal + Intereses y Costas).`;
-    lawsuit.judgeComments = comments || 'Estimada íntegramente la demanda con imposición de costas procesales.';
-    lawsuit.executionTransferId = txId;
+          // ================= LOCK 2: PAGARÉ EN MARKET_MESSAGES (SI EXISTE) =================
+          const pnNum = lawsuit.promissoryNoteNumber || dbLawsuitRow.pagare_numero || null;
+          const pnId = lawsuit.promissoryNoteId || dbLawsuitRow.pagare_id || null;
+          let pnMsgRow: any = null;
+          let pnData: PromissoryNoteData | null = null;
 
-    if (lawsuit.promissoryNoteNumber && db.marketMessages) {
-      db.marketMessages.forEach(m => {
-        if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
-          m.promissoryNoteData.status = 'pagado';
-          m.promissoryNoteData.paidAt = now.toISOString();
-          m.promissoryNoteData.paidTransferId = txId;
+          if (pnNum || pnId) {
+            const noteRes = await client.query(
+              `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+               FROM market_messages
+               WHERE type = 'promissory_note'
+                 AND (
+                   ($1::text IS NOT NULL AND (id = $1::text OR invoice_data->>'id' = $1::text OR invoice_data->>'promissoryNoteNumber' = $1::text))
+                   OR
+                   ($2::text IS NOT NULL AND invoice_data->>'promissoryNoteNumber' = $2::text)
+                 )
+               LIMIT 1
+               FOR UPDATE`,
+              [pnId, pnNum]
+            );
+
+            if (noteRes && noteRes.rows.length > 0) {
+              pnMsgRow = noteRes.rows[0];
+              const rawInv = pnMsgRow.invoice_data;
+              pnData = typeof rawInv === 'string' ? JSON.parse(rawInv) : rawInv;
+            }
+          }
+
+          if (ruling === 'estimatoria' && pnData && pnData.status === 'pagado') {
+            const err: any = new Error('El pagaré vinculado ya figura como pagado previamente. No procede la ejecución forzosa duplicada.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // ================= LOCK 3: CUENTAS ORDENADAS LEXICOGRÁFICAMENTE (ORDER BY id ASC FOR UPDATE) =================
+          const orderedIds = [defendant.id, plaintiff.id].sort();
+          const accountsLockRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+             FROM cuentas
+             WHERE id = ANY($1)
+             ORDER BY id ASC
+             FOR UPDATE`,
+            [orderedIds]
+          );
+
+          const defRow = accountsLockRes.rows.find(r => r.id === defendant.id);
+          const plainRow = accountsLockRes.rows.find(r => r.id === plaintiff.id);
+
+          if (!defRow || !plainRow) {
+            const err: any = new Error('Cuentas de las partes procesales no encontradas en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const currentDefBal = Number(defRow.saldo);
+          const currentPlainBal = Number(plainRow.saldo);
+
+          // ================= RESOLUCIÓN: ESTIMATORIA VS DESESTIMATORIA =================
+          if (ruling === 'estimatoria') {
+            const totalToDebit = Number(lawsuit.totalClaimAmount || lawsuit.claimedAmount || dbLawsuitRow.cuantia_total || dbLawsuitRow.cuantia_reclamada);
+            const txId = generateId('tx');
+            let concept = `Ejecución Judicial Forzosa - Sentencia Estimatoria Autos ${lawsuit.caseNumber}`;
+            let newTransfer: Transfer;
+
+            const hasEmbargo = Boolean(lawsuit.embargoTransferId && lawsuit.embargoAmount);
+            if (hasEmbargo) {
+              // Fondos embargados cautelarmente en depósito judicial -> entregar al actor
+              const embargoAmt = Number(lawsuit.embargoAmount);
+              newPlaintiffBalance = Math.round((currentPlainBal + embargoAmt) * 100) / 100;
+              newDefendantBalance = currentDefBal;
+
+              concept = `Entrega de Fondos Embargados - Sentencia Estimatoria Firme Autos ${lawsuit.caseNumber}`;
+              newTransfer = {
+                id: txId,
+                senderId: 'corp-deposito-judicial',
+                senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
+                senderAccount: 'ES990001009988776655',
+                receiverId: plaintiff.id,
+                receiverName: plaintiff.name,
+                receiverAccount: plainRow.account_number || plaintiff.accountNumber,
+                amount: embargoAmt,
+                concept,
+                timestamp: nowIso
+              };
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff.id]);
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txId + '-in',
+                  plaintiff.id,
+                  embargoAmt,
+                  nowIso,
+                  concept,
+                  'corp-deposito-judicial',
+                  'Cuenta General de Consignaciones Judiciales (Juzgado)',
+                  'ES990001009988776655',
+                  plaintiff.id,
+                  plaintiff.name,
+                  plainRow.account_number || plaintiff.accountNumber
+                ]
+              );
+            } else {
+              // Ejecución directa: comprobar fondos suficientes del demandado
+              if (currentDefBal < totalToDebit) {
+                const err: any = new Error(
+                  `Saldo bancario insuficiente del demandado (${formatNumber(currentDefBal)} € disponibles). Se requieren ${formatNumber(totalToDebit)} € para ejecutar la sentencia estimatoria.`
+                );
+                err.statusCode = 400;
+                throw err;
+              }
+
+              newDefendantBalance = Math.round((currentDefBal - totalToDebit) * 100) / 100;
+              newPlaintiffBalance = Math.round((currentPlainBal + totalToDebit) * 100) / 100;
+
+              newTransfer = {
+                id: txId,
+                senderId: defendant.id,
+                senderName: defendant.name,
+                senderAccount: defRow.account_number || defendant.accountNumber,
+                receiverId: plaintiff.id,
+                receiverName: plaintiff.name,
+                receiverAccount: plainRow.account_number || plaintiff.accountNumber,
+                amount: totalToDebit,
+                concept,
+                timestamp: nowIso
+              };
+
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant.id]);
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff.id]);
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txId + '-out',
+                  defendant.id,
+                  totalToDebit,
+                  nowIso,
+                  concept,
+                  defendant.id,
+                  defendant.name,
+                  defRow.account_number || defendant.accountNumber,
+                  plaintiff.id,
+                  plaintiff.name,
+                  plainRow.account_number || plaintiff.accountNumber
+                ]
+              );
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  txId + '-in',
+                  plaintiff.id,
+                  totalToDebit,
+                  nowIso,
+                  concept,
+                  defendant.id,
+                  defendant.name,
+                  defRow.account_number || defendant.accountNumber,
+                  plaintiff.id,
+                  plaintiff.name,
+                  plainRow.account_number || plaintiff.accountNumber
+                ]
+              );
+            }
+
+            createdTransfers.push(newTransfer);
+
+            // Actualizar estado de demanda
+            lawsuit.status = 'ejecutada';
+            lawsuit.updatedAt = nowIso;
+            lawsuit.resolutionDate = nowIso;
+            lawsuit.resolutionNotes = `Sentencia estimatoria firme dictada por el Magistrado-Juez del Juzgado de 1ª Instancia con ejecución forzosa por ${formatNumber(totalToDebit)} € (Principal + Intereses y Costas).`;
+            lawsuit.judgeComments = comments || 'Estimada íntegramente la demanda con imposición de costas procesales.';
+            lawsuit.executionTransferId = txId;
+
+            // Actualizar pagaré vinculado en PostgreSQL
+            if (pnMsgRow) {
+              const noteUpdate = {
+                status: 'pagado',
+                paidAt: nowIso,
+                paidTransferId: txId
+              };
+              await client.query(
+                `UPDATE market_messages
+                 SET invoice_data = invoice_data || $1::jsonb
+                 WHERE id = $2`,
+                [JSON.stringify(noteUpdate), pnMsgRow.id]
+              );
+            }
+
+            await syncCourtLawsuitToSupabase(lawsuit, client);
+
+          } else {
+            // DESESTIMATORIA
+            const costsBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
+            const costsIva = Number((costsBase * 0.21).toFixed(2));
+            const costsTotal = lawsuit.defendantLawyerFeeTotal || Number((costsBase + costsIva).toFixed(2));
+
+            // Comprobar saldo del demandante para abonar costas
+            if (currentPlainBal < costsTotal) {
+              const err: any = new Error(
+                `Saldo bancario insuficiente del demandante (${formatNumber(currentPlainBal)} € disponibles). Se requieren ${formatNumber(costsTotal)} € para abonar las costas procesales.`
+              );
+              err.statusCode = 400;
+              throw err;
+            }
+
+            newPlaintiffBalance = Math.round((currentPlainBal - costsTotal) * 100) / 100;
+            newDefendantBalance = Math.round((currentDefBal + costsTotal) * 100) / 100;
+
+            const costsTxId = generateId('tx');
+            const costsConcept = `Condena en Costas Procesales (Minuta Letrado 15% + IVA) - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
+
+            const costsTransfer: Transfer = {
+              id: costsTxId,
+              senderId: plaintiff.id,
+              senderName: plaintiff.name,
+              senderAccount: plainRow.account_number || plaintiff.accountNumber,
+              receiverId: defendant.id,
+              receiverName: defendant.name,
+              receiverAccount: defRow.account_number || defendant.accountNumber,
+              amount: costsTotal,
+              concept: costsConcept,
+              timestamp: nowIso
+            };
+            createdTransfers.push(costsTransfer);
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                costsTxId + '-out',
+                plaintiff.id,
+                costsTotal,
+                nowIso,
+                costsConcept,
+                plaintiff.id,
+                plaintiff.name,
+                plainRow.account_number || plaintiff.accountNumber,
+                defendant.id,
+                defendant.name,
+                defRow.account_number || defendant.accountNumber
+              ]
+            );
+
+            await client.query(
+              `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+               VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                costsTxId + '-in',
+                defendant.id,
+                costsTotal,
+                nowIso,
+                costsConcept,
+                plaintiff.id,
+                plaintiff.name,
+                plainRow.account_number || plaintiff.accountNumber,
+                defendant.id,
+                defendant.name,
+                defRow.account_number || defendant.accountNumber
+              ]
+            );
+
+            // Devolución de embargo cautelar si existía
+            if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
+              const refundAmt = Number(lawsuit.embargoAmount);
+              newDefendantBalance = Math.round((newDefendantBalance + refundAmt) * 100) / 100;
+              const refundTxId = generateId('tx');
+              const refundConcept = `Levantamiento y Devolución de Embargo Preventivo - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
+
+              const refundTransfer: Transfer = {
+                id: refundTxId,
+                senderId: 'corp-deposito-judicial',
+                senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
+                senderAccount: 'ES990001009988776655',
+                receiverId: defendant.id,
+                receiverName: defendant.name,
+                receiverAccount: defRow.account_number || defendant.accountNumber,
+                amount: refundAmt,
+                concept: refundConcept,
+                timestamp: nowIso
+              };
+              createdTransfers.push(refundTransfer);
+
+              await client.query(
+                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                  refundTxId + '-in',
+                  defendant.id,
+                  refundAmt,
+                  nowIso,
+                  refundConcept,
+                  'corp-deposito-judicial',
+                  'Cuenta General de Consignaciones Judiciales (Juzgado)',
+                  'ES990001009988776655',
+                  defendant.id,
+                  defendant.name,
+                  defRow.account_number || defendant.accountNumber
+                ]
+              );
+            }
+
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPlaintiffBalance, plaintiff.id]);
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newDefendantBalance, defendant.id]);
+
+            lawsuit.status = 'desestimada';
+            lawsuit.updatedAt = nowIso;
+            lawsuit.resolutionDate = nowIso;
+            lawsuit.costsPaid = costsTotal;
+            lawsuit.costsTransferId = costsTxId;
+            lawsuit.resolutionNotes = `Sentencia desestimatoria dictada por el Magistrado-Juez del Juzgado de 1ª Instancia con expresa imposición de costas al demandante por ${formatNumber(costsTotal)} € (minuta letrada del 15% + IVA).`;
+            lawsuit.judgeComments = comments || 'Desestimada íntegramente la demanda con expresa condena en costas a la parte actora.';
+            lawsuit.executionTransferId = costsTxId;
+
+            await syncCourtLawsuitToSupabase(lawsuit, client);
+          }
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está activo
+        if (ruling === 'estimatoria') {
+          const totalToDebit = lawsuit.totalClaimAmount || lawsuit.claimedAmount;
+          const hasEmbargo = Boolean(lawsuit.embargoTransferId && lawsuit.embargoAmount);
+          if (hasEmbargo) {
+            const embargoAmt = Number(lawsuit.embargoAmount);
+            newPlaintiffBalance = Number((plaintiff.balance + embargoAmt).toFixed(2));
+          } else {
+            if (defendant.balance < totalToDebit) {
+              const err: any = new Error(`Saldo bancario insuficiente del demandado (${formatNumber(defendant.balance)} € disponibles). Se requieren ${formatNumber(totalToDebit)} € para ejecutar la sentencia estimatoria.`);
+              err.statusCode = 400;
+              throw err;
+            }
+            newDefendantBalance = Number((defendant.balance - totalToDebit).toFixed(2));
+            newPlaintiffBalance = Number((plaintiff.balance + totalToDebit).toFixed(2));
+          }
+          lawsuit.status = 'ejecutada';
+          lawsuit.resolutionDate = nowIso;
+        } else {
+          const costsBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
+          const costsIva = Number((costsBase * 0.21).toFixed(2));
+          const costsTotal = lawsuit.defendantLawyerFeeTotal || Number((costsBase + costsIva).toFixed(2));
+          if (plaintiff.balance < costsTotal) {
+            const err: any = new Error(`Saldo bancario insuficiente del demandante (${formatNumber(plaintiff.balance)} € disponibles). Se requieren ${formatNumber(costsTotal)} € para abonar las costas procesales.`);
+            err.statusCode = 400;
+            throw err;
+          }
+          newPlaintiffBalance = Number((plaintiff.balance - costsTotal).toFixed(2));
+          newDefendantBalance = Number((defendant.balance + costsTotal).toFixed(2));
+          if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
+            newDefendantBalance = Number((newDefendantBalance + Number(lawsuit.embargoAmount)).toFixed(2));
+          }
+          lawsuit.status = 'desestimada';
+          lawsuit.resolutionDate = nowIso;
         }
-      });
-    }
+      }
 
-    addNotification(
-      db,
-      plaintiff.id,
-      '⚖️ Sentencia judicial estimatoria',
-      `El Magistrado-Juez ha dictado sentencia estimatoria en los Autos ${lawsuit.caseNumber}. Se han transferido ${formatNumber(totalToDebit)} € a tu cuenta.`,
-      'transfer_received',
-      txId
-    );
+      // ================= POST-COMMIT ACTUALIZACIÓN DE ESTADO EN MEMORIA =================
+      defendant.balance = newDefendantBalance;
+      plaintiff.balance = newPlaintiffBalance;
 
-    addNotification(
-      db,
-      defendant.id,
-      '⚖️ Notificación de sentencia y ejecución',
-      `El Magistrado-Juez ha dictado sentencia y ejecutado el cargo en los Autos ${lawsuit.caseNumber} por ${formatNumber(totalToDebit)} €.`,
-      'transfer_received',
-      txId
-    );
-  } else {
-    // Desestimatoria: el demandante debe pagar al demandado las costas procesales (minuta 15% + IVA)
-    const costsBase = Number((lawsuit.claimedAmount * 0.15).toFixed(2));
-    const costsIva = Number((costsBase * 0.21).toFixed(2));
-    const costsTotal = lawsuit.defendantLawyerFeeTotal || Number((costsBase + costsIva).toFixed(2));
+      if (!db.transfers) db.transfers = [];
+      for (const t of createdTransfers) {
+        db.transfers.unshift(t);
+      }
 
-    // Plaintiff pays costs to Defendant
-    plaintiff.balance = Number((plaintiff.balance - costsTotal).toFixed(2));
-    defendant.balance = Number((defendant.balance + costsTotal).toFixed(2));
+      if (ruling === 'estimatoria' && lawsuit.promissoryNoteNumber && db.marketMessages) {
+        db.marketMessages.forEach(m => {
+          if (m.type === 'promissory_note' && m.promissoryNoteData?.promissoryNoteNumber === lawsuit.promissoryNoteNumber) {
+            m.promissoryNoteData.status = 'pagado';
+            m.promissoryNoteData.paidAt = nowIso;
+            m.promissoryNoteData.paidTransferId = lawsuit.executionTransferId;
+          }
+        });
+      }
 
-    const costsTxId = generateId('tx');
-    const costsConcept = `Condena en Costas Procesales (Minuta Letrado 15% + IVA) - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
+      if (ruling === 'estimatoria') {
+        const totalAmount = lawsuit.totalClaimAmount || lawsuit.claimedAmount;
+        addNotification(
+          db,
+          plaintiff.id,
+          '⚖️ Sentencia judicial estimatoria',
+          `El Magistrado-Juez ha dictado sentencia estimatoria en los Autos ${lawsuit.caseNumber}. Se han transferido ${formatNumber(totalAmount)} € a tu cuenta.`,
+          'transfer_received',
+          lawsuit.executionTransferId
+        );
+        addNotification(
+          db,
+          defendant.id,
+          '⚖️ Notificación de sentencia y ejecución',
+          `El Magistrado-Juez ha dictado sentencia y ejecutado el cargo en los Autos ${lawsuit.caseNumber} por ${formatNumber(totalAmount)} €.`,
+          'transfer_received',
+          lawsuit.executionTransferId
+        );
+      } else {
+        const costsTotal = lawsuit.costsPaid || 0;
+        addNotification(
+          db,
+          plaintiff.id,
+          '⚖️ Sentencia desestimatoria - condena en costas',
+          `El Magistrado-Juez ha desestimado tu demanda en los Autos ${lawsuit.caseNumber} con expresa condena en costas. Se han transferido ${formatNumber(costsTotal)} € de tu cuenta a favor de ${defendant.name} en concepto de costas procesales.`,
+          'transfer_received',
+          lawsuit.executionTransferId
+        );
+        addNotification(
+          db,
+          defendant.id,
+          '⚖️ Demanda desestimada - abono de costas',
+          `La demanda deducida contra tu empresa en los Autos ${lawsuit.caseNumber} ha sido desestimada con condena en costas al actor. Se han abonado ${formatNumber(costsTotal)} € en tu cuenta bancaria en concepto de costas procesales (minuta letrada 15% + IVA). ${lawsuit.embargoAmount ? 'Asimismo, se han devuelto los fondos embargados cautelarmente a tu cuenta.' : ''}`,
+          'transfer_received',
+          lawsuit.executionTransferId
+        );
+      }
 
-    const costsTransfer: Transfer = {
-      id: costsTxId,
-      senderId: plaintiff.id,
-      senderName: plaintiff.name,
-      senderAccount: plaintiff.accountNumber,
-      receiverId: defendant.id,
-      receiverName: defendant.name,
-      receiverAccount: defendant.accountNumber,
-      amount: costsTotal,
-      concept: costsConcept,
-      timestamp: now.toISOString()
-    };
+      writeDb(db);
 
-    if (!db.transfers) db.transfers = [];
-    db.transfers.unshift(costsTransfer);
-
-    syncAccountToSupabase(plaintiff.id, plaintiff.name, plaintiff.balance, plaintiff.username, plaintiff.password, plaintiff.accountNumber, plaintiff.role, plaintiff.level).catch(e => console.error(e));
-    syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-    syncMovimientoToSupabase(costsTxId + '-out', plaintiff.id, 'TRANSFER_OUT', costsTotal, now.toISOString(), costsConcept, costsTransfer).catch(e => console.error(e));
-    syncMovimientoToSupabase(costsTxId + '-in', defendant.id, 'TRANSFER_IN', costsTotal, now.toISOString(), costsConcept, costsTransfer).catch(e => console.error(e));
-
-    // If funds were previously embargoed, return them from Escrow to defendant
-    if (lawsuit.embargoTransferId && lawsuit.embargoAmount) {
-      const refundAmt = lawsuit.embargoAmount;
-      defendant.balance = Number((defendant.balance + refundAmt).toFixed(2));
-      const refundTxId = generateId('tx');
-      const refundConcept = `Levantamiento y Devolución de Embargo Preventivo - Sentencia Desestimatoria Autos ${lawsuit.caseNumber}`;
-
-      const refundTransfer: Transfer = {
-        id: refundTxId,
-        senderId: 'corp-deposito-judicial',
-        senderName: 'Cuenta General de Consignaciones Judiciales (Juzgado)',
-        senderAccount: 'ES990001009988776655',
-        receiverId: defendant.id,
-        receiverName: defendant.name,
-        receiverAccount: defendant.accountNumber,
-        amount: refundAmt,
-        concept: refundConcept,
-        timestamp: now.toISOString()
+      return {
+        success: true,
+        message: `Resolución judicial dictada con éxito en los Autos ${lawsuit.caseNumber}.`,
+        lawsuit
       };
+    });
 
-      db.transfers.unshift(refundTransfer);
-
-      syncAccountToSupabase(defendant.id, defendant.name, defendant.balance, defendant.username, defendant.password, defendant.accountNumber, defendant.role, defendant.level).catch(e => console.error(e));
-      syncMovimientoToSupabase(refundTxId + '-in', defendant.id, 'TRANSFER_IN', refundAmt, now.toISOString(), refundConcept, refundTransfer).catch(e => console.error(e));
-    }
-
-    lawsuit.status = 'desestimada';
-    lawsuit.updatedAt = now.toISOString();
-    lawsuit.resolutionDate = now.toISOString();
-    lawsuit.costsPaid = costsTotal;
-    lawsuit.costsTransferId = costsTxId;
-    lawsuit.resolutionNotes = `Sentencia desestimatoria dictada por el Magistrado-Juez del Juzgado de 1ª Instancia con expresa imposición de costas al demandante por ${formatNumber(costsTotal)} € (minuta letrada del 15% + IVA).`;
-    lawsuit.judgeComments = comments || 'Desestimada íntegramente la demanda con expresa condena en costas a la parte actora.';
-    lawsuit.executionTransferId = costsTxId;
-
-    addNotification(
-      db,
-      plaintiff.id,
-      '⚖️ Sentencia desestimatoria - condena en costas',
-      `El Magistrado-Juez ha desestimado tu demanda en los Autos ${lawsuit.caseNumber} con expresa condena en costas. Se han transferido ${formatNumber(costsTotal)} € de tu cuenta a favor de ${defendant.name} en concepto de costas procesales.`,
-      'transfer_received',
-      costsTxId
-    );
-
-    addNotification(
-      db,
-      defendant.id,
-      '⚖️ Demanda desestimada - abono de costas',
-      `La demanda deducida contra tu empresa en los Autos ${lawsuit.caseNumber} ha sido desestimada con condena en costas al actor. Se han abonado ${formatNumber(costsTotal)} € en tu cuenta bancaria en concepto de costas procesales (minuta letrada 15% + IVA). ${lawsuit.embargoAmount ? 'Asimismo, se han devuelto los fondos embargados cautelarmente a tu cuenta.' : ''}`,
-      'transfer_received',
-      costsTxId
-    );
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Judge Ruling] Error processing ruling:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al dictar la resolución judicial.' });
   }
-
-  writeDb(db);
-  syncCourtLawsuitToSupabase(lawsuit).catch(e => console.error(e));
-
-  res.json({
-    success: true,
-    message: `Resolución judicial dictada con éxito en los Autos ${lawsuit.caseNumber}.`,
-    lawsuit
-  });
 });
 
 // API 404 handler - ensure any unmatched /api request returns JSON, not HTML
@@ -22816,7 +29713,9 @@ async function startServer() {
 
   try {
     const startupDb = readDb();
-    checkAndProcessAutomatedElectricity(startupDb);
+    await checkAndProcessAutomatedPayrollAndTaxes(startupDb);
+    await checkAndProcessAutomatedElectricity(startupDb);
+    await checkAndProcessAutomatedTelecom(startupDb);
     await processStudentAutomaticPayments(startupDb);
   } catch (e) {
     console.error('[Startup Automated Payments Error]', e);
@@ -22826,7 +29725,9 @@ async function startServer() {
   setInterval(async () => {
     try {
       const periodicDb = readDb();
-      checkAndProcessAutomatedElectricity(periodicDb);
+      await checkAndProcessAutomatedPayrollAndTaxes(periodicDb);
+      await checkAndProcessAutomatedElectricity(periodicDb);
+      await checkAndProcessAutomatedTelecom(periodicDb);
       await processStudentAutomaticPayments(periodicDb);
     } catch (e) {
       console.error('[Periodic Automated Processing Error]', e);

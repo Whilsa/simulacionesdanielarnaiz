@@ -1,0 +1,96 @@
+{
+  "TEST_A": {
+    "pass": true,
+    "status": 200,
+    "memStatus": "admitida",
+    "pgStatus": "admitida"
+  },
+  "TEST_B": {
+    "pass": true,
+    "status": 200,
+    "memStatus": "inadmitida",
+    "pgStatus": "inadmitida"
+  },
+  "TEST_C": {
+    "pass": true,
+    "r1Status": 200,
+    "r2Status": 200,
+    "both200": true
+  },
+  "TEST_D": {
+    "rAdmStatus": 200,
+    "rAnsStatus": 200
+  },
+  "TEST_E": {
+    "rAdmStatus": 200,
+    "rPayStatus": 200,
+    "finalPgStatus": "allanada_pagada"
+  },
+  "TEST_F": {
+    "rAdmStatus": 200,
+    "rRuleStatus": 200,
+    "finalPgStatus": "ejecutada"
+  },
+  "TEST_G": {
+    "applicable": false,
+    "reason": "judge-admission no modifica ni bloquea pagarés ni market_messages"
+  },
+  "TEST_H": {
+    "applicable": false,
+    "reason": "judge-admission no interactúa con la liquidación ni cobro de pagarés"
+  },
+  "TEST_I": {
+    "applicable": false,
+    "reason": "judge-admission no afecta vencimiento automático ni tablas de pagarés descontados"
+  },
+  "TEST_J": {
+    "pass": true,
+    "r1Status": 200,
+    "r2Status": 200,
+    "retryExecutedTwice": true
+  },
+  "TEST_K": {
+    "r1Status": 200,
+    "r2Status": 200,
+    "inIdemTable": false
+  },
+  "TEST_L": {
+    "r1Status": 200,
+    "r2Status": 200
+  },
+  "TEST_M": {
+    "pass": true,
+    "pgState": "admitida",
+    "deadlineExists": true
+  },
+  "TEST_N": {
+    "pass": true,
+    "memStatus": "admitida",
+    "memNotes": "Adm N"
+  },
+  "TEST_O": {
+    "pass": true,
+    "getStatus": "admitida"
+  },
+  "TEST_P": {
+    "modified": false,
+    "reason": "judge-admission does not mutate promissory note or market_messages"
+  },
+  "TEST_Q": {
+    "hasEmbargo": false,
+    "reason": "judge-admission does not create preventative embargo"
+  },
+  "TEST_R": {
+    "movementsCreated": 0,
+    "reason": "judge-admission does not create financial transfers or movements"
+  },
+  "TEST_S": {
+    "pass": true,
+    "notifCount": 4,
+    "duplicated": true
+  },
+  "TEST_T": {
+    "deadlocks": false,
+    "all200": true
+  }
+}

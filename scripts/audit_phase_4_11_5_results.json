@@ -1,0 +1,74 @@
+[
+  {
+    "suite": "Payroll Worker",
+    "name": "Employee correctly registered in PostgreSQL empleados_contratados",
+    "passed": true,
+    "details": "Empleado ID: emp_4115_muf8h8um, Sueldo Bruto: 1200€"
+  },
+  {
+    "suite": "Payroll Concurrency",
+    "name": "Initial payroll state clean for current month/year",
+    "passed": true,
+    "details": "Registros previos encontrados: 0"
+  },
+  {
+    "suite": "Pessimistic Locking",
+    "name": "Deterministic SELECT ... FOR UPDATE acquired on student account",
+    "passed": true,
+    "details": "Lock verificado exitosamente sobre cuenta user-dv9afbq7u"
+  },
+  {
+    "suite": "Tax Obligations",
+    "name": "Tax obligation created with estado=pendiente in PostgreSQL",
+    "passed": true,
+    "details": "Obligación ID: tax_dummy_4115_muf8h8wt, Importe: 150.5€, Vence: 2026-09-23T07:51:54.462Z"
+  },
+  {
+    "suite": "Tax Liquidation",
+    "name": "Tax obligation paid transactionally with account debit and estado=pagado",
+    "passed": true,
+    "details": "Estado actualizado a pagado, Fecha Pago: Thu Sep 24 2026 07:51:54 GMT+0000 (Coordinated Universal Time)"
+  },
+  {
+    "suite": "Promissory Note Row Lock",
+    "name": "Promissory note locked with SELECT ... FOR UPDATE on market_messages",
+    "passed": true,
+    "details": "Pagaré ID pn_note_4115_muf8h8zy correctamente bloqueado para vencimiento"
+  },
+  {
+    "suite": "Promissory Idempotency",
+    "name": "Idempotency key registered prevents duplicate maturity processing",
+    "passed": true,
+    "details": "Clave registrada: maturity_promissory_pn_note_4115_muf8h8zy"
+  },
+  {
+    "suite": "Safe Bank Reconcile",
+    "name": "Reconciliation endpoint does NOT overwrite PostgreSQL authoritative balance with hardcoded defaults",
+    "passed": true,
+    "details": "Saldo PG previo: 14849.5€, Saldo PG posterior: 14849.5€"
+  },
+  {
+    "suite": "Memory Cache Alignment",
+    "name": "Reconciliation endpoint aligns in-memory cached balance to match PostgreSQL authoritative balance",
+    "passed": true,
+    "details": "Saldo en memoria alineado: 14849.5€, Saldo en PG: 14849.5€"
+  },
+  {
+    "suite": "Rod Production Mode",
+    "name": "Concurrent calls safely serialize and persist rod_production_mode under row lock",
+    "passed": true,
+    "details": "Modo en PostgreSQL: estrella"
+  },
+  {
+    "suite": "Restore Exclusive Lock",
+    "name": "Exclusive maintenance advisory lock (987654321) acquired and released safely",
+    "passed": true,
+    "details": "Lock exclusivo de mantenimiento verificado"
+  },
+  {
+    "suite": "Advisory Shared Lock Concurrency",
+    "name": "Multiple concurrent business transactions share lock (987654321) without mutual blockage",
+    "passed": true,
+    "details": "Dos transacciones concurrentes operaron simultáneamente con shared lock"
+  }
+]
