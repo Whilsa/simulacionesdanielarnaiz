@@ -21,8 +21,8 @@ const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
-// Server lifecycle state: ensure no operations are processed before initial Supabase restoration completes
-let isServerReady = false;
+// Server lifecycle state: ready by default from disk, updated by Supabase restoration
+let isServerReady = true;
 let serverInitError: string | null = null;
 
 // Bypass self-signed TLS/SSL certificate checks for Supabase pooler connections
@@ -58,9 +58,9 @@ function initPgPool(url: string) {
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined
     },
-    connectionTimeoutMillis: 15000,
+    connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 10000,
-    max: 10,
+    max: 25,
     allowExitOnIdle: true
   });
 
@@ -68,8 +68,13 @@ function initPgPool(url: string) {
   console.log('[Supabase DB] PostgreSQL pool configured automatically with transaction pooler.');
 }
 
+let totalPostgresQueriesCount = 0;
+let totalSessionCacheHits = 0;
+let totalSessionCacheMisses = 0;
+
 async function safeDbQuery(text: string, params?: any[], retries = 5): Promise<pg.QueryResult<any> | null> {
   if (!dbPool) return null;
+  totalPostgresQueriesCount++;
   let lastErr: any = null;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -811,6 +816,11 @@ async function withPostgresTransaction<T>(
     throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
   }
   const client = await dbPool.connect();
+  const rawClientQuery = client.query.bind(client);
+  (client as any).query = (text: any, params?: any) => {
+    totalPostgresQueriesCount++;
+    return rawClientQuery(text, params);
+  };
   try {
     await client.query('BEGIN');
 
@@ -866,6 +876,132 @@ async function withPostgresTransaction<T>(
     client.release();
   }
 }
+
+// ============================================================================
+// FASE 4.13: SESSION CACHE & LOAD OPTIMIZATION ENGINE
+// ============================================================================
+
+export interface CachedDomain<T = any> {
+  data: T;
+  cachedAt: number;
+}
+
+export interface StudentSessionEntry {
+  studentId: string;
+  version: number;
+  lastUpdated: number;
+  company?: CachedDomain;
+  acquisitions?: CachedDomain;
+  transfers?: CachedDomain;
+  employees?: CachedDomain;
+  electricityContracts?: CachedDomain;
+  electricityBills?: CachedDomain;
+  floorPlans?: CachedDomain;
+  telecomContracts?: CachedDomain;
+  telecomInvoices?: CachedDomain;
+  officeOrders?: CachedDomain;
+  vehicles?: CachedDomain;
+  rawMaterialOrders?: CachedDomain;
+  rawMaterialInventory?: CachedDomain;
+  upcomingPayments?: CachedDomain;
+  courtLawsuits?: CachedDomain;
+}
+
+export interface GlobalCatalogCache {
+  properties?: CachedDomain;
+  jobListings?: CachedDomain;
+  rawMaterialAnnouncements?: CachedDomain;
+  users?: CachedDomain;
+  studentsList?: CachedDomain;
+}
+
+const studentSessionCache = new Map<string, StudentSessionEntry>();
+const globalCatalogCache: GlobalCatalogCache = {};
+
+function getStudentSession(studentId: string): StudentSessionEntry {
+  const sId = String(studentId || '');
+  let session = studentSessionCache.get(sId);
+  if (!session) {
+    session = {
+      studentId: sId,
+      version: 1,
+      lastUpdated: Date.now()
+    };
+    studentSessionCache.set(sId, session);
+  }
+  return session;
+}
+
+async function getOrCreateStudentSession(studentId: string): Promise<StudentSessionEntry> {
+  const sId = String(studentId || '');
+  if (!sId) return getStudentSession('');
+  const existing = studentSessionCache.get(sId);
+  if (existing && existing.company && existing.transfers && existing.acquisitions) {
+    return existing;
+  }
+  return await buildStudentSessionFromPostgres(sId);
+}
+
+function invalidateStudentSessionCache(studentId?: string, domain?: keyof StudentSessionEntry) {
+  if (!studentId) return;
+  const sId = String(studentId);
+  const session = studentSessionCache.get(sId);
+  if (session) {
+    session.version = (session.version || 0) + 1;
+    session.lastUpdated = Date.now();
+    if (domain && domain !== 'studentId' && domain !== 'version' && domain !== 'lastUpdated') {
+      delete (session as any)[domain];
+    } else {
+      studentSessionCache.delete(sId);
+    }
+  }
+  // Public user listing might be impacted if user details/balance changed
+  delete globalCatalogCache.users;
+  delete globalCatalogCache.studentsList;
+}
+
+function invalidateGlobalCatalogCache(key?: keyof GlobalCatalogCache) {
+  if (key) {
+    delete globalCatalogCache[key];
+  } else {
+    delete globalCatalogCache.properties;
+    delete globalCatalogCache.jobListings;
+    delete globalCatalogCache.rawMaterialAnnouncements;
+    delete globalCatalogCache.users;
+    delete globalCatalogCache.studentsList;
+  }
+}
+
+function clearAllSessionCaches() {
+  studentSessionCache.clear();
+  invalidateGlobalCatalogCache();
+}
+
+app.get('/api/system/cache-stats', (req, res) => {
+  const activeStudents = Array.from(studentSessionCache.keys());
+  const catalogKeys = Object.keys(globalCatalogCache);
+  const totalReqs = totalSessionCacheHits + totalSessionCacheMisses;
+  res.json({
+    success: true,
+    totalHits: totalSessionCacheHits,
+    totalMisses: totalSessionCacheMisses,
+    hitRatio: totalReqs > 0 ? Number((totalSessionCacheHits / totalReqs).toFixed(3)) : 0,
+    activeStudentSessionsCount: activeStudents.length,
+    activeStudentSessions: activeStudents,
+    globalCatalogEntriesCount: catalogKeys.length,
+    globalCatalogEntries: catalogKeys
+  });
+});
+
+app.post('/api/system/cache-clear', (req, res) => {
+  const { studentId, domain } = req.body || {};
+  if (studentId) {
+    invalidateStudentSessionCache(String(studentId), domain);
+  } else {
+    clearAllSessionCaches();
+  }
+  res.json({ success: true, message: 'Caché invalidada correctamente.' });
+});
 
 const inFlightOperations = new Map<string, Promise<any>>();
 
@@ -5547,6 +5683,11 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
   }
 
     writeDb(db);
+    for (const student of (db.users || []).filter(u => u.role !== 'teacher')) {
+      invalidateStudentSessionCache(student.id, 'company');
+      invalidateStudentSessionCache(student.id, 'upcomingPayments');
+      invalidateStudentSessionCache(student.id, 'transfers');
+    }
 }
 
 function calculateElectricityForStudent(studentId: string, month: number, year: number, db: DatabaseSchema): ElectricityBill | null {
@@ -5973,6 +6114,14 @@ async function checkAndProcessAutomatedElectricity(db: DatabaseSchema): Promise<
 
   if (modified) {
     writeDb(db);
+    for (const contract of (db.electricityContracts || [])) {
+      if (contract.studentId) {
+        invalidateStudentSessionCache(contract.studentId, 'electricityBills');
+        invalidateStudentSessionCache(contract.studentId, 'company');
+        invalidateStudentSessionCache(contract.studentId, 'upcomingPayments');
+        invalidateStudentSessionCache(contract.studentId, 'transfers');
+      }
+    }
   }
 
   return modified;
@@ -6254,6 +6403,14 @@ async function checkAndProcessAutomatedTelecom(db: DatabaseSchema): Promise<bool
 
   if (modified) {
     writeDb(db);
+    for (const contract of (db.telecomContracts || [])) {
+      if (contract.studentId) {
+        invalidateStudentSessionCache(contract.studentId, 'telecomInvoices');
+        invalidateStudentSessionCache(contract.studentId, 'company');
+        invalidateStudentSessionCache(contract.studentId, 'upcomingPayments');
+        invalidateStudentSessionCache(contract.studentId, 'transfers');
+      }
+    }
   }
   return modified;
 }
@@ -6700,6 +6857,15 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
 
   console.log('[LOGIN] Success! Matched user:', user.name, 'Role:', user.role);
 
+  // Pre-build and warm isolated session cache for student
+  if (user.role === 'student' || user.role !== 'teacher') {
+    try {
+      await getOrCreateStudentSession(user.id);
+    } catch (sessionErr) {
+      console.warn('[LOGIN] Error preloading student session cache:', sessionErr);
+    }
+  }
+
   // Exclude password from response
   const { password: _, ...userWithoutPassword } = user;
   res.json({ user: userWithoutPassword });
@@ -6718,6 +6884,15 @@ app.post('/login', loginHandler);
 // If student, returns limited public info (name, username, accountNumber) for transfer targets.
 const handleGetUsersRoute = async (req: express.Request, res: express.Response) => {
   const role = req.query.role as string;
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  const now = Date.now();
+
+  if (!bypass && role !== 'teacher' && globalCatalogCache.users) {
+    totalSessionCacheHits++;
+    return res.json(globalCatalogCache.users.data);
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   let usersList = (db.users || []).map(u => ({ ...u }));
 
@@ -6760,6 +6935,7 @@ const handleGetUsersRoute = async (req: express.Request, res: express.Response) 
     const publicStudents = usersList
       .filter(u => u.role === 'student')
       .map(({ password: _, ...u }) => u);
+    globalCatalogCache.users = { data: { users: publicStudents }, cachedAt: Date.now() };
     res.json({ users: publicStudents });
   }
 };
@@ -7672,10 +7848,26 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
       }
     });
 
+    if (result && (result as any).transfer) {
+      const tx = (result as any).transfer;
+      invalidateStudentSessionCache(tx.senderId, 'transfers');
+      invalidateStudentSessionCache(tx.senderId, 'company');
+      invalidateStudentSessionCache(tx.senderId, 'upcomingPayments');
+      invalidateStudentSessionCache(tx.receiverId, 'transfers');
+      invalidateStudentSessionCache(tx.receiverId, 'company');
+      invalidateStudentSessionCache(tx.receiverId, 'upcomingPayments');
+    }
+
     res.json(result);
   } catch (err: any) {
-    console.error('[Transfer Concurrency Error]:', err);
-    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar la transferencia' });
+    const isValidation = (err.statusCode && err.statusCode < 500) || (err.status && err.status < 500) || err.message?.includes('Saldo insuficiente') || err.message?.includes('no encontrado') || err.message?.includes('inválidos');
+    if (isValidation) {
+      console.warn(`[Transfer Validation Notice]: HTTP ${err.statusCode || err.status || 400} - ${err.message}`);
+    } else {
+      console.error('[Transfer Concurrency Error]:', err);
+    }
+    const statusCode = (isValidation && (!err.statusCode || err.statusCode >= 500)) ? 400 : (err.statusCode || err.status || 500);
+    return res.status(statusCode).json({ error: err.message || 'Error al procesar la transferencia' });
   }
 };
 
@@ -7685,13 +7877,27 @@ app.post('/transfers', handleTransferRoute);
 // Get transfers
 const handleGetTransfersRoute = (req: express.Request, res: express.Response) => {
   const { userId, role } = req.query;
+  const sId = userId ? String(userId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId && role !== 'teacher') {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.transfers) {
+      totalSessionCacheHits++;
+      return res.json(session.transfers.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
 
   if (role === 'teacher') {
     res.json({ transfers: db.transfers });
-  } else if (userId) {
+  } else if (sId) {
     // Filter transfers involving this user as either sender or receiver
-    const filtered = db.transfers.filter(tx => tx.senderId === userId || tx.receiverId === userId);
+    const filtered = (db.transfers || []).filter(tx => tx.senderId === sId || tx.receiverId === sId);
+    const session = getStudentSession(sId);
+    session.transfers = { data: { transfers: filtered }, cachedAt: Date.now() };
     res.json({ transfers: filtered });
   } else {
     res.status(400).json({ error: 'Se requiere userId o rol para ver el historial' });
@@ -8103,6 +8309,13 @@ app.post('/api/restore', async (req, res) => {
 
 // Get all property listings (with live Supabase sync)
 app.get('/api/properties', async (req, res) => {
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  if (!bypass && globalCatalogCache.properties) {
+    totalSessionCacheHits++;
+    return res.json(globalCatalogCache.properties.data);
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   let properties = db.properties || [];
   if (dbPool) {
@@ -8135,16 +8348,30 @@ app.get('/api/properties', async (req, res) => {
       console.warn('[Supabase Real-Time Read Warning for Properties]:', e);
     }
   }
+  globalCatalogCache.properties = { data: { properties }, cachedAt: Date.now() };
   res.json({ properties });
 });
 
 // Get acquisitions (filtered by studentId if query parameter provided)
 app.get('/api/acquisitions', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.acquisitions) {
+      totalSessionCacheHits++;
+      return res.json(session.acquisitions.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   let acquisitions = db.acquisitions || [];
-  if (studentId) {
-    acquisitions = acquisitions.filter(a => a.studentId === String(studentId));
+  if (sId) {
+    acquisitions = acquisitions.filter(a => a.studentId === sId);
+    const session = getStudentSession(sId);
+    session.acquisitions = { data: { success: true, acquisitions }, cachedAt: Date.now() };
   }
   res.json({ success: true, acquisitions });
 });
@@ -8768,6 +8995,15 @@ app.post('/api/properties/buy-rent', async (req, res) => {
         }
       }
     });
+
+    if (studentId) {
+      invalidateStudentSessionCache(studentId, 'acquisitions');
+      invalidateStudentSessionCache(studentId, 'company');
+      invalidateStudentSessionCache(studentId, 'floorPlans');
+      invalidateStudentSessionCache(studentId, 'upcomingPayments');
+      invalidateStudentSessionCache(studentId, 'transfers');
+      invalidateGlobalCatalogCache('properties');
+    }
 
     return res.json(responseData);
   } catch (err: any) {
@@ -9699,6 +9935,13 @@ app.post('/api/machinery/buy', async (req, res) => {
       }
     }
 
+    if (studentId) {
+      invalidateStudentSessionCache(studentId, 'company');
+      invalidateStudentSessionCache(studentId, 'upcomingPayments');
+      invalidateStudentSessionCache(studentId, 'floorPlans');
+      invalidateStudentSessionCache(studentId, 'transfers');
+    }
+
     return res.json({
       success: result.success,
       message: result.message,
@@ -10033,77 +10276,70 @@ app.put('/api/student/machinery/:id/relocate', async (req, res) => {
   }
 });
 
-// Get Company Financial & Property Assets (Mi Empresa Dashboard)
-app.get('/api/company/:studentId', async (req, res) => {
-  let studentId = req.params.studentId;
-  if (studentId === 'dashboard' && req.query.studentId) {
-    studentId = String(req.query.studentId);
-  }
-  const db = readDb();
-
+// Helper to calculate student company assets and obligations
+async function calculateStudentCompanyResult(studentId: string, db: DatabaseSchema) {
   if (dbPool) {
-    try {
-      await syncEmployeesFromSupabase(db);
-      await syncJobListingsFromSupabase(db);
-    } catch (e) {
-      console.warn('[Supabase Real-Time Sync Warning for /api/company]:', e);
+    // Reconciliación transaccional en PostgreSQL de maquinaria en reubicación activa (únicamente si el alumno tiene máquinas en ese estado)
+    const hasRelocatingInMem = (db.machineryAcquisitions || []).some(
+      (m: any) => m.studentId === studentId && (m.relocationStatus === 'desmontaje' || m.relocationStatus === 'remontaje')
+    );
+    if (hasRelocatingInMem) {
+      try {
+        await withPostgresTransaction(async (client) => {
+          const relocatingRows = await client.query(
+            `SELECT id, estado, relocation_status, relocation_disassembly_end_date, relocation_reassembly_end_date, relocation_target_nave_id, relocation_target_nave_title
+             FROM maquinaria_adquisiciones
+             WHERE alumno_id = $1
+               AND relocation_status IN ('desmontaje', 'remontaje')
+             ORDER BY id ASC
+             FOR UPDATE`,
+            [studentId]
+          );
+
+          for (const row of relocatingRows.rows) {
+            if (row.relocation_status === 'desmontaje') {
+              const res4h = await client.query(
+                `UPDATE maquinaria_adquisiciones
+                 SET relocation_status = 'remontaje',
+                     estado = 'en_montaje'
+                 WHERE id = $1
+                   AND alumno_id = $2
+                   AND relocation_status = 'desmontaje'
+                   AND relocation_disassembly_end_date <= CURRENT_TIMESTAMP`,
+                [row.id, studentId]
+              );
+              if (res4h.rowCount && res4h.rowCount > 0) {
+                row.relocation_status = 'remontaje';
+                row.estado = 'en_montaje';
+              }
+            }
+
+            if (row.relocation_status === 'remontaje') {
+              const res8h = await client.query(
+                `UPDATE maquinaria_adquisiciones
+                 SET relocation_status = 'completed',
+                     estado = 'operativa',
+                     nave_instalada_id = relocation_target_nave_id,
+                     nave_instalada_titulo = relocation_target_nave_title
+                 WHERE id = $1
+                   AND alumno_id = $2
+                   AND relocation_status = 'remontaje'
+                   AND relocation_reassembly_end_date <= CURRENT_TIMESTAMP`,
+                [row.id, studentId]
+              );
+              if (res8h.rowCount && res8h.rowCount > 0) {
+                row.relocation_status = 'completed';
+                row.estado = 'operativa';
+              }
+            }
+          }
+        });
+      } catch (relocErr) {
+        console.warn('[Machinery relocation check warning]:', relocErr);
+      }
     }
 
-    // Reconciliación transaccional en PostgreSQL de maquinaria en reubicación
     try {
-      await withPostgresTransaction(async (client) => {
-        // Bloquear exclusivamente las filas de maquinaria del alumno en reubicación activa
-        const relocatingRows = await client.query(
-          `SELECT id, estado, relocation_status, relocation_disassembly_end_date, relocation_reassembly_end_date, relocation_target_nave_id, relocation_target_nave_title
-           FROM maquinaria_adquisiciones
-           WHERE alumno_id = $1
-             AND relocation_status IN ('desmontaje', 'remontaje')
-           ORDER BY id ASC
-           FOR UPDATE`,
-          [studentId]
-        );
-
-        for (const row of relocatingRows.rows) {
-          // Paso 1: Transición +4 horas (desmontaje -> remontaje)
-          if (row.relocation_status === 'desmontaje') {
-            const res4h = await client.query(
-              `UPDATE maquinaria_adquisiciones
-               SET relocation_status = 'remontaje',
-                   estado = 'en_montaje'
-               WHERE id = $1
-                 AND alumno_id = $2
-                 AND relocation_status = 'desmontaje'
-                 AND relocation_disassembly_end_date <= CURRENT_TIMESTAMP`,
-              [row.id, studentId]
-            );
-            if (res4h.rowCount && res4h.rowCount > 0) {
-              row.relocation_status = 'remontaje';
-              row.estado = 'en_montaje';
-            }
-          }
-
-          // Paso 2: Transición +8 horas (remontaje -> completed)
-          if (row.relocation_status === 'remontaje') {
-            const res8h = await client.query(
-              `UPDATE maquinaria_adquisiciones
-               SET relocation_status = 'completed',
-                   estado = 'operativa',
-                   nave_instalada_id = relocation_target_nave_id,
-                   nave_instalada_titulo = relocation_target_nave_title
-               WHERE id = $1
-                 AND alumno_id = $2
-                 AND relocation_status = 'remontaje'
-                 AND relocation_reassembly_end_date <= CURRENT_TIMESTAMP`,
-              [row.id, studentId]
-            );
-            if (res8h.rowCount && res8h.rowCount > 0) {
-              row.relocation_status = 'completed';
-              row.estado = 'operativa';
-            }
-          }
-        }
-      });
-
       // Sincronizar representación en memoria con el estado comprometido en PostgreSQL
       const resMachStudent = await safeDbQuery(
         'SELECT * FROM maquinaria_adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC',
@@ -10185,7 +10421,7 @@ app.get('/api/company/:studentId', async (req, res) => {
 
   const user = db.users.find(u => u.id === studentId);
   if (!user) {
-    return res.status(404).json({ error: 'Usuario / Empresa no encontrada' });
+    throw new Error('Usuario / Empresa no encontrada');
   }
 
   const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
@@ -10196,7 +10432,7 @@ app.get('/api/company/:studentId', async (req, res) => {
   const machineryAcquisitions = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
 
   // Comprobar fin de montaje inicial de compra (excluyendo máquinas en reubicación)
-  const now = new Date();
+  const currentDate = new Date();
 
   for (const m of machineryAcquisitions) {
     if (m.requiredStaff === 5 || !m.requiredStaff) {
@@ -10204,7 +10440,7 @@ app.get('/api/company/:studentId', async (req, res) => {
     }
     if ((m.status === 'montaje' || m.status === 'en_montaje') && (!m.relocationStatus || m.relocationStatus === 'completed')) {
       const finishDate = new Date(m.assemblyFinishDate || m.assemblyEndDate || '');
-      if (m.assemblyFinishDate && now >= finishDate) {
+      if (m.assemblyFinishDate && currentDate >= finishDate) {
         m.status = 'operativa';
         syncMachineryToSupabase(m).catch(e => console.error(e));
       }
@@ -10233,14 +10469,11 @@ app.get('/api/company/:studentId', async (req, res) => {
     totalMachineryAssetsValue += m.basePrice;
   }
 
-  const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2)); // 2% amortización contable oficial de construcción en España
+  const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2));
 
-  // 1. Payment Obligations (Pagarés, letras de cambio y cuotas de compra aplazada)
-  // Las cuotas de alquiler de meses posteriores son compromisos de gasto corriente, no deudas financieras acumulativas.
   const pendingDebtObligations = obligations.filter(o => o.status === 'pendiente' && o.type !== 'cuota_alquiler');
   const totalObligationsPendingAmount = Number(pendingDebtObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
 
-  // 2. Bank Loans (Préstamos hipotecarios activos)
   let totalLoansPendingAmount = 0;
   let totalLoansPendingPrincipal = 0;
 
@@ -10255,7 +10488,6 @@ app.get('/api/company/:studentId', async (req, res) => {
   totalLoansPendingAmount = Number(totalLoansPendingAmount.toFixed(2));
   totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
 
-  // 3. Total Combined Pending Debt (including pending tax/SS obligations)
   const studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
   const studentPayrollRecords = (db.payrollRecords || []).filter(p => p.studentId === studentId);
   const studentTaxObligations = (db.taxObligations || []).filter(t => t.studentId === studentId);
@@ -10265,7 +10497,7 @@ app.get('/api/company/:studentId', async (req, res) => {
 
   const totalMonthlyRentCommitments = Number(rentedProperties.reduce((acc, r) => acc + (r.monthlyRent || 0), 0).toFixed(2));
 
-  res.json({
+  const companyResult = {
     company: {
       id: user.id,
       name: user.name,
@@ -10303,7 +10535,203 @@ app.get('/api/company/:studentId', async (req, res) => {
     purchasedVehicles: (db.purchasedVehicles || []).filter(v => v.studentId === studentId),
     payrollRecords: studentPayrollRecords,
     taxObligations: studentTaxObligations
-  });
+  };
+
+  return companyResult;
+}
+
+// Centralized builder for student session from PostgreSQL
+async function buildStudentSessionFromPostgres(studentId: string): Promise<StudentSessionEntry> {
+  const sId = String(studentId || '');
+  const now = Date.now();
+  const db = readDb();
+
+  if (dbPool && sId) {
+    try {
+      const resAccount = await safeDbQuery(
+        'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1',
+        [sId]
+      );
+      if (resAccount?.rows?.[0]) {
+        const row = resAccount.rows[0];
+        const user = (db.users || []).find(u => u.id === sId);
+        if (user) {
+          user.balance = Number(row.saldo);
+          if (row.alumno) user.name = String(row.alumno);
+          if (row.account_number) user.accountNumber = String(row.account_number);
+          if (row.level) user.level = Number(row.level) as 1 | 2 | 3;
+        }
+      }
+    } catch (e) {
+      console.warn('[Session Loader] Error checking student account:', e);
+    }
+  }
+
+  const session = getStudentSession(sId);
+  session.version = (session.version || 0) + 1;
+  session.lastUpdated = now;
+
+  // 1. Company
+  try {
+    const compData = await calculateStudentCompanyResult(sId, db);
+    session.company = { data: compData, cachedAt: now };
+  } catch (e) {
+    console.warn('[Session Loader] Error building company domain:', e);
+  }
+
+  // 2. Acquisitions
+  const studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === sId);
+  session.acquisitions = { data: { success: true, acquisitions: studentAcquisitions }, cachedAt: now };
+
+  // 3. Transfers
+  const studentTransfers = (db.transfers || []).filter(tx => tx.senderId === sId || tx.receiverId === sId);
+  session.transfers = { data: { transfers: studentTransfers }, cachedAt: now };
+
+  // 4. Employees
+  const studentEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === sId);
+  session.employees = { data: { success: true, employees: studentEmployees }, cachedAt: now };
+
+  // 5. Electricity Contracts
+  const activeElecContracts = (db.electricityContracts || []).filter(c => c.studentId === sId && c.status === 'active');
+  session.electricityContracts = { data: { success: true, contracts: activeElecContracts }, cachedAt: now };
+
+  // 6. Electricity Bills
+  const elecBills = [...(db.electricityBills || []).filter(b => b.studentId === sId)].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  session.electricityBills = { data: { success: true, bills: elecBills }, cachedAt: now };
+
+  // 7. Floor Plans
+  try {
+    const floorPlans = await getStudentFloorPlansAsync(sId, db);
+    session.floorPlans = { data: { success: true, floorPlans }, cachedAt: now };
+  } catch (e) {
+    session.floorPlans = { data: { success: true, floorPlans: [] }, cachedAt: now };
+  }
+
+  // 8. Telecom Contracts
+  const activeTelContracts = (db.telecomContracts || []).filter(c => c.studentId === sId && c.status === 'active');
+  session.telecomContracts = { data: { success: true, contracts: activeTelContracts }, cachedAt: now };
+
+  // 9. Telecom Invoices
+  const telInvoices = [...(db.telecomInvoices || []).filter(i => i.studentId === sId)].sort(
+    (a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime()
+  );
+  session.telecomInvoices = { data: { success: true, invoices: telInvoices }, cachedAt: now };
+
+  // 10. Office Orders
+  const offOrders = [...(db.officeOrders || []).filter((o: any) => o.studentId === sId || String(o.studentId) === sId)].sort(
+    (a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime()
+  );
+  session.officeOrders = { data: { success: true, orders: offOrders }, cachedAt: now };
+
+  // 11. Vehicles
+  const studentVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === sId);
+  session.vehicles = { data: { success: true, vehicles: studentVehicles }, cachedAt: now };
+
+  // 12. Raw Material Orders
+  const rawOrders = (db.rawMaterialOrders || []).filter(o => o.studentId === sId);
+  session.rawMaterialOrders = { data: { success: true, orders: rawOrders }, cachedAt: now };
+
+  // 13. Raw Material Inventory
+  try {
+    const inv = checkAndCalculateProduction(db, sId);
+    const rawMaterials = {
+      fragmentos_hierro_kg: inv.ironKg || 0,
+      fragmentos_metal_kg: inv.metalKg || 0,
+      pellets_plastico_kg: inv.plasticKg || 0,
+      pegamento_epoxi_kg: inv.epoxiKg || 0
+    };
+    const producedGoods = {
+      rodProductionMode: (inv as any).rodProductionMode || null,
+      varillas_punta: inv.producedRodsUnits || 0,
+      varillas_punta_estrella: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+      varillas_punta_plana: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+      varillas_hierro_punta: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+      varillas_metal_punta: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+      productos_ensamblados: inv.producedScrewdriversUnits || 0,
+      destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+      destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+      destornilladores_hierro: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+      destornilladores_metal: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+      producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
+    };
+    session.rawMaterialInventory = {
+      data: { success: true, inventory: inv, rawMaterials, producedGoods },
+      cachedAt: now
+    };
+  } catch (e) {
+    console.warn('[Session Loader] Error building inventory domain:', e);
+  }
+
+  // 14. Upcoming Payments
+  try {
+    const status = getStudentPaymentStatus(db, sId);
+    session.upcomingPayments = { data: { success: true, ...status }, cachedAt: now };
+  } catch (e) {
+    console.warn('[Session Loader] Error building upcoming payments domain:', e);
+  }
+
+  // 15. Court Lawsuits
+  const userLawsuits = (db.courtLawsuits || []).filter(
+    l => l.plaintiffId === sId || l.defendantId === sId
+  );
+  session.courtLawsuits = { data: { success: true, lawsuits: userLawsuits }, cachedAt: now };
+
+  console.log(`[StudentSessionCache] Session pre-built for student ${sId} with all domains cached.`);
+  return session;
+}
+
+// Student session initialization endpoint
+app.get('/api/student/session-init/:studentId', async (req, res) => {
+  const { studentId } = req.params;
+  if (!studentId) return res.status(400).json({ error: 'studentId es requerido' });
+  try {
+    const session = await getOrCreateStudentSession(String(studentId));
+    res.json({ success: true, version: session.version, cachedAt: session.lastUpdated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error inicializando sesión del alumno' });
+  }
+});
+
+// Student logout endpoint (clears in-memory session cache)
+app.post('/api/logout', (req, res) => {
+  const { studentId } = req.body;
+  if (studentId) {
+    invalidateStudentSessionCache(String(studentId));
+    console.log(`[StudentSessionCache] Cleared session cache for student ${studentId} on logout.`);
+  }
+  res.json({ success: true, message: 'Sesión invalidada' });
+});
+
+// Get Company Financial & Property Assets (Mi Empresa Dashboard)
+app.get('/api/company/:studentId', async (req, res) => {
+  let studentId = req.params.studentId;
+  if (studentId === 'dashboard' && req.query.studentId) {
+    studentId = String(req.query.studentId);
+  }
+  const sId = String(studentId || '');
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.company) {
+      totalSessionCacheHits++;
+      return res.json(session.company.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
+  const db = readDb();
+  try {
+    const companyResult = await calculateStudentCompanyResult(sId, db);
+    if (sId) {
+      const session = getStudentSession(sId);
+      session.company = { data: companyResult, cachedAt: Date.now() };
+    }
+    res.json(companyResult);
+  } catch (err: any) {
+    res.status(err.message?.includes('no encontrada') ? 404 : 500).json({ error: err.message || 'Error al obtener datos de empresa' });
+  }
 });
 
 // Pay due obligation (Promissory note / Bill of exchange / Rent installment)
@@ -10453,6 +10881,11 @@ app.post('/api/obligations/pay', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'transfers');
+    invalidateStudentSessionCache(String(studentId), 'acquisitions');
+
     res.json(result);
   } catch (err: any) {
     console.error('[Obligation Pay Concurrency Error]:', err);
@@ -10590,6 +11023,10 @@ app.post('/api/taxes/pay', async (req, res) => {
         return { success: true, tax, updatedBalance: student.balance };
       }
     });
+
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'transfers');
 
     return res.json(result);
   } catch (err: any) {
@@ -12024,6 +12461,48 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
     students = (db.users || []).filter(u => u.role === 'student');
   }
 
+  interface CandidateLoan {
+    id: string;
+    studentId: string;
+    termMonths: number;
+    propertyTitle?: string;
+    schedule: AmortizationRow[];
+    loanRef?: BankLoan;
+  }
+
+  const candidateLoansByStudent = new Map<string, CandidateLoan[]>();
+  if (dbPool) {
+    try {
+      const q = targetStudentId
+        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE alumno_id = $1 AND estado = 'active'`
+        : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE estado = 'active'`;
+      const p = targetStudentId ? [targetStudentId] : [];
+      const pgLoansRes = await dbPool.query(q, p);
+      for (const r of pgLoansRes.rows) {
+        let sched: AmortizationRow[] = [];
+        if (typeof r.tabla_amortizacion === 'string') {
+          try { sched = JSON.parse(r.tabla_amortizacion); } catch (e) { sched = []; }
+        } else if (Array.isArray(r.tabla_amortizacion)) {
+          sched = r.tabla_amortizacion;
+        }
+        const memRef = (db.loans || []).find(l => l.id === r.id);
+        const lObj: CandidateLoan = {
+          id: r.id,
+          studentId: r.alumno_id,
+          termMonths: Number(r.plazo_meses),
+          propertyTitle: r.garantia_inmueble_titulo,
+          schedule: sched,
+          loanRef: memRef
+        };
+        const curList = candidateLoansByStudent.get(r.alumno_id) || [];
+        curList.push(lObj);
+        candidateLoansByStudent.set(r.alumno_id, curList);
+      }
+    } catch (err) {
+      console.error('[processStudentAutomaticPayments] Error loading candidate loans from PG:', err);
+    }
+  }
+
   for (const student of students) {
     interface PendingItem {
       id: string;
@@ -12094,46 +12573,8 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
       }
     }
 
-    // 2. Loans: source candidate active loans from PostgreSQL if dbPool is active, fallback to db.loans
-    interface CandidateLoan {
-      id: string;
-      studentId: string;
-      termMonths: number;
-      propertyTitle?: string;
-      schedule: AmortizationRow[];
-      loanRef?: BankLoan;
-    }
-
-    let candidateLoans: CandidateLoan[] = [];
-    if (dbPool) {
-      try {
-        const pgLoansRes = await dbPool.query(
-          `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion 
-           FROM prestamos 
-           WHERE alumno_id = $1 AND estado = 'active'`,
-          [student.id]
-        );
-        candidateLoans = pgLoansRes.rows.map(r => {
-          let sched: AmortizationRow[] = [];
-          if (typeof r.tabla_amortizacion === 'string') {
-            try { sched = JSON.parse(r.tabla_amortizacion); } catch (e) { sched = []; }
-          } else if (Array.isArray(r.tabla_amortizacion)) {
-            sched = r.tabla_amortizacion;
-          }
-          const memRef = (db.loans || []).find(l => l.id === r.id);
-          return {
-            id: r.id,
-            studentId: r.alumno_id,
-            termMonths: Number(r.plazo_meses),
-            propertyTitle: r.garantia_inmueble_titulo,
-            schedule: sched,
-            loanRef: memRef
-          };
-        });
-      } catch (err) {
-        console.error('[processStudentAutomaticPayments] Error loading candidate loans from PG:', err);
-      }
-    }
+    // 2. Loans: source candidate active loans from batch or fallback to db.loans
+    let candidateLoans = candidateLoansByStudent.get(student.id) || [];
 
     if (candidateLoans.length === 0 && db.loans) {
       candidateLoans = (db.loans || []).filter(l => l.studentId === student.id && l.status === 'active').map(l => ({
@@ -12670,6 +13111,17 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
   if (modified) {
     writeDb(db);
+    if (targetStudentId) {
+      invalidateStudentSessionCache(targetStudentId, 'upcomingPayments');
+      invalidateStudentSessionCache(targetStudentId, 'company');
+      invalidateStudentSessionCache(targetStudentId, 'transfers');
+    } else {
+      for (const user of (db.users || []).filter(u => u.role !== 'teacher')) {
+        invalidateStudentSessionCache(user.id, 'upcomingPayments');
+        invalidateStudentSessionCache(user.id, 'company');
+        invalidateStudentSessionCache(user.id, 'transfers');
+      }
+    }
   }
   return modified;
 }
@@ -13947,17 +14399,32 @@ app.get('/api/teacher/deferred-payments-audit', (req, res) => {
 // GET upcoming payments for student
 app.get('/api/student/upcoming-payments', (req, res) => {
   const { studentId } = req.query;
-  if (!studentId || typeof studentId !== 'string') {
+  const sId = studentId ? String(studentId) : '';
+  if (!sId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.upcomingPayments) {
+      totalSessionCacheHits++;
+      return res.json(session.upcomingPayments.data);
+    }
+  }
+  totalSessionCacheMisses++;
 
   const db = readDb();
-  const status = getStudentPaymentStatus(db, studentId);
-
-  res.json({
+  const status = getStudentPaymentStatus(db, sId);
+  const result = {
     success: true,
     ...status
-  });
+  };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.upcomingPayments = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 // GET all loans or student's loans
@@ -15042,6 +15509,13 @@ app.put('/api/student/change-password', (req, res) => {
 
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
 app.get('/api/job-listings', async (req, res) => {
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  if (!bypass && globalCatalogCache.jobListings) {
+    totalSessionCacheHits++;
+    return res.json(globalCatalogCache.jobListings.data);
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   await syncEmployeesFromSupabase(db);
   await syncJobListingsFromSupabase(db);
@@ -15055,7 +15529,9 @@ app.get('/api/job-listings', async (req, res) => {
     !hiredNames.has((j.employeeName || '').toLowerCase().trim())
   );
 
-  res.json({ success: true, jobListings: activeJobs });
+  const result = { success: true, jobListings: activeJobs };
+  globalCatalogCache.jobListings = { data: result, cachedAt: Date.now() };
+  res.json(result);
 });
 
 app.post('/api/teacher/job-listings/batch', (req, res) => {
@@ -15358,6 +15834,11 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'employees');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateGlobalCatalogCache('jobListings');
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Hire Error]:', err);
@@ -15367,10 +15848,27 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
 
 app.get('/api/student/employees', async (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.employees) {
+      totalSessionCacheHits++;
+      return res.json(session.employees.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   await syncEmployeesFromSupabase(db);
-  const list = (db.hiredEmployees || []).filter(e => !studentId || String(e.studentId) === String(studentId));
-  res.json({ success: true, employees: list });
+  const list = (db.hiredEmployees || []).filter(e => !sId || String(e.studentId) === sId);
+  const result = { success: true, employees: list };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.employees = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
@@ -15537,6 +16035,12 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
         return { success: true, employee: emp };
       }
     });
+
+    const affectedStudent = reqStudentId || result.employee?.studentId;
+    if (affectedStudent) {
+      invalidateStudentSessionCache(String(affectedStudent), 'employees');
+      invalidateStudentSessionCache(String(affectedStudent), 'company');
+    }
 
     return res.json(result);
   } catch (err: any) {
@@ -15710,6 +16214,9 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'employees');
+    invalidateStudentSessionCache(String(studentId), 'company');
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Auto-assign Error]:', err);
@@ -15791,6 +16298,9 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
         };
       }
     });
+
+    invalidateStudentSessionCache(String(studentId), 'employees');
+    invalidateStudentSessionCache(String(studentId), 'company');
 
     return res.json(result);
   } catch (err: any) {
@@ -16361,15 +16871,48 @@ app.put('/api/loans/:id', async (req, res) => {
 // ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
 app.get('/api/electricity/contracts', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.electricityContracts) {
+      totalSessionCacheHits++;
+      return res.json(session.electricityContracts.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const contracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
-  res.json({ success: true, contracts });
+  const contracts = (db.electricityContracts || []).filter(c => c.studentId === sId && c.status === 'active');
+  const result = { success: true, contracts };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.electricityContracts = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.get('/api/electricity/contract', (req, res) => {
   const { studentId, propertyId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.electricityContracts) {
+      totalSessionCacheHits++;
+      const allContracts = session.electricityContracts.data.contracts || [];
+      const contract = propertyId
+        ? allContracts.find((c: any) => c.propertyId === propertyId || c.id === propertyId) || null
+        : allContracts[0] || null;
+      return res.json({ success: true, contract, contracts: allContracts });
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === sId && c.status === 'active');
   let contract = null;
   if (propertyId) {
     contract = allContracts.find(c => c.propertyId === propertyId || c.id === propertyId) || null;
@@ -16627,6 +17170,11 @@ app.post('/api/electricity/contract', async (req, res) => {
       ? `¡Suministro eléctrico contratado (${txResult.pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 8 horas para ${txResult.unblockedCount} línea(s) de maquinaria.`
       : `¡Suministro eléctrico de ${txResult.pKw} kW contratado correctamente!`;
 
+    invalidateStudentSessionCache(reqStudentId, 'electricityContracts');
+    invalidateStudentSessionCache(reqStudentId, 'electricityBills');
+    invalidateStudentSessionCache(reqStudentId, 'company');
+    invalidateStudentSessionCache(reqStudentId, 'upcomingPayments');
+
     res.json({
       success: true,
       contract: txResult.contract,
@@ -16644,10 +17192,27 @@ app.post('/api/electricity/contract', async (req, res) => {
 
 app.get('/api/electricity/bills', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.electricityBills) {
+      totalSessionCacheHits++;
+      return res.json(session.electricityBills.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const bills = (db.electricityBills || []).filter(b => b.studentId === studentId);
+  const bills = (db.electricityBills || []).filter(b => b.studentId === sId);
   bills.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  res.json({ success: true, bills });
+  const result = { success: true, bills };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.electricityBills = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 function getStudentFloorPlans(db: any, studentId: string): NaveFloorPlan[] {
@@ -16843,9 +17408,26 @@ async function getStudentFloorPlansAsync(studentId: string, fallbackDb?: any): P
 
 app.get('/api/electricity/floor-plans', async (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.floorPlans) {
+      totalSessionCacheHits++;
+      return res.json(session.floorPlans.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const plans = await getStudentFloorPlansAsync(String(studentId || ''), db);
-  res.json({ success: true, floorPlans: plans });
+  const plans = await getStudentFloorPlansAsync(sId, db);
+  const result = { success: true, floorPlans: plans };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.floorPlans = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/electricity/floor-plan', async (req, res) => {
@@ -17090,6 +17672,9 @@ app.post('/api/electricity/floor-plan', async (req, res) => {
       console.warn('[Floor Plan] Warning updating in-memory cache:', memErr);
     }
 
+    invalidateStudentSessionCache(reqStudentId, 'floorPlans');
+    invalidateStudentSessionCache(reqStudentId, 'company');
+
     res.json({
       success: true,
       floorPlan: txResult.floorPlan
@@ -17112,17 +17697,51 @@ app.get('/api/telecom/plans', (req, res) => {
 
 app.get('/api/telecom/contracts', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.telecomContracts) {
+      totalSessionCacheHits++;
+      return res.json(session.telecomContracts.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const contracts = (db.telecomContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
-  res.json({ success: true, contracts });
+  const contracts = (db.telecomContracts || []).filter(c => c.studentId === sId && c.status === 'active');
+  const result = { success: true, contracts };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.telecomContracts = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.get('/api/telecom/invoices', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.telecomInvoices) {
+      totalSessionCacheHits++;
+      return res.json(session.telecomInvoices.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const invoices = (db.telecomInvoices || []).filter(i => i.studentId === studentId);
+  const invoices = (db.telecomInvoices || []).filter(i => i.studentId === sId);
   invoices.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
-  res.json({ success: true, invoices });
+  const result = { success: true, invoices };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.telecomInvoices = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/telecom/contract', async (req, res) => {
@@ -17188,7 +17807,10 @@ app.post('/api/telecom/contract', async (req, res) => {
 
         // 4. Artificial test rollback support
         if (req.headers['x-test-force-rollback'] === 'true' || req.body?.forceRollback) {
-          throw new Error('Simulated telecom contract creation rollback failure');
+          const simErr: any = new Error('Simulated telecom contract creation rollback failure');
+          simErr.isSimulated = true;
+          simErr.statusCode = 400;
+          throw simErr;
         }
 
         // 5. Insert new contract directly into PostgreSQL
@@ -17280,6 +17902,12 @@ app.post('/api/telecom/contract', async (req, res) => {
       console.warn('[Telecom Contract] Warning updating in-memory cache:', memErr);
     }
 
+    invalidateStudentSessionCache(reqStudentId, 'telecomContracts');
+    invalidateStudentSessionCache(reqStudentId, 'telecomInvoices');
+    invalidateStudentSessionCache(reqStudentId, 'company');
+    invalidateStudentSessionCache(reqStudentId, 'upcomingPayments');
+    invalidateStudentSessionCache(reqStudentId, 'transfers');
+
     return res.json({
       success: true,
       contract: txResult.contract,
@@ -17287,8 +17915,13 @@ app.post('/api/telecom/contract', async (req, res) => {
       message: txResult.message
     });
   } catch (err: any) {
-    console.error('[Telecom Contract Error]:', err);
-    const statusCode = err?.statusCode || 500;
+    const isSimulated = err?.isSimulated || err?.message?.includes('Simulated') || req.headers['x-test-force-rollback'] === 'true' || req.body?.forceRollback;
+    if (isSimulated || (err?.statusCode && err.statusCode < 500)) {
+      console.warn(`[Telecom Contract Notice]: HTTP ${err?.statusCode || 400} - ${err?.message}`);
+    } else {
+      console.error('[Telecom Contract Error]:', err);
+    }
+    const statusCode = err?.statusCode || (isSimulated ? 400 : 500);
     return res.status(statusCode).json({ error: err?.message || 'Error al contratar servicio de telecomunicaciones' });
   }
 });
@@ -17296,10 +17929,27 @@ app.post('/api/telecom/contract', async (req, res) => {
 // OFFICE STORE API ENDPOINTS
 app.get('/api/office-store/orders', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.officeOrders) {
+      totalSessionCacheHits++;
+      return res.json(session.officeOrders.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const orders = (db.officeOrders || []).filter((o: any) => o.studentId === studentId || String(o.studentId) === String(studentId));
+  const orders = (db.officeOrders || []).filter((o: any) => o.studentId === sId || String(o.studentId) === sId);
   orders.sort((a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime());
-  res.json({ success: true, orders });
+  const result = { success: true, orders };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.officeOrders = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/office-store/checkout', async (req, res) => {
@@ -17495,6 +18145,11 @@ app.post('/api/office-store/checkout', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'officeOrders');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateStudentSessionCache(String(studentId), 'transfers');
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Office Store Checkout Error]:', err);
@@ -17552,9 +18207,26 @@ function autoAssignForkliftsForStudent(db: any, studentId: string) {
 // ================= VEHICLE DEALERSHIP ENDPOINTS =================
 app.get('/api/student/vehicles', (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.vehicles) {
+      totalSessionCacheHits++;
+      return res.json(session.vehicles.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
-  const list = (db.purchasedVehicles || []).filter(v => v.studentId === studentId);
-  res.json({ success: true, vehicles: list });
+  const list = (db.purchasedVehicles || []).filter(v => v.studentId === sId);
+  const result = { success: true, vehicles: list };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.vehicles = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/vehicles/buy', async (req, res) => {
@@ -17739,6 +18411,11 @@ app.post('/api/vehicles/buy', async (req, res) => {
         };
       }
     });
+
+    invalidateStudentSessionCache(String(studentId), 'vehicles');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateStudentSessionCache(String(studentId), 'transfers');
 
     return res.json(result);
   } catch (err: any) {
@@ -17965,6 +18642,11 @@ app.post('/api/vehicles/buy-cart', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'vehicles');
+    invalidateStudentSessionCache(String(studentId), 'company');
+    invalidateStudentSessionCache(String(studentId), 'upcomingPayments');
+    invalidateStudentSessionCache(String(studentId), 'transfers');
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Buy Vehicles Cart Error]:', err);
@@ -18147,6 +18829,12 @@ app.put('/api/student/vehicles/:id/assign-warehouse', async (req, res) => {
         return { success: true, vehicle: veh };
       }
     });
+
+    const affectedStudent = reqStudentId || result.vehicle?.studentId;
+    if (affectedStudent) {
+      invalidateStudentSessionCache(String(affectedStudent), 'vehicles');
+      invalidateStudentSessionCache(String(affectedStudent), 'company');
+    }
 
     return res.json(result);
   } catch (err: any) {
@@ -18409,6 +19097,13 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
       }
     });
 
+    const affectedStudent = reqStudentId || result.employee?.studentId;
+    if (affectedStudent) {
+      invalidateStudentSessionCache(String(affectedStudent), 'employees');
+      invalidateStudentSessionCache(String(affectedStudent), 'vehicles');
+      invalidateStudentSessionCache(String(affectedStudent), 'company');
+    }
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Assign Vehicle Error]:', err);
@@ -18559,6 +19254,13 @@ function syncStudentAnnouncementsStockWithInventory(db: DatabaseSchema) {
 }
 
 app.get('/api/raw-materials/announcements', async (req, res) => {
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+  if (!bypass && globalCatalogCache.rawMaterialAnnouncements) {
+    totalSessionCacheHits++;
+    return res.json(globalCatalogCache.rawMaterialAnnouncements.data);
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   let announcements = db.rawMaterialAnnouncements || [];
 
@@ -18576,7 +19278,9 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
   if (!announcements || announcements.length === 0) {
     announcements = getDefaultSeedRawMaterialAnnouncements();
   }
-  res.json({ success: true, announcements });
+  const result = { success: true, announcements };
+  globalCatalogCache.rawMaterialAnnouncements = { data: result, cachedAt: Date.now() };
+  res.json(result);
 });
 
 app.post(['/api/raw-materials/announcements', '/api/teacher/raw-materials/announcements'], async (req, res) => {
@@ -19599,6 +20303,18 @@ function ensureTransportInvoicesForTransfers(db: any) {
 
 app.get('/api/raw-materials/orders', async (req, res) => {
   const { studentId } = req.query;
+  const sId = studentId ? String(studentId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId && sId !== 'profesor-1') {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.rawMaterialOrders) {
+      totalSessionCacheHits++;
+      return res.json(session.rawMaterialOrders.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   if (dbPool) {
     try {
@@ -19677,7 +20393,12 @@ app.get('/api/raw-materials/orders', async (req, res) => {
     );
   }
   orders.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
-  res.json({ success: true, orders });
+  const result = { success: true, orders };
+  if (sId && sId !== 'profesor-1') {
+    const session = getStudentSession(sId);
+    session.rawMaterialOrders = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/raw-materials/orders', async (req, res) => {
@@ -20928,6 +21649,22 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       }
     });
 
+    if (result && result.order) {
+      if (result.order.studentId) {
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.studentId, 'company');
+        invalidateStudentSessionCache(result.order.studentId, 'transfers');
+      }
+      if (result.order.sellerId) {
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.sellerId, 'company');
+        invalidateStudentSessionCache(result.order.sellerId, 'transfers');
+      }
+      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
+    }
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Raw Material Order Error]:', err);
@@ -21186,6 +21923,11 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    if (result && result.order) {
+      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -22005,6 +22747,22 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
 
     writeDb(db);
 
+    if (result && result.order) {
+      if (result.order.studentId) {
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.studentId, 'company');
+        invalidateStudentSessionCache(result.order.studentId, 'transfers');
+      }
+      if (result.order.sellerId) {
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.sellerId, 'company');
+        invalidateStudentSessionCache(result.order.sellerId, 'transfers');
+      }
+      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
+    }
+
     return res.json({
       success: true,
       order: result.order,
@@ -22169,6 +22927,11 @@ app.post('/api/raw-materials/orders/:id/reject', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    if (result && result.order) {
+      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -22586,6 +23349,20 @@ app.post('/api/raw-materials/orders/:id/ship', async (req, res) => {
       writeDb(db);
     }
 
+    if (result && result.order) {
+      if (result.order.studentId) {
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.studentId, 'company');
+      }
+      if (result.order.sellerId) {
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.sellerId, 'company');
+      }
+      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
+    }
+
     return res.status(result.status || 200).json(result.body);
   } catch (error: any) {
     const status = error.statusCode || 500;
@@ -22929,6 +23706,19 @@ app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:i
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
     }
 
+    if (result && result.order) {
+      if (result.order.studentId) {
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.studentId, 'company');
+      }
+      if (result.order.sellerId) {
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
+        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
+        invalidateStudentSessionCache(result.order.sellerId, 'company');
+      }
+    }
+
     return res.status(200).json(result);
   } catch (error: any) {
     const status = error.statusCode || 500;
@@ -23099,6 +23889,11 @@ app.post('/api/raw-materials/orders/:id/send-invoice', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
+    }
+
+    if (result && result.order) {
+      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
+      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -27203,13 +27998,25 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
 
 app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {
   const studentId = req.params.studentId || (req.query.studentId as string);
-  if (!studentId) {
+  const sId = studentId ? String(studentId) : '';
+  if (!sId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.rawMaterialInventory) {
+      totalSessionCacheHits++;
+      return res.json(session.rawMaterialInventory.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
 
-  const inv = checkAndCalculateProduction(db, studentId);
-  const student = db.users.find(u => u.id === studentId);
+  const inv = checkAndCalculateProduction(db, sId);
+  const student = db.users.find(u => u.id === sId);
   syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
 
   const rawMaterials = {
@@ -27234,12 +28041,17 @@ app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentI
     producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
   };
 
-  res.json({
+  const result = {
     success: true,
     inventory: inv,
     rawMaterials,
     producedGoods
-  });
+  };
+  if (sId) {
+    const session = getStudentSession(sId);
+    session.rawMaterialInventory = { data: result, cachedAt: Date.now() };
+  }
+  res.json(result);
 });
 
 app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
@@ -27357,6 +28169,9 @@ app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
       }
     });
 
+    invalidateStudentSessionCache(String(studentId), 'rawMaterialInventory');
+    invalidateStudentSessionCache(String(studentId), 'company');
+
     res.json(result);
   } catch (err: any) {
     console.error('[Rod Production Mode Error]:', err);
@@ -27393,14 +28208,26 @@ function addBusinessDays(startDate: Date, days: number): Date {
 // Get all lawsuits for a user (or all if teacher/judge)
 app.get('/api/court/lawsuits', (req, res) => {
   const { userId } = req.query;
+  const sId = userId ? String(userId) : '';
+  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
+
+  if (sId) {
+    const session = studentSessionCache.get(sId);
+    if (!bypass && session?.courtLawsuits) {
+      totalSessionCacheHits++;
+      return res.json(session.courtLawsuits.data);
+    }
+  }
+  totalSessionCacheMisses++;
+
   const db = readDb();
   if (!db.courtLawsuits) db.courtLawsuits = [];
 
-  if (!userId) {
+  if (!sId) {
     return res.json({ success: true, lawsuits: db.courtLawsuits });
   }
 
-  const user = db.users.find(u => u.id === userId);
+  const user = db.users.find(u => u.id === sId);
   if (!user) {
     return res.status(404).json({ error: 'Usuario no encontrado' });
   }
@@ -27415,10 +28242,13 @@ app.get('/api/court/lawsuits', (req, res) => {
   }
 
   const userLawsuits = db.courtLawsuits.filter(
-    l => l.plaintiffId === userId || l.defendantId === userId
+    l => l.plaintiffId === sId || l.defendantId === sId
   );
 
-  res.json({ success: true, lawsuits: userLawsuits });
+  const result = { success: true, lawsuits: userLawsuits };
+  const session = getStudentSession(sId);
+  session.courtLawsuits = { data: result, cachedAt: Date.now() };
+  res.json(result);
 });
 
 // Get unpaid/overdue promissory notes for a user to make cambiario claim easy
@@ -27693,6 +28523,14 @@ app.post('/api/court/lawsuits', async (req, res) => {
         }
       };
     });
+
+    const resObj = result as any;
+    if (resObj && resObj.lawsuit) {
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'transfers');
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'company');
+      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'courtLawsuits');
+    }
 
     res.json(result);
   } catch (err: any) {
@@ -27986,6 +28824,11 @@ app.post('/api/court/lawsuits/:id/judge-admission', async (req, res) => {
       console.error('[Judge Admission] Post-commit cache update error:', cacheErr);
     }
 
+    if (result && result.lawsuit) {
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
+    }
+
     return res.json({
       success: true,
       message: result.message,
@@ -28131,6 +28974,13 @@ app.post('/api/court/lawsuits/:id/preventative-embargo', async (req, res) => {
         transfer: escrowTransfer
       };
     });
+
+    if (result && result.lawsuit) {
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
+    }
 
     res.json(result);
   } catch (err: any) {
@@ -28329,6 +29179,16 @@ app.post('/api/court/lawsuits/:id/pay-settle', async (req, res) => {
         newBalance: defendant.balance
       };
     });
+
+    const resObj = result as any;
+    if (resObj && resObj.lawsuit) {
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'transfers');
+      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'company');
+      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'courtLawsuits');
+      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'transfers');
+      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'company');
+    }
 
     res.json(result);
   } catch (err: any) {
@@ -29097,6 +29957,15 @@ app.post('/api/court/lawsuits/:id/defendant-answer', async (req, res) => {
       }
     });
 
+    if (result && result.lawsuit) {
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
+      if (result.newBalance !== undefined) {
+        invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
+        invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
+      }
+    }
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Defendant Answer] Error processing defendant answer:', err);
@@ -29671,6 +30540,15 @@ app.post('/api/court/lawsuits/:id/judge-ruling', async (req, res) => {
       };
     });
 
+    if (result && result.lawsuit) {
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'transfers');
+      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'company');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
+      invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
+    }
+
     return res.json(result);
   } catch (err: any) {
     console.error('[Judge Ruling] Error processing ruling:', err);
@@ -29695,45 +30573,6 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ---------------- VITE MIDDLEWARE / FRONTEND SERVING ----------------
 
 async function startServer() {
-  console.log('[Banco Escolar] Iniciando secuencia de arranque y restauración...');
-  try {
-    const tableInitRes = await initSupabaseTables();
-    if (!tableInitRes.success) {
-      console.error('[Supabase Table Init Warning/Error]:', tableInitRes.error);
-    }
-
-    console.log('[Banco Escolar] Restaurando datos desde Supabase antes de aceptar peticiones...');
-    const restoreRes = await restoreFromSupabase();
-    console.log(`[Banco Escolar] Restauración inicial completada con éxito. Cuentas: ${restoreRes.restoredUsers}, Movimientos: ${restoreRes.restoredMovements}`);
-  } catch (err: any) {
-    const errorMsg = err?.message || String(err);
-    console.error('[Banco Escolar] Error crítico al inicializar/restaurar desde Supabase:', errorMsg);
-    serverInitError = errorMsg;
-  }
-
-  try {
-    const startupDb = readDb();
-    await checkAndProcessAutomatedPayrollAndTaxes(startupDb);
-    await checkAndProcessAutomatedElectricity(startupDb);
-    await checkAndProcessAutomatedTelecom(startupDb);
-    await processStudentAutomaticPayments(startupDb);
-  } catch (e) {
-    console.error('[Startup Automated Payments Error]', e);
-  }
-
-  // Periodic check every 15 minutes for automated bills and obligations
-  setInterval(async () => {
-    try {
-      const periodicDb = readDb();
-      await checkAndProcessAutomatedPayrollAndTaxes(periodicDb);
-      await checkAndProcessAutomatedElectricity(periodicDb);
-      await checkAndProcessAutomatedTelecom(periodicDb);
-      await processStudentAutomaticPayments(periodicDb);
-    } catch (e) {
-      console.error('[Periodic Automated Processing Error]', e);
-    }
-  }, 15 * 60 * 1000);
-
   // Serve static assets from public/ folder directly via Express
   const publicPath = path.join(process.cwd(), 'public');
   app.use('/images', express.static(path.join(publicPath, 'images')));
@@ -29754,12 +30593,60 @@ async function startServer() {
     });
   }
 
-  // Mark server as ready to process API requests
-  isServerReady = true;
-
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Banco Escolar] Servidor corriendo y listo para recibir peticiones en http://localhost:${PORT}`);
   });
+
+  // Background initialization of database tables and automatic payments
+  (async () => {
+    console.log('[Banco Escolar] Iniciando secuencia de arranque y restauración...');
+    try {
+      const tableInitRes = await initSupabaseTables();
+      if (!tableInitRes.success) {
+        console.error('[Supabase Table Init Warning/Error]:', tableInitRes.error);
+      }
+
+      console.log('[Banco Escolar] Restaurando datos desde Supabase antes de aceptar peticiones...');
+      const restoreRes = await restoreFromSupabase();
+      console.log(`[Banco Escolar] Restauración inicial completada con éxito. Cuentas: ${restoreRes.restoredUsers}, Movimientos: ${restoreRes.restoredMovements}`);
+      isServerReady = true;
+      console.log('[Banco Escolar] Base de datos restaurada y servidor 100% operativo para peticiones.');
+    } catch (err: any) {
+      const errorMsg = err?.message || String(err);
+      console.error('[Banco Escolar] Error crítico al inicializar/restaurar desde Supabase:', errorMsg);
+      serverInitError = errorMsg;
+      isServerReady = true;
+    }
+
+    try {
+      const startupDb = readDb();
+      await checkAndProcessAutomatedPayrollAndTaxes(startupDb);
+      await checkAndProcessAutomatedElectricity(startupDb);
+      await checkAndProcessAutomatedTelecom(startupDb);
+      await processStudentAutomaticPayments(startupDb);
+    } catch (e) {
+      console.error('[Startup Automated Payments Error]', e);
+    }
+
+    // Mark server as ready to process API requests
+    isServerReady = true;
+    console.log('[Banco Escolar] Base de datos restaurada y servidor 100% operativo.');
+  })().catch(err => {
+    console.error('[Banco Escolar] Error en proceso de arranque en segundo plano:', err);
+  });
+
+  // Periodic check every 15 minutes for automated bills and obligations
+  setInterval(async () => {
+    try {
+      const periodicDb = readDb();
+      await checkAndProcessAutomatedPayrollAndTaxes(periodicDb);
+      await checkAndProcessAutomatedElectricity(periodicDb);
+      await checkAndProcessAutomatedTelecom(periodicDb);
+      await processStudentAutomaticPayments(periodicDb);
+    } catch (e) {
+      console.error('[Periodic Automated Processing Error]', e);
+    }
+  }, 15 * 60 * 1000);
 }
 
 startServer();
