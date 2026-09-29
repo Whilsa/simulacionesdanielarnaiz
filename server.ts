@@ -977,501 +977,6 @@ function clearAllSessionCaches() {
   invalidateGlobalCatalogCache();
 }
 
-let totalPostCommitCacheUpdatesCount = 0;
-
-function updateStudentSessionBalance(studentId: string, newBalance: number) {
-  if (!studentId) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.company?.data?.company) {
-        session.company.data.company.balance = newBalance;
-      }
-      if (session.company?.data?.summary) {
-        session.company.data.summary.bankBalance = newBalance;
-      }
-      if (session.upcomingPayments?.data) {
-        session.upcomingPayments.data.currentBalance = newBalance;
-      }
-    }
-    const db = readDb();
-    const u = (db.users || []).find(usr => usr.id === sId);
-    if (u) u.balance = newBalance;
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating balance for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'company');
-  }
-}
-
-function updateStudentSessionTransfer(studentId: string, transfer: Transfer, newBalance?: number) {
-  if (!studentId || !transfer) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.transfers?.data?.transfers) {
-        const list = session.transfers.data.transfers;
-        const idx = list.findIndex(t => t.id === transfer.id);
-        if (idx >= 0) {
-          list[idx] = { ...list[idx], ...transfer };
-        } else {
-          list.unshift(transfer);
-        }
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating transfer for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'transfers');
-  }
-}
-
-function updateStudentSessionAcquisition(studentId: string, acquisition: Acquisition, newBalance?: number) {
-  if (!studentId || !acquisition) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.acquisitions?.data?.acquisitions) {
-        const list = session.acquisitions.data.acquisitions;
-        const idx = list.findIndex(a => a.id === acquisition.id);
-        if (idx >= 0) {
-          list[idx] = { ...list[idx], ...acquisition };
-        } else {
-          list.unshift(acquisition);
-        }
-      }
-      if (session.company?.data?.acquisitions) {
-        const cList = session.company.data.acquisitions;
-        const cIdx = cList.findIndex(a => a.id === acquisition.id);
-        if (cIdx >= 0) {
-          cList[cIdx] = { ...cList[cIdx], ...acquisition };
-        } else {
-          cList.unshift(acquisition);
-        }
-        const owned = cList.filter(a => a.operation === 'compra');
-        const rented = cList.filter(a => a.operation === 'alquiler');
-        session.company.data.summary.ownedPropertiesCount = owned.length;
-        session.company.data.summary.rentedPropertiesCount = rented.length;
-        session.company.data.summary.totalRealEstateAssetsValue = Number(owned.reduce((acc, a) => acc + a.basePrice, 0).toFixed(2));
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating acquisition for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'acquisitions');
-  }
-}
-
-function updateStudentSessionMachinery(studentId: string, machinery: MachineryAcquisition, newBalance?: number) {
-  if (!studentId || !machinery) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.company?.data?.machineryAcquisitions) {
-        const mList = session.company.data.machineryAcquisitions;
-        const mIdx = mList.findIndex(m => m.id === machinery.id);
-        if (mIdx >= 0) {
-          mList[mIdx] = { ...mList[mIdx], ...machinery };
-        } else {
-          mList.unshift(machinery);
-        }
-        session.company.data.summary.machineryCount = mList.length;
-        session.company.data.summary.totalMachineryAssetsValue = Number(mList.reduce((acc, m) => acc + m.basePrice, 0).toFixed(2));
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating machinery for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'company');
-  }
-}
-
-function updateStudentSessionEmployee(studentId: string, employee: HiredEmployee, action: 'add' | 'update' | 'remove') {
-  if (!studentId || !employee) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.employees?.data?.employees) {
-        const list = session.employees.data.employees;
-        const idx = list.findIndex(e => e.id === employee.id);
-        if (action === 'remove') {
-          if (idx >= 0) list.splice(idx, 1);
-        } else if (action === 'update' || idx >= 0) {
-          if (idx >= 0) list[idx] = { ...list[idx], ...employee };
-          else list.unshift(employee);
-        } else if (action === 'add') {
-          list.unshift(employee);
-        }
-      }
-      if (session.company?.data?.hiredEmployees) {
-        const cList = session.company.data.hiredEmployees;
-        const cIdx = cList.findIndex(e => e.id === employee.id);
-        if (action === 'remove') {
-          if (cIdx >= 0) cList.splice(cIdx, 1);
-        } else if (action === 'update' || cIdx >= 0) {
-          if (cIdx >= 0) cList[cIdx] = { ...cList[cIdx], ...employee };
-          else cList.unshift(employee);
-        } else if (action === 'add') {
-          cList.unshift(employee);
-        }
-        session.company.data.summary.hiredEmployeesCount = cList.length;
-      }
-    }
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating employee for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'employees');
-  }
-}
-
-function updateStudentSessionElectricityContract(studentId: string, contract: ElectricityContract) {
-  if (!studentId || !contract) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.electricityContracts?.data?.contracts) {
-        const list = session.electricityContracts.data.contracts;
-        const idx = list.findIndex(c => c.id === contract.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...contract };
-        else list.unshift(contract);
-      }
-    }
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating electricity contract for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'electricityContracts');
-  }
-}
-
-function updateStudentSessionElectricityBill(studentId: string, bill: ElectricityBill, newBalance?: number) {
-  if (!studentId || !bill) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.electricityBills?.data?.bills) {
-        const list = session.electricityBills.data.bills;
-        const idx = list.findIndex(b => b.id === bill.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...bill };
-        else list.unshift(bill);
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating electricity bill for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'electricityBills');
-  }
-}
-
-function updateStudentSessionTelecomContract(studentId: string, contract: TelecomContract) {
-  if (!studentId || !contract) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.telecomContracts?.data?.contracts) {
-        const list = session.telecomContracts.data.contracts;
-        const idx = list.findIndex(c => c.id === contract.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...contract };
-        else list.unshift(contract);
-      }
-    }
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating telecom contract for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'telecomContracts');
-  }
-}
-
-function updateStudentSessionTelecomInvoice(studentId: string, invoice: TelecomInvoice, newBalance?: number) {
-  if (!studentId || !invoice) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.telecomInvoices?.data?.invoices) {
-        const list = session.telecomInvoices.data.invoices;
-        const idx = list.findIndex(i => i.id === invoice.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...invoice };
-        else list.unshift(invoice);
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating telecom invoice for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'telecomInvoices');
-  }
-}
-
-function updateStudentSessionOfficeOrder(studentId: string, order: OfficeOrder, newBalance?: number) {
-  if (!studentId || !order) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.officeOrders?.data?.orders) {
-        const list = session.officeOrders.data.orders;
-        const idx = list.findIndex(o => o.id === order.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...order };
-        else list.unshift(order);
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating office order for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'officeOrders');
-  }
-}
-
-function updateStudentSessionVehicle(studentId: string, vehicle: PurchasedVehicle, newBalance?: number) {
-  if (!studentId || !vehicle) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.vehicles?.data?.vehicles) {
-        const list = session.vehicles.data.vehicles;
-        const idx = list.findIndex(v => v.id === vehicle.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...vehicle };
-        else list.unshift(vehicle);
-      }
-      if (session.company?.data?.purchasedVehicles) {
-        const cList = session.company.data.purchasedVehicles;
-        const cIdx = cList.findIndex(v => v.id === vehicle.id);
-        if (cIdx >= 0) cList[cIdx] = { ...cList[cIdx], ...vehicle };
-        else cList.unshift(vehicle);
-        session.company.data.summary.purchasedVehiclesCount = cList.length;
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating vehicle for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'vehicles');
-  }
-}
-
-function updateStudentSessionRawMaterialOrder(studentId: string, order: RawMaterialOrder, newBalance?: number) {
-  if (!studentId || !order) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.rawMaterialOrders?.data?.orders) {
-        const list = session.rawMaterialOrders.data.orders;
-        const idx = list.findIndex(o => o.id === order.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...order };
-        else list.unshift(order);
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating raw material order for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'rawMaterialOrders');
-  }
-}
-
-function updateStudentSessionRawMaterialInventory(studentId: string, inv: any, rawMaterials?: any, producedGoods?: any) {
-  if (!studentId || !inv) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.rawMaterialInventory?.data) {
-        session.rawMaterialInventory.data.inventory = { ...session.rawMaterialInventory.data.inventory, ...inv };
-        if (rawMaterials) {
-          session.rawMaterialInventory.data.rawMaterials = { ...session.rawMaterialInventory.data.rawMaterials, ...rawMaterials };
-        }
-        if (producedGoods) {
-          session.rawMaterialInventory.data.producedGoods = { ...session.rawMaterialInventory.data.producedGoods, ...producedGoods };
-        }
-      }
-    }
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating raw material inventory for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'rawMaterialInventory');
-  }
-}
-
-function updateStudentSessionUpcomingPaymentPaid(studentId: string, paymentId: string, newBalance?: number) {
-  if (!studentId || !paymentId) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session && session.upcomingPayments?.data) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      const pData = session.upcomingPayments.data;
-      if (Array.isArray(pData.overdueItems)) {
-        pData.overdueItems = pData.overdueItems.filter((i: any) => i.id !== paymentId);
-      }
-      if (Array.isArray(pData.upcoming30DaysItems)) {
-        pData.upcoming30DaysItems = pData.upcoming30DaysItems.filter((i: any) => i.id !== paymentId);
-      }
-      if (pData.summary) {
-        pData.summary.overdueCount = (pData.overdueItems || []).length;
-        pData.summary.overdueTotalAmount = Number((pData.overdueItems || []).reduce((acc: number, i: any) => acc + (i.amount || 0), 0).toFixed(2));
-        pData.summary.upcoming30DaysCount = (pData.upcoming30DaysItems || []).length;
-        pData.summary.upcoming30DaysTotalAmount = Number((pData.upcoming30DaysItems || []).reduce((acc: number, i: any) => acc + (i.amount || 0), 0).toFixed(2));
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating upcoming payment for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'upcomingPayments');
-  }
-}
-
-function updateStudentSessionFloorPlan(studentId: string, floorPlan: NaveFloorPlan) {
-  if (!studentId || !floorPlan) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.floorPlans?.data?.floorPlans) {
-        const list = session.floorPlans.data.floorPlans;
-        const idx = list.findIndex(f => f.id === floorPlan.id || f.propertyId === floorPlan.propertyId);
-        if (idx >= 0) list[idx] = { ...list[idx], ...floorPlan };
-        else list.unshift(floorPlan);
-      }
-      if (session.company?.data?.naveFloorPlans) {
-        const cList = session.company.data.naveFloorPlans;
-        const cIdx = cList.findIndex(f => f.id === floorPlan.id || f.propertyId === floorPlan.propertyId);
-        if (cIdx >= 0) cList[cIdx] = { ...cList[cIdx], ...floorPlan };
-        else cList.unshift(floorPlan);
-      }
-    }
-    totalPostCommitCacheUpdatesCount++;
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating floor plan for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'floorPlans');
-  }
-}
-
-function updateStudentSessionLawsuit(studentId: string, lawsuit: CourtLawsuit, newBalance?: number) {
-  if (!studentId || !lawsuit) return;
-  const sId = String(studentId);
-  try {
-    const session = studentSessionCache.get(sId);
-    if (session) {
-      session.version = (session.version || 0) + 1;
-      session.lastUpdated = Date.now();
-      if (session.courtLawsuits?.data?.lawsuits) {
-        const list = session.courtLawsuits.data.lawsuits;
-        const idx = list.findIndex(l => l.id === lawsuit.id);
-        if (idx >= 0) list[idx] = { ...list[idx], ...lawsuit };
-        else list.unshift(lawsuit);
-      }
-    }
-    if (newBalance !== undefined) {
-      updateStudentSessionBalance(sId, newBalance);
-    } else {
-      totalPostCommitCacheUpdatesCount++;
-    }
-  } catch (err) {
-    console.error(`[StudentSessionCache] Error updating lawsuit for ${sId}:`, err);
-    invalidateStudentSessionCache(sId, 'courtLawsuits');
-  }
-}
-
-app.get('/api/system/cache-stats', (req, res) => {
-  const activeStudents = Array.from(studentSessionCache.keys());
-  const catalogKeys = Object.keys(globalCatalogCache);
-  const totalReqs = totalSessionCacheHits + totalSessionCacheMisses;
-  res.json({
-    success: true,
-    totalHits: totalSessionCacheHits,
-    totalMisses: totalSessionCacheMisses,
-    hitRatio: totalReqs > 0 ? Number((totalSessionCacheHits / totalReqs).toFixed(3)) : 0,
-    totalPostCommitCacheUpdates: totalPostCommitCacheUpdatesCount,
-    totalPostgresQueries: totalPostgresQueriesCount,
-    activeStudentSessionsCount: activeStudents.length,
-    activeStudentSessions: activeStudents,
-    globalCatalogEntriesCount: catalogKeys.length,
-    globalCatalogEntries: catalogKeys
-  });
-});
-
-app.post('/api/system/cache-clear', (req, res) => {
-  const { studentId, domain } = req.body || {};
-  if (studentId) {
-    invalidateStudentSessionCache(String(studentId), domain);
-  } else {
-    clearAllSessionCaches();
-  }
-  res.json({ success: true, message: 'Caché invalidada correctamente.' });
-});
-
 const inFlightOperations = new Map<string, Promise<any>>();
 
 async function executeWithIdempotency<T>(
@@ -6152,11 +5657,6 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
   }
 
     writeDb(db);
-    for (const student of (db.users || []).filter(u => u.role !== 'teacher')) {
-      invalidateStudentSessionCache(student.id, 'company');
-      invalidateStudentSessionCache(student.id, 'upcomingPayments');
-      invalidateStudentSessionCache(student.id, 'transfers');
-    }
 }
 
 function calculateElectricityForStudent(studentId: string, month: number, year: number, db: DatabaseSchema): ElectricityBill | null {
@@ -6583,14 +6083,6 @@ async function checkAndProcessAutomatedElectricity(db: DatabaseSchema): Promise<
 
   if (modified) {
     writeDb(db);
-    for (const contract of (db.electricityContracts || [])) {
-      if (contract.studentId) {
-        invalidateStudentSessionCache(contract.studentId, 'electricityBills');
-        invalidateStudentSessionCache(contract.studentId, 'company');
-        invalidateStudentSessionCache(contract.studentId, 'upcomingPayments');
-        invalidateStudentSessionCache(contract.studentId, 'transfers');
-      }
-    }
   }
 
   return modified;
@@ -6872,14 +6364,6 @@ async function checkAndProcessAutomatedTelecom(db: DatabaseSchema): Promise<bool
 
   if (modified) {
     writeDb(db);
-    for (const contract of (db.telecomContracts || [])) {
-      if (contract.studentId) {
-        invalidateStudentSessionCache(contract.studentId, 'telecomInvoices');
-        invalidateStudentSessionCache(contract.studentId, 'company');
-        invalidateStudentSessionCache(contract.studentId, 'upcomingPayments');
-        invalidateStudentSessionCache(contract.studentId, 'transfers');
-      }
-    }
   }
   return modified;
 }
@@ -8270,7 +7754,7 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
           db.transfers.unshift(newTransfer);
           writeDb(db);
 
-          return { success: true, transfer: newTransfer, senderBalance: newSenderBalance, receiverBalance: newReceiverBalance };
+          return { success: true, transfer: newTransfer, senderBalance: newSenderBalance };
         }, key);
       } else {
         // Fallback in-memory
@@ -8313,16 +7797,18 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
 
         db.transfers.unshift(newTransfer);
         writeDb(db);
-        return { success: true, transfer: newTransfer, senderBalance: sender.balance, receiverBalance: receiver.balance };
+        return { success: true, transfer: newTransfer, senderBalance: sender.balance };
       }
     });
 
     if (result && (result as any).transfer) {
       const tx = (result as any).transfer;
-      updateStudentSessionTransfer(tx.senderId, tx, (result as any).senderBalance);
-      if (tx.receiverId) {
-        updateStudentSessionTransfer(tx.receiverId, tx, (result as any).receiverBalance);
-      }
+      invalidateStudentSessionCache(tx.senderId, 'transfers');
+      invalidateStudentSessionCache(tx.senderId, 'company');
+      invalidateStudentSessionCache(tx.senderId, 'upcomingPayments');
+      invalidateStudentSessionCache(tx.receiverId, 'transfers');
+      invalidateStudentSessionCache(tx.receiverId, 'company');
+      invalidateStudentSessionCache(tx.receiverId, 'upcomingPayments');
     }
 
     res.json(result);
@@ -9464,11 +8950,11 @@ app.post('/api/properties/buy-rent', async (req, res) => {
     });
 
     if (studentId) {
-      if (responseData && (responseData as any).acquisition) {
-        updateStudentSessionAcquisition(studentId, (responseData as any).acquisition, (responseData as any).updatedBalance);
-      } else if (responseData && (responseData as any).updatedBalance !== undefined) {
-        updateStudentSessionBalance(studentId, (responseData as any).updatedBalance);
-      }
+      invalidateStudentSessionCache(studentId, 'acquisitions');
+      invalidateStudentSessionCache(studentId, 'company');
+      invalidateStudentSessionCache(studentId, 'floorPlans');
+      invalidateStudentSessionCache(studentId, 'upcomingPayments');
+      invalidateStudentSessionCache(studentId, 'transfers');
       invalidateGlobalCatalogCache('properties');
     }
 
@@ -10402,8 +9888,11 @@ app.post('/api/machinery/buy', async (req, res) => {
       }
     }
 
-    if (studentId && result && result.machineryAcquisition) {
-      updateStudentSessionMachinery(studentId, result.machineryAcquisition, result.updatedBalance);
+    if (studentId) {
+      invalidateStudentSessionCache(studentId, 'company');
+      invalidateStudentSessionCache(studentId, 'upcomingPayments');
+      invalidateStudentSessionCache(studentId, 'floorPlans');
+      invalidateStudentSessionCache(studentId, 'transfers');
     }
 
     return res.json({
@@ -10733,10 +10222,6 @@ app.put('/api/student/machinery/:id/relocate', async (req, res) => {
       console.warn('[Relocate cache sync warning]:', cacheErr);
     }
 
-    if (result && result.machinery) {
-      updateStudentSessionMachinery(result.machinery.studentId, result.machinery, result.newBalance);
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Machinery Relocate Error]:', err);
@@ -11008,637 +10493,36 @@ async function calculateStudentCompanyResult(studentId: string, db: DatabaseSche
   return companyResult;
 }
 
-// Centralized builder for student session directly from PostgreSQL
+// Centralized builder for student session from PostgreSQL
 async function buildStudentSessionFromPostgres(studentId: string): Promise<StudentSessionEntry> {
   const sId = String(studentId || '');
   const now = Date.now();
-  const session = getStudentSession(sId);
-  session.version = (session.version || 0) + 1;
-  session.lastUpdated = now;
+  const db = readDb();
 
   if (dbPool && sId) {
     try {
-      const [
-        resAccount,
-        resAcq,
-        resMachinery,
-        resMov,
-        resEmployees,
-        resElecContracts,
-        resElecBills,
-        resFloorPlans,
-        resTelContracts,
-        resTelInvoices,
-        resOfficeOrders,
-        resVehicles,
-        resRawOrders,
-        resRawInv,
-        resObl,
-        resLoans,
-        resPayrolls,
-        resTaxes,
-        resLawsuits
-      ] = await Promise.all([
-        safeDbQuery('SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1', [sId]),
-        safeDbQuery('SELECT * FROM adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC', [sId]),
-        safeDbQuery('SELECT * FROM maquinaria_adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC', [sId]),
-        safeDbQuery('SELECT * FROM movimientos WHERE cuenta_id = $1 OR sender_id = $1 OR receiver_id = $1 ORDER BY fecha DESC', [sId]),
-        safeDbQuery('SELECT * FROM empleados_contratados WHERE alumno_id = $1 ORDER BY fecha_contratacion DESC', [sId]),
-        safeDbQuery('SELECT * FROM contratos_electricos WHERE alumno_id = $1 ORDER BY fecha_contrato DESC', [sId]),
-        safeDbQuery('SELECT * FROM facturas_electricidad WHERE alumno_id = $1 ORDER BY fecha_vencimiento DESC', [sId]),
-        safeDbQuery('SELECT * FROM planos_distribucion_naves WHERE alumno_id = $1 ORDER BY fecha_actualizacion DESC', [sId]),
-        safeDbQuery('SELECT * FROM contratos_telecom WHERE alumno_id = $1 ORDER BY fecha_contrato DESC', [sId]),
-        safeDbQuery('SELECT * FROM facturas_telecom WHERE alumno_id = $1 ORDER BY fecha_emision DESC', [sId]),
-        safeDbQuery('SELECT * FROM pedidos_oficina WHERE alumno_id = $1 ORDER BY fecha_compra DESC', [sId]),
-        safeDbQuery('SELECT * FROM vehiculos_comprados WHERE alumno_id = $1 ORDER BY fecha_compra DESC', [sId]),
-        safeDbQuery('SELECT * FROM materias_primas_pedidos WHERE alumno_id = $1 OR seller_id = $1 ORDER BY fecha_pedido DESC', [sId]),
-        safeDbQuery('SELECT * FROM materias_primas_inventario WHERE alumno_id = $1', [sId]),
-        safeDbQuery('SELECT * FROM obligaciones_pago WHERE alumno_id = $1 ORDER BY fecha_vencimiento ASC', [sId]),
-        safeDbQuery('SELECT * FROM prestamos WHERE alumno_id = $1 ORDER BY fecha_creacion DESC', [sId]),
-        safeDbQuery('SELECT * FROM registros_nomina WHERE alumno_id = $1 ORDER BY fecha_nomina DESC', [sId]),
-        safeDbQuery('SELECT * FROM obligaciones_fiscales WHERE alumno_id = $1 ORDER BY fecha_vencimiento ASC', [sId]),
-        safeDbQuery('SELECT * FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1 ORDER BY fecha_creacion DESC', [sId])
-      ]);
-
-      const accRow = resAccount?.rows?.[0];
-      const user: User = accRow ? {
-        id: String(accRow.id),
-        name: String(accRow.alumno || ''),
-        balance: Number(accRow.saldo || 0),
-        accountNumber: String(accRow.account_number || ''),
-        role: accRow.role || 'student',
-        level: Number(accRow.level || 1) as 1 | 2 | 3,
-        username: accRow.usuario || ''
-      } : {
-        id: sId,
-        name: sId,
-        balance: 0,
-        accountNumber: '',
-        role: 'student',
-        level: 1,
-        username: sId
-      };
-
-      const acquisitions: Acquisition[] = (resAcq?.rows || []).map(row => ({
-        id: String(row.id),
-        propertyId: String(row.inmueble_id),
-        propertyTitle: String(row.inmueble_titulo),
-        propertyType: String(row.inmueble_tipo) as PropertyType,
-        operation: String(row.operacion) as OperationType,
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        surfaceM2: Number(row.superficie_m2),
-        location: String(row.ubicacion),
-        imageUrl: String(row.imagen_url),
-        landPercentage: Number(row.porcentaje_suelo),
-        basePrice: Number(row.precio_base),
-        ivaAmount: Number(row.importe_iva),
-        totalPrice: Number(row.precio_total),
-        purchaseDate: new Date(row.fecha_compra).toISOString(),
-        paymentMethod: String(row.metodo_pago) as any,
-        monthlyRent: row.alquiler_mensual ? Number(row.alquiler_mensual) : undefined,
-        nextRentDueDate: row.proximo_pago_alquiler ? new Date(row.proximo_pago_alquiler).toISOString() : undefined,
-        downPaymentPaid: row.entrada_pagada ? Number(row.entrada_pagada) : undefined,
-        pendingBalance: row.saldo_pendiente ? Number(row.saldo_pendiente) : undefined
-      }));
-
-      const machineryAcquisitions: MachineryAcquisition[] = (resMachinery?.rows || []).map(row => {
-        const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
-        return {
-          id: String(row.id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          machineryId: String(row.maquinaria_id),
-          category: String(row.categoria) as any,
-          lineTitle: String(row.linea_titulo),
-          title: String(row.linea_titulo),
-          optionTitle: String(row.linea_titulo),
-          lathesCount: 1,
-          productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
-          imageUrl: '/images/machinery/maquinaria_cnc.jpg',
-          basePrice: Number(row.precio_base),
-          financedPrice: Number(row.precio_financiado || row.precio_base),
-          deferredPrice: Number(row.precio_financiado || row.precio_base),
-          ivaAmount: Number(row.importe_iva),
-          totalPrice: Number(row.precio_total),
-          downPaymentPaid: Number(row.entrada_pagada),
-          pendingBalance: Number(row.saldo_pendiente),
-          paymentMethod: String(row.metodo_pago) as any,
-          installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-          installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-          purchaseDate: new Date(row.fecha_compra).toISOString(),
-          assemblyDays: Number(row.dias_montaje || 5),
-          assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-          assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-          status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
-          installedAtNaveId: String(row.nave_instalada_id),
-          installedNaveId: String(row.nave_instalada_id),
-          installationNaveId: String(row.nave_instalada_id),
-          installedAtNaveTitle: String(row.nave_instalada_titulo),
-          installedNaveTitle: String(row.nave_instalada_titulo),
-          installationNaveTitle: String(row.nave_instalada_titulo),
-          installationSurfaceM2: 300,
-          requiredStaff: Number(row.personal_requerido || 2),
-          requiredPowerKW: Number(row.potencia_kw || 35),
-          powerKw: Number(row.potencia_kw || 35),
-          equipmentList: equip,
-          equipment: equip,
-          relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
-          relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
-          relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
-          relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
-          relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
-          relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
-        };
-      });
-
-      const seenTx = new Set<string>();
-      const transfers: Transfer[] = [];
-      for (const row of (resMov?.rows || [])) {
-        const txId = String(row.id).replace(/-in$/, '').replace(/-out$/, '');
-        if (!seenTx.has(txId)) {
-          seenTx.add(txId);
-          transfers.push({
-            id: txId,
-            senderId: row.sender_id || (row.tipo === 'TRANSFER_OUT' ? row.cuenta_id : 'corp-1'),
-            senderName: row.sender_name || 'Alumno',
-            senderAccount: row.sender_account || 'ES000000000000000000',
-            receiverId: row.receiver_id || (row.tipo === 'TRANSFER_IN' ? row.cuenta_id : 'corp-1'),
-            receiverName: row.receiver_name || 'Destinatario',
-            receiverAccount: row.receiver_account || 'ES000000000000000000',
-            amount: Number(row.importe),
-            concept: row.concepto || 'Transferencia',
-            timestamp: new Date(row.fecha).toISOString()
-          });
+      const resAccount = await safeDbQuery(
+        'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1',
+        [sId]
+      );
+      if (resAccount?.rows?.[0]) {
+        const row = resAccount.rows[0];
+        const user = (db.users || []).find(u => u.id === sId);
+        if (user) {
+          user.balance = Number(row.saldo);
+          if (row.alumno) user.name = String(row.alumno);
+          if (row.account_number) user.accountNumber = String(row.account_number);
+          if (row.level) user.level = Number(row.level) as 1 | 2 | 3;
         }
       }
-
-      const hiredEmployees: HiredEmployee[] = (resEmployees?.rows || []).map(mapHiredEmployeeRow);
-
-      const electricityContracts: ElectricityContract[] = (resElecContracts?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        propertyId: row.inmueble_id ? String(row.inmueble_id) : undefined,
-        propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : undefined,
-        contractedPowerKw: Number(row.potencia_contratada_kw),
-        tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
-        pricePerKwDay: Number(row.precio_kw_dia || 0.11),
-        pricePerKwh: Number(row.precio_kwh || 0.14),
-        status: String(row.estado) as 'active' | 'cancelled',
-        contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
-        cupsCode: String(row.cups_code || '')
-      }));
-
-      const electricityBills: ElectricityBill[] = (resElecBills?.rows || []).map(row => {
-        const breakdown = row.desglose_inmuebles ? (typeof row.desglose_inmuebles === 'string' ? JSON.parse(row.desglose_inmuebles) : row.desglose_inmuebles) : [];
-        return {
-          id: String(row.id),
-          billNumber: String(row.numero_factura),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre || ''),
-          companyName: String(row.empresa_nombre || ''),
-          cifNif: String(row.cif_nif || ''),
-          contractId: String(row.contrato_id),
-          cupsCode: String(row.cups_code || ''),
-          periodMonth: Number(row.mes),
-          periodYear: Number(row.anio),
-          startDate: String(row.fecha_inicio || ''),
-          endDate: String(row.fecha_fin || ''),
-          daysCount: Number(row.dias_facturados || 30),
-          contractedPowerKw: Number(row.potencia_contratada_kw),
-          pricePerKwDay: Number(row.precio_kw_dia),
-          powerAmount: Number(row.importe_potencia),
-          totalKwh: Number(row.total_kwh),
-          pricePerKwh: Number(row.precio_kwh),
-          energyAmount: Number(row.importe_energia),
-          equipmentRental: Number(row.alquiler_equipos || 0.85),
-          taxableBase: Number(row.base_imponible),
-          electricityTax: Number(row.impuesto_electricidad),
-          subtotalWithTax: Number((Number(row.base_imponible) + Number(row.impuesto_electricidad)).toFixed(2)),
-          ivaRate: Number(row.tipo_iva || 21),
-          ivaAmount: Number(row.importe_iva),
-          totalAmount: Number(row.importe_total),
-          dueDate: new Date(row.fecha_vencimiento).toISOString(),
-          status: String(row.estado) as any,
-          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-          createdAt: row.creado_en ? new Date(row.creado_en).toISOString() : new Date().toISOString(),
-          propertyBreakdown: breakdown
-        };
-      });
-
-      const floorPlans: NaveFloorPlan[] = (resFloorPlans?.rows || []).map(row => ({
-        id: String(row.id),
-        propertyId: String(row.inmueble_id),
-        acquisitionId: row.adquisicion_id ? String(row.adquisicion_id) : String(row.inmueble_id),
-        propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : '',
-        studentId: String(row.alumno_id),
-        machineryZoneM2: Number(row.zona_maquinaria_m2 || 0),
-        storageZoneM2: Number(row.zona_almacen_m2 || 0),
-        rawMaterialsStorageM2: row.almacen_materias_primas_m2 !== null && row.almacen_materias_primas_m2 !== undefined ? Number(row.almacen_materias_primas_m2) : 30,
-        semiFinishedStorageM2: row.almacen_semiterminados_m2 !== null && row.almacen_semiterminados_m2 !== undefined ? Number(row.almacen_semiterminados_m2) : 5,
-        finishedGoodsStorageM2: row.almacen_terminados_m2 !== null && row.almacen_terminados_m2 !== undefined ? Number(row.almacen_terminados_m2) : 30,
-        adminZoneM2: Number(row.zona_admin_m2 || 0),
-        freeZoneM2: Number(row.zona_libre_m2 || 0),
-        warehousesCount: Number(row.num_almacenes || 2),
-        updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
-      }));
-
-      const telecomContracts: TelecomContract[] = (resTelContracts?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        planId: String(row.plan_id),
-        planName: String(row.plan_nombre),
-        provider: String(row.proveedor),
-        monthlyPrice: Number(row.precio_mensual),
-        speedMbps: Number(row.velocidad_mbps || 0),
-        mobileLinesCount: Number(row.lineas_moviles || 0),
-        propertyId: row.inmueble_id ? String(row.inmueble_id) : '',
-        propertyTitle: row.inmueble_titulo ? String(row.inmueble_titulo) : '',
-        phoneNumber: row.numero_telefono ? String(row.numero_telefono) : undefined,
-        status: String(row.estado) as 'active' | 'cancelled',
-        contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString()
-      }));
-
-      const telecomInvoices: TelecomInvoice[] = (resTelInvoices?.rows || []).map(row => ({
-        id: String(row.id),
-        invoiceNumber: String(row.numero_factura),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        companyName: String(row.empresa_nombre || row.alumno_nombre),
-        nifCif: String(row.nif_cif || ''),
-        contractId: String(row.contrato_id),
-        planName: String(row.plan_nombre),
-        provider: String(row.proveedor),
-        periodMonth: Number(row.mes),
-        periodYear: Number(row.anio),
-        issueDate: new Date(row.fecha_emision).toISOString(),
-        dueDate: new Date(row.fecha_vencimiento).toISOString(),
-        subtotal: Number(row.subtotal),
-        ivaRate: Number(row.tipo_iva || 21),
-        ivaAmount: Number(row.importe_iva),
-        totalAmount: Number(row.importe_total),
-        status: String(row.estado) as 'pagado' | 'pendiente',
-        paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-        items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
-        paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
-      }));
-
-      const officeOrders: OfficeOrder[] = (resOfficeOrders?.rows || []).map(row => ({
-        id: String(row.id),
-        orderNumber: String(row.numero_pedido),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        companyName: String(row.empresa_nombre || row.alumno_nombre),
-        nifCif: String(row.nif_cif || ''),
-        purchaseDate: new Date(row.fecha_compra).toISOString(),
-        items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : [],
-        subtotal: Number(row.subtotal),
-        ivaRate: Number(row.tipo_iva || 21),
-        ivaAmount: Number(row.importe_iva),
-        totalAmount: Number(row.importe_total),
-        status: String(row.estado) as 'completado_pagado',
-        paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'banco'
-      }));
-
-      const vehicles: PurchasedVehicle[] = (resVehicles?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        vehicleType: String(row.vehiculo_tipo) as any,
-        title: String(row.titulo),
-        basePrice: Number(row.precio_base),
-        ivaAmount: Number(row.importe_iva),
-        totalPrice: Number(row.precio_total),
-        paymentMethod: String(row.metodo_pago) as any,
-        purchaseDate: new Date(row.fecha_compra).toISOString(),
-        assignedDriverId: row.conductor_asignado_id ? String(row.conductor_asignado_id) : undefined,
-        assignedDriverName: row.conductor_asignado_nombre ? String(row.conductor_asignado_nombre) : undefined,
-        assignedShift: row.turno_asignado ? Number(row.turno_asignado) : undefined,
-        assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
-        assignedPropertyId: row.propiedad_asignada_id ? String(row.propiedad_asignada_id) : undefined,
-        assignedPropertyTitle: row.propiedad_asignada_titulo ? String(row.propiedad_asignada_titulo) : undefined,
-        assignedWarehouseName: row.almacen_asignado_nombre ? String(row.almacen_asignado_nombre) : undefined,
-        status: String(row.estado) as 'activo' | 'mantenimiento',
-        imageUrl: row.imagen_url ? String(row.imagen_url) : '/images/vehicles/coche_empresa.jpg'
-      }));
-
-      const rawMaterialOrders: RawMaterialOrder[] = (resRawOrders?.rows || []).map(parseRawMaterialOrderRow);
-
-      const invRow = resRawInv?.rows?.[0];
-      const rawMaterialInventory = invRow ? parseInventoryRow(invRow) : {
-        studentId: sId,
-        ironKg: 0,
-        metalKg: 0,
-        plasticKg: 0,
-        epoxiKg: 0,
-        producedRodsUnits: 0,
-        producedScrewdriversUnits: 0,
-        lastCalculatedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      const obligations = (resObl?.rows || []).map(row => ({
-        id: String(row.id),
-        acquisitionId: String(row.adquisicion_id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        propertyTitle: String(row.inmueble_titulo),
-        type: String(row.tipo) as any,
-        amount: Number(row.importe),
-        dueDate: new Date(row.fecha_vencimiento).toISOString(),
-        status: String(row.estado) as ('pendiente' | 'pagado'),
-        paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-        installmentNumber: Number(row.numero_cuota || 1),
-        totalInstallments: Number(row.total_cuotas || 1)
-      }));
-
-      const loans: Loan[] = (resLoans?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        studentAccount: String(row.alumno_cuenta || ''),
-        requestedAmount: Number(row.importe_solicitado),
-        offeredAmount: Number(row.importe_ofrecido),
-        approvedAmount: row.importe_concedido ? Number(row.importe_concedido) : undefined,
-        termMonths: Number(row.plazo_meses),
-        annualInterestRate: Number(row.tipo_interes),
-        euriborRate: Number(row.euribor || 3.50),
-        spread: Number(row.diferencial || 1.00),
-        openingFee: Number(row.comision_apertura),
-        monthlyPayment: Number(row.cuota_mensual),
-        collateral: {
-          type: String(row.garantia_tipo) as any,
-          propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
-          propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
-          surfaceM2: Number(row.garantia_superficie_m2 || 0),
-          appraisalValue: Number(row.garantia_valor_tasacion)
-        },
-        status: String(row.estado) as any,
-        requiresTeacherApproval: Boolean(row.requiere_profesor),
-        teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
-        createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
-        acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
-        schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
-      }));
-
-      const payrollRecords = (resPayrolls?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        payrollDate: new Date(row.fecha_nomina).toISOString(),
-        periodMonth: Number(row.mes),
-        periodYear: Number(row.anio),
-        employeeCount: Number(row.num_empleados),
-        totalGrossSalary: Number(row.total_bruto),
-        totalEmployeeSS: Number(row.total_ss_empleado),
-        totalEmployeeIRPF: Number(row.total_irpf),
-        totalNetSalaryPaid: Number(row.total_liquido),
-        totalCompanySS: Number(row.total_ss_empresa),
-        isProportional: Boolean(row.es_proporcional),
-        status: 'paid' as const,
-        createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
-      }));
-
-      const taxObligations = (resTaxes?.rows || []).map(row => ({
-        id: String(row.id),
-        studentId: String(row.alumno_id),
-        studentName: String(row.alumno_nombre),
-        type: row.tipo as any,
-        concept: String(row.concepto),
-        amount: Number(row.importe),
-        dueDate: new Date(row.fecha_vencimiento).toISOString(),
-        status: row.estado as any,
-        paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-        payrollRecordId: row.nomina_id ? String(row.nomina_id) : undefined
-      }));
-
-      const courtLawsuits: CourtLawsuit[] = (resLawsuits?.rows || []).map(row => ({
-        ...row,
-        id: String(row.id),
-        plaintiffId: String(row.demandante_id),
-        defendantId: String(row.demandado_id)
-      }));
-
-      // Calculate Real Estate Assets
-      const ownedProperties = acquisitions.filter(a => a.operation === 'compra');
-      const rentedProperties = acquisitions.filter(a => a.operation === 'alquiler');
-      let totalRealEstateAssetsValue = 0;
-      let totalLandValue = 0;
-      let totalBuildingValue = 0;
-      for (const prop of ownedProperties) {
-        const base = prop.basePrice;
-        const landPart = (base * prop.landPercentage) / 100;
-        const buildingPart = base - landPart;
-        totalRealEstateAssetsValue += base;
-        totalLandValue += landPart;
-        totalBuildingValue += buildingPart;
-      }
-      const annualBuildingDepreciation = Number((totalBuildingValue * 0.02).toFixed(2));
-      const totalMachineryAssetsValue = Number(machineryAcquisitions.reduce((acc, m) => acc + m.basePrice, 0).toFixed(2));
-      const pendingDebtObligations = obligations.filter(o => o.status === 'pendiente' && o.type !== 'cuota_alquiler');
-      const totalObligationsPendingAmount = Number(pendingDebtObligations.reduce((acc, o) => acc + o.amount, 0).toFixed(2));
-
-      let totalLoansPendingAmount = 0;
-      let totalLoansPendingPrincipal = 0;
-      for (const loan of loans) {
-        const unpaidRows = (loan.schedule || []).filter(r => !r.paid);
-        totalLoansPendingAmount += unpaidRows.reduce((acc, r) => acc + r.payment, 0);
-        totalLoansPendingPrincipal += unpaidRows.reduce((acc, r) => acc + r.principal, 0);
-      }
-      totalLoansPendingAmount = Number(totalLoansPendingAmount.toFixed(2));
-      totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
-
-      const totalPendingTaxAmount = Number(taxObligations.filter(t => t.status === 'pendiente').reduce((acc, t) => acc + t.amount, 0).toFixed(2));
-      const totalPendingObligations = Number((totalObligationsPendingAmount + totalLoansPendingAmount + totalPendingTaxAmount).toFixed(2));
-      const totalMonthlyRentCommitments = Number(rentedProperties.reduce((acc, r) => acc + (r.monthlyRent || 0), 0).toFixed(2));
-
-      const companyResult = {
-        company: {
-          id: user.id,
-          name: user.name,
-          username: user.username,
-          accountNumber: user.accountNumber,
-          balance: user.balance,
-          role: user.role
-        },
-        summary: {
-          bankBalance: user.balance,
-          ownedPropertiesCount: ownedProperties.length,
-          rentedPropertiesCount: rentedProperties.length,
-          totalRealEstateAssetsValue: Number(totalRealEstateAssetsValue.toFixed(2)),
-          totalLandValue: Number(totalLandValue.toFixed(2)),
-          totalBuildingValue: Number(totalBuildingValue.toFixed(2)),
-          totalMachineryAssetsValue,
-          annualBuildingDepreciation,
-          totalObligationsPendingAmount,
-          totalLoansPendingAmount,
-          totalLoansPendingPrincipal,
-          totalPendingTaxAmount,
-          totalPendingObligations,
-          totalMonthlyRentCommitments,
-          activeLoansCount: loans.length,
-          machineryCount: machineryAcquisitions.length,
-          hiredEmployeesCount: hiredEmployees.length,
-          purchasedVehiclesCount: vehicles.length
-        },
-        acquisitions,
-        obligations,
-        loans,
-        machineryAcquisitions,
-        naveFloorPlans: floorPlans,
-        hiredEmployees,
-        purchasedVehicles: vehicles,
-        payrollRecords,
-        taxObligations
-      };
-
-      // Raw materials breakdown
-      const rawMaterials = {
-        fragmentos_hierro_kg: rawMaterialInventory.ironKg || 0,
-        fragmentos_metal_kg: rawMaterialInventory.metalKg || 0,
-        pellets_plastico_kg: rawMaterialInventory.plasticKg || 0,
-        pegamento_epoxi_kg: rawMaterialInventory.epoxiKg || 0
-      };
-      const producedGoods = {
-        rodProductionMode: (rawMaterialInventory as any).rodProductionMode || null,
-        varillas_punta: rawMaterialInventory.producedRodsUnits || 0,
-        varillas_punta_estrella: (rawMaterialInventory as any).producedStarRodsUnits || (rawMaterialInventory as any).producedIronRodsUnits || 0,
-        varillas_punta_plana: (rawMaterialInventory as any).producedFlatRodsUnits || (rawMaterialInventory as any).producedMetalRodsUnits || 0,
-        varillas_hierro_punta: (rawMaterialInventory as any).producedStarRodsUnits || (rawMaterialInventory as any).producedIronRodsUnits || 0,
-        varillas_metal_punta: (rawMaterialInventory as any).producedFlatRodsUnits || (rawMaterialInventory as any).producedMetalRodsUnits || 0,
-        productos_ensamblados: rawMaterialInventory.producedScrewdriversUnits || 0,
-        destornilladores_punta_estrella: (rawMaterialInventory as any).starScrewdriversUnits || (rawMaterialInventory as any).ironScrewdriversUnits || 0,
-        destornilladores_punta_plana: (rawMaterialInventory as any).flatScrewdriversUnits || (rawMaterialInventory as any).metalScrewdriversUnits || 0,
-        destornilladores_hierro: (rawMaterialInventory as any).starScrewdriversUnits || (rawMaterialInventory as any).ironScrewdriversUnits || 0,
-        destornilladores_metal: (rawMaterialInventory as any).flatScrewdriversUnits || (rawMaterialInventory as any).metalScrewdriversUnits || 0,
-        producedScrewdriversUnits: rawMaterialInventory.producedScrewdriversUnits || 0
-      };
-
-      // Calculate upcoming payments status from PostgreSQL rows
-      const overdueItems: UpcomingPaymentItem[] = [];
-      const upcoming30DaysItems: UpcomingPaymentItem[] = [];
-      const thirtyFiveDaysLater = new Date(now + 35 * 86400 * 1000);
-
-      for (const ob of obligations) {
-        if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) continue;
-        if (ob.status !== 'pagado') {
-          const dDate = new Date(ob.dueDate);
-          const isMachinery = ob.acquisitionId?.startsWith('mac-acq');
-          const item: UpcomingPaymentItem = {
-            id: ob.id,
-            originType: isMachinery ? 'machinery_obligation' : 'property_obligation',
-            propertyTitle: ob.propertyTitle,
-            type: ob.type,
-            concept: isMachinery ? `Pagaré de maquinaria: ${ob.propertyTitle}` : `Obligación de pago: ${ob.propertyTitle}`,
-            amount: ob.amount,
-            dueDate: ob.dueDate,
-            daysRemaining: Math.ceil((dDate.getTime() - now) / (1000 * 60 * 60 * 24)),
-            isOverdue: dDate.getTime() < now,
-            isCritical: dDate.getTime() < now,
-            status: ob.status,
-            installmentNumber: ob.installmentNumber,
-            totalInstallments: ob.totalInstallments
-          };
-          if (dDate.getTime() < now) overdueItems.push(item);
-          else if (dDate <= thirtyFiveDaysLater) upcoming30DaysItems.push(item);
-        }
-      }
-
-      for (const loan of loans) {
-        for (const row of (loan.schedule || [])) {
-          if (!row.paid) {
-            const pDate = new Date(row.dueDate);
-            const item: UpcomingPaymentItem = {
-              id: `${loan.id}_cuota_${row.installmentNumber}`,
-              loanId: loan.id,
-              originType: 'loan_installment',
-              concept: `Cuota mensual préstamo bancario #${row.installmentNumber}`,
-              amount: row.payment,
-              dueDate: row.dueDate,
-              daysRemaining: Math.ceil((pDate.getTime() - now) / (1000 * 60 * 60 * 24)),
-              isOverdue: pDate.getTime() < now,
-              isCritical: pDate.getTime() < now,
-              status: 'pendiente',
-              installmentNumber: row.installmentNumber,
-              totalInstallments: loan.termMonths
-            };
-            if (pDate.getTime() < now) overdueItems.push(item);
-            else if (pDate <= thirtyFiveDaysLater) upcoming30DaysItems.push(item);
-          }
-        }
-      }
-
-      for (const tax of taxObligations) {
-        if (tax.status !== 'pagado') {
-          const tDate = new Date(tax.dueDate);
-          const item: UpcomingPaymentItem = {
-            id: tax.id,
-            originType: 'tax_obligation',
-            concept: tax.concept,
-            amount: tax.amount,
-            dueDate: tax.dueDate,
-            daysRemaining: Math.ceil((tDate.getTime() - now) / (1000 * 60 * 60 * 24)),
-            isOverdue: tDate.getTime() < now,
-            isCritical: tDate.getTime() < now,
-            status: tax.status
-          };
-          if (tDate.getTime() < now) overdueItems.push(item);
-          else if (tDate <= thirtyFiveDaysLater) upcoming30DaysItems.push(item);
-        }
-      }
-
-      const overdueTotal = Number(overdueItems.reduce((acc, i) => acc + i.amount, 0).toFixed(2));
-      const upcomingTotal = Number(upcoming30DaysItems.reduce((acc, i) => acc + i.amount, 0).toFixed(2));
-
-      const upcomingPaymentsStatus = {
-        currentBalance: user.balance,
-        summary: {
-          overdueCount: overdueItems.length,
-          overdueTotalAmount: overdueTotal,
-          upcoming30DaysCount: upcoming30DaysItems.length,
-          upcoming30DaysTotalAmount: upcomingTotal,
-          hasCriticalPayments: overdueItems.length > 0,
-          liquidityRisk: user.balance < (overdueTotal + upcomingTotal)
-        },
-        overdueItems,
-        upcoming30DaysItems
-      };
-
-      // Set all domains in memory session
-      session.company = { data: companyResult, cachedAt: now };
-      session.acquisitions = { data: { success: true, acquisitions }, cachedAt: now };
-      session.transfers = { data: { transfers }, cachedAt: now };
-      session.employees = { data: { success: true, employees: hiredEmployees }, cachedAt: now };
-      session.electricityContracts = { data: { success: true, contracts: electricityContracts }, cachedAt: now };
-      session.electricityBills = { data: { success: true, bills: electricityBills }, cachedAt: now };
-      session.floorPlans = { data: { success: true, floorPlans }, cachedAt: now };
-      session.telecomContracts = { data: { success: true, contracts: telecomContracts }, cachedAt: now };
-      session.telecomInvoices = { data: { success: true, invoices: telecomInvoices }, cachedAt: now };
-      session.officeOrders = { data: { success: true, orders: officeOrders }, cachedAt: now };
-      session.vehicles = { data: { success: true, vehicles }, cachedAt: now };
-      session.rawMaterialOrders = { data: { success: true, orders: rawMaterialOrders }, cachedAt: now };
-      session.rawMaterialInventory = { data: { success: true, inventory: rawMaterialInventory, rawMaterials, producedGoods }, cachedAt: now };
-      session.upcomingPayments = { data: { success: true, ...upcomingPaymentsStatus }, cachedAt: now };
-      session.courtLawsuits = { data: { success: true, lawsuits: courtLawsuits }, cachedAt: now };
-
-      // Synchronize in-memory db users array as well for legacy references
-      const db = readDb();
-      const existingUserIdx = (db.users || []).findIndex(u => u.id === sId);
-      if (existingUserIdx >= 0) {
-        db.users[existingUserIdx] = { ...db.users[existingUserIdx], ...user };
-      }
-
-      console.log(`[StudentSessionCache] Session pre-built directly from PostgreSQL for student ${sId} with all domains cached.`);
-      return session;
     } catch (e) {
-      console.error('[Session Loader] Error building session from PostgreSQL, falling back to local memory:', e);
+      console.warn('[Session Loader] Error checking student account:', e);
     }
   }
 
-  // Graceful fallback for non-PostgreSQL (offline/memory mode)
-  const db = readDb();
+  const session = getStudentSession(sId);
+  session.version = (session.version || 0) + 1;
+  session.lastUpdated = now;
 
   // 1. Company
   try {
@@ -11789,17 +10673,6 @@ app.get('/api/company/:studentId', async (req, res) => {
     }
   }
   totalSessionCacheMisses++;
-
-  if (sId && dbPool) {
-    try {
-      const session = await buildStudentSessionFromPostgres(sId);
-      if (session.company) {
-        return res.json(session.company.data);
-      }
-    } catch (e) {
-      console.warn('[Company GET] Error building session from Postgres:', e);
-    }
-  }
 
   const db = readDb();
   try {
@@ -11961,18 +10834,6 @@ app.post('/api/obligations/pay', async (req, res) => {
       }
     });
 
-    if (result && result.paidObligation) {
-      updateStudentSessionUpcomingPaymentPaid(String(studentId), result.paidObligation.id, result.updatedBalance);
-      const session = studentSessionCache.get(String(studentId));
-      if (session?.company?.data?.obligations) {
-        const ob = session.company.data.obligations.find((o: any) => o.id === result.paidObligation.id);
-        if (ob) {
-          ob.status = 'pagado';
-          ob.paidDate = result.paidObligation.paidDate;
-        }
-      }
-    }
-
     res.json(result);
   } catch (err: any) {
     console.error('[Obligation Pay Concurrency Error]:', err);
@@ -12110,18 +10971,6 @@ app.post('/api/taxes/pay', async (req, res) => {
         return { success: true, tax, updatedBalance: student.balance };
       }
     });
-
-    if (result && result.tax) {
-      updateStudentSessionUpcomingPaymentPaid(String(studentId), result.tax.id, result.updatedBalance);
-      const session = studentSessionCache.get(String(studentId));
-      if (session?.company?.data?.taxObligations) {
-        const t = session.company.data.taxObligations.find((taxItem: any) => taxItem.id === result.tax.id);
-        if (t) {
-          t.status = 'pagado';
-          t.paidDate = result.tax.paidDate;
-        }
-      }
-    }
 
     return res.json(result);
   } catch (err: any) {
@@ -14206,17 +13055,6 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
   if (modified) {
     writeDb(db);
-    if (targetStudentId) {
-      invalidateStudentSessionCache(targetStudentId, 'upcomingPayments');
-      invalidateStudentSessionCache(targetStudentId, 'company');
-      invalidateStudentSessionCache(targetStudentId, 'transfers');
-    } else {
-      for (const user of (db.users || []).filter(u => u.role !== 'teacher')) {
-        invalidateStudentSessionCache(user.id, 'upcomingPayments');
-        invalidateStudentSessionCache(user.id, 'company');
-        invalidateStudentSessionCache(user.id, 'transfers');
-      }
-    }
   }
   return modified;
 }
@@ -15494,32 +14332,17 @@ app.get('/api/teacher/deferred-payments-audit', (req, res) => {
 // GET upcoming payments for student
 app.get('/api/student/upcoming-payments', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  if (!sId) {
+  if (!studentId || typeof studentId !== 'string') {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.upcomingPayments) {
-      totalSessionCacheHits++;
-      return res.json(session.upcomingPayments.data);
-    }
-  }
-  totalSessionCacheMisses++;
 
   const db = readDb();
-  const status = getStudentPaymentStatus(db, sId);
-  const result = {
+  const status = getStudentPaymentStatus(db, studentId);
+
+  res.json({
     success: true,
     ...status
-  };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.upcomingPayments = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  });
 });
 
 // GET all loans or student's loans
@@ -16117,22 +14940,6 @@ app.post('/api/loans/:id/accept', async (req, res) => {
         db.transfers.unshift(pc.feeTransfer);
         db.transfers.unshift(pc.loanDisbursementTransfer);
         writeDb(db);
-
-        if (pc.updatedLoanData) {
-          const sId = String(pc.studentId);
-          updateStudentSessionBalance(sId, pc.newBalance);
-          const session = studentSessionCache.get(sId);
-          if (session?.company?.data?.loans) {
-            const lIdx = session.company.data.loans.findIndex((l: any) => l.id === pc.loanId);
-            if (lIdx >= 0) {
-              session.company.data.loans[lIdx] = { ...session.company.data.loans[lIdx], ...pc.updatedLoanData };
-            } else {
-              session.company.data.loans.unshift(pc.updatedLoanData);
-            }
-          }
-          if (pc.feeTransfer) updateStudentSessionTransfer(sId, pc.feeTransfer);
-          if (pc.loanDisbursementTransfer) updateStudentSessionTransfer(sId, pc.loanDisbursementTransfer);
-        }
       } catch (cacheErr) {
         console.warn('[Loan Accept Post-Commit Cache Warning]:', cacheErr);
       }
@@ -16620,13 +15427,6 @@ app.put('/api/student/change-password', (req, res) => {
 
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
 app.get('/api/job-listings', async (req, res) => {
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-  if (!bypass && globalCatalogCache.jobListings) {
-    totalSessionCacheHits++;
-    return res.json(globalCatalogCache.jobListings.data);
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
   await syncEmployeesFromSupabase(db);
   await syncJobListingsFromSupabase(db);
@@ -16640,9 +15440,7 @@ app.get('/api/job-listings', async (req, res) => {
     !hiredNames.has((j.employeeName || '').toLowerCase().trim())
   );
 
-  const result = { success: true, jobListings: activeJobs };
-  globalCatalogCache.jobListings = { data: result, cachedAt: Date.now() };
-  res.json(result);
+  res.json({ success: true, jobListings: activeJobs });
 });
 
 app.post('/api/teacher/job-listings/batch', (req, res) => {
@@ -16945,11 +15743,6 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
       }
     });
 
-    if (result && (result.employee || result.hiredEmployee)) {
-      updateStudentSessionEmployee(String(studentId), result.employee || result.hiredEmployee, 'add');
-    }
-    invalidateGlobalCatalogCache('jobListings');
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Hire Error]:', err);
@@ -16959,27 +15752,10 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
 
 app.get('/api/student/employees', async (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.employees) {
-      totalSessionCacheHits++;
-      return res.json(session.employees.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
   await syncEmployeesFromSupabase(db);
-  const list = (db.hiredEmployees || []).filter(e => !sId || String(e.studentId) === sId);
-  const result = { success: true, employees: list };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.employees = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  const list = (db.hiredEmployees || []).filter(e => !studentId || String(e.studentId) === String(studentId));
+  res.json({ success: true, employees: list });
 });
 
 app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
@@ -17146,11 +15922,6 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
         return { success: true, employee: emp };
       }
     });
-
-    const affectedStudent = reqStudentId || result.employee?.studentId;
-    if (affectedStudent && result && result.employee) {
-      updateStudentSessionEmployee(String(affectedStudent), result.employee, 'update');
-    }
 
     return res.json(result);
   } catch (err: any) {
@@ -17324,18 +16095,6 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
       }
     });
 
-    if (result && Array.isArray(result.employees)) {
-      const session = studentSessionCache.get(String(studentId));
-      if (session) {
-        session.version = (session.version || 0) + 1;
-        session.lastUpdated = Date.now();
-        session.employees = { data: { success: true, employees: result.employees }, cachedAt: Date.now() };
-        if (session.company?.data?.hiredEmployees) {
-          session.company.data.hiredEmployees = result.employees;
-        }
-      }
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Auto-assign Error]:', err);
@@ -17417,18 +16176,6 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
         };
       }
     });
-
-    if (result && Array.isArray(result.employees)) {
-      const session = studentSessionCache.get(String(studentId));
-      if (session) {
-        session.version = (session.version || 0) + 1;
-        session.lastUpdated = Date.now();
-        session.employees = { data: { success: true, employees: result.employees }, cachedAt: Date.now() };
-        if (session.company?.data?.hiredEmployees) {
-          session.company.data.hiredEmployees = result.employees;
-        }
-      }
-    }
 
     return res.json(result);
   } catch (err: any) {
@@ -17999,48 +16746,15 @@ app.put('/api/loans/:id', async (req, res) => {
 // ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
 app.get('/api/electricity/contracts', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.electricityContracts) {
-      totalSessionCacheHits++;
-      return res.json(session.electricityContracts.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const contracts = (db.electricityContracts || []).filter(c => c.studentId === sId && c.status === 'active');
-  const result = { success: true, contracts };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.electricityContracts = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  const contracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  res.json({ success: true, contracts });
 });
 
 app.get('/api/electricity/contract', (req, res) => {
   const { studentId, propertyId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.electricityContracts) {
-      totalSessionCacheHits++;
-      const allContracts = session.electricityContracts.data.contracts || [];
-      const contract = propertyId
-        ? allContracts.find((c: any) => c.propertyId === propertyId || c.id === propertyId) || null
-        : allContracts[0] || null;
-      return res.json({ success: true, contract, contracts: allContracts });
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === sId && c.status === 'active');
+  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
   let contract = null;
   if (propertyId) {
     contract = allContracts.find(c => c.propertyId === propertyId || c.id === propertyId) || null;
@@ -18298,23 +17012,6 @@ app.post('/api/electricity/contract', async (req, res) => {
       ? `¡Suministro eléctrico contratado (${txResult.pKw} kW)! Se ha iniciado automáticamente el periodo de montaje de 8 horas para ${txResult.unblockedCount} línea(s) de maquinaria.`
       : `¡Suministro eléctrico de ${txResult.pKw} kW contratado correctamente!`;
 
-    if (txResult && txResult.contract) {
-      updateStudentSessionElectricityContract(reqStudentId, txResult.contract);
-      if (txResult.unblockedMachineIds && txResult.unblockedMachineIds.length > 0) {
-        const session = studentSessionCache.get(reqStudentId);
-        if (session?.company?.data?.machineryAcquisitions) {
-          for (const mId of txResult.unblockedMachineIds) {
-            const m = session.company.data.machineryAcquisitions.find((x: any) => x.id === mId);
-            if (m) {
-              m.status = 'en_montaje';
-              m.assemblyFinishDate = txResult.finishDate;
-              m.assemblyEndDate = txResult.finishDate;
-            }
-          }
-        }
-      }
-    }
-
     res.json({
       success: true,
       contract: txResult.contract,
@@ -18332,27 +17029,10 @@ app.post('/api/electricity/contract', async (req, res) => {
 
 app.get('/api/electricity/bills', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.electricityBills) {
-      totalSessionCacheHits++;
-      return res.json(session.electricityBills.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const bills = (db.electricityBills || []).filter(b => b.studentId === sId);
+  const bills = (db.electricityBills || []).filter(b => b.studentId === studentId);
   bills.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const result = { success: true, bills };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.electricityBills = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  res.json({ success: true, bills });
 });
 
 function getStudentFloorPlans(db: any, studentId: string): NaveFloorPlan[] {
@@ -18548,26 +17228,9 @@ async function getStudentFloorPlansAsync(studentId: string, fallbackDb?: any): P
 
 app.get('/api/electricity/floor-plans', async (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.floorPlans) {
-      totalSessionCacheHits++;
-      return res.json(session.floorPlans.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const plans = await getStudentFloorPlansAsync(sId, db);
-  const result = { success: true, floorPlans: plans };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.floorPlans = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  const plans = await getStudentFloorPlansAsync(String(studentId || ''), db);
+  res.json({ success: true, floorPlans: plans });
 });
 
 app.post('/api/electricity/floor-plan', async (req, res) => {
@@ -18812,10 +17475,6 @@ app.post('/api/electricity/floor-plan', async (req, res) => {
       console.warn('[Floor Plan] Warning updating in-memory cache:', memErr);
     }
 
-    if (txResult && txResult.floorPlan) {
-      updateStudentSessionFloorPlan(reqStudentId, txResult.floorPlan);
-    }
-
     res.json({
       success: true,
       floorPlan: txResult.floorPlan
@@ -18838,51 +17497,17 @@ app.get('/api/telecom/plans', (req, res) => {
 
 app.get('/api/telecom/contracts', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.telecomContracts) {
-      totalSessionCacheHits++;
-      return res.json(session.telecomContracts.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const contracts = (db.telecomContracts || []).filter(c => c.studentId === sId && c.status === 'active');
-  const result = { success: true, contracts };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.telecomContracts = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  const contracts = (db.telecomContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  res.json({ success: true, contracts });
 });
 
 app.get('/api/telecom/invoices', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.telecomInvoices) {
-      totalSessionCacheHits++;
-      return res.json(session.telecomInvoices.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const invoices = (db.telecomInvoices || []).filter(i => i.studentId === sId);
+  const invoices = (db.telecomInvoices || []).filter(i => i.studentId === studentId);
   invoices.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
-  const result = { success: true, invoices };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.telecomInvoices = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  res.json({ success: true, invoices });
 });
 
 app.post('/api/telecom/contract', async (req, res) => {
@@ -19043,13 +17668,6 @@ app.post('/api/telecom/contract', async (req, res) => {
       console.warn('[Telecom Contract] Warning updating in-memory cache:', memErr);
     }
 
-    if (txResult && txResult.contract) {
-      updateStudentSessionTelecomContract(reqStudentId, txResult.contract);
-    }
-    if (txResult && txResult.studentBalance !== undefined) {
-      updateStudentSessionBalance(reqStudentId, txResult.studentBalance);
-    }
-
     return res.json({
       success: true,
       contract: txResult.contract,
@@ -19071,27 +17689,10 @@ app.post('/api/telecom/contract', async (req, res) => {
 // OFFICE STORE API ENDPOINTS
 app.get('/api/office-store/orders', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.officeOrders) {
-      totalSessionCacheHits++;
-      return res.json(session.officeOrders.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const orders = (db.officeOrders || []).filter((o: any) => o.studentId === sId || String(o.studentId) === sId);
+  const orders = (db.officeOrders || []).filter((o: any) => o.studentId === studentId || String(o.studentId) === String(studentId));
   orders.sort((a: any, b: any) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime());
-  const result = { success: true, orders };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.officeOrders = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  res.json({ success: true, orders });
 });
 
 app.post('/api/office-store/checkout', async (req, res) => {
@@ -19287,10 +17888,6 @@ app.post('/api/office-store/checkout', async (req, res) => {
       }
     });
 
-    if (result && result.order) {
-      updateStudentSessionOfficeOrder(String(studentId), result.order, result.newBalance);
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Office Store Checkout Error]:', err);
@@ -19348,26 +17945,9 @@ function autoAssignForkliftsForStudent(db: any, studentId: string) {
 // ================= VEHICLE DEALERSHIP ENDPOINTS =================
 app.get('/api/student/vehicles', (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.vehicles) {
-      totalSessionCacheHits++;
-      return res.json(session.vehicles.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
-  const list = (db.purchasedVehicles || []).filter(v => v.studentId === sId);
-  const result = { success: true, vehicles: list };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.vehicles = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  const list = (db.purchasedVehicles || []).filter(v => v.studentId === studentId);
+  res.json({ success: true, vehicles: list });
 });
 
 app.post('/api/vehicles/buy', async (req, res) => {
@@ -19552,10 +18132,6 @@ app.post('/api/vehicles/buy', async (req, res) => {
         };
       }
     });
-
-    if (result && result.vehicle) {
-      updateStudentSessionVehicle(String(studentId), result.vehicle, result.newBalance);
-    }
 
     return res.json(result);
   } catch (err: any) {
@@ -19782,15 +18358,6 @@ app.post('/api/vehicles/buy-cart', async (req, res) => {
       }
     });
 
-    if (result && Array.isArray(result.vehicles)) {
-      result.vehicles.forEach((veh: PurchasedVehicle) => {
-        updateStudentSessionVehicle(String(studentId), veh);
-      });
-      if (result.newBalance !== undefined) {
-        updateStudentSessionBalance(String(studentId), result.newBalance);
-      }
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Buy Vehicles Cart Error]:', err);
@@ -19973,11 +18540,6 @@ app.put('/api/student/vehicles/:id/assign-warehouse', async (req, res) => {
         return { success: true, vehicle: veh };
       }
     });
-
-    const affectedStudent = reqStudentId || result.vehicle?.studentId;
-    if (affectedStudent && result && result.vehicle) {
-      updateStudentSessionVehicle(String(affectedStudent), result.vehicle);
-    }
 
     return res.json(result);
   } catch (err: any) {
@@ -20240,11 +18802,6 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
       }
     });
 
-    const affectedStudent = reqStudentId || result.employee?.studentId;
-    if (affectedStudent && result && result.employee) {
-      updateStudentSessionEmployee(String(affectedStudent), result.employee, 'update');
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Assign Vehicle Error]:', err);
@@ -20395,13 +18952,6 @@ function syncStudentAnnouncementsStockWithInventory(db: DatabaseSchema) {
 }
 
 app.get('/api/raw-materials/announcements', async (req, res) => {
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-  if (!bypass && globalCatalogCache.rawMaterialAnnouncements) {
-    totalSessionCacheHits++;
-    return res.json(globalCatalogCache.rawMaterialAnnouncements.data);
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
   let announcements = db.rawMaterialAnnouncements || [];
 
@@ -20419,9 +18969,7 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
   if (!announcements || announcements.length === 0) {
     announcements = getDefaultSeedRawMaterialAnnouncements();
   }
-  const result = { success: true, announcements };
-  globalCatalogCache.rawMaterialAnnouncements = { data: result, cachedAt: Date.now() };
-  res.json(result);
+  res.json({ success: true, announcements });
 });
 
 app.post(['/api/raw-materials/announcements', '/api/teacher/raw-materials/announcements'], async (req, res) => {
@@ -21444,18 +19992,6 @@ function ensureTransportInvoicesForTransfers(db: any) {
 
 app.get('/api/raw-materials/orders', async (req, res) => {
   const { studentId } = req.query;
-  const sId = studentId ? String(studentId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId && sId !== 'profesor-1') {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.rawMaterialOrders) {
-      totalSessionCacheHits++;
-      return res.json(session.rawMaterialOrders.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
   if (dbPool) {
     try {
@@ -21534,12 +20070,7 @@ app.get('/api/raw-materials/orders', async (req, res) => {
     );
   }
   orders.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
-  const result = { success: true, orders };
-  if (sId && sId !== 'profesor-1') {
-    const session = getStudentSession(sId);
-    session.rawMaterialOrders = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  res.json({ success: true, orders });
 });
 
 app.post('/api/raw-materials/orders', async (req, res) => {
@@ -22790,22 +21321,6 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       }
     });
 
-    if (result && result.order) {
-      if (result.order.studentId) {
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.studentId, 'company');
-        invalidateStudentSessionCache(result.order.studentId, 'transfers');
-      }
-      if (result.order.sellerId) {
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.sellerId, 'company');
-        invalidateStudentSessionCache(result.order.sellerId, 'transfers');
-      }
-      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Raw Material Order Error]:', err);
@@ -23064,11 +21579,6 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
-    }
-
-    if (result && result.order) {
-      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -23888,22 +22398,6 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
 
     writeDb(db);
 
-    if (result && result.order) {
-      if (result.order.studentId) {
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.studentId, 'company');
-        invalidateStudentSessionCache(result.order.studentId, 'transfers');
-      }
-      if (result.order.sellerId) {
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.sellerId, 'company');
-        invalidateStudentSessionCache(result.order.sellerId, 'transfers');
-      }
-      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
-    }
-
     return res.json({
       success: true,
       order: result.order,
@@ -24068,11 +22562,6 @@ app.post('/api/raw-materials/orders/:id/reject', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
-    }
-
-    if (result && result.order) {
-      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -24490,20 +22979,6 @@ app.post('/api/raw-materials/orders/:id/ship', async (req, res) => {
       writeDb(db);
     }
 
-    if (result && result.order) {
-      if (result.order.studentId) {
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.studentId, 'company');
-      }
-      if (result.order.sellerId) {
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.sellerId, 'company');
-      }
-      invalidateGlobalCatalogCache('rawMaterialAnnouncements');
-    }
-
     return res.status(result.status || 200).json(result.body);
   } catch (error: any) {
     const status = error.statusCode || 500;
@@ -24847,19 +23322,6 @@ app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:i
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
     }
 
-    if (result && result.order) {
-      if (result.order.studentId) {
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.studentId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.studentId, 'company');
-      }
-      if (result.order.sellerId) {
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
-        invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialInventory');
-        invalidateStudentSessionCache(result.order.sellerId, 'company');
-      }
-    }
-
     return res.status(200).json(result);
   } catch (error: any) {
     const status = error.statusCode || 500;
@@ -25030,11 +23492,6 @@ app.post('/api/raw-materials/orders/:id/send-invoice', async (req, res) => {
       writeDb(db);
     } catch (cacheErr) {
       console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
-    }
-
-    if (result && result.order) {
-      if (result.order.studentId) invalidateStudentSessionCache(result.order.studentId, 'rawMaterialOrders');
-      if (result.order.sellerId) invalidateStudentSessionCache(result.order.sellerId, 'rawMaterialOrders');
     }
 
     return res.status(200).json(result);
@@ -29139,25 +27596,13 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
 
 app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {
   const studentId = req.params.studentId || (req.query.studentId as string);
-  const sId = studentId ? String(studentId) : '';
-  if (!sId) {
+  if (!studentId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.rawMaterialInventory) {
-      totalSessionCacheHits++;
-      return res.json(session.rawMaterialInventory.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
 
-  const inv = checkAndCalculateProduction(db, sId);
-  const student = db.users.find(u => u.id === sId);
+  const inv = checkAndCalculateProduction(db, studentId);
+  const student = db.users.find(u => u.id === studentId);
   syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
 
   const rawMaterials = {
@@ -29182,17 +27627,12 @@ app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentI
     producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
   };
 
-  const result = {
+  res.json({
     success: true,
     inventory: inv,
     rawMaterials,
     producedGoods
-  };
-  if (sId) {
-    const session = getStudentSession(sId);
-    session.rawMaterialInventory = { data: result, cachedAt: Date.now() };
-  }
-  res.json(result);
+  });
 });
 
 app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
@@ -29310,9 +27750,6 @@ app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
       }
     });
 
-    invalidateStudentSessionCache(String(studentId), 'rawMaterialInventory');
-    invalidateStudentSessionCache(String(studentId), 'company');
-
     res.json(result);
   } catch (err: any) {
     console.error('[Rod Production Mode Error]:', err);
@@ -29349,26 +27786,14 @@ function addBusinessDays(startDate: Date, days: number): Date {
 // Get all lawsuits for a user (or all if teacher/judge)
 app.get('/api/court/lawsuits', (req, res) => {
   const { userId } = req.query;
-  const sId = userId ? String(userId) : '';
-  const bypass = req.headers['x-bypass-cache'] === 'true' || req.query.fresh === 'true';
-
-  if (sId) {
-    const session = studentSessionCache.get(sId);
-    if (!bypass && session?.courtLawsuits) {
-      totalSessionCacheHits++;
-      return res.json(session.courtLawsuits.data);
-    }
-  }
-  totalSessionCacheMisses++;
-
   const db = readDb();
   if (!db.courtLawsuits) db.courtLawsuits = [];
 
-  if (!sId) {
+  if (!userId) {
     return res.json({ success: true, lawsuits: db.courtLawsuits });
   }
 
-  const user = db.users.find(u => u.id === sId);
+  const user = db.users.find(u => u.id === userId);
   if (!user) {
     return res.status(404).json({ error: 'Usuario no encontrado' });
   }
@@ -29383,13 +27808,10 @@ app.get('/api/court/lawsuits', (req, res) => {
   }
 
   const userLawsuits = db.courtLawsuits.filter(
-    l => l.plaintiffId === sId || l.defendantId === sId
+    l => l.plaintiffId === userId || l.defendantId === userId
   );
 
-  const result = { success: true, lawsuits: userLawsuits };
-  const session = getStudentSession(sId);
-  session.courtLawsuits = { data: result, cachedAt: Date.now() };
-  res.json(result);
+  res.json({ success: true, lawsuits: userLawsuits });
 });
 
 // Get unpaid/overdue promissory notes for a user to make cambiario claim easy
@@ -29664,14 +28086,6 @@ app.post('/api/court/lawsuits', async (req, res) => {
         }
       };
     });
-
-    const resObj = result as any;
-    if (resObj && resObj.lawsuit) {
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'transfers');
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'company');
-      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'courtLawsuits');
-    }
 
     res.json(result);
   } catch (err: any) {
@@ -29965,11 +28379,6 @@ app.post('/api/court/lawsuits/:id/judge-admission', async (req, res) => {
       console.error('[Judge Admission] Post-commit cache update error:', cacheErr);
     }
 
-    if (result && result.lawsuit) {
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
-    }
-
     return res.json({
       success: true,
       message: result.message,
@@ -30115,13 +28524,6 @@ app.post('/api/court/lawsuits/:id/preventative-embargo', async (req, res) => {
         transfer: escrowTransfer
       };
     });
-
-    if (result && result.lawsuit) {
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
-    }
 
     res.json(result);
   } catch (err: any) {
@@ -30320,16 +28722,6 @@ app.post('/api/court/lawsuits/:id/pay-settle', async (req, res) => {
         newBalance: defendant.balance
       };
     });
-
-    const resObj = result as any;
-    if (resObj && resObj.lawsuit) {
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'transfers');
-      invalidateStudentSessionCache(resObj.lawsuit.plaintiffId, 'company');
-      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'courtLawsuits');
-      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'transfers');
-      invalidateStudentSessionCache(resObj.lawsuit.defendantId, 'company');
-    }
 
     res.json(result);
   } catch (err: any) {
@@ -31098,15 +29490,6 @@ app.post('/api/court/lawsuits/:id/defendant-answer', async (req, res) => {
       }
     });
 
-    if (result && result.lawsuit) {
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
-      if (result.newBalance !== undefined) {
-        invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
-        invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
-      }
-    }
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Defendant Answer] Error processing defendant answer:', err);
@@ -31680,15 +30063,6 @@ app.post('/api/court/lawsuits/:id/judge-ruling', async (req, res) => {
         lawsuit
       };
     });
-
-    if (result && result.lawsuit) {
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'transfers');
-      invalidateStudentSessionCache(result.lawsuit.plaintiffId, 'company');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'courtLawsuits');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'transfers');
-      invalidateStudentSessionCache(result.lawsuit.defendantId, 'company');
-    }
 
     return res.json(result);
   } catch (err: any) {
