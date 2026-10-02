@@ -441,6 +441,13 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS invoiced_at TIMESTAMPTZ;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS invoice_number TEXT;
+      -- Backfill historical invoice emission dates for already invoiced/delivered orders where invoiced_at was null
+      UPDATE materias_primas_pedidos
+      SET invoiced_at = fecha_pedido
+      WHERE invoiced_at IS NULL AND (estado = 'facturado' OR estado = 'entregado' OR estado = 'finalizado' OR invoice_number IS NOT NULL);
+      UPDATE materias_primas_pedidos
+      SET invoice_number = 'FACT-2026-' || SUBSTRING(id FROM GREATEST(1, LENGTH(id) - 3) FOR 4)
+      WHERE invoice_number IS NULL AND (estado = 'facturado' OR estado = 'entregado' OR estado = 'finalizado');
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS inventory_credited BOOLEAN DEFAULT FALSE;
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS destination_nave_id VARCHAR(255);
       ALTER TABLE materias_primas_pedidos ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
@@ -1001,18 +1008,14 @@ async function executeWithIdempotency<T>(
     // Execute the transactional operation
     const result = await operation(key);
 
-    // Extra safety: ensure recorded in case the operation ran in fallback mode without withPostgresTransaction
+    // Extra safety: ensure recorded asynchronously without blocking the response
     if (dbPool) {
-      try {
-        await safeDbQuery(
-          `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha) 
-           VALUES ($1, $2, CURRENT_TIMESTAMP) 
-           ON CONFLICT (clave) DO UPDATE SET respuesta = EXCLUDED.respuesta`,
-          [key, JSON.stringify(result)]
-        );
-      } catch (e) {
-        // Non-fatal
-      }
+      safeDbQuery(
+        `INSERT INTO operaciones_idempotencia (clave, respuesta, fecha) 
+         VALUES ($1, $2, CURRENT_TIMESTAMP) 
+         ON CONFLICT (clave) DO UPDATE SET respuesta = EXCLUDED.respuesta`,
+        [key, JSON.stringify(result)]
+      ).catch(() => {});
     }
 
     return result;
@@ -1780,8 +1783,8 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder, client?: pg
         last_turn_user_id = EXCLUDED.last_turn_user_id,
         negotiation_history = EXCLUDED.negotiation_history,
         shipped_at = EXCLUDED.shipped_at,
-        invoiced_at = EXCLUDED.invoiced_at,
-        invoice_number = EXCLUDED.invoice_number,
+        invoiced_at = COALESCE(materias_primas_pedidos.invoiced_at, EXCLUDED.invoiced_at),
+        invoice_number = COALESCE(materias_primas_pedidos.invoice_number, EXCLUDED.invoice_number),
         inventory_credited = EXCLUDED.inventory_credited,
         destination_nave_id = EXCLUDED.destination_nave_id,
         rejection_reason = EXCLUDED.rejection_reason`,
@@ -1919,9 +1922,9 @@ async function syncElectricityBillToSupabase(bill: ElectricityBill, client?: pg.
         potencia_contratada_kw, precio_kw_dia, importe_potencia, total_kwh, precio_kwh,
         importe_energia, alquiler_equipos, base_imponible, impuesto_electricidad,
         tipo_iva, importe_iva, importe_total, fecha_vencimiento, estado, fecha_pago,
-        desglose_inmuebles
+        desglose_inmuebles, creado_en
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
       ON CONFLICT (id) DO UPDATE SET
         estado = EXCLUDED.estado,
         fecha_pago = EXCLUDED.fecha_pago,
@@ -1955,7 +1958,8 @@ async function syncElectricityBillToSupabase(bill: ElectricityBill, client?: pg.
         parseSafeDate(bill.dueDate),
         bill.status,
         parseNullableSafeDate(bill.paidDate),
-        breakdownJson
+        breakdownJson,
+        parseSafeDate(bill.createdAt || new Date().toISOString())
       ]
     );
   } catch (e) {
@@ -3076,7 +3080,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
             dueDate: new Date(row.fecha_vencimiento).toISOString(),
             status: String(row.estado) as any,
             paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-            createdAt: row.creado_en ? new Date(row.creado_en).toISOString() : new Date().toISOString(),
+            createdAt: row.creado_en ? new Date(row.creado_en).toISOString() : new Date(row.fecha_vencimiento || row.fecha_inicio || '2026-09-01T00:00:00.000Z').toISOString(),
             propertyBreakdown: breakdown
           };
         });
@@ -3248,32 +3252,38 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
 
       // Reconstruct db.rawMaterialOrders from Supabase "materias_primas_pedidos"
       if (resRawOrders.rows.length > 0) {
-        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => ({
-          id: String(row.id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          announcementId: String(row.announcement_id),
-          materialType: String(row.materia_tipo) as any,
-          materialTitle: String(row.materia_titulo),
-          quantity: Number(row.cantidad),
-          unitWeightKg: Number(row.peso_unitario_kg),
-          totalKg: Number(row.peso_total_kg),
-          basePrice: Number(row.precio_base),
-          ivaAmount: Number(row.importe_iva),
-          transportCost: Number(row.coste_transporte),
-          totalAmount: Number(row.importe_total),
-          needsTransport: Boolean(row.necesita_transporte),
-          deliveryAddress: String(row.direccion_entrega || ''),
-          pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
-          status: String(row.estado) as any,
-          requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
-          approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
-          shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
-          estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
-          deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
-          invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
-          invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
-          items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
+        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => {
+          const rawInvoicedAt = row.invoiced_at
+            ? new Date(row.invoiced_at).toISOString()
+            : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+                ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
+                : undefined);
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            announcementId: String(row.announcement_id),
+            materialType: String(row.materia_tipo) as any,
+            materialTitle: String(row.materia_titulo),
+            quantity: Number(row.cantidad),
+            unitWeightKg: Number(row.peso_unitario_kg),
+            totalKg: Number(row.peso_total_kg),
+            basePrice: Number(row.precio_base),
+            ivaAmount: Number(row.importe_iva),
+            transportCost: Number(row.coste_transporte),
+            totalAmount: Number(row.importe_total),
+            needsTransport: Boolean(row.necesita_transporte),
+            deliveryAddress: String(row.direccion_entrega || ''),
+            pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+            status: String(row.estado) as any,
+            requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : (row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : (row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : '2026-09-01T00:00:00.000Z')),
+            approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+            shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+            estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+            deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+            invoicedAt: rawInvoicedAt,
+            invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+            items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
           sellerId: row.seller_id ? String(row.seller_id) : undefined,
           sellerName: row.seller_name ? String(row.seller_name) : undefined,
           sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
@@ -3285,10 +3295,11 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
           inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
           destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
-        }));
-      }
+        };
+      });
+    }
 
-      // Reconstruct db.rawMaterialAnnouncements from Supabase "anuncios_materia_prima"
+    // Reconstruct db.rawMaterialAnnouncements from Supabase "anuncios_materia_prima"
       if (resRawAnnouncements.rows.length > 0) {
         db.rawMaterialAnnouncements = resRawAnnouncements.rows.map((row: any) => {
           let parsedLevel: number | 'official' | undefined = undefined;
@@ -7801,24 +7812,145 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
 app.post('/api/transfers', handleTransferRoute);
 app.post('/transfers', handleTransferRoute);
 
-// Get transfers
-const handleGetTransfersRoute = (req: express.Request, res: express.Response) => {
+// Get transfers (PostgreSQL Source of Truth with In-Memory fallback)
+const handleGetTransfersRoute = async (req: express.Request, res: express.Response) => {
   const { userId, role } = req.query;
   const db = readDb();
 
   if (role === 'teacher') {
-    res.json({ transfers: db.transfers });
+    if (dbPool) {
+      try {
+        const movsRes = await safeDbQuery(
+          `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
+           FROM movimientos
+           ORDER BY fecha DESC`
+        );
+        if (movsRes && movsRes.rows && movsRes.rows.length > 0) {
+          const mapped = movsRes.rows.map(r => ({
+            id: String(r.id),
+            amount: Number(r.importe),
+            concept: String(r.concepto || ''),
+            date: new Date(r.fecha).toISOString(),
+            fecha: new Date(r.fecha).toISOString(),
+            timestamp: new Date(r.fecha).toISOString(),
+            senderId: String(r.sender_id || r.cuenta_id),
+            senderName: String(r.sender_name || ''),
+            senderAccount: String(r.sender_account || ''),
+            receiverId: String(r.receiver_id || ''),
+            receiverName: String(r.receiver_name || ''),
+            receiverAccount: String(r.receiver_account || '')
+          }));
+          return res.json({ transfers: mapped });
+        }
+      } catch (e) {}
+    }
+    return res.json({ transfers: db.transfers });
   } else if (userId) {
-    // Filter transfers involving this user as either sender or receiver
-    const filtered = db.transfers.filter(tx => tx.senderId === userId || tx.receiverId === userId);
-    res.json({ transfers: filtered });
+    if (dbPool) {
+      try {
+        const movsRes = await safeDbQuery(
+          `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
+           FROM movimientos
+           WHERE sender_id = $1 OR receiver_id = $1 OR cuenta_id = $1
+           ORDER BY fecha DESC`,
+          [String(userId)]
+        );
+        if (movsRes && movsRes.rows && movsRes.rows.length > 0) {
+          const mapped = movsRes.rows.map(r => ({
+            id: String(r.id),
+            amount: Number(r.importe),
+            concept: String(r.concepto || ''),
+            date: new Date(r.fecha).toISOString(),
+            fecha: new Date(r.fecha).toISOString(),
+            timestamp: new Date(r.fecha).toISOString(),
+            senderId: String(r.sender_id || r.cuenta_id),
+            senderName: String(r.sender_name || ''),
+            senderAccount: String(r.sender_account || ''),
+            receiverId: String(r.receiver_id || ''),
+            receiverName: String(r.receiver_name || ''),
+            receiverAccount: String(r.receiver_account || '')
+          }));
+          return res.json({ transfers: mapped });
+        }
+      } catch (e) {}
+    }
+    const filtered = (db.transfers || []).filter(tx => tx.senderId === userId || tx.receiverId === userId);
+    return res.json({ transfers: filtered });
   } else {
-    res.status(400).json({ error: 'Se requiere userId o rol para ver el historial' });
+    return res.status(400).json({ error: 'Se requiere userId o rol para ver el historial' });
   }
 };
 
 app.get('/api/transfers', handleGetTransfersRoute);
 app.get('/transfers', handleGetTransfersRoute);
+
+// Get single account details with its real movements
+app.get('/api/accounts/:id', async (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  let user = (db.users || []).find(u => u.id === id);
+  let movements: any[] = [];
+
+  if (dbPool) {
+    try {
+      const userRes = await safeDbQuery('SELECT id, alumno, role, saldo, level, account_number FROM cuentas WHERE id = $1', [id]);
+      if (userRes && userRes.rows && userRes.rows.length > 0) {
+        const uRow = userRes.rows[0];
+        user = {
+          id: String(uRow.id),
+          name: String(uRow.alumno || 'Estudiante'),
+          username: String(uRow.alumno || id),
+          role: String(uRow.role || 'student') as any,
+          balance: Number(uRow.saldo || 0),
+          level: Number(uRow.level || 1),
+          accountNumber: uRow.account_number ? String(uRow.account_number) : undefined
+        } as any;
+      }
+      const movsRes = await safeDbQuery(
+        `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
+         FROM movimientos
+         WHERE sender_id = $1 OR receiver_id = $1 OR cuenta_id = $1
+         ORDER BY fecha DESC`,
+        [id]
+      );
+      if (movsRes && movsRes.rows) {
+        movements = movsRes.rows.map(r => ({
+          id: String(r.id),
+          amount: Number(r.importe),
+          concept: String(r.concepto || ''),
+          date: new Date(r.fecha).toISOString(),
+          fecha: new Date(r.fecha).toISOString(),
+          timestamp: new Date(r.fecha).toISOString(),
+          senderId: String(r.sender_id || r.cuenta_id),
+          senderName: String(r.sender_name || ''),
+          senderAccount: String(r.sender_account || ''),
+          receiverId: String(r.receiver_id || ''),
+          receiverName: String(r.receiver_name || ''),
+          receiverAccount: String(r.receiver_account || '')
+        }));
+      }
+    } catch (e) {}
+  }
+
+  if (!user) {
+    return res.status(404).json({ error: 'Cuenta no encontrada' });
+  }
+
+  if (movements.length === 0) {
+    movements = (db.transfers || []).filter(tx => tx.senderId === id || tx.receiverId === id).map(tx => ({
+      ...tx,
+      fecha: tx.date,
+      timestamp: tx.date
+    }));
+  }
+
+  return res.json({
+    account: {
+      ...user,
+      movements
+    }
+  });
+});
 
 // Get system logs (Teacher only)
 const handleGetLogsRoute = (req: express.Request, res: express.Response) => {
@@ -19781,32 +19913,38 @@ app.get('/api/raw-materials/orders', async (req, res) => {
     try {
       const resRawOrders = await safeDbQuery('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC');
       if (resRawOrders && resRawOrders.rows && resRawOrders.rows.length > 0) {
-        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => ({
-          id: String(row.id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          announcementId: String(row.announcement_id),
-          materialType: String(row.materia_tipo) as any,
-          materialTitle: String(row.materia_titulo),
-          quantity: Number(row.cantidad),
-          unitWeightKg: Number(row.peso_unitario_kg),
-          totalKg: Number(row.peso_total_kg),
-          basePrice: Number(row.precio_base),
-          ivaAmount: Number(row.importe_iva),
-          transportCost: Number(row.coste_transporte),
-          totalAmount: Number(row.importe_total),
-          needsTransport: Boolean(row.necesita_transporte),
-          deliveryAddress: String(row.direccion_entrega || ''),
-          pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
-          status: String(row.estado) as any,
-          requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
-          approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
-          shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
-          estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
-          deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
-          invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
-          invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
-          items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
+        db.rawMaterialOrders = resRawOrders.rows.map((row: any) => {
+          const rawInvoicedAt = row.invoiced_at
+            ? new Date(row.invoiced_at).toISOString()
+            : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+                ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
+                : undefined);
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            announcementId: String(row.announcement_id),
+            materialType: String(row.materia_tipo) as any,
+            materialTitle: String(row.materia_titulo),
+            quantity: Number(row.cantidad),
+            unitWeightKg: Number(row.peso_unitario_kg),
+            totalKg: Number(row.peso_total_kg),
+            basePrice: Number(row.precio_base),
+            ivaAmount: Number(row.importe_iva),
+            transportCost: Number(row.coste_transporte),
+            totalAmount: Number(row.importe_total),
+            needsTransport: Boolean(row.necesita_transporte),
+            deliveryAddress: String(row.direccion_entrega || ''),
+            pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+            status: String(row.estado) as any,
+            requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : (row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : (row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : '2026-09-01T00:00:00.000Z')),
+            approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+            shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+            estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+            deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+            invoicedAt: rawInvoicedAt,
+            invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+            items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
           sellerId: row.seller_id ? String(row.seller_id) : undefined,
           sellerName: row.seller_name ? String(row.seller_name) : undefined,
           sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
@@ -19818,8 +19956,9 @@ app.get('/api/raw-materials/orders', async (req, res) => {
           negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
           inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
           destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
-        }));
-      }
+        };
+      });
+    }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Orders]:', e);
     }
@@ -19829,7 +19968,9 @@ app.get('/api/raw-materials/orders', async (req, res) => {
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
 
   let orders = db.rawMaterialOrders;
-  if (studentId) {
+  if (req.query.all === 'true' || req.query.all === '1') {
+    // Return all orders without P2P filtering
+  } else if (studentId) {
     const sId = String(studentId);
     if (sId === 'profesor-1') {
       orders = orders.filter(o =>
@@ -19923,7 +20064,30 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     return res.status(400).json({ error: 'No se ha especificado ningún producto para la compra.' });
   }
 
-  const primaryAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === itemsToProcess[0].announcementId);
+  let primaryAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === itemsToProcess[0].announcementId);
+  if (!primaryAnn && dbPool) {
+    try {
+      const annRowRes = await safeDbQuery('SELECT * FROM anuncios_materia_prima WHERE id = $1', [itemsToProcess[0].announcementId]);
+      if (annRowRes && annRowRes.rows && annRowRes.rows.length > 0) {
+        const r = annRowRes.rows[0];
+        primaryAnn = {
+          id: String(r.id),
+          materialType: String(r.material_type || r.materia_tipo || 'hierro') as any,
+          title: String(r.title || r.titulo || 'Materia prima'),
+          unitWeightKg: Number(r.unit_weight_kg || 100),
+          pricePerUnit: Number(r.price_per_unit || r.precio_unitario || 50),
+          stock: r.stock !== undefined && r.stock !== null ? (r.stock === 'ilimitado' ? 'ilimitado' : Number(r.stock)) : 'ilimitado',
+          sellerId: r.seller_id ? String(r.seller_id) : 'proveedor-materia-prima',
+          sellerName: r.seller_name ? String(r.seller_name) : 'Suministros Industriales S.A.',
+          sellerLevel: r.seller_level === 'official' ? 'official' : (r.seller_level ? Number(r.seller_level) : undefined),
+          sellerAccount: r.seller_account ? String(r.seller_account) : 'ES990001000988776655',
+          active: Boolean(r.active)
+        };
+        if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
+        db.rawMaterialAnnouncements.push(primaryAnn);
+      }
+    } catch (e) {}
+  }
   if (!primaryAnn) return res.status(404).json({ error: 'Anuncio no encontrado.' });
 
   const sellerId = primaryAnn.sellerId || 'proveedor-materia-prima';
@@ -20230,6 +20394,8 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         deliveredAt: isAutoApproved ? now.toISOString() : undefined,
         estimatedDeliveryDays: isAutoApproved ? 0 : undefined,
         estimatedDeliveryAt: isAutoApproved ? now.toISOString() : undefined,
+        invoiceNumber: (isAutoApproved || buyerLevel === 1) ? `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
+        invoicedAt: (isAutoApproved || buyerLevel === 1) ? now.toISOString() : undefined,
         items: orderItems,
         lastTurnUserId: buyer.id,
         negotiationHistory: [initialNegotiation]
@@ -21402,32 +21568,38 @@ function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
     }
   }
 
-  return {
-    id: String(row.id),
-    studentId: String(row.alumno_id),
-    studentName: String(row.alumno_nombre || ''),
-    announcementId: String(row.announcement_id || ''),
-    materialType: String(row.materia_tipo || 'hierro') as any,
-    materialTitle: String(row.materia_titulo || ''),
-    quantity: Number(row.cantidad || 0),
-    unitWeightKg: Number(row.peso_unitario_kg || 0),
-    totalKg: Number(row.peso_total_kg || 0),
-    basePrice: Number(row.precio_base || 0),
-    ivaAmount: Number(row.importe_iva || 0),
-    transportCost: Number(row.coste_transporte || 0),
-    totalAmount: Number(row.importe_total || 0),
-    needsTransport: Boolean(row.necesita_transporte),
-    deliveryAddress: String(row.direccion_entrega || ''),
-    pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
-    status: String(row.estado) as any,
-    requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : new Date().toISOString(),
-    approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
-    shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
-    estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
-    deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
-    invoicedAt: row.invoiced_at ? new Date(row.invoiced_at).toISOString() : undefined,
-    invoiceNumber: row.invoice_number ? String(row.invoice_number) : undefined,
-    items: itemsParsed,
+    const rawInvoicedAt = row.invoiced_at
+      ? new Date(row.invoiced_at).toISOString()
+      : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+          ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
+          : undefined);
+
+    return {
+      id: String(row.id),
+      studentId: String(row.alumno_id),
+      studentName: String(row.alumno_nombre || ''),
+      announcementId: String(row.announcement_id || ''),
+      materialType: String(row.materia_tipo || 'hierro') as any,
+      materialTitle: String(row.materia_titulo || ''),
+      quantity: Number(row.cantidad || 0),
+      unitWeightKg: Number(row.peso_unitario_kg || 0),
+      totalKg: Number(row.peso_total_kg || 0),
+      basePrice: Number(row.precio_base || 0),
+      ivaAmount: Number(row.importe_iva || 0),
+      transportCost: Number(row.coste_transporte || 0),
+      totalAmount: Number(row.importe_total || 0),
+      needsTransport: Boolean(row.necesita_transporte),
+      deliveryAddress: String(row.direccion_entrega || ''),
+      pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+      status: String(row.estado) as any,
+      requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : (row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : (row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : '2026-09-01T00:00:00.000Z')),
+      approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+      shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+      estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+      deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+      invoicedAt: rawInvoicedAt,
+      invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+      items: itemsParsed,
     sellerId: row.seller_id ? String(row.seller_id) : undefined,
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
     sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
@@ -22890,7 +23062,7 @@ app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:i
   const idempotencyKey = rawIdemKey || `deliver_${id}_${Date.now()}`;
 
   try {
-    const result = await executeWithIdempotency(idempotencyKey, async () => {
+    const result = await executeWithIdempotency(idempotencyKey, async (idemKey) => {
       return await withPostgresTransaction(async (client) => {
         // 1. LOCK ORDER IN POSTGRESQL (READ YOUR OWN WRITES / SOURCE OF TRUTH)
         let orderRes = await client.query(
@@ -23065,7 +23237,7 @@ app.post(['/api/raw-materials/orders/:id/deliver', '/api/raw-materials/orders/:i
         };
 
         return responseBody;
-      });
+      }, idemKey);
     });
 
     // 10. POST-COMMIT CACHE UPDATE (DB.JSON & NOTIFICATIONS)
@@ -23217,26 +23389,28 @@ app.post('/api/raw-materials/orders/:id/send-invoice', async (req, res) => {
           invoiceNum = candidate;
         }
 
-        const invoicedAtIso = now.toISOString();
+        // Preserve historical invoice date: if already set or from purchase date, preserve it!
+        const finalInvoicedAt = order.invoicedAt || order.requestedAt || now.toISOString();
+        const finalInvoiceNum = invoiceNum;
         order.status = 'facturado';
-        order.invoiceNumber = invoiceNum;
-        order.invoicedAt = invoicedAtIso;
+        order.invoiceNumber = finalInvoiceNum;
+        order.invoicedAt = finalInvoicedAt;
 
         // 6. UPDATE materias_primas_pedidos DIRECTLY IN POSTGRESQL (NO syncRawMaterialOrderToSupabase)
         await client.query(
           `UPDATE materias_primas_pedidos
            SET estado = 'facturado',
-               invoice_number = $2,
-               invoiced_at = $3
+               invoice_number = COALESCE(materias_primas_pedidos.invoice_number, $2),
+               invoiced_at = COALESCE(materias_primas_pedidos.invoiced_at, $3)
            WHERE id = $1`,
-          [order.id, invoiceNum, invoicedAtIso]
+          [order.id, finalInvoiceNum, finalInvoicedAt]
         );
 
         const responseBody = {
           success: true,
           order,
-          invoiceNumber: invoiceNum,
-          message: `Factura ${invoiceNum} emitida y notificada al comprador.`
+          invoiceNumber: finalInvoiceNum,
+          message: `Factura ${finalInvoiceNum} emitida y notificada al comprador.`
         };
 
         await client.query(
@@ -25063,7 +25237,7 @@ app.post('/api/market/messages', (req, res) => {
   res.json({ success: true, message: msg });
 });
 
-app.post('/api/market/messages/send-manual-invoice', (req, res) => {
+app.post('/api/market/messages/send-manual-invoice', async (req, res) => {
   const {
     senderId,
     recipientId,
@@ -25080,8 +25254,35 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
   }
 
   const db = readDb();
-  const sender = db.users.find(u => u.id === senderId);
-  const recipient = db.users.find(u => u.id === recipientId);
+  let sender = (db.users || []).find(u => u.id === senderId);
+  let recipient = (db.users || []).find(u => u.id === recipientId);
+
+  if ((!sender || !recipient) && dbPool) {
+    try {
+      const usersRes = await safeDbQuery('SELECT id, alumno, role, level FROM cuentas WHERE id = ANY($1)', [[senderId, recipientId]]);
+      if (usersRes && usersRes.rows) {
+        for (const row of usersRes.rows) {
+          const userObj = {
+            id: String(row.id),
+            name: String(row.alumno || 'Estudiante'),
+            username: String(row.alumno || row.id),
+            role: String(row.role || 'student') as any,
+            level: Number(row.level || 1)
+          };
+          if (row.id === senderId && !sender) {
+            sender = userObj as any;
+            if (!db.users.some(u => u.id === userObj.id)) db.users.push(userObj as any);
+          }
+          if (row.id === recipientId && !recipient) {
+            recipient = userObj as any;
+            if (!db.users.some(u => u.id === userObj.id)) db.users.push(userObj as any);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[send-manual-invoice] Error looking up sender/recipient in cuentas:', e);
+    }
+  }
 
   if (!sender || !recipient) {
     return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
@@ -25131,10 +25332,34 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
 
   if (orderId) {
     linkedOrder = db.rawMaterialOrders.find(o => o.id === orderId);
+    if (!linkedOrder && dbPool) {
+      try {
+        const pgOrd = await safeDbQuery('SELECT * FROM materias_primas_pedidos WHERE id = $1', [orderId]);
+        if (pgOrd && pgOrd.rows && pgOrd.rows.length > 0) {
+          linkedOrder = parseRawMaterialOrderRow(pgOrd.rows[0]);
+          if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+          db.rawMaterialOrders.push(linkedOrder);
+        }
+      } catch (e) {
+        console.error('[send-manual-invoice] PG query error:', e);
+      }
+    }
     if (linkedOrder) {
+      if (!linkedOrder.invoicedAt && dbPool) {
+        try {
+          const pgRes = await safeDbQuery('SELECT invoiced_at, invoice_number FROM materias_primas_pedidos WHERE id = $1', [linkedOrder.id]);
+          if (pgRes && pgRes.rows && pgRes.rows.length > 0) {
+            if (pgRes.rows[0].invoiced_at) linkedOrder.invoicedAt = new Date(pgRes.rows[0].invoiced_at).toISOString();
+            if (pgRes.rows[0].invoice_number) linkedOrder.invoiceNumber = String(pgRes.rows[0].invoice_number);
+          }
+        } catch (e) {}
+      }
+      const finalInvoiceNum = linkedOrder.invoiceNumber || invoiceNum;
+      const finalInvoicedAt = linkedOrder.invoicedAt || now.toISOString();
+
       linkedOrder.status = 'facturado';
-      linkedOrder.invoiceNumber = invoiceNum;
-      linkedOrder.invoicedAt = now.toISOString();
+      linkedOrder.invoiceNumber = finalInvoiceNum;
+      linkedOrder.invoicedAt = finalInvoicedAt;
       linkedOrder.sellerLevel = sender.level || linkedOrder.sellerLevel || 1;
       linkedOrder.buyerLevel = recipient.level || linkedOrder.buyerLevel || 1;
       linkedOrder.deliveryAddress = linkedOrder.deliveryAddress || 'Dirección comercial registrada';
@@ -25167,6 +25392,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
   if (!linkedOrder) {
     // Create new order record for custom manual invoice
     const totalQuantity = items.reduce((acc, i) => acc + i.quantity, 0);
+    const emissionDate = now.toISOString();
     linkedOrder = {
       id: generateId('ord'),
       studentId: recipientId,
@@ -25204,8 +25430,8 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       totalAmount,
       status: 'facturado',
       invoiceNumber: invoiceNum,
-      invoicedAt: now.toISOString(),
-      requestedAt: now.toISOString(),
+      invoicedAt: emissionDate,
+      requestedAt: emissionDate,
       deliveryAddress: 'Dirección comercial registrada',
       note: concept || 'Factura emitida manualmente por chat de mensajería',
       isDirectMessageInvoice: true,
@@ -25213,10 +25439,13 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       source: 'chat'
     };
     db.rawMaterialOrders.unshift(linkedOrder);
-    syncRawMaterialOrderToSupabase(linkedOrder).catch(e => console.error(e));
+    await syncRawMaterialOrderToSupabase(linkedOrder).catch(e => console.error(e));
   }
 
-  const msgContent = `📄 FACTURA EMITIDA: ${invoiceNum} - ${items[0]?.title || 'Productos/Servicios'} (${totalAmount.toFixed(2)} € IVA incl.)`;
+  const finalOrderInvoicedAt = linkedOrder.invoicedAt || now.toISOString();
+  const finalOrderInvoiceNum = linkedOrder.invoiceNumber || invoiceNum;
+
+  const msgContent = `📄 FACTURA EMITIDA: ${finalOrderInvoiceNum} - ${items[0]?.title || 'Productos/Servicios'} (${totalAmount.toFixed(2)} € IVA incl.)`;
 
   const msg: MarketMessage = {
     id: generateId('msg'),
@@ -25232,7 +25461,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
     invoiceData: {
       id: linkedOrder.id,
       orderId: linkedOrder.id,
-      invoiceNumber: invoiceNum,
+      invoiceNumber: finalOrderInvoiceNum,
       concept: concept || items[0]?.title || 'Factura comercial',
       items: items.map(i => ({
         announcementId: 'manual_item',
@@ -25251,7 +25480,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
       vatRate,
       vatAmount,
       totalAmount,
-      issuedAt: now.toISOString(),
+      issuedAt: finalOrderInvoicedAt,
       sellerId: senderId,
       sellerName: sender.name,
       sellerLevel: sender.level || 1,
@@ -25271,7 +25500,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
     db,
     recipientId,
     'Nueva factura recibida en chat',
-    `${sender.name} te ha enviado la factura oficial ${invoiceNum} por un importe total de ${totalAmount.toFixed(2)} € en mensajería directa.`,
+    `${sender.name} te ha enviado la factura oficial ${finalOrderInvoiceNum} por un importe total de ${totalAmount.toFixed(2)} € en mensajería directa.`,
     'order_approved',
     linkedOrder.id
   );
@@ -25282,7 +25511,7 @@ app.post('/api/market/messages/send-manual-invoice', (req, res) => {
     success: true,
     message: msg,
     order: linkedOrder,
-    invoiceNumber: invoiceNum
+    invoiceNumber: finalOrderInvoiceNum
   });
 });
 

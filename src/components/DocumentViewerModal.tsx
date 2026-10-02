@@ -116,7 +116,7 @@ export default function DocumentViewerModal({ data, onClose }: DocumentViewerMod
       textContent = `================================================
 FACTURA OFICIAL DE ${isRent ? 'ARRENDAMIENTO' : 'COMPRAVENTA DE INMUEBLE'}
 Nº Factura Única: FAC-2026-${(acq?.id || '101').toUpperCase()}
-Fecha de Expedición: ${new Date(acq?.purchaseDate || Date.now()).toLocaleDateString('es-ES')}
+Fecha de Expedición: ${new Date(acq?.purchaseDate || (acq as any)?.fecha_compra || (acq as any)?.fechaCompra || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES')}
 ------------------------------------------------
 EMISOR (Vendedor/Arrendador):
 Inmobiliaria Polígonos de España S.A.
@@ -150,7 +150,7 @@ Forma de pago: ${acq?.paymentMethod === 'contado' ? 'Al contado' : 'Pago aplazad
       textContent = `================================================
 FACTURA OFICIAL DE COMPRA DE MAQUINARIA INDUSTRIAL
 Nº Factura Única: FAC-2026-${(mac?.id || '201').toUpperCase()}
-Fecha de Expedición: ${new Date(mac?.purchaseDate || Date.now()).toLocaleDateString('es-ES')}
+Fecha de Expedición: ${new Date(mac?.purchaseDate || (mac as any)?.fecha_compra || (mac as any)?.fechaCompra || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES')}
 ------------------------------------------------
 PROVEEDOR / EMISOR:
 Maquinarias e Instalaciones Industriales S.A.
@@ -187,7 +187,7 @@ Forma de pago: ${mac?.paymentMethod === 'contado' ? 'Al contado' : 'Pago aplazad
       textContent = `================================================
 FACTURA DE TRASLADO Y MONTAJE DE MAQUINARIA INDUSTRIAL
 Nº Factura: ${invoiceNo}
-Fecha: ${relInv?.issueDate ? new Date(relInv.issueDate).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES')}
+Fecha: ${relInv?.issueDate ? new Date(relInv.issueDate).toLocaleDateString('es-ES') : (mac?.purchaseDate ? new Date(mac.purchaseDate).toLocaleDateString('es-ES') : '—')}
 ------------------------------------------------
 PROVEEDOR: Logística y Montajes Industriales España S.L. (CIF: B-88442211)
 CLIENTE: ${relInv?.companyName || mac?.studentName || 'Empresa estudiante'}
@@ -210,11 +210,13 @@ TOTAL PAGADO: ${formatNumber(totalAmount)} € (PAGADO AL CONTADO)
       const code = `EXT-2026-${(ob?.id || '001').toUpperCase()}`;
       const isPaid = ob?.status === 'pagado';
       const instrumentName = ob?.type === 'pagare' ? 'Pagaré mercantil' : ob?.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota de alquiler';
+      const extractEmissionDate = ob?.createdAt || ob?.paidDate || ob?.dueDate;
+      const formattedExtractDate = extractEmissionDate ? new Date(extractEmissionDate).toLocaleDateString('es-ES') : '';
 
       textContent = `================================================
 EXTRACTO CONTABLE DE Pago aplazado / efecto mercantil
 Nº extracto único: ${code}
-Fecha de emisión extracto: ${new Date().toLocaleDateString('es-ES')}
+Fecha de emisión extracto: ${formattedExtractDate}
 ------------------------------------------------
 TITULAR Y DEUDOR:
 ${ob?.studentName || 'Empresa estudiante'}
@@ -222,11 +224,11 @@ ${ob?.studentName || 'Empresa estudiante'}
 OPERACIÓN ORIGEN:
 Concepto: ${ob?.propertyTitle || 'Operación empresarial'}
 Tipo de Efecto: ${instrumentName} (${ob?.installmentNumber || 1}/${ob?.totalInstallments || 1})
-Vencimiento: ${new Date(ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
+Vencimiento: ${ob?.dueDate ? new Date(ob.dueDate).toLocaleDateString('es-ES') : '—'}
 ------------------------------------------------
 LIQUIDACIÓN DEL VENCIMIENTO:
 Importe del Vencimiento: ${formatNumber(ob?.amount || 0)} €
-Estado: ${isPaid ? `PAGADO Y ABONADO el ${new Date(ob?.paidDate || Date.now()).toLocaleDateString('es-ES')}` : 'PENDIENTE DE COBRO / VENCIMIENTO'}
+Estado: ${isPaid ? `PAGADO Y ABONADO el ${ob?.paidDate ? new Date(ob.paidDate).toLocaleDateString('es-ES') : '—'}` : 'PENDIENTE DE COBRO / VENCIMIENTO'}
 ================================================`;
     } else if (data.type === 'loan_statement') {
       const loan = data.loan;
@@ -242,7 +244,7 @@ Estado: ${isPaid ? `PAGADO Y ABONADO el ${new Date(ob?.paidDate || Date.now()).t
 BANCO CENTRAL HIPOTECARIO S.A.
 PÓLIZA DE PRÉSTAMO HIPOTECARIO Y LIQUIDACIÓN
 Nº póliza única: POL-HIP-2026-${(loan?.id || '000').toUpperCase()}
-Fecha: ${new Date().toLocaleDateString('es-ES')}
+Fecha: ${new Date(loan?.createdAt || loan?.acceptedAt || (loan as any)?.fechaAprobacion || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES')}
 ------------------------------------------------
 PRESTATARIO / TITULAR:
 ${loan?.studentName || 'Estudiante'}
@@ -356,7 +358,7 @@ Estado Contable: EJECUTADO Y ABONADO
             const landValue = Number(((basePrice * landPct) / 100).toFixed(2));
             const buildingValue = Number((basePrice - landValue).toFixed(2));
             const invoiceNo = `FAC-2026-${(acq?.id || '101').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
-            const issueDate = new Date(acq?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
+            const issueDate = new Date(acq?.purchaseDate || (acq as any)?.fecha_compra || (acq as any)?.fechaCompra || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES', {
               year: 'numeric', month: 'long', day: 'numeric'
             });
 
@@ -527,7 +529,7 @@ Estado Contable: EJECUTADO Y ABONADO
             const downPayment = mac?.downPaymentPaid || totalPrice;
             const pendingBalance = mac?.pendingBalance || 0;
             const invoiceNo = `FAC-2026-${(mac?.id || '201').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
-            const issueDate = new Date(mac?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
+            const issueDate = new Date(mac?.purchaseDate || (mac as any)?.fecha_compra || (mac as any)?.fechaCompra || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES', {
               year: 'numeric', month: 'long', day: 'numeric'
             });
 
@@ -847,7 +849,7 @@ Estado Contable: EJECUTADO Y ABONADO
             const ivaAmount = veh?.ivaAmount || (basePrice * 0.21);
             const totalPrice = veh?.totalPrice || (basePrice + ivaAmount);
             const invoiceNo = `FAC-VEH-2026-${(veh?.id || '301').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
-            const issueDate = new Date(veh?.purchaseDate || Date.now()).toLocaleDateString('es-ES', {
+            const issueDate = new Date(veh?.purchaseDate || (veh as any)?.fecha_compra || (veh as any)?.fechaCompra || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES', {
               year: 'numeric', month: 'long', day: 'numeric'
             });
 
@@ -963,6 +965,8 @@ Estado Contable: EJECUTADO Y ABONADO
             const extractNo = `EXT-2026-${(ob?.id || '001').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
             const isPaid = ob?.status === 'pagado';
             const instrumentName = ob?.type === 'pagare' ? 'Pagaré mercantil' : ob?.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota de alquiler';
+            const extractEmissionDate = ob?.createdAt || ob?.paidDate || ob?.dueDate;
+            const formattedExtractDate = extractEmissionDate ? new Date(extractEmissionDate).toLocaleDateString('es-ES') : '';
 
             return (
               <div className="space-y-8">
@@ -986,7 +990,7 @@ Estado Contable: EJECUTADO Y ABONADO
                     <span className="text-[10px] uppercase font-bold text-indigo-800 block">Extracto contable único</span>
                     <span className="text-base font-extrabold text-slate-900 block">{extractNo}</span>
                     <span className="text-[11px] text-slate-600 block mt-1">
-                      Fecha extracto: {new Date().toLocaleDateString('es-ES')}
+                      Fecha extracto: {formattedExtractDate}
                     </span>
                   </div>
                 </div>
@@ -1034,7 +1038,7 @@ Estado Contable: EJECUTADO Y ABONADO
                     <div className="bg-white p-3.5 rounded-lg border border-slate-200">
                       <span className="text-[10px] text-slate-400 font-sans uppercase block">Fecha de vencimiento</span>
                       <span className="text-xs font-bold text-slate-900 block mt-0.5">
-                        {new Date(ob?.dueDate || Date.now()).toLocaleDateString('es-ES')}
+                        {ob?.dueDate ? new Date(ob.dueDate).toLocaleDateString('es-ES') : '—'}
                       </span>
                     </div>
                   </div>
@@ -1043,7 +1047,7 @@ Estado Contable: EJECUTADO Y ABONADO
                     <div>
                       <span className="text-xs font-sans font-bold text-slate-800 block">Importe del extracto / vencimiento:</span>
                       <span className="text-[10px] text-slate-500 font-sans">
-                        {isPaid ? `Abonado en cuenta el ${new Date(ob?.paidDate || Date.now()).toLocaleDateString('es-ES')}` : 'Cargo programado mediante vencimiento automático'}
+                        {isPaid ? (ob?.paidDate ? `Abonado en cuenta el ${new Date(ob.paidDate).toLocaleDateString('es-ES')}` : 'Abonado en cuenta') : 'Cargo programado mediante vencimiento automático'}
                       </span>
                     </div>
                     <span className={`text-lg font-extrabold px-3 py-1 rounded-lg border ${isPaid ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-900 bg-amber-50 border-amber-300'}`}>
@@ -1095,7 +1099,7 @@ Estado Contable: EJECUTADO Y ABONADO
                     <span className="text-[10px] uppercase font-bold text-emerald-800 block">Póliza de préstamo única</span>
                     <span className="text-base font-extrabold text-slate-900 block">POL-HIP-2026-{(loan?.id || '001').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}</span>
                     <span className="text-[11px] text-slate-600 block mt-1">
-                      Fecha operación: {new Date(loan?.createdAt || Date.now()).toLocaleDateString('es-ES')}
+                      Fecha operación: {new Date(loan?.createdAt || loan?.acceptedAt || (loan as any)?.fechaAprobacion || '2026-09-01T00:00:00.000Z').toLocaleDateString('es-ES')}
                     </span>
                   </div>
                 </div>

@@ -1288,10 +1288,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     if (existingOrder) {
       const normalized = normalizeInvoiceOrder({
         ...existingOrder,
+        invoicedAt: existingOrder.invoicedAt || invData.issuedAt || invData.invoicedAt || existingOrder.requestedAt,
+        invoiceNumber: invData.invoiceNumber || existingOrder.invoiceNumber,
         sellerLevel: existingOrder.sellerLevel || invData.sellerLevel,
         buyerLevel: existingOrder.buyerLevel || invData.buyerLevel,
         deliveryAddress: existingOrder.deliveryAddress || invData.deliveryAddress,
-        invoiceNumber: invData.invoiceNumber || existingOrder.invoiceNumber,
         discountAmount: invData.discountAmount !== undefined ? invData.discountAmount : existingOrder.discountAmount,
         transportCost: invData.transportCost !== undefined ? invData.transportCost : existingOrder.transportCost,
         insuranceFee: invData.insuranceFee !== undefined ? invData.insuranceFee : (invData.insuranceCost !== undefined ? invData.insuranceCost : ((existingOrder as any).insuranceFee || (existingOrder as any).insuranceCost)),
@@ -1336,8 +1337,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       needsTransport: Boolean(invData.transportCost > 0),
       deliveryAddress: invData.deliveryAddress || 'Dirección comercial registrada',
       status: 'facturado',
-      requestedAt: invData.issuedAt || new Date().toISOString(),
-      invoicedAt: invData.issuedAt || new Date().toISOString(),
+      requestedAt: invData.issuedAt || invData.invoicedAt || invData.timestamp || '2026-09-01T00:00:00.000Z',
+      invoicedAt: invData.issuedAt || invData.invoicedAt || invData.timestamp || '2026-09-01T00:00:00.000Z',
       invoiceNumber: invData.invoiceNumber,
       items: invData.items || []
     });
@@ -1423,7 +1424,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     if (!rawOrder) return;
     const order = normalizeInvoiceOrder(rawOrder);
     const invoiceNum = order.invoiceNumber || `FACT-2026-${order.id.slice(-4)}`;
-    const invDate = order.invoicedAt ? new Date(order.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
+    const invDate = (order.invoicedAt || order.requestedAt) ? new Date(order.invoicedAt || order.requestedAt).toLocaleDateString('es-ES') : '—';
 
     const isTransport = isTransportInvoiceOrder(order);
 
@@ -4048,7 +4049,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   .map((rawOrd) => {
                     const ord = normalizeInvoiceOrder(rawOrd);
                     const invNumber = ord.invoiceNumber || `FACT-2026-${ord.id.slice(-4)}`;
-                    const invDate = ord.invoicedAt ? new Date(ord.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
+                    const invDate = (ord.invoicedAt || ord.requestedAt) ? new Date(ord.invoicedAt || ord.requestedAt).toLocaleDateString('es-ES') : '—';
 
                     return (
                       <tr key={ord.id} className="hover:bg-slate-800/30 transition-colors">
@@ -4142,7 +4143,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     {selectedInvoiceOrder.invoiceNumber || `FACT-2026-${selectedInvoiceOrder.id.slice(-4)}`}
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Fecha: {selectedInvoiceOrder.invoicedAt ? new Date(selectedInvoiceOrder.invoicedAt).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES')}
+                    Fecha: {(selectedInvoiceOrder.invoicedAt || selectedInvoiceOrder.requestedAt) ? new Date(selectedInvoiceOrder.invoicedAt || selectedInvoiceOrder.requestedAt).toLocaleDateString('es-ES') : '—'}
                   </div>
                   <div className="text-xs text-slate-500">
                     Ref. Pedido: {selectedInvoiceOrder.id}
