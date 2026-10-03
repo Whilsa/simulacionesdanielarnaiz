@@ -9247,15 +9247,16 @@ app.post('/api/machinery/buy', async (req, res) => {
   const { studentId, machineryId, optionId, targetNaveId, paymentMethod } = req.body;
   const db = readDb();
 
-  let student = db.users.find(u => u.id === studentId);
+  let student = db.users.find(u => u.id === studentId || u.username === studentId);
   if (!student && !dbPool) {
     return res.status(404).json({ error: 'Estudiante no encontrado' });
   }
 
   // Check for automatic payments and overdue debt blocking
   if (student) {
-    await processStudentAutomaticPayments(db, studentId);
-    const studentStatus = getStudentPaymentStatus(db, studentId);
+    await processStudentAutomaticPayments(db, student.id);
+    const updatedDb = readDb();
+    const studentStatus = getStudentPaymentStatus(updatedDb, student.id);
     if (studentStatus.isBlocked) {
       return res.status(400).json({
         error: `Operación de compra de maquinaria bloqueada: Tienes vencimientos impagados pendientes por un total de ${formatCurrency(studentStatus.totalOverdueAmount)} (incluyendo el 5% de interés de demora). Tu cuenta no puede quedar en números rojos. Las salidas manuales de dinero están bloqueadas hasta regularizar tu saldo.`
@@ -10964,19 +10965,44 @@ function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date | stri
 }
 
 // Automatic processing for discounted and collection promissory notes when due date arrives (PostgreSQL ACID)
-async function processDiscountedPromissoryNotesMaturityPG(db: DatabaseSchema): Promise<boolean> {
+async function processDiscountedPromissoryNotesMaturityPG(db: DatabaseSchema, targetStudentId?: string): Promise<boolean> {
   if (!dbPool) return false;
   let modified = false;
 
   try {
-    const candidateQuery = await dbPool.query(
-      `SELECT id 
-       FROM market_messages 
-       WHERE type = 'promissory_note'
-         AND (invoice_data->>'status' = 'descontado' OR invoice_data->>'status' = 'gestion_cobro')
-         AND (invoice_data->>'maturityProcessed' IS NULL OR invoice_data->>'maturityProcessed' = 'false')
-       ORDER BY id ASC`
-    );
+    const nowIso = new Date().toISOString();
+    const todayDateStr = nowIso.slice(0, 10);
+    const candidateQuery = targetStudentId
+      ? await dbPool.query(
+          `SELECT id 
+           FROM market_messages 
+           WHERE type = 'promissory_note'
+             AND (invoice_data->>'status' = 'descontado' OR invoice_data->>'status' = 'gestion_cobro')
+             AND (invoice_data->>'maturityProcessed' IS NULL OR invoice_data->>'maturityProcessed' = 'false')
+             AND (
+               invoice_data->>'dueDate' IS NULL 
+               OR SUBSTRING(invoice_data->>'dueDate', 1, 10) <= $1
+             )
+             AND (
+               sender_id = $2 OR recipient_id = $2
+               OR invoice_data->>'issuerId' = $2 OR invoice_data->>'beneficiaryId' = $2
+             )
+           ORDER BY id ASC`,
+          [todayDateStr, targetStudentId]
+        )
+      : await dbPool.query(
+          `SELECT id 
+           FROM market_messages 
+           WHERE type = 'promissory_note'
+             AND (invoice_data->>'status' = 'descontado' OR invoice_data->>'status' = 'gestion_cobro')
+             AND (invoice_data->>'maturityProcessed' IS NULL OR invoice_data->>'maturityProcessed' = 'false')
+             AND (
+               invoice_data->>'dueDate' IS NULL 
+               OR SUBSTRING(invoice_data->>'dueDate', 1, 10) <= $1
+             )
+           ORDER BY id ASC`,
+          [todayDateStr]
+        );
 
     for (const candidateRow of candidateQuery.rows) {
       try {
@@ -11575,9 +11601,9 @@ async function processDiscountedPromissoryNotesMaturityPG(db: DatabaseSchema): P
 }
 
 // Automatic processing for discounted promissory notes when due date arrives
-async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): Promise<boolean> {
+async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema, targetStudentId?: string): Promise<boolean> {
   if (dbPool) {
-    return await processDiscountedPromissoryNotesMaturityPG(db);
+    return await processDiscountedPromissoryNotesMaturityPG(db, targetStudentId);
   }
 
   if (!db.marketMessages || db.marketMessages.length === 0) return false;
@@ -12277,11 +12303,51 @@ async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema): Pro
   return modified;
 }
 
+async function resolveCanonicalStudentAccount(
+  identifier: string,
+  client?: pg.PoolClient | pg.Pool
+): Promise<{
+  id: string;
+  alumno: string;
+  usuario: string;
+  account_number: string;
+  saldo: number;
+  role: string;
+  level: number;
+} | null> {
+  const p = client || dbPool;
+  if (!p) return null;
+  try {
+    const res = await p.query(
+      `SELECT id, alumno, usuario, account_number, saldo, role, level
+       FROM cuentas
+       WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1) OR account_number = $1
+       LIMIT 1`,
+      [identifier]
+    );
+    if (res && res.rows.length > 0) {
+      const r = res.rows[0];
+      return {
+        id: r.id,
+        alumno: r.alumno,
+        usuario: r.usuario,
+        account_number: r.account_number,
+        saldo: Number(r.saldo || 0),
+        role: r.role,
+        level: Number(r.level || 1)
+      };
+    }
+  } catch (err) {
+    console.error('[resolveCanonicalStudentAccount Error]:', err);
+  }
+  return null;
+}
+
 async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudentId?: string): Promise<boolean> {
   const now = new Date();
   let modified = false;
 
-  if (await processDiscountedPromissoryNotesMaturity(db)) {
+  if (await processDiscountedPromissoryNotesMaturity(db, targetStudentId)) {
     modified = true;
   }
 
@@ -12290,20 +12356,46 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
     modified = true;
   }
 
+  let canonicalTargetId = targetStudentId;
+  if (targetStudentId && dbPool) {
+    const canon = await resolveCanonicalStudentAccount(targetStudentId);
+    if (canon) {
+      canonicalTargetId = canon.id;
+      let memU = (db.users || []).find(u => u.id === canon.id || u.username === canon.usuario);
+      if (memU) {
+        memU.balance = canon.saldo;
+        memU.id = canon.id;
+        memU.username = canon.usuario;
+        memU.accountNumber = canon.account_number;
+      } else {
+        if (!db.users) db.users = [];
+        db.users.push({
+          id: canon.id,
+          name: canon.alumno,
+          username: canon.usuario,
+          role: (canon.role as any) || 'student',
+          accountNumber: canon.account_number,
+          balance: canon.saldo,
+          level: (canon.level as any) || 1
+        });
+      }
+    }
+  }
+
   let students: User[] = [];
-  if (targetStudentId) {
-    const existing = (db.users || []).find(u => u.id === targetStudentId);
+  if (canonicalTargetId) {
+    const existing = (db.users || []).find(u => u.id === canonicalTargetId || u.username === canonicalTargetId);
     if (existing) {
       students = [existing];
     } else if (dbPool) {
       try {
-        const uRes = await dbPool.query('SELECT id, alumno, role, account_number, saldo FROM cuentas WHERE id = $1', [targetStudentId]);
+        const uRes = await dbPool.query('SELECT id, alumno, usuario, role, account_number, saldo FROM cuentas WHERE id = $1 OR usuario = $1', [canonicalTargetId]);
         if (uRes.rows.length > 0) {
           const r = uRes.rows[0];
           const synUser: User = {
             id: r.id,
             name: r.alumno || r.id,
-            username: r.id,
+            username: r.usuario || r.id,
             role: (r.role as any) || 'student',
             accountNumber: r.account_number || '',
             balance: Number(r.saldo || 0),
@@ -12318,6 +12410,32 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
       }
     }
   } else {
+    // If no targetStudentId, refresh balances of all students from PostgreSQL so PG is ALWAYS source of truth!
+    if (dbPool) {
+      try {
+        const allCuentas = await dbPool.query('SELECT id, alumno, usuario, account_number, saldo, role, level FROM cuentas WHERE role = $1', ['student']);
+        for (const cr of allCuentas.rows) {
+          const m = (db.users || []).find(u => u.id === cr.id || u.username === cr.usuario);
+          if (m) {
+            m.balance = Number(cr.saldo);
+            m.id = cr.id;
+          } else {
+            if (!db.users) db.users = [];
+            db.users.push({
+              id: cr.id,
+              name: cr.alumno,
+              username: cr.usuario,
+              role: 'student',
+              accountNumber: cr.account_number,
+              balance: Number(cr.saldo),
+              level: cr.level || 1
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[processStudentAutomaticPayments] Error refreshing accounts from PG:', err);
+      }
+    }
     students = (db.users || []).filter(u => u.role === 'student');
   }
 
@@ -12333,10 +12451,10 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
   const candidateLoansByStudent = new Map<string, CandidateLoan[]>();
   if (dbPool) {
     try {
-      const q = targetStudentId
-        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE alumno_id = $1 AND estado = 'active'`
+      const q = canonicalTargetId
+        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = 'active'`
         : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE estado = 'active'`;
-      const p = targetStudentId ? [targetStudentId] : [];
+      const p = canonicalTargetId ? [canonicalTargetId, targetStudentId || canonicalTargetId] : [];
       const pgLoansRes = await dbPool.query(q, p);
       for (const r of pgLoansRes.rows) {
         let sched: AmortizationRow[] = [];
@@ -12345,7 +12463,46 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
         } else if (Array.isArray(r.tabla_amortizacion)) {
           sched = r.tabla_amortizacion;
         }
-        const memRef = (db.loans || []).find(l => l.id === r.id);
+        let memRef = (db.loans || []).find(l => l.id === r.id);
+        if (memRef) {
+          memRef.schedule = sched;
+          memRef.status = (r.estado as any) || 'active';
+          if (r.garantia_inmueble_titulo) {
+            if (!memRef.collateral) memRef.collateral = {} as any;
+            memRef.collateral.propertyTitle = r.garantia_inmueble_titulo;
+          }
+          modified = true;
+        } else {
+          if (!db.loans) db.loans = [];
+          memRef = {
+            id: String(r.id),
+            studentId: String(r.alumno_id),
+            studentName: String(r.alumno_nombre || ''),
+            studentAccount: String(r.alumno_cuenta || ''),
+            requestedAmount: Number(r.importe_solicitado || 0),
+            offeredAmount: Number(r.importe_ofrecido || 0),
+            approvedAmount: r.importe_concedido ? Number(r.importe_concedido) : undefined,
+            termMonths: Number(r.plazo_meses || 180),
+            annualInterestRate: Number(r.tipo_interes || 4.5),
+            euriborRate: Number(r.euribor || 3.50),
+            spread: Number(r.diferencial || 1.00),
+            openingFee: Number(r.comision_apertura || 0),
+            monthlyPayment: Number(r.cuota_mensual || 0),
+            collateral: {
+              type: String(r.garantia_tipo || 'property') as any,
+              propertyId: r.garantia_inmueble_id,
+              propertyTitle: r.garantia_inmueble_titulo,
+              surfaceM2: Number(r.garantia_superficie_m2 || 0),
+              appraisalValue: Number(r.garantia_valor_tasacion || 0)
+            },
+            status: (String(r.estado) as any) || 'active',
+            requiresTeacherApproval: false,
+            createdAt: r.fecha_creacion ? new Date(r.fecha_creacion).toISOString() : new Date().toISOString(),
+            schedule: sched
+          };
+          db.loans.push(memRef);
+          modified = true;
+        }
         const lObj: CandidateLoan = {
           id: r.id,
           studentId: r.alumno_id,
@@ -12387,7 +12544,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
         if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) {
           continue; // Peer-to-peer marketplace promissory notes are transferred manually
         }
-        if (ob.studentId === student.id && (ob.status === 'pendiente' || ob.status === 'vencido')) {
+        if ((ob.studentId === student.id || ob.studentId === student.username) && (ob.status === 'pendiente' || ob.status === 'vencido')) {
           const dDate = new Date(ob.dueDate);
           if (dDate <= now) {
             const principal = ob.amount;
@@ -12435,9 +12592,12 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
     // 2. Loans: source candidate active loans from batch or fallback to db.loans
     let candidateLoans = candidateLoansByStudent.get(student.id) || [];
+    if (candidateLoans.length === 0 && student.username && candidateLoansByStudent.get(student.username)) {
+      candidateLoans = candidateLoansByStudent.get(student.username) || [];
+    }
 
     if (candidateLoans.length === 0 && db.loans) {
-      candidateLoans = (db.loans || []).filter(l => l.studentId === student.id && l.status === 'active').map(l => ({
+      candidateLoans = (db.loans || []).filter(l => (l.studentId === student.id || l.studentId === student.username) && (!l.status || l.status === 'active')).map(l => ({
         id: l.id,
         studentId: l.studentId,
         termMonths: l.termMonths,
@@ -12524,7 +12684,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               // IDEMPOTENCY BARRIER: If already paid, abort immediately without any debit or movement
               if (targetRow.paid) {
-                return { success: false, reason: 'already_paid' };
+                return { success: false, reason: 'already_paid', currentSchedule };
               }
 
               // Verify due date
@@ -12540,9 +12700,10 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               const accountLockRes = await client.query(
                 `SELECT id, alumno, saldo, usuario, password, account_number, role, level
                  FROM cuentas
-                 WHERE id = $1
+                 WHERE id = $1 OR id = $2 OR usuario = $2 OR account_number = $3
+                 LIMIT 1
                  FOR UPDATE`,
-                [student.id]
+                [loanRow.alumno_id, student.id, loanRow.alumno_cuenta]
               );
 
               if (!accountLockRes || accountLockRes.rows.length === 0) {
@@ -12551,10 +12712,12 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               const studentRow = accountLockRes.rows[0];
               const currentBalance = Number(studentRow.saldo);
+              const principal = Number(targetRow.payment);
+              const totalRequired = penalty > 0 ? Number((principal + penalty).toFixed(2)) : principal;
 
-              // Check balance sufficiency
-              if (currentBalance < targetRow.payment) {
-                // Insufficient balance: mark cuota overdue and update penalty in PostgreSQL atomically
+              // Check balance sufficiency from PostgreSQL under FOR UPDATE lock
+              if (currentBalance < principal) {
+                // Really insufficient: cannot even pay principal
                 targetRow.isOverdue = true;
                 targetRow.penaltyInterest = penalty;
 
@@ -12584,17 +12747,17 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               const nowIso = new Date().toISOString();
               const txId = generateId('tx');
 
-              const canPayPenalty = penalty > 0 && currentBalance >= Number((targetRow.payment + penalty).toFixed(2));
+              const canPayPenalty = penalty > 0 && currentBalance >= totalRequired;
               const penaltyPaid = canPayPenalty ? penalty : 0;
-              const totalDeduction = Number((targetRow.payment + penaltyPaid).toFixed(2));
+              const totalDeduction = Number((principal + penaltyPaid).toFixed(2));
               const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
 
-              // A. Update student account balance in cuentas
+              // A. Update student account balance in cuentas using canonical row ID
               await client.query(
                 `UPDATE cuentas
                  SET saldo = $1
                  WHERE id = $2`,
-                [newBalance, student.id]
+                [newBalance, studentRow.id]
               );
 
               // B. Insert main payment transfer in movimientos
@@ -12607,11 +12770,11 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                  VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                 [
                   txId + '-out',
-                  student.id,
-                  targetRow.payment,
+                  studentRow.id,
+                  principal,
                   nowIso,
                   concept,
-                  student.id,
+                  studentRow.id,
                   senderName,
                   senderAccount,
                   'corp-banco-central',
@@ -12631,11 +12794,11 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                    VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                   [
                     penaltyTxId + '-out',
-                    student.id,
+                    studentRow.id,
                     penaltyPaid,
                     penaltyIso,
                     penaltyConcept,
-                    student.id,
+                    studentRow.id,
                     senderName,
                     senderAccount,
                     'corp-banco-central',
@@ -12646,7 +12809,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
                 penaltyTx = {
                   id: penaltyTxId,
-                  senderId: student.id,
+                  senderId: studentRow.id,
                   senderName,
                   senderAccount,
                   receiverId: 'corp-banco-central',
@@ -12677,13 +12840,13 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               const newTransfer: Transfer = {
                 id: txId,
-                senderId: student.id,
+                senderId: studentRow.id,
                 senderName,
                 senderAccount,
                 receiverId: 'corp-banco-central',
                 receiverName: 'Banco Central Hipotecario S.A.',
                 receiverAccount: 'ES210001000299887700',
-                amount: targetRow.payment,
+                amount: principal,
                 concept,
                 timestamp: nowIso
               };
@@ -12694,6 +12857,10 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 if (memLoan) {
                   memLoan.schedule = currentSchedule;
                   memLoan.status = nextStatus as any;
+                }
+                const memStudent = (db.users || []).find(u => u.id === studentRow.id || u.username === studentRow.usuario);
+                if (memStudent) {
+                  memStudent.balance = newBalance;
                 }
                 student.balance = newBalance;
                 if (!db.transfers) db.transfers = [];
@@ -12715,7 +12882,12 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               }
               break; // Stop further deductions for this student
             } else if (txResult.reason === 'already_paid') {
-              // Already paid in another concurrent worker; continue to next item
+              const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
+              const sched = (txResult as any).currentSchedule;
+              if (memLoan && sched) {
+                memLoan.schedule = sched;
+                modified = true;
+              }
               continue;
             }
           } catch (err) {
@@ -12795,13 +12967,18 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             const itemProcessed = await withPostgresTransaction(async (client) => {
               // Lock student account in PostgreSQL
               const lockRes = await client.query(
-                'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-                [student.id]
+                `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+                 FROM cuentas
+                 WHERE id = $1 OR usuario = $1 OR account_number = $2
+                 LIMIT 1
+                 FOR UPDATE`,
+                [student.id, student.accountNumber]
               );
               if (!lockRes || lockRes.rows.length === 0) return false;
 
               const studentRow = lockRes.rows[0];
               const currentBalance = Number(studentRow.saldo);
+              const totalRequired = item.penaltyInterest > 0 ? Number((item.principal + item.penaltyInterest).toFixed(2)) : item.principal;
 
               if (currentBalance < item.principal) {
                 return false;
@@ -12810,19 +12987,35 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               const nowIso = new Date().toISOString();
               const txId = generateId('tx');
 
-              const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= Number((item.principal + item.penaltyInterest).toFixed(2));
+              const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= totalRequired;
               const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
               const totalDeduction = Number((item.principal + penaltyPaid).toFixed(2));
               const newBalance = Number((currentBalance - totalDeduction).toFixed(2));
 
-              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, student.id]);
+              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
 
               const ob = item.obligationRef!;
+
+              // Update obligation in PostgreSQL within the same transaction
+              await client.query(
+                `UPDATE obligaciones_pago
+                 SET estado = 'pagado', fecha_pago = $1
+                 WHERE id = $2`,
+                [nowIso, ob.id]
+              ).catch(() => {});
+
+              if (ob.adquisicion_id) {
+                await client.query(
+                  'UPDATE adquisiciones SET saldo_pendiente = GREATEST(0, COALESCE(saldo_pendiente, 0) - $1) WHERE id = $2',
+                  [ob.amount, ob.adquisicion_id]
+                ).catch(() => {});
+              }
+
               const newTransfer: Transfer = {
                 id: txId,
-                senderId: student.id,
-                senderName: student.name,
-                senderAccount: student.accountNumber,
+                senderId: studentRow.id,
+                senderName: studentRow.alumno,
+                senderAccount: studentRow.account_number,
                 receiverId: 'corp-tenedor-efectos',
                 receiverName: 'Tenedor de Efectos Comerciales S.A.',
                 receiverAccount: 'ES210001000299887755',
@@ -12834,7 +13027,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               await client.query(
                 `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                  VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-                [txId + '-out', student.id, item.principal, nowIso, item.concept, student.id, student.name, student.accountNumber, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+                [txId + '-out', studentRow.id, item.principal, nowIso, item.concept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
               );
 
               let penaltyTx: Transfer | null = null;
@@ -12843,9 +13036,9 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 const penaltyConcept = `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`;
                 penaltyTx = {
                   id: penaltyTxId,
-                  senderId: student.id,
-                  senderName: student.name,
-                  senderAccount: student.accountNumber,
+                  senderId: studentRow.id,
+                  senderName: studentRow.alumno,
+                  senderAccount: studentRow.account_number,
                   receiverId: 'corp-tenedor-efectos',
                   receiverName: 'Tenedor de Efectos Comerciales S.A.',
                   receiverAccount: 'ES210001000299887755',
@@ -12857,7 +13050,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 await client.query(
                   `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                    VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-                  [penaltyTxId + '-out', student.id, penaltyPaid, penaltyTx.timestamp, penaltyConcept, student.id, student.name, student.accountNumber, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+                  [penaltyTxId + '-out', studentRow.id, penaltyPaid, penaltyTx.timestamp, penaltyConcept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
                 );
               }
 
@@ -12867,7 +13060,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               ob.penaltyInterest = 0;
               ob.totalOverdueAmount = 0;
 
-              const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
+              const acq = db.acquisitions?.find(a => a.id === ob.acquisitionId);
               if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
                 acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
                 syncAcquisitionToSupabase(acq).catch(e => console.error(e));
@@ -12887,6 +13080,9 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               // Sync student in-memory balance to match DB
               student.balance = newBalance;
+              const memStudent = (db.users || []).find(u => u.id === studentRow.id || u.username === studentRow.usuario);
+              if (memStudent) memStudent.balance = newBalance;
+
               modified = true;
               return true;
             });
@@ -12980,7 +13176,7 @@ async function processLoanPayments(db: DatabaseSchema) {
 }
 
 function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
-  const student = db.users.find(u => u.id === studentId);
+  const student = db.users.find(u => u.id === studentId || u.username === studentId);
   const currentBalance = student ? student.balance : 0;
   const now = new Date();
   const thirtyFiveDaysLater = new Date(now.getTime() + 35 * 86400 * 1000);
@@ -12994,7 +13190,8 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
       if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) {
         continue; // Excluded from upcoming payments (P2P market notes)
       }
-      if (ob.studentId === studentId && ob.status !== 'pagado') {
+      const isObMatch = ob.studentId === studentId || (student && (ob.studentId === student.id || ob.studentId === student.username));
+      if (isObMatch && ob.status !== 'pagado') {
         const dDate = new Date(ob.dueDate);
         const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
                             ob.propertyTitle?.toLowerCase().includes('línea') ||
@@ -13050,7 +13247,8 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   // 2. Loans
   if (db.loans) {
     for (const loan of db.loans) {
-      if (loan.studentId === studentId && loan.status === 'active') {
+      const isLoanMatch = loan.studentId === studentId || (student && (loan.studentId === student.id || loan.studentId === student.username));
+      if (isLoanMatch && (!loan.status || loan.status === 'active')) {
         for (const row of loan.schedule) {
           if (!row.paid) {
             const dDate = new Date(row.dueDate);
@@ -13088,7 +13286,8 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   // 3. Tax Obligations (IRPF & Seguridad Social)
   if (db.taxObligations) {
     for (const tax of db.taxObligations) {
-      if (tax.studentId === studentId && tax.status !== 'pagado') {
+      const isTaxMatch = tax.studentId === studentId || (student && (tax.studentId === student.id || tax.studentId === student.username));
+      if (isTaxMatch && tax.status !== 'pagado') {
         const dDate = new Date(tax.dueDate);
         const principal = tax.amount;
         const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
@@ -13122,7 +13321,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   }
 
   // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas el día 26 del mes correspondiente y tributos el 20 TGSS / 15 AEAT)
-  const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId);
+  const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId || (student && (e.studentId === student.id || e.studentId === student.username)));
   if (studentEmps.length > 0) {
     const curYear = now.getFullYear();
     const curMonth = now.getMonth(); // 0-indexed
@@ -13495,7 +13694,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
 // SISTEMA DE VERIFICACIÓN Y AUDITORÍA INTEGRAL DE PAGOS APLAZADOS
 // ---------------------------------------------------------------------------
 function buildDeferredPaymentsAuditReport(db: DatabaseSchema, studentId: string): DeferredPaymentsAuditReport {
-  const student = db.users.find(u => u.id === studentId);
+  const student = db.users.find(u => u.id === studentId || u.username === studentId);
   const studentName = student ? student.name : 'Empresa';
   const companyName = (student as any)?.companyName || studentName;
   const currentBalance = student ? student.balance : 0;
@@ -13966,7 +14165,8 @@ function buildDeferredPaymentsAuditReport(db: DatabaseSchema, studentId: string)
   // 7. PRÉSTAMOS BANCARIOS E HIPOTECARIOS RECIBIDOS (Cuadros de amortización)
   if (db.loans) {
     for (const loan of db.loans) {
-      if (loan.studentId === studentId && (loan.status === 'active' || loan.status === 'paid_off')) {
+      const isLoanMatch = loan.studentId === studentId || (student && (loan.studentId === student.id || loan.studentId === student.username));
+      if (isLoanMatch && (!loan.status || loan.status === 'active' || loan.status === 'paid_off')) {
         for (const row of loan.schedule || []) {
           const dDate = new Date(row.dueDate);
           const daysRem = getDaysUntil(row.dueDate);
@@ -14174,14 +14374,16 @@ function buildDeferredPaymentsAuditReport(db: DatabaseSchema, studentId: string)
 }
 
 // GET deferred payments audit for a student
-app.get('/api/student/deferred-payments-audit', (req, res) => {
+app.get('/api/student/deferred-payments-audit', async (req, res) => {
   const { studentId } = req.query;
   if (!studentId || typeof studentId !== 'string') {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
 
   const db = readDb();
-  const audit = buildDeferredPaymentsAuditReport(db, studentId);
+  await processStudentAutomaticPayments(db, studentId);
+  const updatedDb = readDb();
+  const audit = buildDeferredPaymentsAuditReport(updatedDb, studentId);
 
   res.json({
     success: true,
@@ -14246,14 +14448,16 @@ app.get('/api/teacher/deferred-payments-audit', (req, res) => {
 });
 
 // GET upcoming payments for student
-app.get('/api/student/upcoming-payments', (req, res) => {
+app.get('/api/student/upcoming-payments', async (req, res) => {
   const { studentId } = req.query;
   if (!studentId || typeof studentId !== 'string') {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
 
   const db = readDb();
-  const status = getStudentPaymentStatus(db, studentId);
+  await processStudentAutomaticPayments(db, studentId);
+  const updatedDb = readDb();
+  const status = getStudentPaymentStatus(updatedDb, studentId);
 
   res.json({
     success: true,
