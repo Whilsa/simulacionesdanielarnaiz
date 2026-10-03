@@ -14465,14 +14465,128 @@ app.get('/api/student/upcoming-payments', async (req, res) => {
   });
 });
 
-// GET all loans or student's loans
-app.get('/api/loans', (req, res) => {
+// GET all loans or student's loans (PostgreSQL as source of truth)
+app.get('/api/loans', async (req, res) => {
   const { studentId } = req.query;
-  const db = readDb();
 
+  if (dbPool) {
+    try {
+      let query = `
+        SELECT 
+          id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
+          plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
+          garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
+          estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+        FROM prestamos
+      `;
+      const params: any[] = [];
+
+      if (studentId && typeof studentId === 'string' && studentId.trim() !== '') {
+        const cleanId = studentId.trim();
+        // Resolve student canonical ID, username and account from cuentas case-insensitively
+        const studentRes = await safeDbQuery(
+          `SELECT id, usuario, alumno, account_number FROM cuentas 
+           WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1) OR account_number = $1 
+           LIMIT 1`,
+          [cleanId]
+        );
+        const sRow = studentRes?.rows?.[0];
+        const canonicalId = sRow?.id ? String(sRow.id) : cleanId;
+        const username = sRow?.usuario ? String(sRow.usuario) : cleanId;
+
+        query += ' WHERE (alumno_id = $1 OR alumno_id = $2 OR alumno_id = $3 OR LOWER(alumno_id) = LOWER($1) OR LOWER(alumno_id) = LOWER($2) OR LOWER(alumno_id) = LOWER($3)) ORDER BY fecha_creacion DESC';
+        params.push(canonicalId, username, cleanId);
+      } else {
+        query += ' ORDER BY fecha_creacion DESC';
+      }
+
+      const resLoans = await safeDbQuery(query, params);
+      if (resLoans && resLoans.rows) {
+        const mappedLoans: BankLoan[] = resLoans.rows.map(row => {
+          let schedule: any[] = [];
+          if (typeof row.tabla_amortizacion === 'string') {
+            try {
+              schedule = JSON.parse(row.tabla_amortizacion);
+            } catch (e) {
+              schedule = [];
+            }
+          } else if (Array.isArray(row.tabla_amortizacion)) {
+            schedule = row.tabla_amortizacion;
+          }
+
+          const approvedAmt = row.importe_concedido 
+            ? Number(row.importe_concedido) 
+            : ((row.estado === 'offered' || row.estado === 'active' || row.estado === 'teacher_offered') ? Number(row.importe_ofrecido || 0) : undefined);
+
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre || ''),
+            studentAccount: String(row.alumno_cuenta || ''),
+            requestedAmount: Number(row.importe_solicitado || 0),
+            offeredAmount: Number(row.importe_ofrecido || 0),
+            approvedAmount: approvedAmt,
+            termMonths: Number(row.plazo_meses || 12),
+            annualInterestRate: Number(row.tipo_interes || 4.5),
+            euriborRate: Number(row.euribor || 3.5),
+            spread: Number(row.diferencial || 1.0),
+            openingFee: Number(row.comision_apertura || 0),
+            monthlyPayment: Number(row.cuota_mensual || 0),
+            collateral: {
+              type: (row.garantia_tipo as 'property' | 'private_residence') || 'property',
+              propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
+              propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
+              surfaceM2: Number(row.garantia_superficie_m2 || 0),
+              appraisalValue: Number(row.garantia_valor_tasacion || 0)
+            },
+            status: (row.estado as LoanStatus) || 'offered',
+            requiresTeacherApproval: Boolean(row.requiere_profesor),
+            teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
+            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+            acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
+            schedule
+          };
+        });
+
+        // Sync in-memory cache/db.json with PostgreSQL state
+        try {
+          const db = readDb();
+          if (!db.loans) db.loans = [];
+          for (const ml of mappedLoans) {
+            const idx = db.loans.findIndex(l => l.id === ml.id);
+            if (idx !== -1) {
+              db.loans[idx] = ml;
+            } else {
+              db.loans.unshift(ml);
+            }
+          }
+          writeDb(db);
+        } catch (cacheErr) {}
+
+        return res.json({ success: true, loans: mappedLoans });
+      }
+    } catch (pgErr) {
+      console.error('[GET /api/loans PostgreSQL Error]:', pgErr);
+    }
+  }
+
+  // Fallback in-memory if PostgreSQL is unavailable
+  const db = readDb();
   let loans = db.loans || [];
-  if (studentId) {
-    loans = loans.filter(l => l.studentId === studentId);
+  if (studentId && typeof studentId === 'string' && studentId.trim() !== '') {
+    const cleanId = studentId.trim().toLowerCase();
+    const student = (db.users || []).find(u => 
+      u.id?.toLowerCase() === cleanId || 
+      u.username?.toLowerCase() === cleanId ||
+      u.accountNumber?.toLowerCase() === cleanId
+    );
+    const targetIds = new Set([
+      cleanId, 
+      student?.id?.toLowerCase(), 
+      student?.username?.toLowerCase(),
+      student?.accountNumber?.toLowerCase()
+    ].filter(Boolean));
+    loans = loans.filter(l => targetIds.has(l.studentId?.toLowerCase()));
   }
 
   res.json({ success: true, loans });
@@ -14510,11 +14624,11 @@ app.post('/api/loans/request', async (req, res) => {
     const result = await executeWithIdempotency(idemKey, async (key) => {
       if (dbPool) {
         return await withPostgresTransaction(async (client) => {
-          // 1. Lock student account row in 'cuentas' (Serialización por alumno)
+          // 1. Lock student account row in 'cuentas' (Serialización por alumno con resolución canónica)
           const studentLock = await client.query(
             `SELECT id, alumno, saldo, usuario, account_number, role, level
              FROM cuentas
-             WHERE id = $1 OR usuario = $1
+             WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1) OR account_number = $1
              FOR UPDATE`,
             [studentId]
           );
@@ -14527,6 +14641,7 @@ app.post('/api/loans/request', async (req, res) => {
 
           const studentRow = studentLock.rows[0];
           const effectiveStudentId = String(studentRow.id);
+          const studentUsername = String(studentRow.usuario || '');
           const studentName = String(studentRow.alumno);
           const studentAccount = String(studentRow.account_number || '');
 
@@ -14545,8 +14660,8 @@ app.post('/api/loans/request', async (req, res) => {
               `SELECT id, inmueble_id, inmueble_titulo, superficie_m2, alumno_id
                FROM adquisiciones
                WHERE (id = $1 OR inmueble_id = $1)
-                 AND (alumno_id = $2 OR alumno_id = $3)`,
-              [propertyId, effectiveStudentId, studentRow.usuario || effectiveStudentId]
+                 AND (alumno_id = $2 OR alumno_id = $3 OR LOWER(alumno_id) = LOWER($4))`,
+              [propertyId, effectiveStudentId, studentUsername, studentId]
             );
 
             if (!acqRes || acqRes.rows.length === 0) {
@@ -14576,8 +14691,8 @@ app.post('/api/loans/request', async (req, res) => {
           const existingLoansRes = await client.query(
             `SELECT id, estado
              FROM prestamos
-             WHERE alumno_id = $1 OR alumno_id = $2`,
-            [effectiveStudentId, studentRow.usuario || effectiveStudentId]
+             WHERE alumno_id = $1 OR alumno_id = $2 OR LOWER(alumno_id) = LOWER($3)`,
+            [effectiveStudentId, studentUsername, studentId]
           );
 
           const restrictiveStatuses = ['active', 'offered', 'teacher_offered', 'pending_teacher'];
@@ -14614,6 +14729,7 @@ app.post('/api/loans/request', async (req, res) => {
             studentAccount,
             requestedAmount: reqAmt,
             offeredAmount,
+            approvedAmount: status === 'offered' ? offeredAmount : undefined,
             termMonths: termM,
             annualInterestRate,
             euriborRate,
@@ -14633,7 +14749,7 @@ app.post('/api/loans/request', async (req, res) => {
             schedule
           };
 
-          // 5. INSERT INTO prestamos in PostgreSQL
+          // 5. INSERT INTO prestamos in PostgreSQL (Persisting importe_concedido when offered)
           await client.query(
             `INSERT INTO prestamos (
               id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
@@ -14650,7 +14766,7 @@ app.post('/api/loans/request', async (req, res) => {
               studentAccount,
               reqAmt,
               offeredAmount,
-              null,
+              status === 'offered' ? offeredAmount : null,
               termM,
               annualInterestRate,
               euriborRate,
@@ -14693,7 +14809,7 @@ app.post('/api/loans/request', async (req, res) => {
       } else {
         // Fallback in-memory
         const db = readDb();
-        const student = db.users.find(u => u.id === studentId || u.username === studentId);
+        const student = db.users.find(u => u.id === studentId || u.username === studentId || u.id?.toLowerCase() === studentId.toLowerCase() || u.username?.toLowerCase() === studentId.toLowerCase());
         if (!student) {
           const err: any = new Error('Estudiante no encontrado');
           err.statusCode = 404;
@@ -14748,6 +14864,7 @@ app.post('/api/loans/request', async (req, res) => {
           studentAccount: student.accountNumber,
           requestedAmount: reqAmt,
           offeredAmount,
+          approvedAmount: status === 'offered' ? offeredAmount : undefined,
           termMonths: termM,
           annualInterestRate,
           euriborRate,
@@ -14851,16 +14968,40 @@ app.post('/api/loans/:id/accept', async (req, res) => {
 
           const loanRow = loanLock.rows[0];
 
-          if (loanRow.alumno_id !== studentId) {
-            const err: any = new Error('El préstamo no pertenece al estudiante indicado');
-            err.statusCode = 403;
-            throw err;
-          }
-
           // 2. Validate loan state
           if (loanRow.estado !== 'offered' && loanRow.estado !== 'teacher_offered') {
             const err: any = new Error('Este préstamo no se encuentra pendiente de aceptación');
             err.statusCode = 400;
+            throw err;
+          }
+
+          // 3. SELECT cuentas FOR UPDATE (Lock student account second)
+          const studentLock = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level 
+             FROM cuentas 
+             WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR id = $2 OR LOWER(usuario) = LOWER($2) OR LOWER(alumno) = LOWER($2) OR account_number = $2
+             LIMIT 1 
+             FOR UPDATE`,
+            [loanRow.alumno_id, studentId]
+          );
+
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentLock.rows[0];
+          const sIdLower = String(studentId || '').trim().toLowerCase();
+          const loanAlumnoLower = String(loanRow.alumno_id || '').trim().toLowerCase();
+          const rowIdLower = String(studentRow.id || '').trim().toLowerCase();
+          const rowUsuarioLower = String(studentRow.usuario || '').trim().toLowerCase();
+
+          const isOwner = (loanAlumnoLower === rowIdLower || loanAlumnoLower === rowUsuarioLower) &&
+                          (sIdLower === rowIdLower || sIdLower === rowUsuarioLower || sIdLower === loanAlumnoLower);
+          if (!isOwner) {
+            const err: any = new Error('El préstamo no pertenece al estudiante indicado');
+            err.statusCode = 403;
             throw err;
           }
 
@@ -14891,20 +15032,6 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             );
             schedule = amort.schedule;
           }
-
-          // 3. SELECT cuentas FOR UPDATE (Lock student account second)
-          const studentLock = await client.query(
-            'SELECT id, alumno, saldo, usuario, password, account_number, role, level FROM cuentas WHERE id = $1 FOR UPDATE',
-            [loanRow.alumno_id]
-          );
-
-          if (!studentLock || studentLock.rows.length === 0) {
-            const err: any = new Error('Estudiante no encontrado en la base de datos');
-            err.statusCode = 404;
-            throw err;
-          }
-
-          const studentRow = studentLock.rows[0];
           const studentBalance = Number(Number(studentRow.saldo).toFixed(2));
 
           // 4. Validate sufficient balance for opening fee
@@ -15021,13 +15148,13 @@ app.post('/api/loans/:id/accept', async (req, res) => {
       } else {
         // Fallback in-memory
         const db = readDb();
-        const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+        const student = db.users.find(u => u.id === studentId || u.username === studentId);
+        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
+        const loan = (db.loans || []).find(l => l.id === id && (l.studentId === student.id || l.studentId === student.username || l.studentId === studentId));
         if (!loan) { const err: any = new Error('Préstamo no encontrado'); err.statusCode = 404; throw err; }
         if (loan.status !== 'offered' && loan.status !== 'teacher_offered') {
           const err: any = new Error('Este préstamo no se encuentra pendiente de aceptación'); err.statusCode = 400; throw err;
         }
-        const student = db.users.find(u => u.id === studentId);
-        if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
         if (student.balance < loan.openingFee) { const err: any = new Error('Saldo insuficiente para abonar la comisión de apertura'); err.statusCode = 400; throw err; }
 
         student.balance = Number((student.balance - loan.openingFee + loan.offeredAmount).toFixed(2));
@@ -15109,7 +15236,28 @@ app.post('/api/loans/:id/reject', async (req, res) => {
           const loanRow = loanLock.rows[0];
 
           // 2. Validate loan ownership
-          if (loanRow.alumno_id !== studentId) {
+          const studentCheck = await client.query(
+            `SELECT id, usuario, alumno, account_number FROM cuentas 
+             WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR id = $2 OR LOWER(usuario) = LOWER($2) OR LOWER(alumno) = LOWER($2) OR account_number = $2 
+             LIMIT 1`,
+            [loanRow.alumno_id, studentId]
+          );
+
+          if (!studentCheck || studentCheck.rows.length === 0) {
+            const err: any = new Error('Estudiante no encontrado en la base de datos');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const studentRow = studentCheck.rows[0];
+          const sIdLower = String(studentId || '').trim().toLowerCase();
+          const loanAlumnoLower = String(loanRow.alumno_id || '').trim().toLowerCase();
+          const rowIdLower = String(studentRow.id || '').trim().toLowerCase();
+          const rowUsuarioLower = String(studentRow.usuario || '').trim().toLowerCase();
+
+          const isOwner = (loanAlumnoLower === rowIdLower || loanAlumnoLower === rowUsuarioLower) &&
+                          (sIdLower === rowIdLower || sIdLower === rowUsuarioLower || sIdLower === loanAlumnoLower);
+          if (!isOwner) {
             const err: any = new Error('El préstamo no pertenece al estudiante indicado');
             err.statusCode = 403;
             throw err;
@@ -15204,7 +15352,13 @@ app.post('/api/loans/:id/reject', async (req, res) => {
       } else {
         // Fallback in-memory
         const db = readDb();
-        const loan = (db.loans || []).find(l => l.id === id && l.studentId === studentId);
+        const student = db.users.find(u => u.id === studentId || u.username === studentId);
+        if (!student) {
+          const err: any = new Error('Estudiante no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const loan = (db.loans || []).find(l => l.id === id && (l.studentId === student.id || l.studentId === student.username || l.studentId === studentId));
         if (!loan) {
           const err: any = new Error('Préstamo no encontrado');
           err.statusCode = 404;

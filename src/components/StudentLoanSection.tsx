@@ -16,9 +16,10 @@ import { formatNumber } from '../lib/formatters.js';
 interface StudentLoanSectionProps {
   currentUser: User;
   onBalanceUpdated?: (newBalance: number) => void;
+  onLoansUpdated?: () => void;
 }
 
-export default function StudentLoanSection({ currentUser, onBalanceUpdated }: StudentLoanSectionProps) {
+export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLoansUpdated }: StudentLoanSectionProps) {
   const [loans, setLoans] = useState<BankLoan[]>([]);
   const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,13 +42,14 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
 
   useEffect(() => {
     fetchLoansAndAcquisitions();
-  }, []);
+  }, [currentUser?.id, currentUser?.username]);
 
   const fetchLoansAndAcquisitions = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Student Loans
-      const loansRes = await fetch(`/api/loans?studentId=${currentUser.id}`);
+      // 1. Fetch Student Loans directly from PostgreSQL backed endpoint
+      const targetStudentId = currentUser.id || currentUser.username;
+      const loansRes = await fetch(`/api/loans?studentId=${encodeURIComponent(targetStudentId)}`);
       if (loansRes.ok) {
         const loansData = await loansRes.json();
         if (loansData.success && loansData.loans) {
@@ -56,7 +58,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
       }
 
       // 2. Fetch Student Property Acquisitions (for collateral dropdown)
-      const acqRes = await fetch(`/api/acquisitions?studentId=${currentUser.id}`);
+      const acqRes = await fetch(`/api/acquisitions?studentId=${encodeURIComponent(targetStudentId)}`);
       if (acqRes.ok) {
         const acqData = await acqRes.json();
         if (acqData.success && acqData.acquisitions) {
@@ -122,11 +124,12 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
 
     setSubmitting(true);
     try {
+      const targetStudentId = currentUser.id || currentUser.username;
       const res = await fetch('/api/loans/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studentId: currentUser.id,
+          studentId: targetStudentId,
           requestedAmount: reqAmtNum,
           termMonths: termMonthsNum,
           collateralType,
@@ -141,7 +144,19 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
 
       setActionSuccess(data.message);
       setShowRequestModal(false);
-      fetchLoansAndAcquisitions();
+
+      // Immediately integrate the returned loan into state so the offer is visible instantly!
+      if (data.loan) {
+        setLoans(prev => {
+          const withoutNew = prev.filter(l => l.id !== data.loan.id);
+          return [data.loan, ...withoutNew];
+        });
+      }
+
+      await fetchLoansAndAcquisitions();
+      if (onLoansUpdated) {
+        onLoansUpdated();
+      }
     } catch (err: any) {
       setActionError(err.message || 'Error de conexión.');
     } finally {
@@ -153,10 +168,11 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
     setActionError('');
     setActionSuccess('');
     try {
+      const targetStudentId = currentUser.id || currentUser.username;
       const res = await fetch(`/api/loans/${loanId}/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: currentUser.id })
+        body: JSON.stringify({ studentId: targetStudentId })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al formalizar el préstamo.');
@@ -165,7 +181,13 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
       if (data.updatedBalance !== undefined && onBalanceUpdated) {
         onBalanceUpdated(data.updatedBalance);
       }
-      fetchLoansAndAcquisitions();
+      if (data.loan) {
+        setLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
+      }
+      await fetchLoansAndAcquisitions();
+      if (onLoansUpdated) {
+        onLoansUpdated();
+      }
     } catch (err: any) {
       setActionError(err.message || 'Error al aceptar la oferta de préstamo.');
     }
@@ -175,16 +197,23 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated }: St
     setActionError('');
     setActionSuccess('');
     try {
+      const targetStudentId = currentUser.id || currentUser.username;
       const res = await fetch(`/api/loans/${loanId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: currentUser.id })
+        body: JSON.stringify({ studentId: targetStudentId })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al rechazar el préstamo.');
 
       setActionSuccess(data.message);
-      fetchLoansAndAcquisitions();
+      if (data.loan) {
+        setLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
+      }
+      await fetchLoansAndAcquisitions();
+      if (onLoansUpdated) {
+        onLoansUpdated();
+      }
     } catch (err: any) {
       setActionError(err.message || 'Error al rechazar la oferta.');
     }
