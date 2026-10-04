@@ -7,9 +7,9 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Landmark, ArrowUpRight, ArrowDownLeft, Send, Copy, Check, 
-  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText
+  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText, Sparkles
 } from 'lucide-react';
-import { User, Transfer } from '../types.js';
+import { User, Transfer, BankLoan } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import StudentLoanSection from './StudentLoanSection.js';
 import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
@@ -48,6 +48,12 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
     insufficientProjectedBalance: boolean;
     projected30DaysTotal: number;
   } | null>(null);
+
+  // Pending Loan Offer State
+  const [pendingLoanOffer, setPendingLoanOffer] = useState<BankLoan | null>(null);
+  const [loanOfferActionError, setLoanOfferActionError] = useState('');
+  const [loanOfferActionSuccess, setLoanOfferActionSuccess] = useState('');
+  const [isProcessingLoanOffer, setIsProcessingLoanOffer] = useState(false);
 
   // Change Password Modal State
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -156,8 +162,69 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           });
         }
       }
+      // 4. Get student's loans to detect any pending offers directly from PostgreSQL canonical state
+      const targetStudentId = currentUser.id || currentUser.username;
+      const loansRes = await fetch(`/api/loans?studentId=${encodeURIComponent(targetStudentId)}`);
+      if (loansRes.ok) {
+        const loansData = await loansRes.json();
+        if (loansData && loansData.success && Array.isArray(loansData.loans)) {
+          const offer = loansData.loans.find((l: BankLoan) => l.status === 'offered' || l.status === 'teacher_offered');
+          setPendingLoanOffer(offer || null);
+        }
+      }
     } catch (err) {
       console.error('Error polling student data:', err);
+    }
+  };
+
+  const handleAcceptTopOffer = async (loanId: string) => {
+    setLoanOfferActionError('');
+    setLoanOfferActionSuccess('');
+    setIsProcessingLoanOffer(true);
+    try {
+      const targetStudentId = currentUser.id || currentUser.username;
+      const res = await fetch(`/api/loans/${loanId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: targetStudentId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al formalizar el préstamo.');
+
+      setLoanOfferActionSuccess(data.message);
+      if (data.updatedBalance !== undefined) {
+        setBalance(data.updatedBalance);
+      }
+      setPendingLoanOffer(null);
+      await fetchStudentData();
+    } catch (err: any) {
+      setLoanOfferActionError(err.message || 'Error al aceptar la oferta de préstamo.');
+    } finally {
+      setIsProcessingLoanOffer(false);
+    }
+  };
+
+  const handleRejectTopOffer = async (loanId: string) => {
+    setLoanOfferActionError('');
+    setLoanOfferActionSuccess('');
+    setIsProcessingLoanOffer(true);
+    try {
+      const targetStudentId = currentUser.id || currentUser.username;
+      const res = await fetch(`/api/loans/${loanId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: targetStudentId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al rechazar el préstamo.');
+
+      setLoanOfferActionSuccess(data.message);
+      setPendingLoanOffer(null);
+      await fetchStudentData();
+    } catch (err: any) {
+      setLoanOfferActionError(err.message || 'Error al rechazar la oferta.');
+    } finally {
+      setIsProcessingLoanOffer(false);
     }
   };
 
@@ -321,6 +388,71 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           </div>
         )}
 
+        {/* PROMINENT LOAN OFFER BANNER (IMMEDIATE VISIBILITY FOR STUDENT) */}
+        {pendingLoanOffer && (
+          <div className="mb-8 bg-gradient-to-r from-amber-600 via-amber-700 to-amber-900 text-white p-5 rounded-2xl shadow-lg border-2 border-amber-400 animate-in fade-in">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center space-x-2">
+                  <span className="bg-amber-300 text-amber-950 font-black text-[10px] uppercase px-2.5 py-0.5 rounded-full flex items-center shadow-xs">
+                    <Sparkles className="w-3 h-3 mr-1" />
+                    Oferta de préstamo concedida pendiente de aceptación
+                  </span>
+                  <span className="font-mono text-xs text-amber-200">Ref: #{pendingLoanOffer.id}</span>
+                </div>
+                <h3 className="font-display font-bold text-xl text-white">
+                  ¡El banco te ofrece {formatNumber(pendingLoanOffer.offeredAmount)} €!
+                </h3>
+                <p className="text-xs text-amber-100 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>Cuota mensual: <strong className="font-mono text-white">{formatNumber(pendingLoanOffer.monthlyPayment)} €</strong></span>
+                  <span>•</span>
+                  <span>Plazo: <strong className="text-white">{pendingLoanOffer.termMonths} meses</strong></span>
+                  <span>•</span>
+                  <span>TIN: <strong className="font-mono text-white">{pendingLoanOffer.annualInterestRate}%</strong></span>
+                  <span>•</span>
+                  <span>Comisión apertura (1‰): <strong className="font-mono text-white">{formatNumber(pendingLoanOffer.openingFee)} €</strong></span>
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto shrink-0">
+                <button
+                  onClick={() => setBankTab('hipotecaria')}
+                  className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white font-bold text-xs rounded-xl transition cursor-pointer flex items-center space-x-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Ver amortización</span>
+                </button>
+                <button
+                  disabled={isProcessingLoanOffer}
+                  onClick={() => handleRejectTopOffer(pendingLoanOffer.id)}
+                  className="px-3.5 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 border border-rose-400/30 font-bold text-xs rounded-xl transition cursor-pointer disabled:opacity-50"
+                >
+                  Rechazar
+                </button>
+                <button
+                  disabled={isProcessingLoanOffer}
+                  onClick={() => handleAcceptTopOffer(pendingLoanOffer.id)}
+                  className="px-4 py-2 bg-white text-amber-950 hover:bg-amber-50 font-black text-xs rounded-xl transition shadow-md cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4 text-emerald-600 font-bold" />
+                  <span>Aceptar e ingresar dinero</span>
+                </button>
+              </div>
+            </div>
+
+            {loanOfferActionError && (
+              <div className="mt-3 p-2 bg-rose-900/60 border border-rose-400 text-rose-100 text-xs rounded-lg font-medium">
+                {loanOfferActionError}
+              </div>
+            )}
+            {loanOfferActionSuccess && (
+              <div className="mt-3 p-2 bg-emerald-900/60 border border-emerald-400 text-emerald-100 text-xs rounded-lg font-medium">
+                {loanOfferActionSuccess}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Top Card: Balance & Account Details */}
         <div className="mb-8">
           
@@ -410,6 +542,11 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           >
             <Landmark className="w-4 h-4 text-amber-500" />
             <span>Financiación hipotecaria</span>
+            {pendingLoanOffer && (
+              <span className="bg-amber-600 text-white px-2 py-0.5 rounded-full text-[10px] font-extrabold animate-pulse shadow-xs">
+                Oferta disponible
+              </span>
+            )}
           </button>
         </div>
 
@@ -425,6 +562,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
           <StudentLoanSection 
             currentUser={currentUser} 
             onBalanceUpdated={(newBal) => setBalance(newBal)} 
+            onLoansUpdated={fetchStudentData}
           />
         )}
 
