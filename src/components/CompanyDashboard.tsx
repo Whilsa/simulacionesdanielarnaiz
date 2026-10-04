@@ -638,6 +638,14 @@ export default function CompanyDashboard({
       }),
     });
     if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.contract) {
+        setElectricityContract(data.contract);
+        setElectricityContracts((prev) => {
+          const filtered = (prev || []).filter((c) => c.id !== data.contract.id);
+          return [data.contract, ...filtered];
+        });
+      }
       await fetchElectricityData();
       await fetchCompanyData();
     }

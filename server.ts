@@ -17019,24 +17019,114 @@ app.put('/api/loans/:id', async (req, res) => {
 });
 
 // ================= ELECTRICITY & FLOOR PLAN ENDPOINTS =================
-app.get('/api/electricity/contracts', (req, res) => {
+app.get('/api/electricity/contracts', async (req, res) => {
   const { studentId } = req.query;
+  const sId = String(studentId || '').trim();
+
+  if (dbPool && sId) {
+    try {
+      const pgRes = await safeDbQuery(
+        `SELECT * FROM contratos_electricos 
+         WHERE (alumno_id = $1 OR alumno_id IN (SELECT id FROM cuentas WHERE usuario = $1 OR alumno = $1))
+           AND estado = 'active'
+         ORDER BY fecha_contrato DESC`,
+        [sId]
+      );
+      if (pgRes && pgRes.rows) {
+        const contracts: ElectricityContract[] = pgRes.rows.map(row => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre || ''),
+          propertyId: row.inmueble_id ? String(row.inmueble_id) : '',
+          propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : '',
+          contractedPowerKw: Number(row.potencia_contratada_kw || 0),
+          tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+          pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+          pricePerKwh: Number(row.precio_kwh || 0.14),
+          status: String(row.estado || 'active') as any,
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
+          cupsCode: String(row.cups_code || '')
+        }));
+        return res.json({ success: true, contracts });
+      }
+    } catch (e) {
+      console.warn('[Electricity Contracts PG Query Warning]:', e);
+    }
+  }
+
   const db = readDb();
-  const contracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
+  const user = db.users?.find(u => u.id === sId || u.username === sId);
+  const matchedIds = new Set<string>();
+  if (sId) matchedIds.add(sId);
+  if (user) {
+    if (user.id) matchedIds.add(user.id);
+    if (user.username) matchedIds.add(user.username);
+  }
+  const contracts = (db.electricityContracts || []).filter(c =>
+    (matchedIds.has(c.studentId) || (c.studentId && sId && c.studentId.toLowerCase() === sId.toLowerCase())) &&
+    c.status === 'active'
+  );
   res.json({ success: true, contracts });
 });
 
-app.get('/api/electricity/contract', (req, res) => {
+app.get('/api/electricity/contract', async (req, res) => {
   const { studentId, propertyId } = req.query;
-  const db = readDb();
-  const allContracts = (db.electricityContracts || []).filter(c => c.studentId === studentId && c.status === 'active');
-  let contract = null;
-  if (propertyId) {
-    contract = allContracts.find(c => c.propertyId === propertyId || c.id === propertyId) || null;
-  } else {
-    contract = allContracts[0] || null;
+  const sId = String(studentId || '').trim();
+  const propId = String(propertyId || '').trim();
+  let contracts: ElectricityContract[] = [];
+
+  if (dbPool && sId) {
+    try {
+      const pgRes = await safeDbQuery(
+        `SELECT * FROM contratos_electricos 
+         WHERE (alumno_id = $1 OR alumno_id IN (SELECT id FROM cuentas WHERE usuario = $1 OR alumno = $1))
+           AND estado = 'active'
+         ORDER BY fecha_contrato DESC`,
+        [sId]
+      );
+      if (pgRes && pgRes.rows) {
+        contracts = pgRes.rows.map(row => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre || ''),
+          propertyId: row.inmueble_id ? String(row.inmueble_id) : '',
+          propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : '',
+          contractedPowerKw: Number(row.potencia_contratada_kw || 0),
+          tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+          pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+          pricePerKwh: Number(row.precio_kwh || 0.14),
+          status: String(row.estado || 'active') as any,
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
+          cupsCode: String(row.cups_code || '')
+        }));
+      }
+    } catch (e) {
+      console.warn('[Electricity Contract PG Query Warning]:', e);
+    }
   }
-  res.json({ success: true, contract: contract || null, contracts: allContracts });
+
+  if (contracts.length === 0) {
+    const db = readDb();
+    const user = db.users?.find(u => u.id === sId || u.username === sId);
+    const matchedIds = new Set<string>();
+    if (sId) matchedIds.add(sId);
+    if (user) {
+      if (user.id) matchedIds.add(user.id);
+      if (user.username) matchedIds.add(user.username);
+    }
+    contracts = (db.electricityContracts || []).filter(c =>
+      (matchedIds.has(c.studentId) || (c.studentId && sId && c.studentId.toLowerCase() === sId.toLowerCase())) &&
+      c.status === 'active'
+    );
+  }
+
+  let contract = null;
+  if (propId) {
+    contract = contracts.find(c => c.propertyId === propId || c.id === propId) || null;
+  } else {
+    contract = contracts[0] || null;
+  }
+  res.json({ success: true, contract: contract || null, contracts });
 });
 
 app.post('/api/electricity/contract', async (req, res) => {
@@ -17255,7 +17345,7 @@ app.post('/api/electricity/contract', async (req, res) => {
       });
     });
 
-    // 6. Actualización en memoria post-commit para compatibilidad (sin writeDb ni syncs asíncronos)
+    // 6. Actualización inmediata de la caché local post-commit (PostgreSQL -> caché en memoria/disco)
     try {
       const currentDb = readDb();
       if (currentDb) {
@@ -17264,7 +17354,7 @@ app.post('/api/electricity/contract', async (req, res) => {
         if (cIdx !== -1) {
           currentDb.electricityContracts[cIdx] = txResult.contract;
         } else {
-          currentDb.electricityContracts.push(txResult.contract);
+          currentDb.electricityContracts.unshift(txResult.contract);
         }
         if (txResult.unblockedMachineIds && txResult.unblockedMachineIds.length > 0 && currentDb.machineryAcquisitions) {
           const finishIso = txResult.finishDate;
@@ -17277,7 +17367,13 @@ app.post('/api/electricity/contract', async (req, res) => {
             }
           }
         }
-        checkAndProcessAutomatedElectricity(currentDb);
+        writeDb(currentDb);
+      }
+      if (reqStudentId) {
+        const session = getStudentSession(reqStudentId);
+        if (session) {
+          session.company = null;
+        }
       }
     } catch (memErr) {
       console.warn('[Electricity Contract] Warning updating in-memory cache:', memErr);
