@@ -1379,23 +1379,54 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     const isFacturado = order.status === 'facturado' || Boolean(order.invoiceNumber) || (order.status === 'entregado' && (order.totalAmount || 0) > 0);
     if (!isFacturado) return false;
 
-    // Exclude invoices sent/received via direct messaging (chat / manual invoice)
+    // Never show stock transfer records (0 € / 0 units)
     if (
-      order.announcementId === 'manual_invoice' ||
-      order.isDirectMessageInvoice === true ||
-      order.isChatInvoice === true ||
-      order.source === 'chat' ||
-      (order.note && (
-        order.note.includes('chat') ||
-        order.note.includes('mensajería') ||
-        order.note.includes('Emitida manualmente') ||
-        order.note.includes('chat de mensajería')
-      ))
+      order.announcementId?.startsWith('tr-') ||
+      ((order.basePrice || 0) === 0 && (order.totalAmount || 0) === 0 && !isTransportInvoiceOrder(order))
     ) {
       return false;
     }
 
-    return true;
+    // Exclude invoices sent/received via direct messaging (chat / manual invoice)
+    const isManualChatInvoice =
+      order.announcementId === 'manual_invoice' ||
+      order.announcementId?.startsWith('manual') ||
+      order.isDirectMessageInvoice === true ||
+      order.isChatInvoice === true ||
+      order.source === 'chat' ||
+      (order.note && (
+        order.note.toLowerCase().includes('chat') ||
+        order.note.toLowerCase().includes('mensajería') ||
+        order.note.toLowerCase().includes('mensajeria') ||
+        order.note.toLowerCase().includes('emitida manualmente') ||
+        order.note.toLowerCase().includes('factura emitida')
+      )) ||
+      (order.items && order.items.some((i: any) => i.announcementId === 'manual_item' || i.announcementId?.includes('manual')));
+
+    if (isManualChatInvoice) {
+      return false;
+    }
+
+    // Automatic transport invoices ALWAYS appear in Mercado -> Facturas
+    if (isTransportInvoiceOrder(order)) {
+      return true;
+    }
+
+    // For merchandise invoices: ONLY official purchases (catalogo oficial / compras de nivel 1 con proveedor oficial o profesor) appear in Mercado -> Facturas.
+    // Manual student-to-student merchandise invoices belong strictly to Mensajería directa.
+    const isOfficialSeller =
+      order.sellerId === 'profesor-1' ||
+      order.sellerId === 'proveedor-materia-prima' ||
+      order.sellerLevel === 'official' ||
+      !order.sellerId ||
+      order.announcementId?.startsWith('anuncio-mp-') ||
+      order.announcementId?.startsWith('ann-');
+
+    if (isOfficialSeller) {
+      return true;
+    }
+
+    return false;
   };
 
   const getTransportConcept = (order: RawMaterialOrder) => {

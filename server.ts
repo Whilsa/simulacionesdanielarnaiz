@@ -1769,6 +1769,7 @@ async function syncRawMaterialOrderToSupabase(ord: RawMaterialOrder, client?: pg
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
       ON CONFLICT (id) DO UPDATE SET
         estado = EXCLUDED.estado,
+        announcement_id = EXCLUDED.announcement_id,
         fecha_aprobado = EXCLUDED.fecha_aprobado,
         fecha_estimada_entrega = EXCLUDED.fecha_estimada_entrega,
         fecha_entrega = EXCLUDED.fecha_entrega,
@@ -20272,11 +20273,13 @@ app.get('/api/raw-materials/orders', async (req, res) => {
       const resRawOrders = await safeDbQuery('SELECT * FROM materias_primas_pedidos ORDER BY fecha_pedido DESC');
       if (resRawOrders && resRawOrders.rows && resRawOrders.rows.length > 0) {
         db.rawMaterialOrders = resRawOrders.rows.map((row: any) => {
+          const isFacturadoState = String(row.estado) === 'facturado' || Boolean(row.invoice_number);
           const rawInvoicedAt = row.invoiced_at
             ? new Date(row.invoiced_at).toISOString()
-            : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+            : (isFacturadoState
                 ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
                 : undefined);
+          const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual');
           return {
             id: String(row.id),
             studentId: String(row.alumno_id),
@@ -20301,22 +20304,25 @@ app.get('/api/raw-materials/orders', async (req, res) => {
             estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
             deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
             invoicedAt: rawInvoicedAt,
-            invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+            invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt && isFacturadoState ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
             items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
-          sellerId: row.seller_id ? String(row.seller_id) : undefined,
-          sellerName: row.seller_name ? String(row.seller_name) : undefined,
-          sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
-          buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
-          discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
-          insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
-          transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
-          lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
-          negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
-          inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
-          destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
-        };
-      });
-    }
+            sellerId: row.seller_id ? String(row.seller_id) : undefined,
+            sellerName: row.seller_name ? String(row.seller_name) : undefined,
+            sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
+            buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
+            discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
+            insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
+            transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
+            lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
+            negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
+            inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
+            destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined,
+            isDirectMessageInvoice,
+            isChatInvoice: isDirectMessageInvoice,
+            source: isDirectMessageInvoice ? 'chat' : undefined
+          };
+        });
+      }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Orders]:', e);
     }
@@ -21926,11 +21932,13 @@ function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
     }
   }
 
+    const isFacturadoState = String(row.estado) === 'facturado' || Boolean(row.invoice_number);
     const rawInvoicedAt = row.invoiced_at
       ? new Date(row.invoiced_at).toISOString()
-      : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+      : (isFacturadoState
           ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
           : undefined);
+    const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual');
 
     return {
       id: String(row.id),
@@ -21956,21 +21964,24 @@ function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
       estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
       deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
       invoicedAt: rawInvoicedAt,
-      invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+      invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt && isFacturadoState ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
       items: itemsParsed,
-    sellerId: row.seller_id ? String(row.seller_id) : undefined,
-    sellerName: row.seller_name ? String(row.seller_name) : undefined,
-    sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
-    buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
-    discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
-    insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
-    transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
-    lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
-    negotiationHistory: historyParsed,
-    inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
-    destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined,
-    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined
-  };
+      sellerId: row.seller_id ? String(row.seller_id) : undefined,
+      sellerName: row.seller_name ? String(row.seller_name) : undefined,
+      sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
+      buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
+      discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
+      insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
+      transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
+      lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
+      negotiationHistory: historyParsed,
+      inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
+      destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined,
+      rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
+      isDirectMessageInvoice,
+      isChatInvoice: isDirectMessageInvoice,
+      source: isDirectMessageInvoice ? 'chat' : undefined
+    };
 }
 
 app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
@@ -24454,73 +24465,13 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         await syncInventoryToSupabase(senderInv, sender.name, client);
         await syncInventoryToSupabase(recipientInv, recipient.name, client);
 
-        // 4. ATOMIC DOCUMENT CREATION (materias_primas_pedidos)
-        const orderId = generateId('rmord');
+        // Simple stock transfer between students does NOT create a merchandise invoice/order.
+        // Transport invoices (if applicable) are handled separately below.
         let materialType: 'hierro' | 'metal' | 'plastico' | 'epoxi' | 'producto_final' = 'producto_final';
         if (itemKey === 'ironKg') materialType = 'hierro';
         else if (itemKey === 'metalKg') materialType = 'metal';
         else if (itemKey === 'plasticKg') materialType = 'plastico';
         else if (itemKey === 'epoxiKg') materialType = 'epoxi';
-
-        const transferOrder: RawMaterialOrder = {
-          id: orderId,
-          studentId: recipient.id,
-          studentName: recipient.name,
-          buyerLevel: recipient.level || 1,
-          sellerId: sender.id,
-          sellerName: sender.name,
-          sellerLevel: sender.level || 1,
-          announcementId: `tr-${Date.now()}`,
-          materialType,
-          materialTitle: itemLabel,
-          quantity: qty,
-          unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
-          totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-          basePrice: 0,
-          discountPercentage: 0,
-          discountAmount: 0,
-          insuranceFee: 0,
-          hasInsurance: false,
-          ivaAmount: 0,
-          transportCost: 0,
-          transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
-          totalAmount: 0,
-          needsTransport: transportMethod === 'exterior',
-          deliveryAddress: selectedRecipientNave ? `${selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén'}, ${selectedRecipientNave.location || selectedRecipientNave.direccion || 'Polígono Industrial'}` : 'Almacén del destinatario',
-          destinationNaveId: targetRecipientNaveId,
-          status: 'entregado',
-          requestedAt: nowIso,
-          approvedAt: nowIso,
-          deliveredAt: nowIso,
-          inventoryCredited: true,
-          items: [{
-            announcementId: `tr-${Date.now()}`,
-            materialType,
-            materialTitle: itemLabel,
-            quantity: qty,
-            unitWeightKg: itemKey.includes('Kg') ? 1 : 0.1,
-            totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
-            basePrice: 0
-          }],
-          lastTurnUserId: sender.id,
-          negotiationHistory: [{
-            id: generateId('neg'),
-            authorId: sender.id,
-            authorName: sender.name,
-            timestamp: nowIso,
-            action: 'propuesta_inicial',
-            quantity: qty,
-            pricePerUnit: 0,
-            discountPercentage: 0,
-            insuranceFee: 0,
-            transportCost: 0,
-            transportMethod: transportMethod === 'propio' ? 'comprador_recogida' : 'vendedor_envio',
-            totalAmount: 0,
-            note: `Envío directo de existencias entre alumnos (${transportMethod === 'propio' ? 'Transporte propio' : 'Servicio exterior'})`
-          }]
-        };
-
-        await syncRawMaterialOrderToSupabase(transferOrder, client);
 
         let transportInvoiceOrder: RawMaterialOrder | null = null;
         let fuelInvoiceOrder: RawMaterialOrder | null = null;
@@ -24670,7 +24621,6 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           updatedInventory: senderInv,
           recipientInventory: recipientInv,
           newBalance: newSenderBalance,
-          order: transferOrder,
           transportInvoiceOrder,
           fuelInvoiceOrder,
           fuelExpense,
@@ -24739,7 +24689,6 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
     else db.rawMaterialInventories.push(result.recipientInventory);
 
     if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-    db.rawMaterialOrders.unshift(result.order);
     if (result.transportInvoiceOrder) db.rawMaterialOrders.unshift(result.transportInvoiceOrder);
     if (result.fuelInvoiceOrder) db.rawMaterialOrders.unshift(result.fuelInvoiceOrder);
 
@@ -25734,6 +25683,8 @@ app.post('/api/market/messages/send-manual-invoice', async (req, res) => {
       linkedOrder.isDirectMessageInvoice = true;
       linkedOrder.isChatInvoice = true;
       linkedOrder.source = 'chat';
+      linkedOrder.announcementId = 'manual_invoice';
+      linkedOrder.note = concept || 'Factura emitida manualmente por chat de mensajería';
       linkedOrder.items = items.map(i => ({
         announcementId: 'manual_item',
         materialTitle: i.title,
