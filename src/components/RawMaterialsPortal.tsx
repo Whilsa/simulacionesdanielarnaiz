@@ -1354,6 +1354,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       order.sellerId === 'transporte-logistica-oficial' ||
       order.sellerId === 'SUMINISTROS_ESTACION_SERVICIO' ||
       order.sellerId === 'gasolinera-oficial' ||
+      Boolean(order.announcementId && (order.announcementId.startsWith('trans-inv-') || order.announcementId.startsWith('gaso-inv-'))) ||
+      order.materialType === 'combustible' ||
+      (order.materialType as any) === 'transporte' ||
       Boolean(order.sellerName && (
         order.sellerName.toLowerCase().includes('servicio exterior') ||
         order.sellerName.toLowerCase().includes('logística') ||
@@ -1370,7 +1373,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         order.materialTitle.toLowerCase().includes('gasto de transporte') ||
         order.materialTitle.toLowerCase().includes('combustible')
       )) ||
-      Boolean(order.id && order.id.includes('trans'))
+      Boolean(order.id && (order.id.includes('trans') || order.id.includes('gaso')))
     );
   };
 

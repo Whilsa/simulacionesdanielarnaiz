@@ -20375,7 +20375,8 @@ app.get('/api/raw-materials/orders', async (req, res) => {
             : (isFacturadoState
                 ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
                 : undefined);
-          const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual');
+          const hasManualItems = Boolean(row.items && typeof row.items === 'string' && (row.items.includes('manual_invoice') || row.items.includes('manual_item')));
+          const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual') || hasManualItems;
           return {
             id: String(row.id),
             studentId: String(row.alumno_id),
@@ -22034,7 +22035,8 @@ function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
       : (isFacturadoState
           ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
           : undefined);
-    const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual');
+    const hasManualItems = Boolean(itemsParsed && itemsParsed.some(i => i.announcementId === 'manual_item' || (i.announcementId && i.announcementId.includes('manual'))));
+    const isDirectMessageInvoice = row.announcement_id === 'manual_invoice' || String(row.announcement_id).startsWith('manual') || hasManualItems;
 
     return {
       id: String(row.id),
@@ -24812,7 +24814,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
       message: result.message,
       updatedInventory: result.updatedInventory,
       newBalance: result.newBalance,
-      order: result.order
+      order: (result as any).order ?? null
     });
   } catch (err: any) {
     const status = err.statusCode || err.status || 500;
