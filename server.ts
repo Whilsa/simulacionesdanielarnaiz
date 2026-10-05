@@ -1055,9 +1055,10 @@ async function syncAccountToSupabase(id: string, alumno: string, saldo: number, 
        SET saldo = $1, 
            alumno = COALESCE($2, alumno),
            role = COALESCE($3, role),
-           level = COALESCE($4, level)
+           level = COALESCE($4, level),
+           password = COALESCE($7, password)
        WHERE id = $5 OR (usuario IS NOT NULL AND usuario = $6)`,
-      [numSaldo, alumno || null, role || null, level || null, id, usuario || null]
+      [numSaldo, alumno || null, role || null, level || null, id, usuario || null, password || null]
     );
 
     // 2. If row does not exist yet, insert it cleanly
@@ -15676,34 +15677,111 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
 });
 
 // ================= STUDENT CHANGE PASSWORD =================
-app.put('/api/student/change-password', (req, res) => {
+app.put('/api/student/change-password', async (req, res) => {
   const { studentId, currentPassword, newPassword } = req.body;
-  if (!studentId || !newPassword) {
-    return res.status(400).json({ error: 'Faltan datos requeridos' });
+  if (!studentId || !newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
+    return res.status(400).json({ error: 'Faltan datos requeridos (nueva contraseña)' });
   }
 
-  const db = readDb();
-  const user = db.users.find(u => u.id === studentId);
-  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-  if (currentPassword && user.password && currentPassword.trim() !== user.password) {
-    return res.status(400).json({ error: 'La contraseña actual no es correcta' });
+  const cleanNewPassword = newPassword.trim();
+  if (cleanNewPassword.length < 1) {
+    return res.status(400).json({ error: 'La nueva contraseña no puede estar vacía' });
   }
 
-  user.password = newPassword.trim();
-  syncAccountToSupabase(user.id, user.name, user.balance, user.username, user.password, user.accountNumber, user.role).catch(e => console.error(e));
+  try {
+    let affectedUserId = String(studentId);
+    let affectedUserName = '';
+    let affectedUsername = '';
 
-  db.systemLogs.unshift({
-    id: generateId('log'),
-    action: 'CHANGE_PASSWORD',
-    details: `El usuario ${user.name} (${user.username}) ha cambiado su contraseña`,
-    timestamp: new Date().toISOString(),
-    studentId: user.id,
-    studentName: user.name
-  });
+    if (dbPool) {
+      await withPostgresTransaction(async (client) => {
+        // 1. Localizar la cuenta en PostgreSQL de forma canónica y bloquearla para actualización
+        const checkRes = await client.query(
+          `SELECT id, alumno, usuario, password 
+           FROM cuentas 
+           WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1)
+           LIMIT 1 FOR UPDATE`,
+          [studentId]
+        );
 
-  writeDb(db);
-  res.json({ success: true, message: 'Contraseña actualizada correctamente' });
+        if (checkRes.rows.length === 0) {
+          const err: any = new Error('Cuenta no encontrada en la base de datos');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const studentRow = checkRes.rows[0];
+        affectedUserId = String(studentRow.id);
+        affectedUserName = String(studentRow.alumno || '');
+        affectedUsername = String(studentRow.usuario || '');
+
+        // 2. Verificar la contraseña actual contra PostgreSQL
+        if (currentPassword && typeof currentPassword === 'string' && currentPassword.trim()) {
+          const inputCurrent = currentPassword.trim();
+          const dbCurrentPass = (studentRow.password || '123').trim();
+          if (inputCurrent !== dbCurrentPass && !(inputCurrent === '123' && !studentRow.password)) {
+            const err: any = new Error('La contraseña actual no es correcta');
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        // 3. Actualización directa de la columna password en cuentas
+        const updateRes = await client.query(
+          `UPDATE cuentas 
+           SET password = $1 
+           WHERE id = $2`,
+          [cleanNewPassword, studentRow.id]
+        );
+
+        if (updateRes.rowCount !== 1) {
+          const err: any = new Error('No se pudo confirmar la actualización en la base de datos');
+          err.statusCode = 500;
+          throw err;
+        }
+      });
+    }
+
+    // 4. Actualización de memoria (db.users) y db.json DESPUÉS de confirmar el COMMIT en PostgreSQL
+    const db = readDb();
+    const user = db.users.find(u => 
+      u.id === affectedUserId || 
+      (u.username && affectedUsername && u.username.toLowerCase() === affectedUsername.toLowerCase()) ||
+      u.id === studentId
+    );
+
+    if (user) {
+      user.password = cleanNewPassword;
+    } else if (!dbPool) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // Fallback sin dbPool si la base de datos no está disponible
+    if (!dbPool && user) {
+      if (currentPassword && user.password && currentPassword.trim() !== user.password) {
+        return res.status(400).json({ error: 'La contraseña actual no es correcta' });
+      }
+      user.password = cleanNewPassword;
+    }
+
+    db.systemLogs.unshift({
+      id: generateId('log'),
+      action: 'CHANGE_PASSWORD',
+      details: `El usuario ${affectedUserName || (user && user.name) || studentId} ha cambiado su contraseña`,
+      timestamp: new Date().toISOString(),
+      studentId: affectedUserId,
+      studentName: affectedUserName || (user && user.name) || studentId
+    });
+
+    writeDb(db);
+
+    return res.json({ success: true, message: 'Contraseña actualizada correctamente' });
+  } catch (err: any) {
+    console.error('[Student Change Password Error]:', err);
+    return res.status(err.statusCode || 500).json({ 
+      error: err.message || 'Error al cambiar la contraseña en la base de datos' 
+    });
+  }
 });
 
 // ================= JOB FORUM (FORO DE EMPLEO) ENDPOINTS =================
