@@ -172,6 +172,11 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS role TEXT;
       ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS level INT DEFAULT 1;
 
+      -- Enforce Row Level Security (RLS) on cuentas to protect credentials and balances from direct client access
+      ALTER TABLE cuentas ENABLE ROW LEVEL SECURITY;
+      REVOKE ALL ON TABLE cuentas FROM anon, authenticated;
+      GRANT ALL ON TABLE cuentas TO service_role;
+
       CREATE TABLE IF NOT EXISTS movimientos (
         id VARCHAR(255) PRIMARY KEY,
         cuenta_id VARCHAR(255) NOT NULL,
@@ -7940,8 +7945,8 @@ app.get('/api/accounts/:id', async (req, res) => {
   if (movements.length === 0) {
     movements = (db.transfers || []).filter(tx => tx.senderId === id || tx.receiverId === id).map(tx => ({
       ...tx,
-      fecha: tx.date,
-      timestamp: tx.date
+      fecha: (tx as any).date || tx.timestamp,
+      timestamp: (tx as any).date || tx.timestamp
     }));
   }
 
@@ -13005,10 +13010,11 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 [nowIso, ob.id]
               ).catch(() => {});
 
-              if (ob.adquisicion_id) {
+              const acqId = (ob as any).adquisicion_id || (ob as any).acquisitionId;
+              if (acqId) {
                 await client.query(
                   'UPDATE adquisiciones SET saldo_pendiente = GREATEST(0, COALESCE(saldo_pendiente, 0) - $1) WHERE id = $2',
-                  [ob.amount, ob.adquisicion_id]
+                  [ob.amount, acqId]
                 ).catch(() => {});
               }
 
@@ -20556,7 +20562,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           sellerLevel: r.seller_level === 'official' ? 'official' : (r.seller_level ? Number(r.seller_level) : undefined),
           sellerAccount: r.seller_account ? String(r.seller_account) : 'ES990001000988776655',
           active: Boolean(r.active)
-        };
+        } as any;
         if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
         db.rawMaterialAnnouncements.push(primaryAnn);
       }

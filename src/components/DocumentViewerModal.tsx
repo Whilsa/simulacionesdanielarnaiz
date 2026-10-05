@@ -210,7 +210,7 @@ TOTAL PAGADO: ${formatNumber(totalAmount)} € (PAGADO AL CONTADO)
       const code = `EXT-2026-${(ob?.id || '001').toUpperCase()}`;
       const isPaid = ob?.status === 'pagado';
       const instrumentName = ob?.type === 'pagare' ? 'Pagaré mercantil' : ob?.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota de alquiler';
-      const extractEmissionDate = ob?.createdAt || ob?.paidDate || ob?.dueDate;
+      const extractEmissionDate = (ob as any)?.createdAt || ob?.paidDate || ob?.dueDate;
       const formattedExtractDate = extractEmissionDate ? new Date(extractEmissionDate).toLocaleDateString('es-ES') : '';
 
       textContent = `================================================
@@ -965,7 +965,7 @@ Estado Contable: EJECUTADO Y ABONADO
             const extractNo = `EXT-2026-${(ob?.id || '001').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
             const isPaid = ob?.status === 'pagado';
             const instrumentName = ob?.type === 'pagare' ? 'Pagaré mercantil' : ob?.type === 'letra_cambio' ? 'Letra de cambio' : 'Cuota de alquiler';
-            const extractEmissionDate = ob?.createdAt || ob?.paidDate || ob?.dueDate;
+            const extractEmissionDate = (ob as any)?.createdAt || ob?.paidDate || ob?.dueDate;
             const formattedExtractDate = extractEmissionDate ? new Date(extractEmissionDate).toLocaleDateString('es-ES') : '';
 
             return (
