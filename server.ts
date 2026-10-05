@@ -3672,7 +3672,7 @@ function getDefaultSeedRawMaterialAnnouncements(): RawMaterialAnnouncement[] {
 }
 
 function recalculateTotalInventory(inv: any) {
-  if (!inv.naveInventories) return;
+  if (!inv.naveInventories || Object.keys(inv.naveInventories).length === 0) return;
   let totalIron = 0, totalMetal = 0, totalPlastic = 0, totalEpoxi = 0;
   let totalStarRods = 0, totalFlatRods = 0, totalStarScrewdrivers = 0, totalFlatScrewdrivers = 0;
 
@@ -20459,6 +20459,19 @@ app.get('/api/raw-materials/orders', async (req, res) => {
   res.json({ success: true, orders });
 });
 
+function getRandomSpanishCommercialBuyerName(): string {
+  const maleNames = ['Carlos', 'Javier', 'Alejandro', 'Manuel', 'David', 'Pablo', 'Álvaro', 'Diego', 'Gonzalo', 'Sergio', 'Fernando', 'Marcos', 'Hugo', 'Daniel', 'Adrián', 'Lucas', 'Mateo', 'Rubén', 'Jorge', 'Iván', 'Miguel'];
+  const femaleNames = ['Ana', 'María', 'Carmen', 'Laura', 'Marta', 'Paula', 'Lucía', 'Sofía', 'Elena', 'Alba', 'Isabel', 'Cristina', 'Beatriz', 'Patricia', 'Andrea', 'Sara', 'Nuria', 'Rocío', 'Silvia', 'Sonia'];
+  const surnames = ['García', 'Rodríguez', 'González', 'Fernández', 'López', 'Martínez', 'Sánchez', 'Pérez', 'Gómez', 'Martín', 'Jiménez', 'Ruiz', 'Hernández', 'Díaz', 'Moreno', 'Muñoz', 'Álvarez', 'Romero', 'Alonso', 'Gutiérrez'];
+
+  const isMale = Math.random() > 0.5;
+  const firstName = isMale
+    ? maleNames[Math.floor(Math.random() * maleNames.length)]
+    : femaleNames[Math.floor(Math.random() * femaleNames.length)];
+  const surname1 = surnames[Math.floor(Math.random() * surnames.length)];
+  return `${firstName} ${surname1}`;
+}
+
 app.post('/api/raw-materials/orders', async (req, res) => {
   const {
     studentId,
@@ -20817,10 +20830,19 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         note: note || 'Solicitud inicial de compra realizada'
       };
 
+      const isTeacherBuyingFromStudent = Boolean(isTeacherBuyer && isStudentSeller);
+      const chosenBuyerName = isTeacherBuyingFromStudent
+        ? getRandomSpanishCommercialBuyerName()
+        : buyerName;
+
+      const candidateInvoiceNum = (isAutoApproved || buyerLevel === 1 || isTeacherBuyingFromStudent)
+        ? `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
+        : undefined;
+
       const order: RawMaterialOrder = {
         id: generateId('rmord'),
         studentId: buyer.id,
-        studentName: buyerName,
+        studentName: chosenBuyerName,
         buyerLevel,
         sellerId,
         sellerName,
@@ -20848,15 +20870,15 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         deliveryAddress: deliveryAddressStr,
         destinationNaveId: finalDestinationNaveId,
         pickupVehicleId: pickupVehicleId || undefined,
-        status: isAutoApproved ? 'entregado' : 'pendiente',
+        status: isTeacherBuyingFromStudent ? 'facturado' : (isAutoApproved ? 'entregado' : 'pendiente'),
         inventoryCredited: isAutoApproved,
         requestedAt: now.toISOString(),
         approvedAt: isAutoApproved ? now.toISOString() : undefined,
         deliveredAt: isAutoApproved ? now.toISOString() : undefined,
         estimatedDeliveryDays: isAutoApproved ? 0 : undefined,
         estimatedDeliveryAt: isAutoApproved ? now.toISOString() : undefined,
-        invoiceNumber: (isAutoApproved || buyerLevel === 1) ? `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
-        invoicedAt: (isAutoApproved || buyerLevel === 1) ? now.toISOString() : undefined,
+        invoiceNumber: candidateInvoiceNum,
+        invoicedAt: (isAutoApproved || buyerLevel === 1 || isTeacherBuyingFromStudent) ? now.toISOString() : undefined,
         items: orderItems,
         lastTurnUserId: buyer.id,
         negotiationHistory: [initialNegotiation]

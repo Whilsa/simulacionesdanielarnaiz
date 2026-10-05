@@ -1415,8 +1415,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       return true;
     }
 
-    // For merchandise invoices: ONLY official purchases (catalogo oficial / compras de nivel 1 con proveedor oficial o profesor) appear in Mercado -> Facturas.
-    // Manual student-to-student merchandise invoices belong strictly to Mensajería directa.
+    // For merchandise invoices:
+    // - Purchases from official supplier/teacher (official catalog)
+    // - Purchases by teacher/institutional distributor from student market announcements (e.g. level 3 sales)
+    // - Purchases originating from market announcements (rm-ann-, anuncio-mp-, ann-) that have been invoiced
     const isOfficialSeller =
       order.sellerId === 'profesor-1' ||
       order.sellerId === 'proveedor-materia-prima' ||
@@ -1425,7 +1427,16 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       order.announcementId?.startsWith('anuncio-mp-') ||
       order.announcementId?.startsWith('ann-');
 
-    if (isOfficialSeller) {
+    const isTeacherPurchase = order.studentId === 'profesor-1';
+    const isMarketAnnouncementSale = Boolean(
+      order.announcementId && (
+        order.announcementId.startsWith('rm-ann-') ||
+        order.announcementId.startsWith('anuncio-mp-') ||
+        order.announcementId.startsWith('ann-')
+      )
+    );
+
+    if (isOfficialSeller || isTeacherPurchase || isMarketAnnouncementSale) {
       return true;
     }
 
@@ -1601,7 +1612,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       <div>
         <span class="party-label">RECEPTOR (COMPRADOR)</span>
         <div class="party-name">${order.studentName}</div>
-        <div>Nivel: Nivel ${order.buyerLevel || 1}</div>
+        <div>Nivel: ${order.studentId === 'profesor-1' ? 'Cliente comercial' : `Nivel ${order.buyerLevel || 1}`}</div>
         <div>ID: ${order.studentId}</div>
         <div>Entrega: ${order.deliveryAddress || 'Almacén Central'}</div>
       </div>
@@ -4055,7 +4066,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <Receipt className="w-5 h-5 text-purple-400" />
                 {studentLevel === 1
                   ? 'Facturas compras materias primas y servicios transporte'
-                  : 'Facturas servicios de transporte'}
+                  : 'Facturas comerciales y servicios de transporte'}
               </h2>
               <p className="text-xs text-slate-400 mt-1">
                 Consulta e imprime los documentos tributarios y facturas emitidas y recibidas en tus operaciones de mercado.
@@ -4196,7 +4207,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 <div>
                   <span className="font-bold uppercase text-[10px] text-slate-400 block mb-1">RECEPTOR (COMPRADOR)</span>
                   <div className="font-bold text-slate-800 text-sm">{selectedInvoiceOrder.studentName}</div>
-                  <div className="text-slate-600 mt-0.5">Nivel: Nivel {selectedInvoiceOrder.buyerLevel || 1}</div>
+                  <div className="text-slate-600 mt-0.5">Nivel: {selectedInvoiceOrder.studentId === 'profesor-1' ? 'Cliente comercial' : `Nivel ${selectedInvoiceOrder.buyerLevel || 1}`}</div>
                   <div className="text-slate-500 mt-0.5">ID: {selectedInvoiceOrder.studentId}</div>
                   <div className="text-slate-500 mt-0.5">Entrega: {selectedInvoiceOrder.deliveryAddress || 'Almacén Central'}</div>
                 </div>
