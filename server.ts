@@ -1547,28 +1547,32 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
   if (!dbPool) return currentDb.hiredEmployees || [];
   try {
     const resEmp = await safeDbQuery('SELECT * FROM empleados_contratados ORDER BY fecha_contratacion DESC');
-    if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
-      const localMap = new Map((currentDb.hiredEmployees || []).map(e => [e.id, e]));
-      currentDb.hiredEmployees = resEmp.rows.map(row => {
-        const mapped = mapHiredEmployeeRow(row);
-        const local = localMap.get(mapped.id);
-        if (local) {
-          // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local
-          if (local.assignedMachineryId && !mapped.assignedMachineryId) {
-            mapped.assignedMachineryId = local.assignedMachineryId;
-            mapped.assignedMachineryTitle = local.assignedMachineryTitle;
-            mapped.shift = local.shift;
+    if (resEmp && resEmp.rows) {
+      if (resEmp.rows.length === 0) {
+        currentDb.hiredEmployees = [];
+      } else {
+        const localMap = new Map((currentDb.hiredEmployees || []).map(e => [e.id, e]));
+        currentDb.hiredEmployees = resEmp.rows.map(row => {
+          const mapped = mapHiredEmployeeRow(row);
+          const local = localMap.get(mapped.id);
+          if (local) {
+            // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local
+            if (local.assignedMachineryId && !mapped.assignedMachineryId) {
+              mapped.assignedMachineryId = local.assignedMachineryId;
+              mapped.assignedMachineryTitle = local.assignedMachineryTitle;
+              mapped.shift = local.shift;
+            }
+            if (local.assignedVehicleId && !mapped.assignedVehicleId) {
+              mapped.assignedVehicleId = local.assignedVehicleId;
+              mapped.assignedVehicleTitle = local.assignedVehicleTitle;
+            }
+            if (local.assignedWarehouseIndex !== undefined && mapped.assignedWarehouseIndex === undefined) {
+              mapped.assignedWarehouseIndex = local.assignedWarehouseIndex;
+            }
           }
-          if (local.assignedVehicleId && !mapped.assignedVehicleId) {
-            mapped.assignedVehicleId = local.assignedVehicleId;
-            mapped.assignedVehicleTitle = local.assignedVehicleTitle;
-          }
-          if (local.assignedWarehouseIndex !== undefined && mapped.assignedWarehouseIndex === undefined) {
-            mapped.assignedWarehouseIndex = local.assignedWarehouseIndex;
-          }
-        }
-        return mapped;
-      });
+          return mapped;
+        });
+      }
       currentDb.isSeed = false;
     }
   } catch (e) {
@@ -1611,12 +1615,16 @@ async function syncJobListingsFromSupabase(db?: DatabaseSchema): Promise<JobList
 
     const resJobs = await safeDbQuery("SELECT * FROM ofertas_empleo WHERE estado = 'disponible' ORDER BY fecha_creacion DESC");
     if (resJobs && resJobs.rows) {
-      const hiredListingIds = new Set((currentDb.hiredEmployees || []).map(e => e.jobListingId));
-      const hiredNames = new Set((currentDb.hiredEmployees || []).map(e => (e.employeeName || '').toLowerCase().trim()));
+      if (resJobs.rows.length === 0) {
+        currentDb.jobListings = [];
+      } else {
+        const hiredListingIds = new Set((currentDb.hiredEmployees || []).map(e => e.jobListingId));
+        const hiredNames = new Set((currentDb.hiredEmployees || []).map(e => (e.employeeName || '').toLowerCase().trim()));
 
-      currentDb.jobListings = resJobs.rows
-        .map(mapJobListingRow)
-        .filter(j => j.status === 'disponible' && !hiredListingIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
+        currentDb.jobListings = resJobs.rows
+          .map(mapJobListingRow)
+          .filter(j => j.status === 'disponible' && !hiredListingIds.has(j.id) && !hiredNames.has((j.employeeName || '').toLowerCase().trim()));
+      }
       currentDb.isSeed = false;
     }
   } catch (e) {
@@ -2631,12 +2639,55 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       return { restoredUsers: 0, restoredMovements: 0 };
     }
     
-    // If Supabase has NO records, seed Supabase with current db.json state
+    // If Supabase has NO records in "cuentas", ensure teacher pupdaniel exists and do NOT auto-seed simulation data
     if (resCuentas.rows.length === 0) {
-      console.log('[Supabase Sync] Supabase "cuentas" table is empty. Seeding Supabase with local data...');
-      const currentDb = readDb();
-      await syncAllToSupabase(currentDb);
-      return { restoredUsers: 0, restoredMovements: 0 };
+      console.log('[Supabase Restore] Supabase "cuentas" table is empty. Ensuring teacher account in PostgreSQL and application state...');
+      await safeDbQuery(
+        `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+         VALUES ('profesor-1', 'Profesor de Contabilidad', 0, 'pupdaniel', '1987', 'ES000000000000000000', 'teacher', 1)
+         ON CONFLICT (id) DO UPDATE SET usuario = 'pupdaniel', role = 'teacher'`
+      );
+      const cleanDb = readDb();
+      const teacherUser: User = {
+        id: 'profesor-1',
+        username: 'pupdaniel',
+        password: '1987',
+        role: 'teacher',
+        name: 'Profesor de Contabilidad',
+        accountNumber: 'ES000000000000000000',
+        balance: 0
+      };
+      cleanDb.users = [teacherUser];
+      cleanDb.transfers = [];
+      cleanDb.properties = [];
+      cleanDb.acquisitions = [];
+      cleanDb.paymentObligations = [];
+      cleanDb.loans = [];
+      cleanDb.machineryAcquisitions = [];
+      cleanDb.jobListings = [];
+      cleanDb.hiredEmployees = [];
+      cleanDb.payrollRecords = [];
+      cleanDb.taxObligations = [];
+      cleanDb.electricityContracts = [];
+      cleanDb.electricityBills = [];
+      cleanDb.naveFloorPlans = [];
+      cleanDb.telecomContracts = [];
+      cleanDb.telecomInvoices = [];
+      cleanDb.officeOrders = [];
+      cleanDb.purchasedVehicles = [];
+      cleanDb.unifiedMonthlyInvoices = [];
+      cleanDb.rawMaterialAnnouncements = [];
+      cleanDb.rawMaterialOrders = [];
+      cleanDb.rawMaterialInventories = [];
+      cleanDb.marketMessages = [];
+      cleanDb.companyProfiles = [];
+      cleanDb.marketContacts = [];
+      cleanDb.notifications = [];
+      cleanDb.courtLawsuits = [];
+      cleanDb.isSeed = false;
+      fs.writeFileSync(DB_FILE, JSON.stringify(cleanDb, null, 2), 'utf-8');
+      clearAllSessionCaches();
+      return { restoredUsers: 1, restoredMovements: 0 };
     }
 
     console.log(`[Supabase Restore] Found ${resCuentas.rows.length} accounts in Supabase. Restoring to application database...`);
@@ -2692,8 +2743,12 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         const rowRole = row.role ? String(row.role) : 'student';
         const rowLevel = row.level ? (Number(row.level) as 1 | 2 | 3) : 1;
 
-        if (rowRole === 'teacher' || rowId === teacherUser.id) {
+        const isTeacher = rowRole === 'teacher' || rowId === teacherUser.id || rowId === 'profesor-1' || rowUsuario === 'pupdaniel';
+        if (isTeacher) {
+          teacherUser.id = rowId;
           teacherUser.balance = rowSaldo;
+          if (rowAlumno) teacherUser.name = rowAlumno;
+          if (rowAccount) teacherUser.accountNumber = rowAccount;
           if (rowUsuario) teacherUser.username = rowUsuario;
           if (rowPassword) teacherUser.password = rowPassword;
         } else {
@@ -2710,7 +2765,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         }
       }
 
-      db.users = restoredUsers;
+      // Ensure no duplicate IDs in restoredUsers
+      const seenUserIds = new Set<string>();
+      db.users = restoredUsers.filter(u => {
+        if (seenUserIds.has(u.id)) return false;
+        seenUserIds.add(u.id);
+        return true;
+      });
 
       // Reconstruct db.transfers from "movimientos"
       const outMovs = resMov.rows.filter(r => r.tipo === 'TRANSFER_OUT');
@@ -2771,17 +2832,15 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         });
       }
 
-      if (restoredTransfers.length > 0) {
-        const seenTxIds = new Set<string>();
-        const uniqueTransfers: Transfer[] = [];
-        for (const tr of restoredTransfers) {
-          if (!seenTxIds.has(tr.id)) {
-            seenTxIds.add(tr.id);
-            uniqueTransfers.push(tr);
-          }
+      const seenTxIds = new Set<string>();
+      const uniqueTransfers: Transfer[] = [];
+      for (const tr of restoredTransfers) {
+        if (!seenTxIds.has(tr.id)) {
+          seenTxIds.add(tr.id);
+          uniqueTransfers.push(tr);
         }
-        db.transfers = uniqueTransfers;
       }
+      db.transfers = uniqueTransfers;
 
       // Automatic Ledger Reconciliation (Conciliación Bancaria Automática)
       // Ensures account balances in "cuentas" mathematically match the sum of "movimientos"
@@ -2810,163 +2869,150 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       }
 
       // Reconstruct db.properties from Supabase "inmuebles"
-      if (resInm.rows.length > 0) {
-        db.properties = resInm.rows.map(row => ({
-          id: String(row.id),
-          title: String(row.titulo),
-          type: String(row.tipo) as PropertyType,
-          operation: String(row.operacion) as OperationType,
-          surfaceM2: Number(row.superficie_m2),
-          price: Number(row.precio),
-          pricePerM2: Number(row.precio_m2),
-          ivaRate: 0.21,
-          landPercentage: Number(row.porcentaje_suelo),
-          locationScope: 'municipio',
-          community: row.comunidad || 'Comunidad de Madrid',
-          municipality: row.municipio || 'Madrid',
-          address: row.direccion || 'Calle Principal, Nº 1',
-          imageUrl: row.imagen_url || PROPERTY_IMAGES.local_comercial[0],
-          status: row.estado as ('available' | 'sold' | 'rented'),
-          ownerId: row.propietario_id || 'corp-1',
-          ownerName: row.propietario_nombre || 'Inmobiliaria Polígonos de España S.A.',
-          deferredPaymentConfig: row.config_pago_aplazado ? (typeof row.config_pago_aplazado === 'string' ? JSON.parse(row.config_pago_aplazado) : row.config_pago_aplazado) : undefined,
-          createdTimestamp: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
-        }));
-      }
+      db.properties = (resInm && resInm.rows) ? resInm.rows.map(row => ({
+        id: String(row.id),
+        title: String(row.titulo),
+        type: String(row.tipo) as PropertyType,
+        operation: String(row.operacion) as OperationType,
+        surfaceM2: Number(row.superficie_m2),
+        price: Number(row.precio),
+        pricePerM2: Number(row.precio_m2),
+        ivaRate: 0.21,
+        landPercentage: Number(row.porcentaje_suelo),
+        locationScope: 'municipio',
+        community: row.comunidad || 'Comunidad de Madrid',
+        municipality: row.municipio || 'Madrid',
+        address: row.direccion || 'Calle Principal, Nº 1',
+        imageUrl: row.imagen_url || PROPERTY_IMAGES.local_comercial[0],
+        status: row.estado as ('available' | 'sold' | 'rented'),
+        ownerId: row.propietario_id || 'corp-1',
+        ownerName: row.propietario_nombre || 'Inmobiliaria Polígonos de España S.A.',
+        deferredPaymentConfig: row.config_pago_aplazado ? (typeof row.config_pago_aplazado === 'string' ? JSON.parse(row.config_pago_aplazado) : row.config_pago_aplazado) : undefined,
+        createdTimestamp: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString()
+      })) : [];
 
       // Reconstruct db.acquisitions from Supabase "adquisiciones"
-      if (resAcq.rows.length > 0) {
-        db.acquisitions = resAcq.rows.map(row => ({
-          id: String(row.id),
-          propertyId: String(row.inmueble_id),
-          propertyTitle: String(row.inmueble_titulo),
-          propertyType: String(row.inmueble_tipo) as PropertyType,
-          operation: String(row.operacion) as OperationType,
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          surfaceM2: Number(row.superficie_m2),
-          location: String(row.ubicacion),
-          imageUrl: String(row.imagen_url),
-          landPercentage: Number(row.porcentaje_suelo),
-          basePrice: Number(row.precio_base),
-          ivaAmount: Number(row.importe_iva),
-          totalPrice: Number(row.precio_total),
-          purchaseDate: new Date(row.fecha_compra).toISOString(),
-          paymentMethod: String(row.metodo_pago) as any,
-          monthlyRent: row.alquiler_mensual ? Number(row.alquiler_mensual) : undefined,
-          nextRentDueDate: row.proximo_pago_alquiler ? new Date(row.proximo_pago_alquiler).toISOString() : undefined,
-          downPaymentPaid: row.entrada_pagada ? Number(row.entrada_pagada) : undefined,
-          pendingBalance: row.saldo_pendiente ? Number(row.saldo_pendiente) : undefined
-        }));
-      }
+      db.acquisitions = (resAcq && resAcq.rows) ? resAcq.rows.map(row => ({
+        id: String(row.id),
+        propertyId: String(row.inmueble_id),
+        propertyTitle: String(row.inmueble_titulo),
+        propertyType: String(row.inmueble_tipo) as PropertyType,
+        operation: String(row.operacion) as OperationType,
+        studentId: String(row.alumno_id),
+        studentName: String(row.alumno_nombre),
+        surfaceM2: Number(row.superficie_m2),
+        location: String(row.ubicacion),
+        imageUrl: String(row.imagen_url),
+        landPercentage: Number(row.porcentaje_suelo),
+        basePrice: Number(row.precio_base),
+        ivaAmount: Number(row.importe_iva),
+        totalPrice: Number(row.precio_total),
+        purchaseDate: new Date(row.fecha_compra).toISOString(),
+        paymentMethod: String(row.metodo_pago) as any,
+        monthlyRent: row.alquiler_mensual ? Number(row.alquiler_mensual) : undefined,
+        nextRentDueDate: row.proximo_pago_alquiler ? new Date(row.proximo_pago_alquiler).toISOString() : undefined,
+        downPaymentPaid: row.entrada_pagada ? Number(row.entrada_pagada) : undefined,
+        pendingBalance: row.saldo_pendiente ? Number(row.saldo_pendiente) : undefined
+      })) : [];
 
       // Reconstruct db.paymentObligations from Supabase "obligaciones_pago" (excluding peer-to-peer promissory notes which are manual student transfers)
-      if (resObl.rows.length > 0) {
-        db.paymentObligations = resObl.rows
-          .filter(row => !String(row.adquisicion_id || '').startsWith('promissory_'))
-          .map(row => ({
-          id: String(row.id),
-          acquisitionId: String(row.adquisicion_id),
-          studentId: String(row.alumno_id),
-          studentName: String(row.alumno_nombre),
-          propertyTitle: String(row.inmueble_titulo),
-          type: String(row.tipo) as any,
-          amount: Number(row.importe),
-          dueDate: new Date(row.fecha_vencimiento).toISOString(),
-          status: String(row.estado) as ('pendiente' | 'pagado'),
-          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
-          installmentNumber: Number(row.numero_cuota || 1),
-          totalInstallments: Number(row.total_cuotas || 1)
-        }));
-      }
+      db.paymentObligations = (resObl && resObl.rows) ? resObl.rows
+        .filter(row => !String(row.adquisicion_id || '').startsWith('promissory_'))
+        .map(row => ({
+        id: String(row.id),
+        acquisitionId: String(row.adquisicion_id),
+        studentId: String(row.alumno_id),
+        studentName: String(row.alumno_nombre),
+        propertyTitle: String(row.inmueble_titulo),
+        type: String(row.tipo) as any,
+        amount: Number(row.importe),
+        dueDate: new Date(row.fecha_vencimiento).toISOString(),
+        status: String(row.estado) as ('pendiente' | 'pagado'),
+        paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+        installmentNumber: Number(row.numero_cuota || 1),
+        totalInstallments: Number(row.total_cuotas || 1)
+      })) : [];
 
       // Reconstruct db.loans from Supabase "prestamos"
-      if (resLoans.rows.length > 0) {
-        db.loans = resLoans.rows.map(row => ({
+      db.loans = (resLoans && resLoans.rows) ? resLoans.rows.map(row => ({
+        id: String(row.id),
+        studentId: String(row.alumno_id),
+        studentName: String(row.alumno_nombre),
+        studentAccount: String(row.alumno_cuenta || ''),
+        requestedAmount: Number(row.importe_solicitado),
+        offeredAmount: Number(row.importe_ofrecido),
+        approvedAmount: row.importe_concedido ? Number(row.importe_concedido) : undefined,
+        termMonths: Number(row.plazo_meses),
+        annualInterestRate: Number(row.tipo_interes),
+        euriborRate: Number(row.euribor || 3.50),
+        spread: Number(row.diferencial || 1.00),
+        openingFee: Number(row.comision_apertura),
+        monthlyPayment: Number(row.cuota_mensual),
+        collateral: {
+          type: String(row.garantia_tipo) as ('property' | 'private_residence'),
+          propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
+          propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
+          surfaceM2: Number(row.garantia_superficie_m2 || 0),
+          appraisalValue: Number(row.garantia_valor_tasacion)
+        },
+        status: String(row.estado) as any,
+        requiresTeacherApproval: Boolean(row.requiere_profesor),
+        teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
+        createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+        acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
+        schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
+      })) : [];
+
+      // Reconstruct db.machineryAcquisitions from Supabase "maquinaria_adquisiciones"
+      db.machineryAcquisitions = (resMachinery && resMachinery.rows) ? resMachinery.rows.map(row => {
+        const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
+        return {
           id: String(row.id),
           studentId: String(row.alumno_id),
           studentName: String(row.alumno_nombre),
-          studentAccount: String(row.alumno_cuenta || ''),
-          requestedAmount: Number(row.importe_solicitado),
-          offeredAmount: Number(row.importe_ofrecido),
-          approvedAmount: row.importe_concedido ? Number(row.importe_concedido) : undefined,
-          termMonths: Number(row.plazo_meses),
-          annualInterestRate: Number(row.tipo_interes),
-          euriborRate: Number(row.euribor || 3.50),
-          spread: Number(row.diferencial || 1.00),
-          openingFee: Number(row.comision_apertura),
-          monthlyPayment: Number(row.cuota_mensual),
-          collateral: {
-            type: String(row.garantia_tipo) as ('property' | 'private_residence'),
-            propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
-            propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
-            surfaceM2: Number(row.garantia_superficie_m2 || 0),
-            appraisalValue: Number(row.garantia_valor_tasacion)
-          },
-          status: String(row.estado) as any,
-          requiresTeacherApproval: Boolean(row.requiere_profesor),
-          teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
-          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
-          acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
-          schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
-        }));
-      }
-
-      // Reconstruct db.machineryAcquisitions from Supabase "maquinaria_adquisiciones"
-      if (resMachinery.rows.length > 0) {
-        db.machineryAcquisitions = resMachinery.rows.map(row => {
-          const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
-          return {
-            id: String(row.id),
-            studentId: String(row.alumno_id),
-            studentName: String(row.alumno_nombre),
-            machineryId: String(row.maquinaria_id),
-            category: String(row.categoria) as any,
-            lineTitle: String(row.linea_titulo),
-            title: String(row.linea_titulo),
-            optionTitle: String(row.linea_titulo),
-            lathesCount: 1,
-            productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
-            imageUrl: '/images/machinery/maquinaria_cnc.jpg',
-            basePrice: Number(row.precio_base),
-            financedPrice: Number(row.precio_financiado || row.precio_base),
-            deferredPrice: Number(row.precio_financiado || row.precio_base),
-            ivaAmount: Number(row.importe_iva),
-            totalPrice: Number(row.precio_total),
-            downPaymentPaid: Number(row.entrada_pagada),
-            pendingBalance: Number(row.saldo_pendiente),
-            paymentMethod: String(row.metodo_pago) as any,
-            installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-            installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
-            purchaseDate: new Date(row.fecha_compra).toISOString(),
-            assemblyDays: Number(row.dias_montaje || 5),
-            assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-            assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
-            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
-            installedAtNaveId: String(row.nave_instalada_id),
-            installedNaveId: String(row.nave_instalada_id),
-            installationNaveId: String(row.nave_instalada_id),
-            installedAtNaveTitle: String(row.nave_instalada_titulo),
-            installedNaveTitle: String(row.nave_instalada_titulo),
-            installationNaveTitle: String(row.nave_instalada_titulo),
-            installationSurfaceM2: 300,
-            requiredStaff: Number(row.personal_requerido || 2),
-            requiredPowerKW: Number(row.potencia_kw || 35),
-            powerKw: Number(row.potencia_kw || 35),
-            equipmentList: equip,
-            equipment: equip,
-            relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
-            relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
-            relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
-            relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
-            relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
-            relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
-          };
-        });
-      } else if (db.machineryAcquisitions && db.machineryAcquisitions.length > 0) {
-        console.log(`[Supabase Sync] Syncing ${db.machineryAcquisitions.length} local machinery acquisitions to Supabase...`);
-        await syncMachineryBulkToSupabase(db.machineryAcquisitions);
-      }
+          machineryId: String(row.maquinaria_id),
+          category: String(row.categoria) as any,
+          lineTitle: String(row.linea_titulo),
+          title: String(row.linea_titulo),
+          optionTitle: String(row.linea_titulo),
+          lathesCount: 1,
+          productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+          imageUrl: '/images/machinery/maquinaria_cnc.jpg',
+          basePrice: Number(row.precio_base),
+          financedPrice: Number(row.precio_financiado || row.precio_base),
+          deferredPrice: Number(row.precio_financiado || row.precio_base),
+          ivaAmount: Number(row.importe_iva),
+          totalPrice: Number(row.precio_total),
+          downPaymentPaid: Number(row.entrada_pagada),
+          pendingBalance: Number(row.saldo_pendiente),
+          paymentMethod: String(row.metodo_pago) as any,
+          installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+          installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          assemblyDays: Number(row.dias_montaje || 5),
+          assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+          status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
+          installedAtNaveId: String(row.nave_instalada_id),
+          installedNaveId: String(row.nave_instalada_id),
+          installationNaveId: String(row.nave_instalada_id),
+          installedAtNaveTitle: String(row.nave_instalada_titulo),
+          installedNaveTitle: String(row.nave_instalada_titulo),
+          installationNaveTitle: String(row.nave_instalada_titulo),
+          installationSurfaceM2: 300,
+          requiredStaff: Number(row.personal_requerido || 2),
+          requiredPowerKW: Number(row.potencia_kw || 35),
+          powerKw: Number(row.potencia_kw || 35),
+          equipmentList: equip,
+          equipment: equip,
+          relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
+          relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
+          relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
+          relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
+          relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
+          relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
+        };
+      }) : [];
 
       // Reconstruct db.hiredEmployees from Supabase "empleados_contratados"
       if (resEmployees && resEmployees.rows) {
@@ -3306,205 +3352,187 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       });
     }
 
-    // Reconstruct db.rawMaterialAnnouncements from Supabase "anuncios_materia_prima"
-      if (resRawAnnouncements.rows.length > 0) {
-        db.rawMaterialAnnouncements = resRawAnnouncements.rows.map((row: any) => {
-          let parsedLevel: number | 'official' | undefined = undefined;
-          if (row.seller_level === 'official') {
-            parsedLevel = 'official';
-          } else if (row.seller_level) {
-            const numLevel = Number(row.seller_level);
-            if (!isNaN(numLevel)) parsedLevel = numLevel as any;
-          }
+      // Reconstruct db.rawMaterialAnnouncements from Supabase "anuncios_materia_prima"
+      db.rawMaterialAnnouncements = (resRawAnnouncements && resRawAnnouncements.rows) ? resRawAnnouncements.rows.map((row: any) => {
+        let parsedLevel: number | 'official' | undefined = undefined;
+        if (row.seller_level === 'official') {
+          parsedLevel = 'official';
+        } else if (row.seller_level) {
+          const numLevel = Number(row.seller_level);
+          if (!isNaN(numLevel)) parsedLevel = numLevel as any;
+        }
 
-          let parsedDuration: number | 'indefinido' = 'indefinido';
-          if (row.duration_days && row.duration_days !== 'indefinido') {
-            const numDur = Number(row.duration_days);
-            if (!isNaN(numDur)) parsedDuration = numDur;
-          }
+        let parsedDuration: number | 'indefinido' = 'indefinido';
+        if (row.duration_days && row.duration_days !== 'indefinido') {
+          const numDur = Number(row.duration_days);
+          if (!isNaN(numDur)) parsedDuration = numDur;
+        }
 
-          let parsedStock: number | 'ilimitado' = 'ilimitado';
-          if (row.stock && row.stock !== 'ilimitado') {
-            const numStock = Number(row.stock);
-            if (!isNaN(numStock)) parsedStock = numStock;
-          }
+        let parsedStock: number | 'ilimitado' = 'ilimitado';
+        if (row.stock && row.stock !== 'ilimitado') {
+          const numStock = Number(row.stock);
+          if (!isNaN(numStock)) parsedStock = numStock;
+        }
 
-          let parsedPriceAlert: any = undefined;
-          if (row.price_alert) {
-            try {
-              parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
-            } catch (e) {
-              console.warn('[Supabase Parse] price_alert JSON parse error:', e);
-            }
+        let parsedPriceAlert: any = undefined;
+        if (row.price_alert) {
+          try {
+            parsedPriceAlert = typeof row.price_alert === 'string' ? JSON.parse(row.price_alert) : row.price_alert;
+          } catch (e) {
+            console.warn('[Supabase Parse] price_alert JSON parse error:', e);
           }
+        }
 
-          return {
-            id: String(row.id),
-            materialType: String(row.material_type) as any,
-            title: String(row.title),
-            presentation: String(row.presentation || 'Pallet'),
-            unitWeightKg: Number(row.unit_weight_kg || 1000),
-            isPallet: Boolean(row.is_pallet),
-            pricePerUnit: Number(row.price_per_unit || 0),
-            description: String(row.description || ''),
-            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-            durationDays: parsedDuration,
-            expirationDate: row.expiration_date ? new Date(row.expiration_date).toISOString() : undefined,
-            stock: parsedStock,
-            active: Boolean(row.active),
-            sellerId: row.seller_id ? String(row.seller_id) : undefined,
-            sellerName: row.seller_name ? String(row.seller_name) : undefined,
-            sellerLevel: parsedLevel,
-            sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
-            sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
-            sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
-            isDesTornillo: Boolean(row.is_des_tornillo),
-            priceAlert: parsedPriceAlert
-          };
-        });
-      } else if (db.rawMaterialAnnouncements && db.rawMaterialAnnouncements.length > 0) {
-        console.log(`[Supabase Sync] Syncing ${db.rawMaterialAnnouncements.length} local announcements to Supabase...`);
-        await syncRawMaterialAnnouncementsBulkToSupabase(db.rawMaterialAnnouncements);
-      }
+        return {
+          id: String(row.id),
+          materialType: String(row.material_type) as any,
+          title: String(row.title),
+          presentation: String(row.presentation || 'Pallet'),
+          unitWeightKg: Number(row.unit_weight_kg || 1000),
+          isPallet: Boolean(row.is_pallet),
+          pricePerUnit: Number(row.price_per_unit || 0),
+          description: String(row.description || ''),
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+          durationDays: parsedDuration,
+          expirationDate: row.expiration_date ? new Date(row.expiration_date).toISOString() : undefined,
+          stock: parsedStock,
+          active: Boolean(row.active),
+          sellerId: row.seller_id ? String(row.seller_id) : undefined,
+          sellerName: row.seller_name ? String(row.seller_name) : undefined,
+          sellerLevel: parsedLevel,
+          sellerLocation: row.seller_location ? String(row.seller_location) : undefined,
+          sellerMunicipality: row.seller_municipality ? String(row.seller_municipality) : undefined,
+          sellerProvince: row.seller_province ? String(row.seller_province) : undefined,
+          isDesTornillo: Boolean(row.is_des_tornillo),
+          priceAlert: parsedPriceAlert
+        };
+      }) : [];
 
       // Reconstruct db.companyProfiles
-      if (resProfiles.rows.length > 0) {
-        db.companyProfiles = resProfiles.rows.map((row: any) => ({
-          id: String(row.id),
-          studentId: String(row.student_id),
-          companyName: String(row.company_name),
-          description: String(row.description || ''),
-          logoUrl: row.logo_url ? String(row.logo_url) : undefined,
-          level: Number(row.level || 1),
-          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
-        }));
-      }
+      db.companyProfiles = (resProfiles && resProfiles.rows) ? resProfiles.rows.map((row: any) => ({
+        id: String(row.id),
+        studentId: String(row.student_id),
+        companyName: String(row.company_name),
+        description: String(row.description || ''),
+        logoUrl: row.logo_url ? String(row.logo_url) : undefined,
+        level: Number(row.level || 1),
+        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
+      })) : [];
 
       // Reconstruct db.marketContacts
-      if (resContacts.rows.length > 0) {
-        db.marketContacts = resContacts.rows.map((row: any) => ({
-          id: String(row.id),
-          userId: String(row.user_id),
-          contactId: String(row.contact_id),
-          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
-        }));
-      }
+      db.marketContacts = (resContacts && resContacts.rows) ? resContacts.rows.map((row: any) => ({
+        id: String(row.id),
+        userId: String(row.user_id),
+        contactId: String(row.contact_id),
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+      })) : [];
 
       // Reconstruct db.marketMessages
-      if (resMessages.rows.length > 0) {
-        db.marketMessages = resMessages.rows.map((row: any) => {
-          const parsedData = row.invoice_data ? (typeof row.invoice_data === 'string' ? JSON.parse(row.invoice_data) : row.invoice_data) : undefined;
-          const msgType = String(row.type || 'text');
-          return {
-            id: String(row.id),
-            chatId: String(row.chat_id),
-            senderId: String(row.sender_id),
-            senderName: String(row.sender_name),
-            recipientId: String(row.recipient_id),
-            recipientName: String(row.recipient_name),
-            content: String(row.content),
-            timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
-            read: Boolean(row.read),
-            type: msgType as any,
-            invoiceData: msgType === 'invoice' ? parsedData : undefined,
-            promissoryNoteData: msgType === 'promissory_note' ? parsedData : undefined
-          };
-        });
-      }
+      db.marketMessages = (resMessages && resMessages.rows) ? resMessages.rows.map((row: any) => {
+        const parsedData = row.invoice_data ? (typeof row.invoice_data === 'string' ? JSON.parse(row.invoice_data) : row.invoice_data) : undefined;
+        const msgType = String(row.type || 'text');
+        return {
+          id: String(row.id),
+          chatId: String(row.chat_id),
+          senderId: String(row.sender_id),
+          senderName: String(row.sender_name),
+          recipientId: String(row.recipient_id),
+          recipientName: String(row.recipient_name),
+          content: String(row.content),
+          timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+          read: Boolean(row.read),
+          type: msgType as any,
+          invoiceData: msgType === 'invoice' ? parsedData : undefined,
+          promissoryNoteData: msgType === 'promissory_note' ? parsedData : undefined
+        };
+      }) : [];
 
       // Reconstruct db.courtLawsuits from Supabase "demandas_judiciales"
-      if (resLawsuits.rows.length > 0) {
-        db.courtLawsuits = resLawsuits.rows.map((row: any) => {
-          const atts = row.archivos_adjuntos
-            ? (typeof row.archivos_adjuntos === 'string' ? JSON.parse(row.archivos_adjuntos) : row.archivos_adjuntos)
-            : [];
-          const pnData = row.pagare_datos
-            ? (typeof row.pagare_datos === 'string' ? JSON.parse(row.pagare_datos) : row.pagare_datos)
-            : undefined;
+      db.courtLawsuits = (resLawsuits && resLawsuits.rows) ? resLawsuits.rows.map((row: any) => {
+        const atts = row.archivos_adjuntos
+          ? (typeof row.archivos_adjuntos === 'string' ? JSON.parse(row.archivos_adjuntos) : row.archivos_adjuntos)
+          : [];
+        const pnData = row.pagare_datos
+          ? (typeof row.pagare_datos === 'string' ? JSON.parse(row.pagare_datos) : row.pagare_datos)
+          : undefined;
 
-          return {
-            id: String(row.id),
-            caseNumber: String(row.numero_autos),
-            courtName: String(row.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
-            type: String(row.tipo) as any,
-            subtype: row.subtipo ? String(row.subtipo) as any : undefined,
-            plaintiffId: String(row.demandante_id),
-            plaintiffName: String(row.demandante_nombre),
-            plaintiffNif: row.demandante_nif ? String(row.demandante_nif) : undefined,
-            plaintiffIban: row.demandante_iban ? String(row.demandante_iban) : undefined,
-            defendantId: String(row.demandado_id),
-            defendantName: String(row.demandado_nombre),
-            defendantNif: row.demandado_nif ? String(row.demandado_nif) : undefined,
-            defendantIban: row.demandado_iban ? String(row.demandado_iban) : undefined,
-            claimedAmount: Number(row.cuantia_reclamada || 0),
-            interestAndCostsAmount: Number(row.intereses_costas || 0),
-            totalClaimAmount: Number(row.cuantia_total || row.cuantia_reclamada || 0),
-            contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : undefined,
-            goodsDescription: String(row.descripcion_bienes || ''),
-            facts: String(row.hechos || ''),
-            legalBasis: String(row.fundamentos_derecho || ''),
-            petitum: String(row.petitum || ''),
-            evidenceSummary: String(row.resumen_prueba || ''),
-            attachments: atts,
-            relatedOrderId: row.pedido_relacionado_id ? String(row.pedido_relacionado_id) : undefined,
-            promissoryNoteNumber: row.pagare_numero ? String(row.pagare_numero) : undefined,
-            promissoryNoteId: row.pagare_id ? String(row.pagare_id) : undefined,
-            promissoryNoteDueDate: row.pagare_vencimiento ? new Date(row.pagare_vencimiento).toISOString() : undefined,
-            promissoryNoteData: pnData,
-            status: String(row.estado) as any,
-            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
-            updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString(),
-            admissionDate: row.fecha_admision ? new Date(row.fecha_admision).toISOString() : undefined,
-            admissionNotes: row.notas_admision ? String(row.notas_admision) : undefined,
-            resolutionDate: row.fecha_resolucion ? new Date(row.fecha_resolucion).toISOString() : undefined,
-            resolutionNotes: row.notas_resolucion ? String(row.notas_resolucion) : undefined,
-            judgeComments: row.comentarios_juez ? String(row.comentarios_juez) : undefined,
-            executionTransferId: row.transferencia_ejecucion_id ? String(row.transferencia_ejecucion_id) : undefined,
-            lawyerFeeAmount: row.minuta_abogado ? Number(row.minuta_abogado) : undefined,
-            lawyerFeeIva: row.minuta_iva ? Number(row.minuta_iva) : undefined,
-            lawyerFeeTotal: row.minuta_total ? Number(row.minuta_total) : undefined,
-            lawyerFeeInvoiceNumber: row.minuta_factura_num ? String(row.minuta_factura_num) : undefined,
-            embargoDate: row.embargo_fecha ? new Date(row.embargo_fecha).toISOString() : undefined,
-            embargoAmount: row.embargo_importe ? Number(row.embargo_importe) : undefined,
-            embargoTransferId: row.embargo_transfer_id ? String(row.embargo_transfer_id) : undefined,
-            embargoNotes: row.embargo_notas ? String(row.embargo_notas) : undefined,
-            defendantAnswered: Boolean(row.contestacion_realizada),
-            defendantAnswerDate: row.contestacion_fecha ? new Date(row.contestacion_fecha).toISOString() : undefined,
-            defendantAnswerType: row.contestacion_tipo ? String(row.contestacion_tipo) as any : undefined,
-            defendantAnswerFacts: row.contestacion_hechos ? String(row.contestacion_hechos) : undefined,
-            defendantAnswerAttachments: row.contestacion_adjuntos
-              ? (typeof row.contestacion_adjuntos === 'string' ? JSON.parse(row.contestacion_adjuntos) : row.contestacion_adjuntos)
-              : undefined,
-            defendantDeadlineDate: row.plazo_limite_contestacion ? new Date(row.plazo_limite_contestacion).toISOString() : undefined,
-            defendantLawyerFeeAmount: row.minuta_demandado_base ? Number(row.minuta_demandado_base) : undefined,
-            defendantLawyerFeeIva: row.minuta_demandado_iva ? Number(row.minuta_demandado_iva) : undefined,
-            defendantLawyerFeeTotal: row.minuta_demandado_total ? Number(row.minuta_demandado_total) : undefined,
-            defendantLawyerFeeInvoiceNumber: row.minuta_demandado_factura_num ? String(row.minuta_demandado_factura_num) : undefined
-          };
-        });
-      } else if (db.courtLawsuits && db.courtLawsuits.length > 0) {
-        await runInBatches(db.courtLawsuits, 4, lawsuit => syncCourtLawsuitToSupabase(lawsuit));
-      }
+        return {
+          id: String(row.id),
+          caseNumber: String(row.numero_autos),
+          courtName: String(row.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
+          type: String(row.tipo) as any,
+          subtype: row.subtipo ? String(row.subtipo) as any : undefined,
+          plaintiffId: String(row.demandante_id),
+          plaintiffName: String(row.demandante_nombre),
+          plaintiffNif: row.demandante_nif ? String(row.demandante_nif) : undefined,
+          plaintiffIban: row.demandante_iban ? String(row.demandante_iban) : undefined,
+          defendantId: String(row.demandado_id),
+          defendantName: String(row.demandado_nombre),
+          defendantNif: row.demandado_nif ? String(row.demandado_nif) : undefined,
+          defendantIban: row.demandado_iban ? String(row.demandado_iban) : undefined,
+          claimedAmount: Number(row.cuantia_reclamada || 0),
+          interestAndCostsAmount: Number(row.intereses_costas || 0),
+          totalClaimAmount: Number(row.cuantia_total || row.cuantia_reclamada || 0),
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : undefined,
+          goodsDescription: String(row.descripcion_bienes || ''),
+          facts: String(row.hechos || ''),
+          legalBasis: String(row.fundamentos_derecho || ''),
+          petitum: String(row.petitum || ''),
+          evidenceSummary: String(row.resumen_prueba || ''),
+          attachments: atts,
+          relatedOrderId: row.pedido_relacionado_id ? String(row.pedido_relacionado_id) : undefined,
+          promissoryNoteNumber: row.pagare_numero ? String(row.pagare_numero) : undefined,
+          promissoryNoteId: row.pagare_id ? String(row.pagare_id) : undefined,
+          promissoryNoteDueDate: row.pagare_vencimiento ? new Date(row.pagare_vencimiento).toISOString() : undefined,
+          promissoryNoteData: pnData,
+          status: String(row.estado) as any,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString(),
+          admissionDate: row.fecha_admision ? new Date(row.fecha_admision).toISOString() : undefined,
+          admissionNotes: row.notas_admision ? String(row.notas_admision) : undefined,
+          resolutionDate: row.fecha_resolucion ? new Date(row.fecha_resolucion).toISOString() : undefined,
+          resolutionNotes: row.notas_resolucion ? String(row.notas_resolucion) : undefined,
+          judgeComments: row.comentarios_juez ? String(row.comentarios_juez) : undefined,
+          executionTransferId: row.transferencia_ejecucion_id ? String(row.transferencia_ejecucion_id) : undefined,
+          lawyerFeeAmount: row.minuta_abogado ? Number(row.minuta_abogado) : undefined,
+          lawyerFeeIva: row.minuta_iva ? Number(row.minuta_iva) : undefined,
+          lawyerFeeTotal: row.minuta_total ? Number(row.minuta_total) : undefined,
+          lawyerFeeInvoiceNumber: row.minuta_factura_num ? String(row.minuta_factura_num) : undefined,
+          embargoDate: row.embargo_fecha ? new Date(row.embargo_fecha).toISOString() : undefined,
+          embargoAmount: row.embargo_importe ? Number(row.embargo_importe) : undefined,
+          embargoTransferId: row.embargo_transfer_id ? String(row.embargo_transfer_id) : undefined,
+          embargoNotes: row.embargo_notas ? String(row.embargo_notas) : undefined,
+          defendantAnswered: Boolean(row.contestacion_realizada),
+          defendantAnswerDate: row.contestacion_fecha ? new Date(row.contestacion_fecha).toISOString() : undefined,
+          defendantAnswerType: row.contestacion_tipo ? String(row.contestacion_tipo) as any : undefined,
+          defendantAnswerFacts: row.contestacion_hechos ? String(row.contestacion_hechos) : undefined,
+          defendantAnswerAttachments: row.contestacion_adjuntos
+            ? (typeof row.contestacion_adjuntos === 'string' ? JSON.parse(row.contestacion_adjuntos) : row.contestacion_adjuntos)
+            : undefined,
+          defendantDeadlineDate: row.plazo_limite_contestacion ? new Date(row.plazo_limite_contestacion).toISOString() : undefined,
+          defendantLawyerFeeAmount: row.minuta_demandado_base ? Number(row.minuta_demandado_base) : undefined,
+          defendantLawyerFeeIva: row.minuta_demandado_iva ? Number(row.minuta_demandado_iva) : undefined,
+          defendantLawyerFeeTotal: row.minuta_demandado_total ? Number(row.minuta_demandado_total) : undefined,
+          defendantLawyerFeeInvoiceNumber: row.minuta_demandado_factura_num ? String(row.minuta_demandado_factura_num) : undefined
+        };
+      }) : [];
 
       // Reconstruct db.notifications from Supabase "notificaciones"
-      if (resNotif.rows.length > 0) {
-        db.notifications = resNotif.rows.map((row: any) => ({
-          id: String(row.id),
-          userId: String(row.user_id),
-          title: String(row.title),
-          message: String(row.message),
-          type: String(row.type) as any,
-          read: Boolean(row.read),
-          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-          relatedOrderId: row.related_order_id ? String(row.related_order_id) : undefined,
-          relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
-        }));
-      } else if (db.notifications && db.notifications.length > 0) {
-        await syncNotificationsBulkToSupabase(db.notifications);
-      }
+      db.notifications = (resNotif && resNotif.rows) ? resNotif.rows.map((row: any) => ({
+        id: String(row.id),
+        userId: String(row.user_id),
+        title: String(row.title),
+        message: String(row.message),
+        type: String(row.type) as any,
+        read: Boolean(row.read),
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+        relatedOrderId: row.related_order_id ? String(row.related_order_id) : undefined,
+        relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
+      })) : [];
 
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+      clearAllSessionCaches();
       console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes, ${resContracts.rows.length} electricity contracts, ${resFloorPlans.rows.length} floor plans from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
   } catch (e) {
@@ -6499,7 +6527,7 @@ function readDb(): DatabaseSchema {
       ],
       transfers: [],
       systemLogs: [],
-      properties: getDefaultSeedProperties(),
+      properties: [],
       acquisitions: [],
       paymentObligations: [],
       loans: [],
@@ -6509,7 +6537,7 @@ function readDb(): DatabaseSchema {
       payrollRecords: [],
       taxObligations: [],
       defaultInitialBalance: 1000,
-      isSeed: true
+      isSeed: false
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf-8');
     return defaultDb;
@@ -6537,8 +6565,8 @@ function readDb(): DatabaseSchema {
     if (!db.telecomInvoices) db.telecomInvoices = [];
     if (!db.officeOrders) db.officeOrders = [];
     if (!db.purchasedVehicles) db.purchasedVehicles = [];
-    if (!db.rawMaterialAnnouncements || db.rawMaterialAnnouncements.length === 0) {
-      db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+    if (!db.rawMaterialAnnouncements) {
+      db.rawMaterialAnnouncements = [];
     }
     if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
     if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
@@ -6585,12 +6613,18 @@ function readDb(): DatabaseSchema {
       ],
       transfers: [],
       systemLogs: [],
-      properties: getDefaultSeedProperties(),
+      properties: [],
       acquisitions: [],
       paymentObligations: [],
       loans: [],
+      machineryAcquisitions: [],
+      jobListings: [],
+      hiredEmployees: [],
+      payrollRecords: [],
+      taxObligations: [],
+      rawMaterialAnnouncements: [],
       defaultInitialBalance: 1000,
-      isSeed: true
+      isSeed: false
     };
     return defaultDb;
   }
@@ -6701,13 +6735,7 @@ app.post('/api/supabase-sync', async (req, res) => {
       return res.status(500).json({ success: false, error: tableInit.error });
     }
 
-    // Only seed from memory if PostgreSQL accounts table is empty (preventing destruction of PostgreSQL truth!)
-    const countRes = await client.query('SELECT COUNT(*) FROM cuentas');
-    const pgCount = parseInt(countRes.rows[0]?.count || '0', 10);
-    if (pgCount === 0) {
-      const currentDb = readDb();
-      await syncAllToSupabase(currentDb);
-    }
+    // Do NOT auto-seed Supabase from local memory when cuentas count is 0; PostgreSQL is the source of truth!
 
     await client.query('COMMIT');
   } catch (err: any) {
@@ -8046,20 +8074,95 @@ app.post('/api/bank/reconcile', async (req, res) => {
 
 // Execute full simulation reset
 async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: number) {
-  const db = readDb();
   const initialBalanceValue = defaultBalance !== undefined ? Number(defaultBalance) : 1000;
+
+  if (dbPool) {
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
+      // Exclusive maintenance advisory lock across the entire database to isolate from all concurrent transactions
+      await client.query('SELECT pg_advisory_xact_lock(987654321)');
+
+      // Delete all simulation tables in referential/dependency order
+      await client.query('DELETE FROM movimientos');
+      await client.query('DELETE FROM obligaciones_pago');
+      await client.query('DELETE FROM adquisiciones');
+      await client.query('DELETE FROM prestamos');
+      await client.query('DELETE FROM maquinaria_adquisiciones');
+      await client.query('DELETE FROM registros_nomina');
+      await client.query('DELETE FROM obligaciones_fiscales');
+      await client.query('DELETE FROM empleados_contratados');
+      await client.query('DELETE FROM ofertas_empleo');
+      await client.query('DELETE FROM facturas_electricidad');
+      await client.query('DELETE FROM contratos_electricos');
+      await client.query('DELETE FROM facturas_telecom');
+      await client.query('DELETE FROM contratos_telecom');
+      await client.query('DELETE FROM planos_distribucion_naves');
+      await client.query('DELETE FROM pedidos_oficina');
+      await client.query('DELETE FROM vehiculos_comprados');
+      await client.query('DELETE FROM materias_primas_pedidos');
+      await client.query('DELETE FROM materias_primas_inventario');
+      await client.query('DELETE FROM perfiles_empresa');
+      await client.query('DELETE FROM contactos_mercado');
+      await client.query('DELETE FROM market_messages');
+      await client.query('DELETE FROM notificaciones');
+      await client.query('DELETE FROM demandas_judiciales');
+      await client.query('DELETE FROM inmuebles');
+      await client.query('DELETE FROM anuncios_materia_prima');
+      await client.query('DELETE FROM operaciones_idempotencia');
+
+      if (keepUsers) {
+        // Reset student balances and level
+        await client.query(
+          `UPDATE cuentas SET saldo = $1, level = 1 WHERE role = 'student' OR (role IS NULL AND id != 'profesor-1' AND usuario != 'pupdaniel')`,
+          [initialBalanceValue]
+        );
+      } else {
+        // Cero absoluto / Borrado completo deliberado:
+        // Delete all accounts EXCEPT teacher pupdaniel!
+        await client.query(
+          `DELETE FROM cuentas WHERE id != 'profesor-1' AND usuario != 'pupdaniel'`
+        );
+      }
+
+      // Ensure teacher pupdaniel exists and has clean state
+      const teacherRes = await client.query(
+        `SELECT id, alumno, usuario, role FROM cuentas WHERE usuario = 'pupdaniel' OR id = 'profesor-1'`
+      );
+      if (teacherRes.rows.length === 0) {
+        await client.query(
+          `INSERT INTO cuentas (id, alumno, saldo, usuario, password, account_number, role, level)
+           VALUES ('profesor-1', 'Profesor de Contabilidad', 0, 'pupdaniel', '1987', 'ES000000000000000000', 'teacher', 1)`
+        );
+      } else {
+        await client.query(
+          `UPDATE cuentas SET saldo = 0, role = 'teacher' WHERE usuario = 'pupdaniel' OR id = 'profesor-1'`
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[Supabase DB] Error atómico al reiniciar la simulación en PostgreSQL:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Update in-memory state and db.json after successful commit
+  const db = readDb();
   db.defaultInitialBalance = initialBalanceValue;
 
   if (keepUsers) {
-    db.users = db.users.map(u => {
+    db.users = (db.users || []).map(u => {
       if (u.role === 'student') {
         return { ...u, balance: initialBalanceValue, level: 1 };
       }
       return u;
     });
   } else {
-    // Absolute zero: Remove all student accounts, only keep the teacher
-    const teacherUser = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1') || {
+    const teacherUser = (db.users || []).find(u => u.role === 'teacher' || u.username === 'pupdaniel' || u.id === 'profesor-1') || {
       id: 'profesor-1',
       username: 'pupdaniel',
       password: '1987',
@@ -8068,12 +8171,15 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
       accountNumber: 'ES000000000000000000',
       balance: 0
     };
+    teacherUser.balance = 0;
+    teacherUser.username = 'pupdaniel';
+    teacherUser.role = 'teacher';
     db.users = [teacherUser];
   }
 
-  // Clear all movements, transfers, acquisitions, contracts, messages, and records
+  // Clear all simulation entities
   db.transfers = [];
-  db.properties = keepUsers ? getDefaultSeedProperties() : [];
+  db.properties = [];
   db.acquisitions = [];
   db.paymentObligations = [];
   db.loans = [];
@@ -8091,7 +8197,7 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
   db.relocationInvoices = [];
   db.purchasedVehicles = [];
   db.unifiedMonthlyInvoices = [];
-  db.rawMaterialAnnouncements = keepUsers ? getDefaultSeedRawMaterialAnnouncements() : [];
+  db.rawMaterialAnnouncements = [];
   db.rawMaterialOrders = [];
   db.rawMaterialInventories = [];
   db.marketMessages = [];
@@ -8108,64 +8214,9 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
   };
 
   db.systemLogs = [newLog];
+  db.isSeed = false;
   writeDb(db);
-
-  if (dbPool) {
-    try {
-      if (keepUsers) {
-        await safeDbQuery(`UPDATE cuentas SET saldo = $1, level = 1 WHERE role = 'student' OR (role IS NULL AND id != 'profesor-1')`, [initialBalanceValue]);
-        const allowedIds = db.users.map(u => u.id);
-        if (allowedIds.length > 0) {
-          const placeholders = allowedIds.map((_, i) => `$${i + 1}`).join(',');
-          await safeDbQuery(`DELETE FROM cuentas WHERE id NOT IN (${placeholders})`, allowedIds);
-        }
-      } else {
-        // Purge all student accounts from Supabase cuentas table
-        await safeDbQuery(`DELETE FROM cuentas WHERE id != 'profesor-1'`);
-      }
-
-      for (const u of db.users) {
-        await syncAccountToSupabase(u.id, u.name, u.balance, u.username, u.password, u.accountNumber, u.role, u.level);
-      }
-
-      // Purge all movements / transfers
-      await safeDbQuery(`DELETE FROM movimientos`);
-      await safeDbQuery(`DELETE FROM adquisiciones`);
-      await safeDbQuery(`DELETE FROM obligaciones_pago`);
-      await safeDbQuery(`DELETE FROM prestamos`);
-      await safeDbQuery(`DELETE FROM maquinaria_adquisiciones`);
-      await safeDbQuery(`DELETE FROM ofertas_empleo`);
-      await safeDbQuery(`DELETE FROM empleados_contratados`);
-      await safeDbQuery(`DELETE FROM registros_nomina`);
-      await safeDbQuery(`DELETE FROM obligaciones_fiscales`);
-      await safeDbQuery(`DELETE FROM contratos_electricos`);
-      await safeDbQuery(`DELETE FROM facturas_electricidad`);
-      await safeDbQuery(`DELETE FROM planos_distribucion_naves`);
-      await safeDbQuery(`DELETE FROM contratos_telecom`);
-      await safeDbQuery(`DELETE FROM facturas_telecom`);
-      await safeDbQuery(`DELETE FROM pedidos_oficina`);
-      await safeDbQuery(`DELETE FROM vehiculos_comprados`);
-      await safeDbQuery(`DELETE FROM materias_primas_inventario`);
-      await safeDbQuery(`DELETE FROM materias_primas_pedidos`);
-      await safeDbQuery(`DELETE FROM perfiles_empresa`);
-      await safeDbQuery(`DELETE FROM contactos_mercado`);
-      await safeDbQuery(`DELETE FROM market_messages`);
-      await safeDbQuery(`DELETE FROM notificaciones`);
-      await safeDbQuery(`DELETE FROM demandas_judiciales`);
-
-      await safeDbQuery(`DELETE FROM inmuebles`);
-      for (const prop of db.properties) {
-        await syncPropertyToSupabase(prop);
-      }
-
-      await safeDbQuery(`DELETE FROM anuncios_materia_prima`);
-      for (const ann of db.rawMaterialAnnouncements) {
-        await syncRawMaterialAnnouncementToSupabase(ann);
-      }
-    } catch (e) {
-      console.error('[Supabase DB] Error al purgar la base de datos en reinicio:', e);
-    }
-  }
+  clearAllSessionCaches();
 }
 
 // Reset simulation (Teacher only)
@@ -20197,14 +20248,33 @@ app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/
 
         // 2. Authorization check against the locked PostgreSQL row
         const callingUser = userId || studentId || requesterId || req.query?.userId || req.query?.studentId || (req.headers['x-user-id'] as string | undefined);
-        let isTeacher = callingUser === 'profesor-1' || callingUser === 'teacher' || req.originalUrl?.includes('/api/teacher/') || req.baseUrl?.includes('/api/teacher/');
+        const callingUsername = req.body?.username || req.query?.username || (req.headers['x-username'] as string | undefined);
+        let isTeacher = callingUser === 'profesor-1' || 
+                        callingUser === 'teacher' || 
+                        callingUser === 'pupdaniel' || 
+                        callingUsername === 'pupdaniel' ||
+                        (typeof callingUser === 'string' && callingUser.toLowerCase() === 'pupdaniel') ||
+                        (typeof callingUsername === 'string' && callingUsername.toLowerCase() === 'pupdaniel') ||
+                        req.body?.role === 'teacher' ||
+                        req.originalUrl?.includes('/api/teacher/') || 
+                        req.baseUrl?.includes('/api/teacher/');
 
         if (callingUser && !isTeacher) {
           const userCheck = await client.query(
-            `SELECT role FROM cuentas WHERE id = $1 OR usuario = $1`,
+            `SELECT role, usuario FROM cuentas WHERE id = $1 OR usuario = $1`,
             [callingUser]
           );
-          if (userCheck.rows.length > 0 && userCheck.rows[0].role === 'teacher') {
+          if (userCheck.rows.length > 0 && (userCheck.rows[0].role === 'teacher' || userCheck.rows[0].usuario === 'pupdaniel')) {
+            isTeacher = true;
+          }
+        }
+
+        if (callingUsername && !isTeacher) {
+          const uNameCheck = await client.query(
+            `SELECT role, usuario FROM cuentas WHERE usuario = $1`,
+            [callingUsername]
+          );
+          if (uNameCheck.rows.length > 0 && (uNameCheck.rows[0].role === 'teacher' || uNameCheck.rows[0].usuario === 'pupdaniel')) {
             isTeacher = true;
           }
         }

@@ -2065,7 +2065,20 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     if (!deletingAnnId) return;
     setIsDeletingAnn(true);
     try {
-      const res = await fetch(`/api/raw-materials/announcements/${deletingAnnId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/raw-materials/announcements/${deletingAnnId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id,
+          'x-username': currentUser.username || ''
+        },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          username: currentUser.username,
+          studentId: currentUser.id,
+          role: currentUser.role
+        })
+      });
       const data = await res.json();
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: 'Anuncio eliminado correctamente del Mercado.' });
@@ -3153,6 +3166,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               : ann.sellerId === currentUser.id;
             const eligibility = canBuyFromSeller(ann);
             const isFinishedProduct = ann.materialType === 'producto_final';
+            const isLevel3StudentAnn = ann.isDesTornillo || ann.sellerLevel === 3 || Number(ann.sellerLevel) === 3;
 
             return (
               <div
@@ -3365,12 +3379,24 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       >
                         <ArrowRight className="w-4 h-4" />
                       </button>
+
+                      {/* Teacher (pupdaniel) can delete announcements published by level 3 students */}
+                      {isTeacher && isLevel3StudentAnn && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAnnouncement(ann.id)}
+                          className="p-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 transition-colors shrink-0 cursor-pointer"
+                          title="Eliminar anuncio de alumno de nivel 3 (Profesor pupdaniel)"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   )}
 
                   {/* Teacher Price Warning Alert Button (pupdaniel / teacher role) */}
                   {isTeacher && !isMyAnnouncement && (ann.isDesTornillo || ann.sellerLevel === 3 || (ann.sellerId && ann.sellerId !== 'proveedor-materia-prima' && ann.sellerId !== 'profesor-1')) && (
-                    <div className="pt-1.5 border-t border-slate-800/80">
+                    <div className="pt-1.5 border-t border-slate-800/80 space-y-1.5">
                       {ann.priceAlert && ann.priceAlert.active ? (
                         <div className="flex items-center gap-1.5">
                           <button
@@ -3400,6 +3426,19 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         >
                           <Megaphone className="w-3.5 h-3.5 text-amber-400 group-hover/btn:scale-110 transition-transform shrink-0" />
                           <span>Avisar de precio excesivo</span>
+                        </button>
+                      )}
+
+                      {/* Direct button to delete announcement for teacher pupdaniel */}
+                      {isLevel3StudentAnn && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAnnouncement(ann.id)}
+                          className="w-full py-1.5 px-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/30 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          title="Eliminar este anuncio de alumno de nivel 3 del catálogo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span>Eliminar anuncio (Profesor)</span>
                         </button>
                       )}
                     </div>
@@ -5357,45 +5396,66 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       )}
 
       {/* Delete Announcement Confirmation Modal */}
-      {deletingAnnId && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative animate-in fade-in zoom-in-95">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
-                <Trash2 className="w-5 h-5 text-rose-400" />
+      {deletingAnnId && (() => {
+        const deletingAnn = announcements.find(a => a.id === deletingAnnId);
+        const isStudentAnn = deletingAnn && deletingAnn.sellerId !== currentUser.id;
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">
+                    {isTeacher && isStudentAnn ? 'Eliminar anuncio de alumno (Profesor)' : 'Eliminar anuncio del mercado'}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Retirar oferta comercial del catálogo</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-white">Eliminar anuncio del mercado</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Retirar oferta comercial del catálogo</p>
+
+              {deletingAnn && (
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                  <div className="font-bold text-slate-200">{deletingAnn.title}</div>
+                  <div className="text-slate-400 flex items-center justify-between">
+                    <span>Vendedor: <strong className="text-amber-300">{deletingAnn.sellerName || 'Alumno'}</strong></span>
+                    {deletingAnn.sellerLevel && <span>Nivel {deletingAnn.sellerLevel}</span>}
+                  </div>
+                  <div className="text-slate-400">
+                    Precio: <span className="font-mono text-emerald-400">{formatNumber(deletingAnn.pricePerUnit)} €</span> • Stock: {deletingAnn.stock} u.
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-300 bg-slate-950/50 p-3 rounded-xl border border-slate-800/80 leading-relaxed">
+                {isTeacher && isStudentAnn
+                  ? 'Como profesor (cuenta pupdaniel), vas a retirar del mercado este anuncio publicado por el alumno de nivel 3. La oferta dejará de estar disponible de forma inmediata.'
+                  : '¿Estás seguro de que deseas eliminar este anuncio? Los compradores ya no podrán ver esta oferta en el mercado ni realizar solicitudes sobre ella.'}
+              </p>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingAnnId(null)}
+                  disabled={isDeletingAnn}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs hover:bg-slate-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteAnnouncement}
+                  disabled={isDeletingAnn}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
+                >
+                  {isDeletingAnn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  <span>{isDeletingAnn ? 'Eliminando...' : 'Confirmar eliminación'}</span>
+                </button>
               </div>
-            </div>
-
-            <p className="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800 leading-relaxed">
-              ¿Estás seguro de que deseas eliminar este anuncio? Los compradores ya no podrán ver esta oferta en el mercado ni realizar solicitudes sobre ella.
-            </p>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setDeletingAnnId(null)}
-                disabled={isDeletingAnn}
-                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs hover:bg-slate-700 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDeleteAnnouncement}
-                disabled={isDeletingAnn}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
-              >
-                {isDeletingAnn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                <span>{isDeletingAnn ? 'Eliminando...' : 'Confirmar eliminación'}</span>
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Manual Invoice Creation Modal */}
       {isManualInvoiceModalOpen && (

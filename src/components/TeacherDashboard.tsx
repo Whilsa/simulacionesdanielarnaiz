@@ -9,7 +9,7 @@ import {
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
   X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
-  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle, ShieldCheck
+  Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle, ShieldCheck, Store
 } from 'lucide-react';
 import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, RawMaterialAnnouncement, RawMaterialOrder } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
@@ -636,7 +636,18 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
     setIsDeletingAnn(true);
     try {
       const res = await fetch(`/api/raw-materials/announcements/${deletingAnn.id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id,
+          'x-username': currentUser.username || ''
+        },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          username: currentUser.username,
+          studentId: currentUser.id,
+          role: currentUser.role
+        })
       });
       if (res.ok) {
         setDeletingAnn(null);
@@ -1167,35 +1178,38 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 className="space-y-8"
               >
                 {/* Section A: Catalog & Pricing */}
-                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
-                    <div>
-                      <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
-                        <Package className="w-5 h-5 text-amber-600" />
-                        <span>Publicación de anuncios y precios de materias primas</span>
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        El profesor puede crear, editar y eliminar los anuncios de materias primas disponibles para los alumnos de nivel 1.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleOpenCreateAnnouncementModal}
-                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Publicar nuevo anuncio</span>
-                    </button>
-                  </div>
+                {(() => {
+                  const officialAnnouncements = rmAnnouncements.filter(a => !a.isDesTornillo && a.materialType !== 'producto_final' && (a.sellerLevel === 'official' || a.sellerId === 'proveedor-materia-prima' || a.sellerId === 'profesor-1' || !a.sellerId));
+                  return (
+                    <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+                        <div>
+                          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+                            <Package className="w-5 h-5 text-amber-600" />
+                            <span>Publicación de anuncios y precios de materias primas</span>
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            El profesor puede crear, editar y eliminar los anuncios de materias primas disponibles para los alumnos de nivel 1.
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleOpenCreateAnnouncementModal}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Publicar nuevo anuncio</span>
+                        </button>
+                      </div>
 
-                  {rmAnnouncements.length === 0 ? (
-                    <div className="py-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
-                      <Package className="w-12 h-12 mx-auto mb-3 opacity-30 text-slate-500" />
-                      <p className="text-sm font-semibold text-slate-700">No hay anuncios de materias primas publicados</p>
-                      <p className="text-xs text-slate-400 mt-1">Haz clic en &ldquo;Publicar nuevo anuncio&rdquo; para ofertar suministros a los alumnos.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {rmAnnouncements.map((ann) => (
+                      {officialAnnouncements.length === 0 ? (
+                        <div className="py-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+                          <Package className="w-12 h-12 mx-auto mb-3 opacity-30 text-slate-500" />
+                          <p className="text-sm font-semibold text-slate-700">No hay anuncios de materias primas publicados</p>
+                          <p className="text-xs text-slate-400 mt-1">Haz clic en &ldquo;Publicar nuevo anuncio&rdquo; para ofertar suministros a los alumnos.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {officialAnnouncements.map((ann) => (
                         <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between space-y-3">
                           <div className="space-y-2">
                             <div className="flex items-start justify-between gap-2">
@@ -1300,6 +1314,8 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     </div>
                   )}
                 </div>
+                  );
+                })()}
 
                 {/* Section B: Purchase Orders Approval */}
                 <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 space-y-4">
@@ -1407,6 +1423,90 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                     </div>
                   )}
                 </div>
+
+                {/* Section C: Anuncios publicados por alumnos (Nivel 3 — El Des-Tornillo) */}
+                {(() => {
+                  const studentLevel3Announcements = rmAnnouncements.filter(a => a.isDesTornillo || a.sellerLevel === 3 || Number(a.sellerLevel) === 3 || a.materialType === 'producto_final');
+                  return (
+                    <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+                            <Store className="w-5 h-5 text-amber-600" />
+                            <span>Anuncios publicados por alumnos (Nivel 3 — El Des-Tornillo)</span>
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            El profesor desde su cuenta pupdaniel puede supervisar y eliminar los anuncios de productos finales ofertados por los alumnos de nivel 3.
+                          </p>
+                        </div>
+                        <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded-full border border-amber-200 shrink-0">
+                          {studentLevel3Announcements.length} {studentLevel3Announcements.length === 1 ? 'anuncio' : 'anuncios'} de alumnos
+                        </span>
+                      </div>
+
+                      {studentLevel3Announcements.length === 0 ? (
+                        <div className="py-8 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+                          <Store className="w-10 h-10 mx-auto mb-2 opacity-30 text-slate-500" />
+                          <p className="text-sm font-semibold text-slate-600">No hay anuncios de alumnos de nivel 3 publicados actualmente</p>
+                          <p className="text-xs text-slate-400 mt-1">Los anuncios que publiquen los alumnos en El Des-Tornillo aparecerán aquí.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {studentLevel3Announcements.map((ann) => (
+                            <div key={ann.id} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between space-y-3">
+                              <div className="space-y-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <h4 className="font-bold text-slate-900 text-sm leading-snug">{ann.title}</h4>
+                                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-500 font-medium">
+                                      <span>Vendedor:</span>
+                                      <strong className="text-slate-800">{ann.sellerName || 'Alumno'}</strong>
+                                      <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded text-[10px] font-bold">Nivel 3</span>
+                                    </div>
+                                  </div>
+                                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-amber-500/10 text-amber-800 border border-amber-500/20 shrink-0">
+                                    El Des-Tornillo
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+                                  <span className="font-mono font-bold text-slate-600">
+                                    Stock: {ann.stock === undefined || ann.stock === null || ann.stock === 'ilimitado' ? 'Ilimitado' : `${ann.stock} u.`}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{ann.presentation || 'Unidades'}</span>
+                                </div>
+
+                                {ann.description && (
+                                  <p className="text-xs text-slate-600 leading-relaxed line-clamp-2">{ann.description}</p>
+                                )}
+                              </div>
+
+                              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                                <div>
+                                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Precio unitario</span>
+                                  <span className="text-lg font-bold font-mono text-emerald-700">
+                                    {ann.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                  </span>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingAnn(ann)}
+                                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                                  title="Eliminar anuncio del alumno"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                  <span>Eliminar</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </motion.div>
             )}
 
@@ -2832,7 +2932,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 <div className="flex items-center space-x-2">
                   <AlertTriangle className="w-5 h-5 text-white" />
                   <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                    Eliminar anuncio de suministro
+                    {deletingAnn.isDesTornillo || deletingAnn.sellerLevel === 3 || Number(deletingAnn.sellerLevel) === 3
+                      ? 'Eliminar anuncio de alumno (Nivel 3)'
+                      : 'Eliminar anuncio de suministro'}
                   </h3>
                 </div>
                 <button
@@ -2846,11 +2948,16 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
 
               <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-700 font-medium">
-                  ¿Estás seguro de que deseas eliminar este anuncio de materia prima? Los alumnos de nivel 1 ya no podrán comprar este ítem en el mercado.
+                  {deletingAnn.isDesTornillo || deletingAnn.sellerLevel === 3 || Number(deletingAnn.sellerLevel) === 3
+                    ? `¿Estás seguro de que deseas eliminar este anuncio publicado por el alumno ${deletingAnn.sellerName || 'de nivel 3'}? El producto se retirará inmediatamente del catálogo El Des-Tornillo.`
+                    : '¿Estás seguro de que deseas eliminar este anuncio de materia prima? Los alumnos de nivel 1 ya no podrán comprar este ítem en el mercado.'}
                 </p>
 
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1 text-xs">
                   <div className="font-bold text-slate-900">{deletingAnn.title || deletingAnn.materialName}</div>
+                  {deletingAnn.sellerName && (
+                    <div className="text-slate-600">Vendedor: <strong className="text-slate-800">{deletingAnn.sellerName}</strong> (Nivel {deletingAnn.sellerLevel || 3})</div>
+                  )}
                   <div className="text-slate-500">{deletingAnn.presentation}</div>
                   <div className="font-mono font-bold text-emerald-700">{deletingAnn.pricePerUnit.toLocaleString('es-ES', { minimumFractionDigits: 2 })} € / ud</div>
                 </div>
