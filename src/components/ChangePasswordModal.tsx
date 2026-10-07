@@ -44,11 +44,14 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
 
     setLoading(true);
     try {
-      const res = await fetch('/api/student/change-password', {
+      const endpoint = currentUser.role === 'teacher' ? '/api/teacher/change-password' : '/api/student/change-password';
+      const res = await fetch(endpoint, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          userId: currentUser.id,
           studentId: currentUser.id,
+          teacherId: currentUser.id,
           currentPassword,
           newPassword
         })

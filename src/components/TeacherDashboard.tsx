@@ -8,13 +8,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, Landmark, UserPlus, Coins, History, RotateCcw, 
   Trash2, Search, ArrowUpRight, ArrowDownLeft, Eye, EyeOff, 
-  X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut,
+  X, Plus, Minus, Settings, FileText, CheckCircle2, AlertTriangle, LogOut, KeyRound,
   Download, Upload, Database, RefreshCw, Edit, Edit3, Building2, Wrench, Package, Layers, Truck, Check, XCircle, ShieldCheck, Store
 } from 'lucide-react';
 import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, RawMaterialAnnouncement, RawMaterialOrder } from '../types.js';
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
 import TeacherDeferredPaymentsVerification from './TeacherDeferredPaymentsVerification.js';
+import { ChangePasswordModal } from './ChangePasswordModal.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
 
@@ -118,8 +119,9 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [resetSuccess, setResetSuccess] = useState('');
 
-  // Password viewing state
+  // Password viewing & change state
   const [visiblePasswords, setVisiblePasswords] = useState<{ [key: string]: boolean }>({});
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
   // Delete user state
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
@@ -830,11 +832,20 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
               </div>
             </div>
             
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <div className="hidden md:block text-right">
                 <p className="text-sm font-semibold">{currentUser.name}</p>
                 <p className="text-xs text-slate-400">Docente principal</p>
               </div>
+              <button
+                type="button"
+                onClick={() => setIsPasswordModalOpen(true)}
+                className="flex items-center space-x-1.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 px-3 py-2 rounded-xl text-xs font-semibold text-amber-300 hover:text-white transition-all cursor-pointer shadow-xs"
+                title="Cambiar contraseña del docente"
+              >
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                <span className="hidden sm:inline">Cambiar contraseña</span>
+              </button>
               <button 
                 onClick={onLogout}
                 className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-all cursor-pointer"
@@ -1644,6 +1655,31 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 exit={{ opacity: 0, y: -10 }}
                 className="max-w-xl mx-auto py-4 space-y-6"
               >
+                {/* TEACHER CREDENTIALS & SECURITY */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-200/60 shadow-sm space-y-3 animate-fade-in">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3 text-slate-800">
+                      <div className="p-2.5 bg-amber-50 text-amber-700 rounded-xl">
+                        <KeyRound className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold font-display text-slate-900">Seguridad de la cuenta docente</h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Usuario: <strong className="text-slate-800">{currentUser.username || 'pupdaniel'}</strong> • {currentUser.name}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsPasswordModalOpen(true)}
+                      className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs self-start sm:self-auto"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>Cambiar contraseña</span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* BACKUP & RESTORE SECTION */}
                 <div className="bg-white rounded-2xl p-6 border border-slate-200/60 shadow-sm space-y-5 animate-fade-in">
                   <div className="flex items-center space-x-3 text-slate-800">
@@ -2984,6 +3020,12 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
           </div>
         )}
       </AnimatePresence>
+
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+        currentUser={currentUser}
+      />
     </div>
   );
 }

@@ -6579,8 +6579,10 @@ function readDb(): DatabaseSchema {
 
     let teacher = db.users.find(u => u.role === 'teacher' || u.id === 'profesor-1');
     if (teacher) {
-      if (teacher.username !== 'pupdaniel' || teacher.password !== '1987') {
+      if (teacher.username !== 'pupdaniel') {
         teacher.username = 'pupdaniel';
+      }
+      if (!teacher.password) {
         teacher.password = '1987';
       }
     } else {
@@ -7073,7 +7075,7 @@ app.put('/api/users/:id', async (req, res) => {
   const newPassword = password ? password.trim() : user.password;
   const newLevel = (level && [1, 2, 3].includes(Number(level))) ? (Number(level) as 1 | 2 | 3) : user.level;
 
-  if (dbPool && user.role === 'student') {
+  if (dbPool) {
     try {
       await withPostgresTransaction(async (client) => {
         if (newUsername !== user.username) {
@@ -15727,11 +15729,12 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
   }
 });
 
-// ================= STUDENT CHANGE PASSWORD =================
-app.put('/api/student/change-password', async (req, res) => {
-  const { studentId, currentPassword, newPassword } = req.body;
-  if (!studentId || !newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
-    return res.status(400).json({ error: 'Faltan datos requeridos (nueva contraseña)' });
+// ================= CHANGE PASSWORD (STUDENT & TEACHER) =================
+app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/change-password'], async (req, res) => {
+  const targetId = req.body.studentId || req.body.teacherId || req.body.userId || req.body.id;
+  const { currentPassword, newPassword } = req.body;
+  if (!targetId || !newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
+    return res.status(400).json({ error: 'Faltan datos requeridos (usuario o nueva contraseña)' });
   }
 
   const cleanNewPassword = newPassword.trim();
@@ -15740,7 +15743,7 @@ app.put('/api/student/change-password', async (req, res) => {
   }
 
   try {
-    let affectedUserId = String(studentId);
+    let affectedUserId = String(targetId);
     let affectedUserName = '';
     let affectedUsername = '';
 
@@ -15748,11 +15751,11 @@ app.put('/api/student/change-password', async (req, res) => {
       await withPostgresTransaction(async (client) => {
         // 1. Localizar la cuenta en PostgreSQL de forma canónica y bloquearla para actualización
         const checkRes = await client.query(
-          `SELECT id, alumno, usuario, password 
+          `SELECT id, alumno, usuario, password, role 
            FROM cuentas 
            WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1)
            LIMIT 1 FOR UPDATE`,
-          [studentId]
+          [targetId]
         );
 
         if (checkRes.rows.length === 0) {
@@ -15761,16 +15764,18 @@ app.put('/api/student/change-password', async (req, res) => {
           throw err;
         }
 
-        const studentRow = checkRes.rows[0];
-        affectedUserId = String(studentRow.id);
-        affectedUserName = String(studentRow.alumno || '');
-        affectedUsername = String(studentRow.usuario || '');
+        const userRow = checkRes.rows[0];
+        affectedUserId = String(userRow.id);
+        affectedUserName = String(userRow.alumno || '');
+        affectedUsername = String(userRow.usuario || '');
+
+        const defaultFallbackPass = (userRow.role === 'teacher' || userRow.usuario === 'pupdaniel' || userRow.id === 'profesor-1') ? '1987' : '123';
 
         // 2. Verificar la contraseña actual contra PostgreSQL
         if (currentPassword && typeof currentPassword === 'string' && currentPassword.trim()) {
           const inputCurrent = currentPassword.trim();
-          const dbCurrentPass = (studentRow.password || '123').trim();
-          if (inputCurrent !== dbCurrentPass && !(inputCurrent === '123' && !studentRow.password)) {
+          const dbCurrentPass = (userRow.password || defaultFallbackPass).trim();
+          if (inputCurrent !== dbCurrentPass) {
             const err: any = new Error('La contraseña actual no es correcta');
             err.statusCode = 400;
             throw err;
@@ -15782,7 +15787,7 @@ app.put('/api/student/change-password', async (req, res) => {
           `UPDATE cuentas 
            SET password = $1 
            WHERE id = $2`,
-          [cleanNewPassword, studentRow.id]
+          [cleanNewPassword, userRow.id]
         );
 
         if (updateRes.rowCount !== 1) {
@@ -15798,7 +15803,7 @@ app.put('/api/student/change-password', async (req, res) => {
     const user = db.users.find(u => 
       u.id === affectedUserId || 
       (u.username && affectedUsername && u.username.toLowerCase() === affectedUsername.toLowerCase()) ||
-      u.id === studentId
+      u.id === targetId
     );
 
     if (user) {
@@ -15809,7 +15814,8 @@ app.put('/api/student/change-password', async (req, res) => {
 
     // Fallback sin dbPool si la base de datos no está disponible
     if (!dbPool && user) {
-      if (currentPassword && user.password && currentPassword.trim() !== user.password) {
+      const defaultFallbackPass = (user.role === 'teacher' || user.username === 'pupdaniel' || user.id === 'profesor-1') ? '1987' : '123';
+      if (currentPassword && (user.password || defaultFallbackPass) && currentPassword.trim() !== (user.password || defaultFallbackPass)) {
         return res.status(400).json({ error: 'La contraseña actual no es correcta' });
       }
       user.password = cleanNewPassword;
@@ -15818,10 +15824,10 @@ app.put('/api/student/change-password', async (req, res) => {
     db.systemLogs.unshift({
       id: generateId('log'),
       action: 'CHANGE_PASSWORD',
-      details: `El usuario ${affectedUserName || (user && user.name) || studentId} ha cambiado su contraseña`,
+      details: `El usuario ${affectedUserName || (user && user.name) || targetId} ha cambiado su contraseña`,
       timestamp: new Date().toISOString(),
       studentId: affectedUserId,
-      studentName: affectedUserName || (user && user.name) || studentId
+      studentName: affectedUserName || (user && user.name) || targetId
     });
 
     writeDb(db);
@@ -19464,7 +19470,7 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
   if (dbPool) {
     try {
       const resRaw = await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
-      if (resRaw && resRaw.rows && resRaw.rows.length > 0) {
+      if (resRaw && resRaw.rows) {
         announcements = resRaw.rows.map(parseRawMaterialAnnouncementRow);
       }
     } catch (e) {
@@ -19472,7 +19478,9 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
     }
   }
 
-  if (!announcements || announcements.length === 0) {
+  // An empty table after a reset must return [] without synthesizing demo seed announcements.
+  // Only explicitly requested seed mode (db.isSeed === true or ?seed=true) utilizes default seed data.
+  if ((db.isSeed === true || req.query.seed === 'true') && (!announcements || announcements.length === 0)) {
     announcements = getDefaultSeedRawMaterialAnnouncements();
   }
   res.json({ success: true, announcements });
@@ -19503,7 +19511,7 @@ app.post(['/api/raw-materials/announcements', '/api/teacher/raw-materials/announ
   // 1. If no PostgreSQL pool available, fallback to legacy in-memory handling
   if (!dbPool) {
     const db = readDb();
-    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
 
     let sName = sellerName || 'Suministros Industriales S.A.';
     let sLevel: number | 'official' = 'official';
@@ -19804,7 +19812,7 @@ app.post(['/api/raw-materials/announcements', '/api/teacher/raw-materials/announ
       if (result && (result as any).announcement) {
         const publishedAnn = (result as any).announcement;
         const freshDb = readDb();
-        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = [];
         const existingIdx = freshDb.rawMaterialAnnouncements.findIndex(a => a.id === publishedAnn.id);
         if (existingIdx >= 0) {
           freshDb.rawMaterialAnnouncements[existingIdx] = publishedAnn;
@@ -19871,7 +19879,7 @@ app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/ann
   // If dbPool is not configured, fallback gracefully
   if (!dbPool) {
     const db = readDb();
-    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+    if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
     const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
     if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
 
@@ -20114,7 +20122,7 @@ app.put(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/ann
       if (result && (result as any).announcement) {
         const savedAnn = (result as any).announcement;
         const freshDb = readDb();
-        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+        if (!freshDb.rawMaterialAnnouncements) freshDb.rawMaterialAnnouncements = [];
         const existingIdx = freshDb.rawMaterialAnnouncements.findIndex(a => a.id === savedAnn.id);
         if (existingIdx >= 0) {
           freshDb.rawMaterialAnnouncements[existingIdx] = savedAnn;
@@ -20140,7 +20148,7 @@ app.post('/api/raw-materials/announcements/:id/price-alert', async (req, res) =>
   const { message, suggestedPrice, teacherName } = req.body;
   const db = readDb();
 
-  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
   const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
   if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
 
@@ -20185,7 +20193,7 @@ app.delete('/api/raw-materials/announcements/:id/price-alert', async (req, res) 
   const { id } = req.params;
   const db = readDb();
 
-  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = getDefaultSeedRawMaterialAnnouncements();
+  if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
   const ann = db.rawMaterialAnnouncements.find(a => a.id === id);
   if (!ann) return res.status(404).json({ error: 'Anuncio de materia prima no encontrado' });
 
