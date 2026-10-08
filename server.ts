@@ -7888,7 +7888,7 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
         const movsRes = await safeDbQuery(
           `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
            FROM movimientos
-           WHERE sender_id = $1 OR receiver_id = $1 OR cuenta_id = $1
+           WHERE cuenta_id = $1 OR (cuenta_id IS NULL AND (sender_id = $1 OR receiver_id = $1))
            ORDER BY fecha DESC`,
           [String(userId)]
         );
@@ -7897,6 +7897,7 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
             id: String(r.id),
             amount: Number(r.importe),
             concept: String(r.concepto || ''),
+            type: String(r.tipo || ''),
             date: new Date(r.fecha).toISOString(),
             fecha: new Date(r.fecha).toISOString(),
             timestamp: new Date(r.fecha).toISOString(),
@@ -7946,7 +7947,7 @@ app.get('/api/accounts/:id', async (req, res) => {
       const movsRes = await safeDbQuery(
         `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
          FROM movimientos
-         WHERE sender_id = $1 OR receiver_id = $1 OR cuenta_id = $1
+         WHERE cuenta_id = $1 OR (cuenta_id IS NULL AND (sender_id = $1 OR receiver_id = $1))
          ORDER BY fecha DESC`,
         [id]
       );
@@ -7955,6 +7956,7 @@ app.get('/api/accounts/:id', async (req, res) => {
           id: String(r.id),
           amount: Number(r.importe),
           concept: String(r.concepto || ''),
+          type: String(r.tipo || ''),
           date: new Date(r.fecha).toISOString(),
           fecha: new Date(r.fecha).toISOString(),
           timestamp: new Date(r.fecha).toISOString(),

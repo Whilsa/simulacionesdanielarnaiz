@@ -46,34 +46,47 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
       return String(a.id || '').localeCompare(String(b.id || ''));
     });
 
-    // 2. Cálculo acumulativo del saldo:
-    // El saldo final del último movimiento debe coincidir con el saldo actual de la cuenta.
-    // Calculamos el saldo inicial restando la variación neta total acumulada:
-    // saldo_actual = saldo_inicial + suma(deltas) => saldo_inicial = saldo_actual - suma(deltas)
+    // 2. Determinación del efecto económico real del movimiento:
+    // Un gasto/cargo (transferencia emitida, compra, pago factura) disminuye el saldo (-).
+    // Un ingreso/abono (transferencia recibida, venta, apertura, préstamo concedido) aumenta el saldo (+).
+    const getMovementDelta = (tx: Transfer): { isOutbound: boolean; delta: number } => {
+      const amt = Number(tx.amount || 0);
+      const txType = (tx as any).type;
+      if (txType === 'TRANSFER_OUT') {
+        return { isOutbound: true, delta: -amt };
+      }
+      if (txType === 'TRANSFER_IN' || txType === 'DEPOSIT') {
+        return { isOutbound: false, delta: amt };
+      }
+      const isOut = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
+      return { isOutbound: isOut, delta: isOut ? -amt : amt };
+    };
+
+    // 3. Obtener el saldo anterior al primer movimiento:
+    // saldo_actual = saldo_anterior_al_primer_movimiento + suma(efectos_económicos)
+    // saldo_anterior_al_primer_movimiento = saldo_actual - suma(efectos_económicos)
     const currentBalance = typeof balance === 'number' ? balance : Number(currentUser.balance || 0);
 
     let totalDelta = 0;
     for (const tx of sorted) {
-      const isOutbound = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
-      const delta = isOutbound ? -Number(tx.amount || 0) : Number(tx.amount || 0);
+      const { delta } = getMovementDelta(tx);
       totalDelta += delta;
     }
 
     const initialBalance = Math.round((currentBalance - totalDelta) * 100) / 100;
 
+    // 4. Aplicar cada movimiento sucesivamente:
+    // saldo después = saldo anterior + efecto económico del movimiento
+    // Cada fila muestra el saldo resultante real acumulado SIN forzar artificialmente el último movimiento.
     let runningBalance = initialBalance;
-    return sorted.map((tx, idx) => {
-      const isOutbound = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
-      const delta = isOutbound ? -Number(tx.amount || 0) : Number(tx.amount || 0);
+    return sorted.map((tx) => {
+      const { isOutbound, delta } = getMovementDelta(tx);
       runningBalance = Math.round((runningBalance + delta) * 100) / 100;
-
-      // El saldo resultante del último movimiento coincide con el saldo actual de la cuenta
-      const resultingBalance = idx === sorted.length - 1 ? currentBalance : runningBalance;
 
       return {
         ...tx,
         isOutbound,
-        resultingBalance
+        resultingBalance: runningBalance
       };
     });
   }, [transfers, balance, currentUser.id, currentUser.accountNumber, currentUser.balance]);
