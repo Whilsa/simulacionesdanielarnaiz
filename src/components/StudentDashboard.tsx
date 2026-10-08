@@ -46,18 +46,22 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
       return String(a.id || '').localeCompare(String(b.id || ''));
     });
 
-    // 2. Determinación del efecto económico real del movimiento:
-    // Un gasto/cargo (transferencia emitida, compra, pago factura) disminuye el saldo (-).
-    // Un ingreso/abono (transferencia recibida, venta, apertura, préstamo concedido) aumenta el saldo (+).
+    // 2. Determinación del efecto económico real del movimiento según su tipo contable:
+    // Utiliza el tipo real del movimiento proporcionado por /api/transfers.
+    // - Cargos/salidas (-): TRANSFER_OUT, WITHDRAWAL, ELECTRICITY_AUTOMATED_PAYMENT, TELECOM_AUTOMATED_PAYMENT, TAX_AUTOMATED_PAYMENT.
+    // - Abonos/entradas (+): TRANSFER_IN, DEPOSIT.
     const getMovementDelta = (tx: Transfer): { isOutbound: boolean; delta: number } => {
       const amt = Number(tx.amount || 0);
-      const txType = (tx as any).type;
-      if (txType === 'TRANSFER_OUT') {
+      const rawTipo = String(tx.tipo || tx.type || '').trim().toUpperCase();
+
+      if (rawTipo === 'TRANSFER_OUT' || rawTipo === 'WITHDRAWAL' || rawTipo.endsWith('_PAYMENT')) {
         return { isOutbound: true, delta: -amt };
       }
-      if (txType === 'TRANSFER_IN' || txType === 'DEPOSIT') {
+      if (rawTipo === 'TRANSFER_IN' || rawTipo === 'DEPOSIT') {
         return { isOutbound: false, delta: amt };
       }
+
+      // Si no incluye tipo explícito (ej. registros legacy o fallback sin tipo):
       const isOut = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
       return { isOutbound: isOut, delta: isOut ? -amt : amt };
     };

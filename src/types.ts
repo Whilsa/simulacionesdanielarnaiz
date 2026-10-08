@@ -27,6 +27,8 @@ export interface Transfer {
   amount: number;
   concept: string;
   timestamp: string;
+  tipo?: string;
+  type?: string;
 }
 
 export interface SystemLog {
