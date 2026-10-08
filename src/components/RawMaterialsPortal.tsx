@@ -457,6 +457,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         prevLastMessageIdRef.current = newLastId;
         activePartnerIdRef.current = partnerId;
 
+        // Immediately update partner unread count in local state if it had unread messages
+        setTradingPartners(prev => {
+          const hasUnread = prev.some(p => p.id === partnerId && (p.unreadCount || 0) > 0);
+          if (hasUnread) {
+            return prev.map(p => p.id === partnerId ? { ...p, unreadCount: 0 } : p);
+          }
+          return prev;
+        });
+
         // Only auto-scroll on initial open, partner change, or when a new message is received
         if (partnerChanged || isInitialOrPartnerChange || hasNewMessage) {
           setTimeout(() => scrollToBottom(isInitialOrPartnerChange ? false : true), 60);

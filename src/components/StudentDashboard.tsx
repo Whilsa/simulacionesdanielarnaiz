@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Landmark, ArrowUpRight, ArrowDownLeft, Send, Copy, Check, 
@@ -29,6 +29,54 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
   const [studentsList, setStudentsList] = useState<User[]>([]);
   const [copied, setCopied] = useState(false);
   const [selectedExtractTx, setSelectedExtractTx] = useState<Transfer | null>(null);
+
+  // Listado de movimientos ordenados cronológicamente con saldo acumulado resultante
+  const movementsWithBalance = useMemo(() => {
+    if (!transfers || transfers.length === 0) return [];
+
+    // 1. Orden cronológico determinista y estable:
+    // Criterio 1: Del movimiento más antiguo al más reciente (fecha/hora ascendente).
+    // Criterio 2: Si dos movimientos tienen exactamente la misma fecha/hora, desempate determinista por ID.
+    const sorted = [...transfers].sort((a, b) => {
+      const timeA = new Date(a.timestamp || (a as any).fecha || (a as any).date || 0).getTime();
+      const timeB = new Date(b.timestamp || (b as any).fecha || (b as any).date || 0).getTime();
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+
+    // 2. Cálculo acumulativo del saldo:
+    // El saldo final del último movimiento debe coincidir con el saldo actual de la cuenta.
+    // Calculamos el saldo inicial restando la variación neta total acumulada:
+    // saldo_actual = saldo_inicial + suma(deltas) => saldo_inicial = saldo_actual - suma(deltas)
+    const currentBalance = typeof balance === 'number' ? balance : Number(currentUser.balance || 0);
+
+    let totalDelta = 0;
+    for (const tx of sorted) {
+      const isOutbound = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
+      const delta = isOutbound ? -Number(tx.amount || 0) : Number(tx.amount || 0);
+      totalDelta += delta;
+    }
+
+    const initialBalance = Math.round((currentBalance - totalDelta) * 100) / 100;
+
+    let runningBalance = initialBalance;
+    return sorted.map((tx, idx) => {
+      const isOutbound = tx.senderId === currentUser.id || tx.senderAccount === currentUser.accountNumber;
+      const delta = isOutbound ? -Number(tx.amount || 0) : Number(tx.amount || 0);
+      runningBalance = Math.round((runningBalance + delta) * 100) / 100;
+
+      // El saldo resultante del último movimiento coincide con el saldo actual de la cuenta
+      const resultingBalance = idx === sorted.length - 1 ? currentBalance : runningBalance;
+
+      return {
+        ...tx,
+        isOutbound,
+        resultingBalance
+      };
+    });
+  }, [transfers, balance, currentUser.id, currentUser.accountNumber, currentUser.balance]);
 
   // New Transfer Form State
   const [customIBAN, setCustomIBAN] = useState('');
@@ -673,19 +721,24 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                   </div>
                   <h3 className="font-display font-bold text-slate-900 text-base">Historial de movimientos</h3>
                 </div>
+                {movementsWithBalance.length > 0 && (
+                  <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
+                    {movementsWithBalance.length} {movementsWithBalance.length === 1 ? 'movimiento' : 'movimientos'}
+                  </span>
+                )}
               </div>
 
-              {transfers.length === 0 ? (
+              {movementsWithBalance.length === 0 ? (
                 <div className="py-16 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
                   <Coins className="w-12 h-12 mx-auto mb-3 opacity-20 text-slate-500" />
                   <p className="font-semibold text-slate-600">Aún no hay movimientos registrados</p>
                   <p className="text-xs text-slate-400 mt-1">Realiza pagos a tus compañeros o espera recibir fondos de ellos para ver tu historial.</p>
                 </div>
               ) : (
-                <div className="space-y-4 max-h-[480px] overflow-y-auto pr-2">
+                <div className="space-y-3 max-h-[480px] overflow-y-auto pr-2">
                   <AnimatePresence initial={false}>
-                    {transfers.map((tx, idx) => {
-                      const isOutbound = tx.senderId === currentUser.id;
+                    {movementsWithBalance.map((tx, idx) => {
+                      const isOutbound = tx.isOutbound;
                       const counterpartName = isOutbound ? tx.receiverName : tx.senderName;
                       const counterpartAccount = isOutbound ? tx.receiverAccount : tx.senderAccount;
 
@@ -695,43 +748,56 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
                           exit={{ opacity: 0 }}
-                          className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-all flex items-center justify-between gap-4"
+                          className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                         >
-                          <div className="flex items-center space-x-3 min-w-0">
+                          <div className="flex items-center space-x-3 min-w-0 flex-1">
                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                               isOutbound ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
                             }`}>
                               {isOutbound ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
                             </div>
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <p className="text-sm font-bold text-slate-900 truncate font-display">
                                 {isOutbound ? `Transferencia enviada a ${counterpartName}` : `Transferencia recibida de ${counterpartName}`}
                               </p>
                               <p className="text-[11px] text-slate-500 font-mono truncate tracking-tight">{counterpartAccount}</p>
-                              <p className="text-xs text-slate-400 mt-1 flex items-center">
-                                <span className="italic truncate">"{tx.concept}"</span>
-                                <span className="mx-1.5">•</span>
-                                <span className="font-mono text-[10px] shrink-0">
+                              <p className="text-xs text-slate-400 mt-1 flex items-center flex-wrap gap-y-0.5">
+                                <span className="italic truncate font-medium text-slate-600">"{tx.concept}"</span>
+                                <span className="mx-1.5 text-slate-300">•</span>
+                                <span className="font-mono text-[10px] text-slate-500 shrink-0">
                                   {new Date(tx.timestamp).toLocaleString('es-ES', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
                                 </span>
                               </p>
                             </div>
                           </div>
 
-                          <div className="text-right shrink-0 flex flex-col items-end gap-1">
-                            <p className={`text-base font-bold font-mono ${
-                              isOutbound ? 'text-rose-600' : 'text-emerald-600'
-                            }`}>
-                              {isOutbound ? '-' : '+'}{formatNumber(tx.amount)} €
-                            </p>
-                            <button
-                              onClick={() => setSelectedExtractTx(tx)}
-                              className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
-                              title="Descargar extracto bancario"
-                            >
-                              <FileText className="w-3 h-3 text-indigo-600" />
-                              <span>Extracto</span>
-                            </button>
+                          <div className="flex items-center justify-end gap-3 sm:gap-4 shrink-0 self-end sm:self-center border-t sm:border-t-0 pt-2 sm:pt-0 w-full sm:w-auto">
+                            <div className="text-right min-w-[85px] sm:min-w-[95px]">
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Importe</span>
+                              <p className={`text-sm sm:text-base font-bold font-mono ${
+                                isOutbound ? 'text-rose-600' : 'text-emerald-600'
+                              }`}>
+                                {isOutbound ? '-' : '+'}{formatNumber(tx.amount)} €
+                              </p>
+                            </div>
+
+                            <div className="text-right min-w-[90px] sm:min-w-[100px] pl-3 border-l border-slate-200/80">
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Saldo</span>
+                              <p className="text-sm sm:text-base font-bold font-mono text-slate-800">
+                                {formatNumber(tx.resultingBalance)} €
+                              </p>
+                            </div>
+
+                            <div className="pl-1">
+                              <button
+                                onClick={() => setSelectedExtractTx(tx)}
+                                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 transition cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                title="Descargar extracto bancario"
+                              >
+                                <FileText className="w-3 h-3 text-indigo-600" />
+                                <span className="hidden sm:inline">Extracto</span>
+                              </button>
+                            </div>
                           </div>
                         </motion.div>
                       );

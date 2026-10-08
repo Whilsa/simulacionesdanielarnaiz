@@ -25760,18 +25760,29 @@ app.post('/api/court/notifications/mark-read', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/market/messages', (req, res) => {
+app.get('/api/market/messages', async (req, res) => {
   const { userId, partnerId } = req.query as { userId: string; partnerId: string };
   const db = readDb();
   if (!db.marketMessages) db.marketMessages = [];
 
+  let modified = false;
   // Mark messages sent by partnerId to userId as read
   db.marketMessages.forEach(m => {
     if (m.recipientId === userId && m.senderId === partnerId && !m.read) {
       m.read = true;
-      syncMarketMessageToSupabase(m).catch(e => console.error(e));
+      modified = true;
     }
   });
+
+  if (modified) {
+    writeDb(db);
+    if (dbPool) {
+      await safeDbQuery(
+        'UPDATE market_messages SET read = TRUE WHERE recipient_id = $1 AND sender_id = $2 AND read = FALSE',
+        [userId, partnerId]
+      ).catch(e => console.error('[Supabase DB] Error marking market messages as read in PostgreSQL:', e));
+    }
+  }
 
   const msgs = db.marketMessages.filter(
     m => (m.senderId === userId && m.recipientId === partnerId) ||
