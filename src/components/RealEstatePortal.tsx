@@ -31,6 +31,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
   const [selectedOperation, setSelectedOperation] = useState<string>('all');
   const [selectedCommunity, setSelectedCommunity] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<string>('default');
 
   // Modals
   const [selectedPropertyForModal, setSelectedPropertyForModal] = useState<PropertyListing | null>(null);
@@ -111,6 +112,39 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
       if (!matchTitle && !matchLoc) return false;
     }
     return true;
+  });
+
+  // Sorted properties without mutating original list
+  const sortedProperties = [...filteredProperties].sort((a, b) => {
+    if (sortOrder === 'price_asc') {
+      const priceA = Number(a.price) || 0;
+      const priceB = Number(b.price) || 0;
+      const diff = priceA - priceB;
+      if (diff !== 0) return diff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    if (sortOrder === 'price_desc') {
+      const priceA = Number(a.price) || 0;
+      const priceB = Number(b.price) || 0;
+      const diff = priceB - priceA;
+      if (diff !== 0) return diff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    if (sortOrder === 'surface_asc') {
+      const surfA = Number(a.surfaceM2) || 0;
+      const surfB = Number(b.surfaceM2) || 0;
+      const diff = surfA - surfB;
+      if (diff !== 0) return diff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    if (sortOrder === 'surface_desc') {
+      const surfA = Number(a.surfaceM2) || 0;
+      const surfB = Number(b.surfaceM2) || 0;
+      const diff = surfB - surfA;
+      if (diff !== 0) return diff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    return 0;
   });
 
   // Handle Acquire / Rent property
@@ -435,6 +469,32 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
               </select>
             </div>
           </div>
+
+          {/* Selector de ordenación */}
+          <div className="pt-3 mt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="text-xs text-slate-500 font-medium">
+              Mostrando <span className="font-bold text-slate-700">{sortedProperties.length}</span> {sortedProperties.length === 1 ? 'inmueble' : 'inmuebles'}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="sort-properties" className="text-xs font-bold text-slate-700 shrink-0">
+                Ordenar por:
+              </label>
+              <select
+                id="sort-properties"
+                aria-label="Ordenar por"
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value)}
+                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+              >
+                <option value="default">Por defecto</option>
+                <option value="price_asc">Precio: de menor a mayor</option>
+                <option value="price_desc">Precio: de mayor a menor</option>
+                <option value="surface_asc">Superficie: de menor a mayor</option>
+                <option value="surface_desc">Superficie: de mayor a menor</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Listings Grid */}
@@ -443,7 +503,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
             <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-2" />
             <p className="text-xs text-slate-500">Cargando catálogo inmobiliario...</p>
           </div>
-        ) : filteredProperties.length === 0 ? (
+        ) : sortedProperties.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center my-8">
             <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
             <h3 className="text-base font-bold text-slate-800">No hay inmuebles disponibles</h3>
@@ -455,7 +515,7 @@ export default function RealEstatePortal({ currentUser, onBackToHub, onUserBalan
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProperties.map(prop => {
+            {sortedProperties.map(prop => {
               const isRent = prop.operation === 'alquiler';
               const basePrice = prop.price;
               const ivaAmount = basePrice * 0.21;
