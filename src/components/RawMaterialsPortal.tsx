@@ -1813,8 +1813,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const clampedFreePercentage = Math.max(0, 100 - clampedOccupiedPercentage);
   const isOverCapacity = totalOccupiedPallets > maxPalletsAllowed || occupiedPercentage > 100;
 
-  const ownedTruck = vehicles.find(v => v.vehicleType === 'camion_trailer');
-  const hiredDriver = employees.find(e => e.role === 'camionero');
+  const ownedTruck = vehicles.find(v => v.vehicleType === 'camion_trailer' || v.vehicleType === 'furgoneta_transporte' || v.vehicleType === 'furgoneta' || (v.vehicleType || '').toLowerCase().includes('camion') || (v.vehicleType || '').toLowerCase().includes('furgoneta'));
+  const hiredDriver = employees.find(e => e.role === 'camionero' || (e.role as string) === 'conductor');
   const canPickupWithoutTransport = Boolean(ownedTruck && hiredDriver);
 
   // Preset selector

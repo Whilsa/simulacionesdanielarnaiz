@@ -4376,12 +4376,14 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                             .filter(
                                               (v) =>
                                                 v.vehicleType === "camion_trailer" ||
-                                                v.vehicleType === "carretilla_elevadora",
+                                                v.vehicleType === "carretilla_elevadora" ||
+                                                v.vehicleType === "furgoneta_transporte" ||
+                                                v.vehicleType === "furgoneta",
                                             )
                                             .map((v) => (
                                               <option key={v.id} value={v.id}>
-                                                {v.vehicleType === "carretilla_elevadora" ? "🚜 " : "🚛 "}
-                                                {cleanSpanishTitle(v.title || v.vehicleTitle)} ({v.vehicleType === "carretilla_elevadora" ? "Carretilla elevadora" : "Camión tráiler"}) - {v.paymentMethod === "contado" ? "Propiedad" : "Renting"}
+                                                {v.vehicleType === "carretilla_elevadora" ? "🚜 " : v.vehicleType === "furgoneta_transporte" || v.vehicleType === "furgoneta" ? "🚐 " : "🚛 "}
+                                                {cleanSpanishTitle(v.title || v.vehicleTitle)} ({v.vehicleType === "carretilla_elevadora" ? "Carretilla elevadora" : v.vehicleType === "furgoneta_transporte" || v.vehicleType === "furgoneta" ? "Furgoneta de transporte" : "Camión tráiler"}) - {v.paymentMethod === "contado" ? "Propiedad" : "Renting"}
                                               </option>
                                             ))}
                                         </select>
@@ -4869,7 +4871,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         const isForklift =
                           veh.vehicleType === "carretilla_elevadora";
                         const isTruck = veh.vehicleType === "camion_trailer";
-                        const isVan = veh.vehicleType === "furgoneta";
+                        const isVan = veh.vehicleType === "furgoneta" || veh.vehicleType === "furgoneta_transporte";
 
                         const assignedEmp = (data.hiredEmployees || []).find(
                           (e) => e.assignedVehicleId === veh.id,
@@ -7171,7 +7173,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         v.vehicleType === "camion_trailer" ||
                         v.vehicleType === "camion_ligero" ||
                         v.vehicleType === "camion" ||
-                        (v.vehicleType || "").toLowerCase().includes("camion"),
+                        (v.vehicleType || "").toLowerCase().includes("camion") ||
+                        v.vehicleType === "furgoneta_transporte" ||
+                        v.vehicleType === "furgoneta" ||
+                        (v.vehicleType || "").toLowerCase().includes("furgoneta"),
                     );
                     const hasTruckDriver = userEmployees.some(
                       (e) => e.role === "camionero" || e.role === "conductor",
@@ -7204,7 +7209,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             Usar transporte propio de empresa
                           </span>
                           <span className="text-[11px] text-slate-500 block">
-                            Envío utilizando camión y chofer propio en plantilla. Sin costes ni gastos de servicio de transporte. Únicamente se adeudará el gasto de suministro por la gasolina consumida según la distancia entre el almacén de origen y el de destino.
+                            Envío utilizando vehículo de transporte (camión o furgoneta) y conductor propio en plantilla. Sin costes de servicio exterior. Únicamente se adeudará el gasto de suministro por combustible consumido según la distancia entre el almacén de origen y el de destino.
                           </span>
                           {!canUsePropio && (
                             <div className="text-[11px] text-amber-700 font-bold mt-1 bg-amber-50 p-2 rounded-lg border border-amber-200 space-y-0.5">
@@ -7214,7 +7219,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               </span>
                               {!hasTruck && (
                                 <p>
-                                  • No dispones de ningún Camión en tu
+                                  • No dispones de ningún vehículo de transporte (camión o furgoneta) en tu
                                   flota de vehículos.
                                 </p>
                               )}

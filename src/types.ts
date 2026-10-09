@@ -879,7 +879,7 @@ export interface PurchasedVehicle {
   id: string;
   studentId: string;
   studentName: string;
-  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa';
+  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa' | 'furgoneta_transporte' | 'furgoneta' | string;
   title: string;
   basePrice: number;
   ivaAmount: number;

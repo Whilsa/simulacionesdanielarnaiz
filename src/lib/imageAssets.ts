@@ -7,6 +7,7 @@ import React from 'react';
 import carretillaImg from '../assets/images/carretilla_elevadora_1785319922846.jpg';
 import camionImg from '../assets/images/camion_trailer_1785319901174.jpg';
 import cocheImg from '../assets/images/coche_empresa_1785319941496.jpg';
+import furgonetaImg from '../assets/images/furgoneta_transporte_1791535150450.jpg';
 
 import naveImg from '../assets/images/nave_industrial_1786532090667.jpg';
 import oficinaImg from '../assets/images/oficina_edificio_1786532102792.jpg';
@@ -61,6 +62,8 @@ export const VEHICLE_IMAGES: Record<string, string> = {
   carretilla_elevadora: carretillaImg,
   camion_trailer: camionImg,
   coche_empresa: cocheImg,
+  furgoneta_transporte: furgonetaImg,
+  furgoneta: furgonetaImg,
 };
 
 export const PROPERTY_IMAGES_MAP: Record<string, string> = {
@@ -127,6 +130,7 @@ export function resolveImageUrl(
   // 2. Keyword-based intelligent matching for titles, unsplash URLs, descriptions, etc.
   
   // VEHICLES
+  if (query.includes('furgoneta') || query.includes('van')) return furgonetaImg;
   if (query.includes('carretilla') || query.includes('elevadora') || query.includes('forklift')) return carretillaImg;
   if (query.includes('camion') || query.includes('trailer') || query.includes('truck')) return camionImg;
   if (query.includes('coche') || query.includes('turismo') || query.includes('empresa') || query.includes('vehiculo') || query.includes('auto')) return cocheImg;

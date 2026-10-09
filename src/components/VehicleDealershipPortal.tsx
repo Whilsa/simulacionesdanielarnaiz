@@ -34,7 +34,7 @@ interface VehicleDealershipPortalProps {
 }
 
 interface VehicleCatalogItem {
-  type: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa';
+  type: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa' | 'furgoneta_transporte';
   title: string;
   categoryLabel: string;
   badgeStyle: string;
@@ -46,7 +46,7 @@ interface VehicleCatalogItem {
 }
 
 interface CartItem {
-  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa';
+  vehicleType: 'camion_trailer' | 'carretilla_elevadora' | 'coche_empresa' | 'furgoneta_transporte';
   title: string;
   basePrice: number;
   quantity: number;
@@ -54,6 +54,22 @@ interface CartItem {
 }
 
 const VEHICLE_CATALOG: VehicleCatalogItem[] = [
+  {
+    type: 'furgoneta_transporte',
+    title: 'Furgoneta de transporte de existencias',
+    categoryLabel: 'Transporte y logística de existencias',
+    badgeStyle: 'bg-indigo-100 text-indigo-900 border-indigo-200',
+    basePrice: 32000,
+    description: 'Furgoneta comercial de gran capacidad para el transporte ágil de existencias, materias primas y productos terminados. Permite realizar transporte propio con conductor en plantilla.',
+    specs: [
+      'Volumen útil de carga: 13 m³ / 3 europalets',
+      'Carga útil: 1.500 kg',
+      'Motor turbodiésel 150 CV de bajo consumo',
+      'Apta para transporte propio con conductor asignado'
+    ],
+    requirementNotes: 'Requiere contratación/asignación de un conductor o camionero en plantilla para operar el transporte propio.',
+    imageUrl: '/images/vehicles/furgoneta_transporte.jpg'
+  },
   {
     type: 'camion_trailer',
     title: 'Camión de gran tonelaje con tráiler',
@@ -554,7 +570,7 @@ export default function VehicleDealershipPortal({
                       />
                       <div>
                         <span className="text-[10px] uppercase font-bold text-blue-600 tracking-wider block">
-                          {v.vehicleType === 'carretilla_elevadora' ? 'Maquinaria de almacén' : v.vehicleType === 'camion_trailer' ? 'Camión con tráiler' : 'Coche de empresa'}
+                          {v.vehicleType === 'carretilla_elevadora' ? 'Maquinaria de almacén' : v.vehicleType === 'camion_trailer' ? 'Camión con tráiler' : v.vehicleType === 'furgoneta_transporte' ? 'Furgoneta de transporte' : 'Coche de empresa'}
                         </span>
                         <h4 className="font-bold text-slate-900 text-sm leading-snug">{v.title}</h4>
                         <span className="text-[11px] text-slate-500 block font-mono mt-0.5">
@@ -586,7 +602,10 @@ export default function VehicleDealershipPortal({
                         <span>🚜 Requisito: 1 carretilla elevadora para el inmueble industrial para recibir compras y producir.</span>
                       )}
                       {v.vehicleType === 'camion_trailer' && (
-                        <span>🚛 Requisito: Asignable a un camionero/conductor para recogida propia de mercancías.</span>
+                        <span>🚛 Requisito: Asignable a un camionero/conductor para transporte propio y recogida de mercancías.</span>
+                      )}
+                      {v.vehicleType === 'furgoneta_transporte' && (
+                        <span>🚐 Vehículo para transporte de existencias: Asignable a un conductor para transporte propio de existencias.</span>
                       )}
                       {v.vehicleType === 'coche_empresa' && (
                         <span>🚗 Vehículo corporativo de representación y gestión comercial.</span>
@@ -665,14 +684,54 @@ export default function VehicleDealershipPortal({
                       </div>
                     )}
 
-                    {v.vehicleType === 'camion_trailer' && (
+                    {(v.vehicleType === 'camion_trailer' || v.vehicleType === 'furgoneta_transporte') && (
                       <div className="pt-2 border-t border-slate-100 space-y-1">
                         <label className="block text-[11px] font-bold text-indigo-900 uppercase tracking-wider">
                           Conductor asignado
                         </label>
-                        <div className="text-xs text-slate-700 bg-slate-50 p-2 rounded-xl border border-slate-200 font-medium">
-                          {v.assignedDriverName ? `🚛 ${v.assignedDriverName}` : 'Sin camionero asignado (asignable desde patrimonio)'}
-                        </div>
+                        <select
+                          value={v.assignedDriverId || ''}
+                          onChange={async (e) => {
+                            const newDriverId = e.target.value;
+                            if (!newDriverId) {
+                              if (v.assignedDriverId) {
+                                await fetch(`/api/student/employees/${v.assignedDriverId}/assign-vehicle`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ vehicleId: '', studentId: currentUser.id })
+                                });
+                                fetchFleetData();
+                              }
+                            } else {
+                              await fetch(`/api/student/employees/${newDriverId}/assign-vehicle`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ vehicleId: v.id, studentId: currentUser.id })
+                              });
+                              fetchFleetData();
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="">-- Sin conductor asignado --</option>
+                          {hiredEmployees
+                            .filter(emp => emp.role === 'camionero' || (emp.role as string) === 'conductor')
+                            .map(emp => (
+                              <option key={emp.id} value={emp.id}>
+                                👤 {emp.employeeName} ({emp.role === 'conductor' ? 'Conductor' : 'Camionero / conductor'})
+                              </option>
+                            ))}
+                        </select>
+                        {v.assignedDriverName ? (
+                          <div className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>Conductor actual: {v.assignedDriverName}</span>
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            Asigna un empleado con función de conductor o camionero.
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
