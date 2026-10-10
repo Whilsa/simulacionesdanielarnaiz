@@ -15740,17 +15740,32 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
 app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/change-password'], async (req, res) => {
   const targetId = req.body.studentId || req.body.teacherId || req.body.userId || req.body.id || req.body.username;
   const { currentPassword, newPassword } = req.body;
-  if (!targetId || !newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
-    return res.status(400).json({ error: 'Faltan datos requeridos (usuario o nueva contraseña)' });
+
+  if (!targetId || typeof targetId !== 'string' || !targetId.trim()) {
+    return res.status(400).json({ error: 'Faltan datos requeridos (identificador de la cuenta)' });
   }
 
-  const cleanNewPassword = newPassword.trim();
-  if (cleanNewPassword.length < 1) {
+  if (!currentPassword || typeof currentPassword !== 'string' || !currentPassword.trim()) {
+    return res.status(400).json({ error: 'La contraseña actual es obligatoria' });
+  }
+
+  if (!newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
     return res.status(400).json({ error: 'La nueva contraseña no puede estar vacía' });
   }
 
+  const cleanTargetId = targetId.trim();
+  const inputCurrent = currentPassword.trim();
+  const cleanNewPassword = newPassword.trim();
+
+  if (cleanNewPassword.length < 3) {
+    return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 3 caracteres' });
+  }
+
+  const isTeacherRoute = req.path.includes('/teacher');
+  const isStudentRoute = req.path.includes('/student');
+
   try {
-    let affectedUserId = String(targetId);
+    let affectedUserId = String(cleanTargetId);
     let affectedUserName = '';
     let affectedUsername = '';
 
@@ -15762,7 +15777,7 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
            FROM cuentas 
            WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR LOWER(alumno) = LOWER($1)
            LIMIT 1 FOR UPDATE`,
-          [targetId]
+          [cleanTargetId]
         );
 
         if (checkRes.rows.length === 0) {
@@ -15776,17 +15791,32 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
         affectedUserName = String(userRow.alumno || '');
         affectedUsername = String(userRow.usuario || '');
 
-        const defaultFallbackPass = (userRow.role === 'teacher' || userRow.usuario === 'pupdaniel' || userRow.id === 'profesor-1') ? '1987' : '123';
+        const isTeacherAccount = userRow.role === 'teacher' || userRow.usuario === 'pupdaniel' || userRow.id === 'profesor-1';
 
-        // 2. Verificar la contraseña actual contra PostgreSQL
-        if (currentPassword && typeof currentPassword === 'string' && currentPassword.trim()) {
-          const inputCurrent = currentPassword.trim();
-          const dbCurrentPass = (userRow.password || defaultFallbackPass).trim();
-          if (inputCurrent !== dbCurrentPass) {
-            const err: any = new Error('La contraseña actual no es correcta');
-            err.statusCode = 400;
-            throw err;
-          }
+        // Verificación de autorización por rol según la ruta invocada
+        if (isTeacherRoute && !isTeacherAccount) {
+          const err: any = new Error('No autorizado para modificar esta cuenta');
+          err.statusCode = 403;
+          throw err;
+        }
+        if (isStudentRoute && isTeacherAccount) {
+          const err: any = new Error('No autorizado para modificar esta cuenta');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // 2. Verificar obligatoriamente la contraseña actual contra PostgreSQL.
+        // La contraseña predeterminada (1987 para docente, 123 para alumno) SOLO se acepta
+        // si la cuenta carece realmente de contraseña almacenada en la base de datos.
+        const hasStoredPassword = Boolean(userRow.password && typeof userRow.password === 'string' && userRow.password.trim() !== '');
+        const authoritativeCurrentPass = hasStoredPassword
+          ? userRow.password.trim()
+          : (isTeacherAccount ? '1987' : '123');
+
+        if (inputCurrent !== authoritativeCurrentPass) {
+          const err: any = new Error('La contraseña actual no es correcta');
+          err.statusCode = 400;
+          throw err;
         }
 
         // 3. Actualización directa de la columna password en cuentas
@@ -15810,7 +15840,8 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
     const user = db.users.find(u => 
       u.id === affectedUserId || 
       (u.username && affectedUsername && u.username.toLowerCase() === affectedUsername.toLowerCase()) ||
-      u.id === targetId
+      u.id === cleanTargetId ||
+      (u.username && u.username.toLowerCase() === cleanTargetId.toLowerCase())
     );
 
     if (user) {
@@ -15818,10 +15849,10 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
     } else if (dbPool) {
       db.users.push({
         id: affectedUserId,
-        username: affectedUsername || 'pupdaniel',
-        name: affectedUserName || 'Profesor de Contabilidad',
+        username: affectedUsername || cleanTargetId,
+        name: affectedUserName || cleanTargetId,
         password: cleanNewPassword,
-        role: 'teacher',
+        role: (isTeacherRoute || cleanTargetId === 'pupdaniel' || cleanTargetId === 'profesor-1') ? 'teacher' : 'student',
         accountNumber: 'ES000000000000000000',
         balance: 0
       });
@@ -15831,8 +15862,20 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
 
     // Fallback sin dbPool si la base de datos no está disponible
     if (!dbPool && user) {
-      const defaultFallbackPass = (user.role === 'teacher' || user.username === 'pupdaniel' || user.id === 'profesor-1') ? '1987' : '123';
-      if (currentPassword && (user.password || defaultFallbackPass) && currentPassword.trim() !== (user.password || defaultFallbackPass)) {
+      const isTeacherAccount = user.role === 'teacher' || user.username === 'pupdaniel' || user.id === 'profesor-1';
+      if (isTeacherRoute && !isTeacherAccount) {
+        return res.status(403).json({ error: 'No autorizado para modificar esta cuenta' });
+      }
+      if (isStudentRoute && isTeacherAccount) {
+        return res.status(403).json({ error: 'No autorizado para modificar esta cuenta' });
+      }
+
+      const hasStoredPassword = Boolean(user.password && typeof user.password === 'string' && user.password.trim() !== '');
+      const authoritativeCurrentPass = hasStoredPassword
+        ? user.password.trim()
+        : (isTeacherAccount ? '1987' : '123');
+
+      if (inputCurrent !== authoritativeCurrentPass) {
         return res.status(400).json({ error: 'La contraseña actual no es correcta' });
       }
       user.password = cleanNewPassword;
@@ -15841,10 +15884,10 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
     db.systemLogs.unshift({
       id: generateId('log'),
       action: 'CHANGE_PASSWORD',
-      details: `El usuario ${affectedUserName || (user && user.name) || targetId} ha cambiado su contraseña`,
+      details: `El usuario ${affectedUserName || (user && user.name) || cleanTargetId} ha cambiado su contraseña`,
       timestamp: new Date().toISOString(),
       studentId: affectedUserId,
-      studentName: affectedUserName || (user && user.name) || targetId
+      studentName: affectedUserName || (user && user.name) || cleanTargetId
     });
 
     writeDb(db);
@@ -15852,7 +15895,7 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
 
     return res.json({ success: true, message: 'Contraseña actualizada correctamente' });
   } catch (err: any) {
-    console.error('[Student Change Password Error]:', err);
+    console.error('[Change Password Error]:', err);
     return res.status(err.statusCode || 500).json({ 
       error: err.message || 'Error al cambiar la contraseña en la base de datos' 
     });

@@ -27,6 +27,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     setError(null);
     setSuccess(null);
 
+    if (!currentPassword || !currentPassword.trim()) {
+      setError('Debes escribir tu contraseña actual.');
+      return;
+    }
+
     if (!newPassword) {
       setError('Debes escribir una nueva contraseña.');
       return;
@@ -121,6 +126,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
               value={currentPassword}
               onChange={e => setCurrentPassword(e.target.value)}
               placeholder="Escribe tu contraseña actual"
+              required
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-amber-500"
             />
           </div>
