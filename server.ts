@@ -6805,7 +6805,7 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
     const idMatch = (u.id || '').trim().toLowerCase() === cleanUsername;
     const strippedMatch = uName.replace(/[^a-z0-9]/gi, '') === strippedUsername;
     const isTeacherUser = u.role === 'teacher' || u.id === 'profesor-1' || uName === 'pupdaniel';
-    const isPasswordValid = uPass === cleanPassword || (!uPass && cleanPassword === (isTeacherUser ? '1987' : '123')) || (isTeacherUser && cleanPassword === '1987');
+    const isPasswordValid = uPass === cleanPassword || (!uPass && cleanPassword === (isTeacherUser ? '1987' : '123'));
     return (uName === cleanUsername || nameMatch || accountMatch || idMatch || strippedMatch) && isPasswordValid;
   });
 
@@ -6821,7 +6821,7 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
         const isTeacherRow = row.role === 'teacher' || row.id === 'profesor-1' || (row.usuario && String(row.usuario).toLowerCase() === 'pupdaniel');
         const defaultFallback = isTeacherRow ? '1987' : '123';
         const dbPass = (row.password || defaultFallback).trim();
-        if (dbPass === cleanPassword || (!row.password && cleanPassword === defaultFallback) || (isTeacherRow && cleanPassword === '1987')) {
+        if (dbPass === cleanPassword || (!row.password && cleanPassword === defaultFallback)) {
           const newUser: User = {
             id: String(row.id),
             name: String(row.alumno),
@@ -8279,7 +8279,7 @@ app.post('/api/restore', async (req, res) => {
       });
     } else {
       teacher.username = 'pupdaniel';
-      teacher.password = '1987';
+      teacher.password = teacher.password || '1987';
     }
 
     if (dbPool) {
@@ -15738,7 +15738,7 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
 
 // ================= CHANGE PASSWORD (STUDENT & TEACHER) =================
 app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/change-password'], async (req, res) => {
-  const targetId = req.body.studentId || req.body.teacherId || req.body.userId || req.body.id;
+  const targetId = req.body.studentId || req.body.teacherId || req.body.userId || req.body.id || req.body.username;
   const { currentPassword, newPassword } = req.body;
   if (!targetId || !newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
     return res.status(400).json({ error: 'Faltan datos requeridos (usuario o nueva contraseña)' });
@@ -15815,6 +15815,16 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
 
     if (user) {
       user.password = cleanNewPassword;
+    } else if (dbPool) {
+      db.users.push({
+        id: affectedUserId,
+        username: affectedUsername || 'pupdaniel',
+        name: affectedUserName || 'Profesor de Contabilidad',
+        password: cleanNewPassword,
+        role: 'teacher',
+        accountNumber: 'ES000000000000000000',
+        balance: 0
+      });
     } else if (!dbPool) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -15838,6 +15848,7 @@ app.put(['/api/student/change-password', '/api/teacher/change-password', '/api/c
     });
 
     writeDb(db);
+    clearAllSessionCaches();
 
     return res.json({ success: true, message: 'Contraseña actualizada correctamente' });
   } catch (err: any) {
@@ -20795,21 +20806,40 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       : 'vendedor_envio';
 
   if (transportMethod === 'comprador_recogida' && !isTeacher) {
-    const hasTruckDriver = (db.hiredEmployees || []).some(e => e.studentId === buyer.id && (e.role === 'camionero' || (e.role as string) === 'conductor'));
-    const hasTruck = (db.purchasedVehicles || []).some(v => v.studentId === buyer.id && (
-      v.vehicleType === 'camion_trailer' || 
-      (v.vehicleType as string) === 'camion_ligero' || 
-      (v.vehicleType as string) === 'camion' || 
-      (v.vehicleType || '').toLowerCase().includes('camion') ||
-      v.vehicleType === 'furgoneta_transporte' ||
-      v.vehicleType === 'furgoneta' ||
-      (v.vehicleType || '').toLowerCase().includes('furgoneta')
-    ));
+    const isTruckType = (vType: string) => {
+      const t = (vType || '').toLowerCase();
+      return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+    };
+    const isVanType = (vType: string) => {
+      const t = (vType || '').toLowerCase();
+      return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+    };
 
-    if (!hasTruckDriver || !hasTruck) {
-      return res.status(400).json({
-        error: 'Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado con el puesto de Conductor / Camionero.'
-      });
+    const buyerVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === buyer.id);
+    const buyerDrivers = (db.hiredEmployees || []).filter(
+      e => e.studentId === buyer.id && (e.role === 'camionero' || (e.role as string) === 'conductor')
+    );
+
+    const assignedVehicles = buyerVehicles.filter(veh => {
+      const hasDirectDriver = veh.assignedDriverId && buyerDrivers.some(d => d.id === veh.assignedDriverId);
+      const hasEmpAssigned = buyerDrivers.some(d => d.assignedVehicleId === veh.id);
+      return hasDirectDriver || hasEmpAssigned;
+    });
+
+    const hasAssignedTransport = assignedVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+
+    if (!hasAssignedTransport) {
+      const hasAnyVehicle = buyerVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+      const hasAnyDriver = buyerDrivers.length > 0;
+      if (!hasAnyVehicle || !hasAnyDriver) {
+        return res.status(400).json({
+          error: 'Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado con el puesto de Conductor / Camionero.'
+        });
+      } else {
+        return res.status(400).json({
+          error: 'Requisito de Logística: Para acordar la recogida por el comprador debes tener asignado específicamente un empleado conductor o camionero a tu vehículo de transporte (camión o furgoneta).'
+        });
+      }
     }
   }
 
@@ -22034,20 +22064,40 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
 
         if (transportMethod === 'comprador_recogida') {
           const buyerId = order.studentId;
-          const hasTruckDriver = (dbSnapshot.hiredEmployees || []).some(e => e.studentId === buyerId && (e.role === 'camionero' || (e.role as string) === 'conductor'));
-          const hasTruck = (dbSnapshot.purchasedVehicles || []).some(v => v.studentId === buyerId && (
-            v.vehicleType === 'camion_trailer' ||
-            (v.vehicleType as string) === 'camion_ligero' ||
-            (v.vehicleType as string) === 'camion' ||
-            (v.vehicleType || '').toLowerCase().includes('camion') ||
-            v.vehicleType === 'furgoneta_transporte' ||
-            v.vehicleType === 'furgoneta' ||
-            (v.vehicleType || '').toLowerCase().includes('furgoneta')
-          ));
-          if (!hasTruckDriver || !hasTruck) {
-            const err: any = new Error('Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado como Conductor / Camionero.');
-            err.statusCode = 400;
-            throw err;
+          const isTruckType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+          };
+          const isVanType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+          };
+
+          const buyerVehicles = (dbSnapshot.purchasedVehicles || []).filter(v => v.studentId === buyerId);
+          const buyerDrivers = (dbSnapshot.hiredEmployees || []).filter(
+            e => e.studentId === buyerId && (e.role === 'camionero' || (e.role as string) === 'conductor')
+          );
+
+          const assignedVehicles = buyerVehicles.filter(veh => {
+            const hasDirectDriver = veh.assignedDriverId && buyerDrivers.some(d => d.id === veh.assignedDriverId);
+            const hasEmpAssigned = buyerDrivers.some(d => d.assignedVehicleId === veh.id);
+            return hasDirectDriver || hasEmpAssigned;
+          });
+
+          const hasAssignedTransport = assignedVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+
+          if (!hasAssignedTransport) {
+            const hasAnyVehicle = buyerVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+            const hasAnyDriver = buyerDrivers.length > 0;
+            if (!hasAnyVehicle || !hasAnyDriver) {
+              const err: any = new Error('Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado como Conductor / Camionero.');
+              err.statusCode = 400;
+              throw err;
+            } else {
+              const err: any = new Error('Requisito de Logística: Para acordar la recogida por el comprador debes tener asignado específicamente un empleado conductor o camionero a tu vehículo de transporte (camión o furgoneta).');
+              err.statusCode = 400;
+              throw err;
+            }
           }
         }
 
@@ -24475,31 +24525,75 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         let fuelMovId = '';
         let transMovId = '';
 
+        let fuelTripsCount = 1;
+        let fuelVehicleLabel = 'Camión';
+        let totalWeightKg = 0;
+
         if (transportMethod === 'propio') {
-          const hasTruck = (db.purchasedVehicles || []).some(
-            v => v.studentId === senderId && (
-              v.vehicleType === 'camion_trailer' || 
-              (v.vehicleType as string) === 'camion_ligero' || 
-              (v.vehicleType as string) === 'camion' || 
-              (v.vehicleType || '').toLowerCase().includes('camion') ||
-              v.vehicleType === 'furgoneta_transporte' ||
-              v.vehicleType === 'furgoneta' ||
-              (v.vehicleType || '').toLowerCase().includes('furgoneta')
-            )
-          );
-          const hasTruckDriver = (db.hiredEmployees || []).some(
+          // Check available transport vehicles and driver assignment:
+          // A vehicle qualifies if:
+          // 1. Belonging to senderId
+          // 2. vehicleType is camion or furgoneta
+          // 3. Has an active driver assigned specifically to it (v.assignedDriverId OR matching employee in hiredEmployees with assignedVehicleId)
+          const isTruckType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+          };
+          const isVanType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+          };
+
+          const senderVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === senderId);
+          const senderDrivers = (db.hiredEmployees || []).filter(
             e => e.studentId === senderId && (e.role === 'camionero' || (e.role as string) === 'conductor')
           );
-          if (!hasTruck || !hasTruckDriver) {
-            const err: any = new Error('Para realizar el envío con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
-            err.statusCode = 400;
-            throw err;
+
+          // Find vehicles with an assigned driver
+          const assignedVehicles = senderVehicles.filter(veh => {
+            const hasDirectDriver = veh.assignedDriverId && senderDrivers.some(d => d.id === veh.assignedDriverId);
+            const hasEmpAssigned = senderDrivers.some(d => d.assignedVehicleId === veh.id);
+            return hasDirectDriver || hasEmpAssigned;
+          });
+
+          // Check if there is an assigned truck or van
+          const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
+          const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
+
+          if (!assignedTruck && !assignedVan) {
+            const hasAnyVehicle = senderVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+            const hasAnyDriver = senderDrivers.length > 0;
+            if (!hasAnyVehicle || !hasAnyDriver) {
+              const err: any = new Error('Para realizar el envío con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
+              err.statusCode = 400;
+              throw err;
+            } else {
+              const err: any = new Error('Requisito de asignación: Para utilizar el transporte propio debes tener asignado específicamente un empleado con puesto de conductor o camionero al vehículo (camión o furgoneta). Vincula el conductor a tu vehículo desde la gestión de flotas o empleados.');
+              err.statusCode = 400;
+              throw err;
+            }
           }
 
           const senderLoc = selectedSenderNave || sender;
           const recipientLoc = selectedRecipientNave || recipient;
           distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
-          fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+
+          // Calculate weight / trips
+          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+          totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+
+          // If only van is assigned (or preferred if van is active and no truck assigned), van capacity is 1 pallet / 1000 kg per trip
+          // trips = ceil(weight / 1000 kg)
+          if (!assignedTruck && assignedVan) {
+            fuelVehicleLabel = 'Furgoneta';
+            fuelTripsCount = Math.max(1, Math.ceil(totalWeightKg / 1000));
+          } else {
+            fuelVehicleLabel = 'Camión';
+            fuelTripsCount = 1;
+          }
+
+          const singleTripFuel = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+          fuelExpense = Math.round(singleTripFuel * fuelTripsCount * 100) / 100;
         } else if (transportMethod === 'exterior') {
           const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
           const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
@@ -24585,7 +24679,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           const nowIso = new Date().toISOString();
           if (transportMethod === 'propio') {
             fuelMovId = generateId('mov');
-            const concept = `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`;
+            const tripsInfo = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes)` : '';
+            const concept = `Gasto de Suministro - Combustible/Gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km a ${recipient.name})`;
             await client.query(
               `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -24864,6 +24959,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         } else if (transportMethod === 'propio' && fuelExpense > 0 && fuelMovId) {
           const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
           const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+          const tripsInfo = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes)` : '';
           fuelInvoiceOrder = {
             id: `rmord_trans_${fuelMovId}`,
             studentId: sender.id,
@@ -24874,8 +24970,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             sellerLevel: 'official',
             announcementId: `gaso-inv-${fuelMovId}`,
             materialType: 'combustible',
-            materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
-            quantity: 1,
+            materialTitle: `Gasto de Suministro - Combustible/Gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km a ${recipient.name})`,
+            quantity: fuelTripsCount,
             unitWeightKg: 0,
             totalKg: 0,
             basePrice: basePricePropio,
@@ -24899,8 +24995,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             items: [{
               announcementId: `gaso-inv-${fuelMovId}`,
               materialType: 'combustible',
-              materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km a ${recipient.name})`,
-              quantity: 1,
+              materialTitle: `Gasto de Suministro - Combustible/Gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km a ${recipient.name})`,
+              quantity: fuelTripsCount,
               unitWeightKg: 0,
               totalKg: 0,
               basePrice: basePricePropio,
@@ -24913,22 +25009,23 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
               authorName: 'Estación de servicio - suministro de combustible',
               timestamp: nowIso,
               action: 'propuesta_inicial',
-              quantity: 1,
+              quantity: fuelTripsCount,
               pricePerUnit: basePricePropio,
               discountPercentage: 0,
               insuranceFee: 0,
               transportCost: 0,
               transportMethod: 'vendedor_envio',
               totalAmount: fuelExpense,
-              note: `Factura de suministro de combustible camión (${distanceKm} km a ${recipient.name})`
+              note: `Factura de suministro de combustible ${fuelVehicleLabel.toLowerCase()}${tripsInfo} (${distanceKm} km a ${recipient.name})`
             }]
           };
           await syncRawMaterialOrderToSupabase(fuelInvoiceOrder, client);
         }
 
         const destinationNaveName = selectedRecipientNave ? (selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén de destino') : 'Almacén de destino';
+        const tripsSuccessDetail = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes requeridos por peso total de ${totalWeightKg} kg)` : '';
         const transferSuccessMessage = transportMethod === 'propio'
-          ? `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Transporte realizado con tu camión y camionero propio. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
+          ? `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Transporte realizado con tu ${fuelVehicleLabel.toLowerCase()} y conductor asignado en plantilla${tripsSuccessDetail}. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
           : `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Se han cargado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
 
         return {
@@ -24950,7 +25047,9 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           destinationNaveName,
           senderId,
           recipientId,
-          transportMethod
+          transportMethod,
+          fuelTripsCount,
+          fuelVehicleLabel
         };
       }, key);
     });
@@ -24965,6 +25064,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
     if (!db.transfers) db.transfers = [];
     const nowIso = new Date().toISOString();
     if (result.fuelMovId && result.fuelExpense > 0) {
+      const tripsInfo = result.fuelTripsCount > 1 ? ` (${result.fuelTripsCount} viajes)` : '';
+      const vLabel = result.fuelVehicleLabel || 'Camión';
       db.transfers.unshift({
         id: result.fuelMovId,
         senderId: senderId,
@@ -24974,7 +25075,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         receiverName: 'Estación de servicio - suministro de combustible',
         receiverAccount: 'ES00-0000-0000-0000-GASO',
         amount: result.fuelExpense,
-        concept: `Gasto de Suministro - Combustible/Gasolina Camión (${result.distanceKm} km a ${result.recipientId})`,
+        concept: `Gasto de Suministro - Combustible/Gasolina ${vLabel}${tripsInfo} (${result.distanceKm} km a ${result.recipientId})`,
         timestamp: nowIso
       });
     } else if (result.transMovId && result.transportFee > 0) {
@@ -25116,33 +25217,68 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
         let transportFee = 0;
         let fuelExpense = 0;
         let distanceKm = 0;
+        let fuelTripsCount = 1;
+        let fuelVehicleLabel = 'Camión';
         const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
         distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
 
+        // Calculate weight / pallets
+        const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+        const totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+
         if (transportMethod === 'propio') {
-          const hasTruck = (db.purchasedVehicles || []).some(
-            v => v.studentId === studentId && (
-              v.vehicleType === 'camion_trailer' || 
-              (v.vehicleType as string) === 'camion_ligero' || 
-              (v.vehicleType as string) === 'camion' || 
-              (v.vehicleType || '').toLowerCase().includes('camion') ||
-              v.vehicleType === 'furgoneta_transporte' ||
-              v.vehicleType === 'furgoneta' ||
-              (v.vehicleType || '').toLowerCase().includes('furgoneta')
-            )
-          );
-          const hasTruckDriver = (db.hiredEmployees || []).some(
+          const isTruckType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+          };
+          const isVanType = (vType: string) => {
+            const t = (vType || '').toLowerCase();
+            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+          };
+
+          const userVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === studentId);
+          const userDrivers = (db.hiredEmployees || []).filter(
             e => e.studentId === studentId && (e.role === 'camionero' || (e.role as string) === 'conductor')
           );
-          if (!hasTruck || !hasTruckDriver) {
-            const err: any = new Error('Para realizar el traslado con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
-            err.statusCode = 400;
-            throw err;
+
+          // Find vehicles with an assigned driver
+          const assignedVehicles = userVehicles.filter(veh => {
+            const hasDirectDriver = veh.assignedDriverId && userDrivers.some(d => d.id === veh.assignedDriverId);
+            const hasEmpAssigned = userDrivers.some(d => d.assignedVehicleId === veh.id);
+            return hasDirectDriver || hasEmpAssigned;
+          });
+
+          // Check if there is an assigned truck or van
+          const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
+          const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
+
+          if (!assignedTruck && !assignedVan) {
+            const hasAnyVehicle = userVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+            const hasAnyDriver = userDrivers.length > 0;
+            if (!hasAnyVehicle || !hasAnyDriver) {
+              const err: any = new Error('Para realizar el traslado con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
+              err.statusCode = 400;
+              throw err;
+            } else {
+              const err: any = new Error('Requisito de asignación: Para utilizar el transporte propio debes tener asignado específicamente un empleado con puesto de conductor o camionero al vehículo (camión o furgoneta). Vincula el conductor a tu vehículo desde la gestión de flotas o empleados.');
+              err.statusCode = 400;
+              throw err;
+            }
           }
 
-          fuelExpense = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+          // If only van is assigned (or preferred if van is active and no truck assigned), van capacity is 1 pallet / 1000 kg per trip
+          // trips = ceil(weight / 1000 kg)
+          if (!assignedTruck && assignedVan) {
+            fuelVehicleLabel = 'Furgoneta';
+            fuelTripsCount = Math.max(1, Math.ceil(totalWeightKg / 1000));
+          } else {
+            fuelVehicleLabel = 'Camión';
+            fuelTripsCount = 1;
+          }
+
+          const singleTripFuel = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
+          fuelExpense = Math.round(singleTripFuel * fuelTripsCount * 100) / 100;
         } else if (transportMethod === 'exterior') {
-          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
           const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
           const chargedPallets = Math.max(1, Math.ceil(transferPallets));
           transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
@@ -25215,7 +25351,8 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           const nowIso = new Date().toISOString();
 
           if (transportMethod === 'propio') {
-            const concept = `Gasto de suministro - Combustible/gasolina camión (${distanceKm} km entre almacenes)`;
+            const tripsInfo = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes)` : '';
+            const concept = `Gasto de suministro - Combustible/gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km entre almacenes)`;
             await client.query(
               `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -25403,6 +25540,7 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
         if (transportMethod === 'propio' && fuelExpense > 0 && movId) {
           const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
           const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+          const tripsInfo = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes)` : '';
           invoiceOrder = {
             id: `rmord_trans_${movId}`,
             studentId: student.id,
@@ -25413,8 +25551,8 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
             sellerLevel: 'official',
             announcementId: `gaso-inv-${movId}`,
             materialType: 'combustible',
-            materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
-            quantity: 1,
+            materialTitle: `Gasto de Suministro - Combustible/Gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+            quantity: fuelTripsCount,
             unitWeightKg: 0,
             totalKg: 0,
             basePrice: basePricePropio,
@@ -25438,8 +25576,8 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
             items: [{
               announcementId: `gaso-inv-${movId}`,
               materialType: 'combustible',
-              materialTitle: `Gasto de Suministro - Combustible/Gasolina Camión (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
-              quantity: 1,
+              materialTitle: `Gasto de Suministro - Combustible/Gasolina ${fuelVehicleLabel}${tripsInfo} (${distanceKm} km entre ${fromNaveTitle} y ${toNaveTitle})`,
+              quantity: fuelTripsCount,
               unitWeightKg: 0,
               totalKg: 0,
               basePrice: basePricePropio,
@@ -25452,14 +25590,14 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
               authorName: 'Estación de servicio - suministro de combustible',
               timestamp: nowIso,
               action: 'propuesta_inicial',
-              quantity: 1,
+              quantity: fuelTripsCount,
               pricePerUnit: basePricePropio,
               discountPercentage: 0,
               insuranceFee: 0,
               transportCost: 0,
               transportMethod: 'vendedor_envio',
               totalAmount: fuelExpense,
-              note: `Factura de Suministro de Combustible Camión (${distanceKm} km entre almacenes)`
+              note: `Factura de Suministro de Combustible ${fuelVehicleLabel.toLowerCase()}${tripsInfo} (${distanceKm} km entre almacenes)`
             }]
           };
           await syncRawMaterialOrderToSupabase(invoiceOrder, client);
@@ -25528,8 +25666,9 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           await syncRawMaterialOrderToSupabase(invoiceOrder, client);
         }
 
+        const tripsSuccessDetail = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes requeridos por peso total de ${totalWeightKg} kg)` : '';
         const transferSuccessMessage = transportMethod === 'propio'
-          ? `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito con transporte propio. Sin gastos de servicio de transporte. Se ha abonado un gasto de suministro de gasolina de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
+          ? `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito con transporte propio. Transporte realizado con tu ${fuelVehicleLabel.toLowerCase()} y conductor asignado en plantilla${tripsSuccessDetail}. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
           : `Traslado de ${qty} de ${itemLabel} entre naves completado con éxito. Se han adeudado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
 
         return {
@@ -25545,7 +25684,9 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           itemLabel,
           qty,
           studentId,
-          transportMethod
+          transportMethod,
+          fuelTripsCount,
+          fuelVehicleLabel
         };
       }, key);
     });
@@ -25561,6 +25702,8 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
     const nowIso = new Date().toISOString();
     if (result.movId) {
       if (result.transportMethod === 'propio') {
+        const tripsInfo = result.fuelTripsCount > 1 ? ` (${result.fuelTripsCount} viajes)` : '';
+        const vLabel = result.fuelVehicleLabel || 'Camión';
         db.transfers.unshift({
           id: result.movId,
           senderId: studentId,
@@ -25570,7 +25713,7 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           receiverName: 'Estación de servicio - suministro de combustible',
           receiverAccount: 'ES00-0000-0000-0000-GASO',
           amount: result.fuelExpense,
-          concept: `Gasto de suministro - Combustible/gasolina camión (${result.distanceKm} km entre almacenes)`,
+          concept: `Gasto de suministro - Combustible/gasolina ${vLabel}${tripsInfo} (${result.distanceKm} km entre almacenes)`,
           timestamp: nowIso
         });
       } else if (result.transportMethod === 'exterior') {

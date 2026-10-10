@@ -7168,20 +7168,27 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   {(() => {
                     const userVehicles = data?.purchasedVehicles || [];
                     const userEmployees = data?.hiredEmployees || [];
-                    const hasTruck = userVehicles.some(
-                      (v) =>
-                        v.vehicleType === "camion_trailer" ||
-                        v.vehicleType === "camion_ligero" ||
-                        v.vehicleType === "camion" ||
-                        (v.vehicleType || "").toLowerCase().includes("camion") ||
-                        v.vehicleType === "furgoneta_transporte" ||
-                        v.vehicleType === "furgoneta" ||
-                        (v.vehicleType || "").toLowerCase().includes("furgoneta"),
-                    );
+                    const isTruckType = (vType: string) => {
+                      const t = (vType || '').toLowerCase();
+                      return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+                    };
+                    const isVanType = (vType: string) => {
+                      const t = (vType || '').toLowerCase();
+                      return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+                    };
+
+                    const hasTruck = userVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
                     const hasTruckDriver = userEmployees.some(
-                      (e) => e.role === "camionero" || e.role === "conductor",
+                      (e) => e.role === "camionero" || (e.role as string) === "conductor",
                     );
-                    const canUsePropio = hasTruck && hasTruckDriver;
+
+                    const assignedVehicles = userVehicles.filter(veh => {
+                      const hasDirectDriver = veh.assignedDriverId && userEmployees.some(d => d.id === veh.assignedDriverId);
+                      const hasEmpAssigned = userEmployees.some(d => d.assignedVehicleId === veh.id);
+                      return hasDirectDriver || hasEmpAssigned;
+                    });
+                    const hasAssignedTransport = assignedVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+                    const canUsePropio = Boolean(hasAssignedTransport);
 
                     return (
                       <label
@@ -7209,7 +7216,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             Usar transporte propio de empresa
                           </span>
                           <span className="text-[11px] text-slate-500 block">
-                            Envío utilizando vehículo de transporte (camión o furgoneta) y conductor propio en plantilla. Sin costes de servicio exterior. Únicamente se adeudará el gasto de suministro por combustible consumido según la distancia entre el almacén de origen y el de destino.
+                            Envío utilizando vehículo de transporte (camión o furgoneta) y conductor asignado en plantilla. Sin costes de servicio exterior. Únicamente se adeudará el gasto de suministro por combustible consumido según la distancia entre el almacén de origen y el de destino (dividido automáticamente en viajes de 1.000 kg si se utiliza furgoneta).
                           </span>
                           {!canUsePropio && (
                             <div className="text-[11px] text-amber-700 font-bold mt-1 bg-amber-50 p-2 rounded-lg border border-amber-200 space-y-0.5">
@@ -7229,6 +7236,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                   contratado en tu plantilla.
                                 </p>
                               )}
+                              {hasTruck && hasTruckDriver && !hasAssignedTransport && (
+                                <p>
+                                  • Debes tener asignado específicamente el conductor a tu camión o furgoneta desde la gestión de flotas o empleados.
+                                </p>
+                              )}
                             </div>
                           )}
                         </div>
@@ -7244,6 +7256,27 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(transferItemKey);
                 const pReq = isKgItem ? (qty / 1000) : (qty / 10000);
                 const cPallets = pReq > 0 ? Math.max(1, Math.ceil(pReq)) : 0;
+                const totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+
+                const userVehicles = data?.purchasedVehicles || [];
+                const userEmployees = data?.hiredEmployees || [];
+                const isTruckType = (vType: string) => {
+                  const t = (vType || '').toLowerCase();
+                  return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+                };
+                const isVanType = (vType: string) => {
+                  const t = (vType || '').toLowerCase();
+                  return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+                };
+                const assignedVehicles = userVehicles.filter(veh => {
+                  const hasDirectDriver = veh.assignedDriverId && userEmployees.some(d => d.id === veh.assignedDriverId);
+                  const hasEmpAssigned = userEmployees.some(d => d.assignedVehicleId === veh.id);
+                  return hasDirectDriver || hasEmpAssigned;
+                });
+                const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
+                const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
+                const isVanActive = !assignedTruck && Boolean(assignedVan);
+                const tripsCount = isVanActive ? Math.max(1, Math.ceil(totalWeightKg / 1000)) : 1;
                 
                 let sourceLoc: any = null;
                 let targetLoc: any = null;
@@ -7257,7 +7290,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 }
                 const distKm = calculateSpanishDistanceKm(sourceLoc, targetLoc);
                 const estExtCost = Math.round(cPallets * distKm * 0.38 * 100) / 100;
-                const estPropioCost = Math.max(8.50, Math.round((distKm * 0.48 + 5.0) * 100) / 100);
+                const singleTripFuel = Math.max(8.50, Math.round((distKm * 0.48 + 5.0) * 100) / 100);
+                const estPropioCost = Math.round(singleTripFuel * tripsCount * 100) / 100;
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
@@ -7265,19 +7299,32 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <span>Distancia real por carretera:</span>
                       <span className="font-bold text-slate-800">{distKm} km</span>
                     </div>
-                    <div className="flex justify-between items-center text-slate-600">
-                      <span>Palets facturables (fracción como completo):</span>
-                      <span className="font-bold text-slate-800">{cPallets} palet{cPallets !== 1 ? 's' : ''} ({pReq.toFixed(2)} reales)</span>
-                    </div>
+                    {transferTransportMethod === 'exterior' ? (
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>Palets facturables (fracción como completo):</span>
+                        <span className="font-bold text-slate-800">{cPallets} palet{cPallets !== 1 ? 's' : ''} ({pReq.toFixed(2)} reales)</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>Vehículo y viajes requeridos:</span>
+                        <span className="font-bold text-slate-800">
+                          {isVanActive ? `Furgoneta (1.000 kg / viaje): ${tripsCount} viaje${tripsCount > 1 ? 's' : ''}` : 'Camión tráiler (1 viaje)'}
+                        </span>
+                      </div>
+                    )}
                     <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center font-bold text-slate-900">
                       <span>Coste de transporte {transferTransportMethod === 'exterior' ? '(Servicio exterior)' : '(Gasto suministro gasolina)'}:</span>
                       <span className="text-indigo-600 text-sm">
                         {transferTransportMethod === 'exterior' ? `${formatNumber(estExtCost)} €` : `${formatNumber(estPropioCost)} €`}
                       </span>
                     </div>
-                    {transferTransportMethod === 'exterior' && (
+                    {transferTransportMethod === 'exterior' ? (
                       <p className="text-[10px] text-slate-400">
                         Cálculo: {cPallets} palet{cPallets !== 1 ? 's' : ''} × {distKm} km × 0,38 €/pal-km = {formatNumber(estExtCost)} €
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-slate-400">
+                        Cálculo combustible: {tripsCount} viaje{tripsCount > 1 ? 's' : ''} × {singleTripFuel.toFixed(2)} €/viaje ({distKm} km) = {formatNumber(estPropioCost)} €
                       </p>
                     )}
                   </div>

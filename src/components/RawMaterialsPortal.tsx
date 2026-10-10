@@ -1813,9 +1813,24 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const clampedFreePercentage = Math.max(0, 100 - clampedOccupiedPercentage);
   const isOverCapacity = totalOccupiedPallets > maxPalletsAllowed || occupiedPercentage > 100;
 
-  const ownedTruck = vehicles.find(v => v.vehicleType === 'camion_trailer' || v.vehicleType === 'furgoneta_transporte' || v.vehicleType === 'furgoneta' || (v.vehicleType || '').toLowerCase().includes('camion') || (v.vehicleType || '').toLowerCase().includes('furgoneta'));
-  const hiredDriver = employees.find(e => e.role === 'camionero' || (e.role as string) === 'conductor');
-  const canPickupWithoutTransport = Boolean(ownedTruck && hiredDriver);
+  const isTruckType = (vType: string) => {
+    const t = (vType || '').toLowerCase();
+    return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+  };
+  const isVanType = (vType: string) => {
+    const t = (vType || '').toLowerCase();
+    return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+  };
+
+  const transportVehicles = vehicles.filter(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
+  const hiredDrivers = employees.filter(e => e.role === 'camionero' || (e.role as string) === 'conductor');
+  const assignedTransportVehicle = transportVehicles.find(veh => {
+    const hasDirectDriver = veh.assignedDriverId && hiredDrivers.some(d => d.id === veh.assignedDriverId);
+    const hasEmpAssigned = hiredDrivers.some(d => d.assignedVehicleId === veh.id);
+    return hasDirectDriver || hasEmpAssigned;
+  });
+  const canPickupWithoutTransport = Boolean(assignedTransportVehicle);
+  const ownedTruck = assignedTransportVehicle;
 
   // Preset selector
   const handleSelectPreset = (key: 'hierro' | 'plastico' | 'epoxi') => {
@@ -5241,11 +5256,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
                 >
                   <option value="vendedor_envio">Envío a cargo del vendedor (+ portes)</option>
-                  <option value="comprador_recogida">Recogida por el comprador (requiere camión + camionero)</option>
+                  <option value="comprador_recogida">Recogida por el comprador (requiere vehículo + conductor asignado)</option>
                 </select>
                 {negTransportMethod === 'comprador_recogida' && !canPickupWithoutTransport && (
                   <p className="text-[11px] text-amber-400 mt-1">
-                    ⚠️ Advertencia: Para recoger la mercancía debes disponer de un camión tráiler y un chofer camionero contratado.
+                    ⚠️ Advertencia: Para recoger la mercancía debes disponer de un vehículo de transporte (camión o furgoneta) y tener asignado un empleado conductor en plantilla.
                   </p>
                 )}
               </div>

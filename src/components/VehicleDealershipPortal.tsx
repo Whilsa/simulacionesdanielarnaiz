@@ -63,7 +63,8 @@ const VEHICLE_CATALOG: VehicleCatalogItem[] = [
     description: 'Furgoneta comercial de gran capacidad para el transporte ágil de existencias, materias primas y productos terminados. Permite realizar transporte propio con conductor en plantilla.',
     specs: [
       'Volumen útil de carga: 13 m³ / 3 europalets',
-      'Carga útil: 1.500 kg',
+      'Carga útil declarada: 1.500 kg',
+      'Capacidad operativa de transporte: 1.000 kg / 1 palé por viaje (fraccionamiento automático en múltiples viajes para pedidos mayores)',
       'Motor turbodiésel 150 CV de bajo consumo',
       'Apta para transporte propio con conductor asignado'
     ],
@@ -605,7 +606,7 @@ export default function VehicleDealershipPortal({
                         <span>🚛 Requisito: Asignable a un camionero/conductor para transporte propio y recogida de mercancías.</span>
                       )}
                       {v.vehicleType === 'furgoneta_transporte' && (
-                        <span>🚐 Vehículo para transporte de existencias: Asignable a un conductor para transporte propio de existencias.</span>
+                        <span>🚐 Vehículo para transporte de existencias: Capacidad de 1.000 kg (1 palé) por viaje con fraccionamiento automático en múltiples viajes. Requiere conductor asignado.</span>
                       )}
                       {v.vehicleType === 'coche_empresa' && (
                         <span>🚗 Vehículo corporativo de representación y gestión comercial.</span>

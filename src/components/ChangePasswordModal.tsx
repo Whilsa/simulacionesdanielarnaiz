@@ -52,6 +52,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           userId: currentUser.id,
           studentId: currentUser.id,
           teacherId: currentUser.id,
+          username: currentUser.username,
           currentPassword,
           newPassword
         })
