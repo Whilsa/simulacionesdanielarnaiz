@@ -62,7 +62,9 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
         setMyEmployees(dataEmp.employees);
       }
 
-      const resCompany = await fetch(`/api/company/${currentUser.id}`);
+      const resCompany = await fetch(`/api/company/${currentUser.id}?fresh=true`, {
+        headers: { 'x-bypass-cache': 'true' }
+      });
       const dataCompany = await resCompany.json();
       if (dataCompany.machineryAcquisitions) {
         setMachineryList(dataCompany.machineryAcquisitions);
@@ -188,14 +190,17 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
       const res = await fetch(`/api/student/employees/${employeeId}/assign-machinery`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ machineryId, shift })
+        body: JSON.stringify({ machineryId, shift, studentId: currentUser.id })
       });
       if (res.ok) {
         setMessage({ type: 'success', text: 'Asignación de puesto de trabajo actualizada' });
-        fetchMyEmployeesAndMachinery();
+        await fetchMyEmployeesAndMachinery();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        setMessage({ type: 'error', text: errorData.error || 'Error al asignar puesto' });
       }
-    } catch (e) {
-      setMessage({ type: 'error', text: 'Error al asignar puesto' });
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message || 'Error al asignar puesto' });
     }
   };
 

@@ -583,7 +583,9 @@ export default function CompanyDashboard({
       setLoading(true);
     }
     try {
-      const res = await fetch(`/api/company/${currentUser.id}`);
+      const res = await fetch(`/api/company/${currentUser.id}?fresh=true`, {
+        headers: { "x-bypass-cache": "true" },
+      });
       if (!res.ok)
         throw new Error("Error al cargar la información patrimonial");
       const contentType = res.headers.get("content-type");
@@ -1141,6 +1143,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
     setUpdatingEmpId(employeeId);
     setError(null);
 
+    const isUnassign = !machineryId || machineryId === "unassign";
+
     // Optimistically update local state so UI updates instantly without unmounting/scrolling
     setData((prev) => {
       if (!prev || !prev.hiredEmployees) return prev;
@@ -1153,8 +1157,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           emp.id === employeeId
             ? {
                 ...emp,
-                assignedMachineryId: machineryId,
-                assignedMachineryTitle: targetMac
+                assignedMachineryId: isUnassign ? undefined : machineryId,
+                assignedMachineryTitle: isUnassign
+                  ? undefined
+                  : targetMac
                   ? targetMac.title || targetMac.lineTitle
                   : undefined,
                 shift: shift || 1,
@@ -1170,15 +1176,33 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ machineryId, shift }),
+          body: JSON.stringify({
+            machineryId: isUnassign ? "unassign" : machineryId,
+            shift,
+            studentId: currentUser.id,
+          }),
         },
       );
-      if (!res.ok)
-        throw new Error("Error al actualizar asignación del empleado");
-      fetchCompanyData(true);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error al actualizar asignación del empleado");
+      }
+      const dataJson = await res.json().catch(() => null);
+      if (dataJson?.employee) {
+        setData((prev) => {
+          if (!prev || !prev.hiredEmployees) return prev;
+          return {
+            ...prev,
+            hiredEmployees: prev.hiredEmployees.map((emp) =>
+              emp.id === employeeId ? dataJson.employee : emp
+            ),
+          };
+        });
+      }
+      await fetchCompanyData(true);
     } catch (err: any) {
       setError(err.message);
-      fetchCompanyData(true);
+      await fetchCompanyData(true);
     } finally {
       setUpdatingEmpId(null);
     }
@@ -1193,6 +1217,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
     setUpdatingEmpId(employeeId);
     setError(null);
 
+    const isUnassign = !vehicleId || vehicleId === "unassign";
+
     // Optimistically update local state so UI updates instantly without unmounting/scrolling
     setData((prev) => {
       if (!prev || !prev.hiredEmployees) return prev;
@@ -1202,7 +1228,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           emp.id === employeeId
             ? {
                 ...emp,
-                assignedVehicleId: vehicleId,
+                assignedVehicleId: isUnassign ? undefined : vehicleId,
                 assignedWarehouseIndex: warehouseIndex,
                 shift: shift || 1,
               }
@@ -1217,15 +1243,34 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vehicleId, warehouseIndex, shift }),
+          body: JSON.stringify({
+            vehicleId: isUnassign ? "unassign" : vehicleId,
+            warehouseIndex,
+            shift,
+            studentId: currentUser.id,
+          }),
         },
       );
-      if (!res.ok)
-        throw new Error("Error al actualizar asignación del empleado");
-      fetchCompanyData(true);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error al actualizar asignación del empleado");
+      }
+      const dataJson = await res.json().catch(() => null);
+      if (dataJson?.employee) {
+        setData((prev) => {
+          if (!prev || !prev.hiredEmployees) return prev;
+          return {
+            ...prev,
+            hiredEmployees: prev.hiredEmployees.map((emp) =>
+              emp.id === employeeId ? dataJson.employee : emp
+            ),
+          };
+        });
+      }
+      await fetchCompanyData(true);
     } catch (err: any) {
       setError(err.message);
-      fetchCompanyData(true);
+      await fetchCompanyData(true);
     } finally {
       setUpdatingEmpId(null);
     }

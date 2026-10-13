@@ -1556,11 +1556,17 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
           const mapped = mapHiredEmployeeRow(row);
           const local = localMap.get(mapped.id);
           if (local) {
-            // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local
+            // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local and persist to PG
             if (local.assignedMachineryId && !mapped.assignedMachineryId) {
               mapped.assignedMachineryId = local.assignedMachineryId;
               mapped.assignedMachineryTitle = local.assignedMachineryTitle;
-              mapped.shift = local.shift;
+              mapped.shift = local.shift || 1;
+              safeDbQuery(
+                `UPDATE empleados_contratados 
+                 SET maquinaria_asignada_id = $1, maquinaria_asignada_titulo = $2, turno = $3 
+                 WHERE id = $4`,
+                [local.assignedMachineryId, local.assignedMachineryTitle || null, local.shift || 1, local.id]
+              ).catch(e => console.warn('[syncEmployeesFromSupabase] Error backfilling assignment to PG:', e));
             }
             if (local.assignedVehicleId && !mapped.assignedVehicleId) {
               mapped.assignedVehicleId = local.assignedVehicleId;
@@ -10615,7 +10621,34 @@ app.get('/api/company/:studentId', async (req, res) => {
   totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
 
   // 3. Total Combined Pending Debt (including pending tax/SS obligations)
-  const studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
+  let studentHiredEmployees: HiredEmployee[] = [];
+  if (dbPool) {
+    try {
+      const empRes = await safeDbQuery(
+        'SELECT * FROM empleados_contratados WHERE alumno_id = $1 ORDER BY fecha_contratacion DESC',
+        [studentId]
+      );
+      if (empRes && empRes.rows) {
+        studentHiredEmployees = empRes.rows.map(mapHiredEmployeeRow);
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+        for (const emp of studentHiredEmployees) {
+          const idx = db.hiredEmployees.findIndex(e => e.id === emp.id);
+          if (idx !== -1) {
+            db.hiredEmployees[idx] = emp;
+          } else {
+            db.hiredEmployees.push(emp);
+          }
+        }
+      } else {
+        studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
+      }
+    } catch (empErr) {
+      console.warn('[API Company] Error querying empleados_contratados from PostgreSQL:', empErr);
+      studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
+    }
+  } else {
+    studentHiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
+  }
   const studentPayrollRecords = (db.payrollRecords || []).filter(p => p.studentId === studentId);
   const studentTaxObligations = (db.taxObligations || []).filter(t => t.studentId === studentId);
 
@@ -16163,6 +16196,9 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
             console.warn('[Hire] Warning updating in-memory cache:', memErr);
           }
 
+          invalidateStudentSessionCache(student.id, 'company');
+          invalidateStudentSessionCache(student.id);
+
           return {
             success: true,
             employee: newHired,
@@ -16216,6 +16252,8 @@ app.post('/api/jobs/:id/hire', async (req, res) => {
         db.hiredEmployees.push(newHired);
         db.jobListings = (db.jobListings || []).filter(j => j.id !== job.id);
         writeDb(db);
+        invalidateStudentSessionCache(student.id, 'company');
+        invalidateStudentSessionCache(student.id);
         return { success: true, employee: newHired, hiredEmployee: newHired, jobListing: job, job };
       }
     });
@@ -16357,6 +16395,9 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
             console.warn('[Assign Machinery] Warning updating in-memory cache:', memErr);
           }
 
+          invalidateStudentSessionCache(studentOwnerId, 'company');
+          invalidateStudentSessionCache(studentOwnerId);
+
           return { success: true, employee: updatedEmployee };
         }, key);
       } else {
@@ -16396,6 +16437,8 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
           emp.shift = Number(shift) || 1;
         }
         writeDb(db);
+        invalidateStudentSessionCache(emp.studentId, 'company');
+        invalidateStudentSessionCache(emp.studentId);
         return { success: true, employee: emp };
       }
     });
@@ -16517,6 +16560,9 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
             console.warn('[Auto-assign] Warning updating in-memory cache:', memErr);
           }
 
+          invalidateStudentSessionCache(studentId, 'company');
+          invalidateStudentSessionCache(studentId);
+
           return {
             success: true,
             message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
@@ -16563,6 +16609,8 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
         });
 
         writeDb(db);
+        invalidateStudentSessionCache(studentId, 'company');
+        invalidateStudentSessionCache(studentId);
         return {
           success: true,
           message: `Se han asignado ${assignedCount} operarios automáticamente a ${studentMachines.length} líneas de maquinaria (2 por turno).`,
@@ -16628,6 +16676,9 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
             console.warn('[Unassign-all] Warning updating in-memory cache:', memErr);
           }
 
+          invalidateStudentSessionCache(studentId, 'company');
+          invalidateStudentSessionCache(studentId);
+
           return {
             success: true,
             message: 'Se han desvinculado todos los operarios de la maquinaria.',
@@ -16646,6 +16697,8 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
         });
 
         writeDb(db);
+        invalidateStudentSessionCache(studentId, 'company');
+        invalidateStudentSessionCache(studentId);
         return {
           success: true,
           message: 'Se han desvinculado todos los operarios de la maquinaria.',
@@ -19317,6 +19370,9 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
             console.warn('[Assign Vehicle] Warning updating in-memory cache:', memErr);
           }
 
+          invalidateStudentSessionCache(studentOwnerId, 'company');
+          invalidateStudentSessionCache(studentOwnerId);
+
           return { success: true, employee: updatedEmployee };
         }, key);
       } else {
@@ -19374,6 +19430,8 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
         }
 
         writeDb(db);
+        invalidateStudentSessionCache(emp.studentId, 'company');
+        invalidateStudentSessionCache(emp.studentId);
         return { success: true, employee: emp };
       }
     });
