@@ -3675,7 +3675,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       <>
                         {chatMessages.map((msg) => {
                         const isMe = msg.senderId === currentUser.id;
-                        const isInvoiceMsg = msg.type === 'invoice' || Boolean(msg.invoiceData);
+                        const isInvoiceMsg = msg.type === 'invoice' || (Boolean(msg.invoiceData) && msg.type !== 'promissory_note');
                         return (
                           <div
                             key={msg.id}

@@ -2848,32 +2848,6 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       }
       db.transfers = uniqueTransfers;
 
-      // Automatic Ledger Reconciliation (Conciliación Bancaria Automática)
-      // Ensures account balances in "cuentas" mathematically match the sum of "movimientos"
-      for (const student of db.users) {
-        if (student.role !== 'student') continue;
-        const studentMovs = resMov.rows.filter(m => m.cuenta_id === student.id);
-        if (studentMovs.length > 0) {
-          let netMovs = 0;
-          for (const m of studentMovs) {
-            const amt = Number(m.importe);
-            if (m.tipo === 'TRANSFER_IN') netMovs += amt;
-            else if (m.tipo === 'TRANSFER_OUT') netMovs -= amt;
-          }
-          const isRetailOrWholesale = (student.username && ['cliente04', 'cliente05'].includes(student.username)) || 
-                                     student.name.toLowerCase().includes('minorista') || 
-                                     student.name.toLowerCase().includes('mayorista');
-          const defaultInitial = isRetailOrWholesale ? 3000 : 60000;
-          const expectedBalance = Number((defaultInitial + netMovs).toFixed(2));
-          
-          if (Math.abs(student.balance - expectedBalance) > 0.01 && expectedBalance >= 0) {
-            console.log(`[Supabase Ledger Audit] Reconciling balance for ${student.name} (${student.id}): Stored=${student.balance} €, Expected=${expectedBalance} €. Updating...`);
-            student.balance = expectedBalance;
-            safeDbQuery('UPDATE cuentas SET saldo = $1 WHERE id = $2', [expectedBalance, student.id]).catch(e => console.error('[Ledger Reconcile DB Update Error]', e));
-          }
-        }
-      }
-
       // Reconstruct db.properties from Supabase "inmuebles"
       db.properties = (resInm && resInm.rows) ? resInm.rows.map(row => ({
         id: String(row.id),
@@ -26638,8 +26612,7 @@ app.post('/api/market/messages/sign-promissory-note', async (req, res) => {
           timestamp: nowIso,
           read: false,
           type: 'promissory_note',
-          promissoryNoteData: finalPromissoryData,
-          invoiceData: finalPromissoryData as any
+          promissoryNoteData: finalPromissoryData
         };
 
         return {
@@ -26734,8 +26707,7 @@ app.post('/api/market/messages/sign-promissory-note', async (req, res) => {
         timestamp: now.toISOString(),
         read: false,
         type: 'promissory_note',
-        promissoryNoteData: promissoryData,
-        invoiceData: promissoryData as any
+        promissoryNoteData: promissoryData
       };
 
       db.marketMessages.push(msg);
