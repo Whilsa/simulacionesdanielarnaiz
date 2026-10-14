@@ -716,7 +716,7 @@ export default function VehicleDealershipPortal({
                         >
                           <option value="">-- Sin conductor asignado --</option>
                           {hiredEmployees
-                            .filter(emp => emp.role === 'camionero' || (emp.role as string) === 'conductor')
+                            .filter(emp => emp.status !== 'despedido' && (emp.role === 'camionero' || (emp.role as string) === 'conductor'))
                             .map(emp => (
                               <option key={emp.id} value={emp.id}>
                                 👤 {emp.employeeName} ({emp.role === 'conductor' ? 'Conductor' : 'Camionero / conductor'})

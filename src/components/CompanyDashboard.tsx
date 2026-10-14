@@ -23,6 +23,7 @@ import {
   RawMaterialOrder,
   RawMaterialInventory,
   RawMaterialNaveInventory,
+  FiniquitoData,
 } from "../types.js";
 import {
   Briefcase,
@@ -51,6 +52,7 @@ import {
   Users,
   DollarSign,
   UserCheck,
+  UserMinus,
   Download,
   Zap,
   LayoutGrid,
@@ -240,6 +242,14 @@ export default function CompanyDashboard({
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState<string | null>(null);
+
+  // Employee Dismissal & Finiquito State
+  const [dismissModalEmployee, setDismissModalEmployee] = useState<HiredEmployee | null>(null);
+  const [dismissModalLoading, setDismissModalLoading] = useState(false);
+  const [dismissModalSubmitting, setDismissModalSubmitting] = useState(false);
+  const [dismissModalError, setDismissModalError] = useState<string | null>(null);
+  const [dismissFiniquitoPreview, setDismissFiniquitoPreview] = useState<FiniquitoData | null>(null);
+  const [dismissSuccessMessage, setDismissSuccessMessage] = useState<string | null>(null);
 
   const fetchStudentsList = async () => {
     try {
@@ -612,6 +622,63 @@ export default function CompanyDashboard({
     fetchTelecomAndOfficeData();
     fetchInventoryData();
   }, [currentUser.id]);
+
+  const handleOpenDismissModal = async (emp: HiredEmployee) => {
+    setDismissModalEmployee(emp);
+    setDismissModalError(null);
+    setDismissFiniquitoPreview(null);
+    setDismissModalLoading(true);
+
+    try {
+      const res = await fetch(`/api/student/employees/${emp.id}/calculate-finiquito`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: currentUser.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Error al calcular la liquidación del finiquito");
+      }
+      setDismissFiniquitoPreview(json.finiquitoData);
+    } catch (err: any) {
+      setDismissModalError(err.message || "Error al calcular el finiquito");
+    } finally {
+      setDismissModalLoading(false);
+    }
+  };
+
+  const handleConfirmDismissal = async () => {
+    if (!dismissModalEmployee) return;
+    setDismissModalSubmitting(true);
+    setDismissModalError(null);
+
+    try {
+      const res = await fetch(`/api/student/employees/${dismissModalEmployee.id}/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: currentUser.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Error al tramitar el despido");
+      }
+
+      await fetchCompanyData(true);
+      if (json.newBalance !== undefined && onUserBalanceUpdated) {
+        onUserBalanceUpdated(json.newBalance);
+      }
+
+      const totalPaid = json.finiquito?.totalFiniquito || 0;
+      setDismissSuccessMessage(`Despido de ${dismissModalEmployee.employeeName} tramitado con éxito. Finiquito liquidado y abonado: ${formatNumber(totalPaid)} €.`);
+      setDismissModalEmployee(null);
+      setDismissFiniquitoPreview(null);
+      setTimeout(() => setDismissSuccessMessage(null), 8000);
+    } catch (err: any) {
+      setDismissModalError(err.message || "Error al tramitar el despido");
+    } finally {
+      setDismissModalSubmitting(false);
+    }
+  };
 
   const handleSaveFloorPlan = async (plan: Partial<NaveFloorPlan>) => {
     const res = await fetch("/api/electricity/floor-plan", {
@@ -2157,7 +2224,8 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           {data.machineryAcquisitions.map((mac) => {
                             const isPendingEnergy =
                               mac.status === "pendiente_energia";
-                            const isAssembly = mac.status === "montaje";
+                            const isAssembly =
+                              mac.status === "montaje" || mac.status === "en_montaje";
                             const baseVal =
                               mac.basePrice || mac.totalPrice / 1.21;
                             const ivaVal =
@@ -3725,11 +3793,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               <div className="space-y-6">
                 {(() => {
                   const hiredList = data.hiredEmployees || [];
+                  const activeHiredList = hiredList.filter(e => e.status !== 'despedido');
+                  const dismissedHiredList = hiredList.filter(e => e.status === 'despedido');
                   const curNow = new Date();
                   const curYear = curNow.getFullYear();
                   const curMonth = curNow.getMonth() + 1;
 
-                  const totalGrossMonthly = hiredList.reduce((sum, e) => {
+                  const totalGrossMonthly = activeHiredList.reduce((sum, e) => {
                     if (!e.hireDate) return sum + e.grossSalaryMonthly;
                     const parts = e.hireDate.split("T")[0].split("-");
                     const hireYear = parseInt(parts[0], 10);
@@ -3781,6 +3851,23 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
 
                   return (
                     <div className="space-y-6">
+                      {/* SUCCESS DISMISSAL BANNER */}
+                      {dismissSuccessMessage && (
+                        <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-3 rounded-2xl text-xs font-semibold flex items-center justify-between shadow-xs">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>{dismissSuccessMessage}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDismissSuccessMessage(null)}
+                            className="text-emerald-700 hover:text-emerald-900 font-bold p-1 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+
                       {/* TOP SUMMARY CARDS FOR PAYROLL AND TAXES */}
                       <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
@@ -3798,11 +3885,16 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               </span>
                             </h3>
                             <p className="text-xs text-slate-500 mt-0.5">
-                              Plantilla total:{" "}
+                              Plantilla activa:{" "}
                               <strong>
-                                {hiredList.length} empleados contratados
+                                {activeHiredList.length} empleados contratados
                               </strong>{" "}
-                              • Pago individual de salarios el día 26 del mes correspondiente
+                              {dismissedHiredList.length > 0 && (
+                                <span className="text-rose-600 font-semibold">
+                                  • {dismissedHiredList.length} {dismissedHiredList.length === 1 ? 'baja tramitada' : 'bajas tramitadas'}
+                                </span>
+                              )}
+                              {" "}• Pago individual de salarios el día 26 del mes correspondiente
                             </p>
                           </div>
                           <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
@@ -4144,11 +4236,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         )}
 
                       {/* LIST OF HIRED EMPLOYEES CARDS */}
-                      {hiredList.length === 0 ? (
+                      {activeHiredList.length === 0 ? (
                         <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-xs">
                           <Briefcase className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                           <h3 className="text-lg font-bold text-slate-800">
-                            Aún no tienes empleados contratados
+                            {dismissedHiredList.length > 0
+                              ? "No tienes operarios activos en plantilla actualmente"
+                              : "Aún no tienes empleados contratados"}
                           </h3>
                           <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
                             Accede a la sección Foro de Empleo para contratar
@@ -4158,7 +4252,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {hiredList.map((emp) => {
+                          {activeHiredList.map((emp) => {
                             let hireYear = curYear;
                             let hireMonth = curMonth;
                             let hireDay = 1;
@@ -4483,10 +4577,138 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                                     <Receipt className="w-3.5 h-3.5 text-blue-300" />
                                     <span>Ver / imprimir nómina (PDF)</span>
                                   </button>
+
+                                  {/* TRAMITAR DESPIDO Y FINIQUITO */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenDismissModal(emp)}
+                                    className="w-full mt-2 py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center justify-center gap-2"
+                                    title="Calcular y liquidar finiquito completo por despido"
+                                  >
+                                    <UserMinus className="w-3.5 h-3.5 text-rose-600" />
+                                    <span>Tramitar despido y liquidar finiquito</span>
+                                  </button>
                                 </div>
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {/* HISTORIAL DE BAJAS LABORALES Y FINIQUITOS ABONADOS */}
+                      {dismissedHiredList.length > 0 && (
+                        <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                            <div>
+                              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                                <UserMinus className="w-5 h-5 text-rose-600" />
+                                <span>Historial de bajas laborales y finiquitos liquidados</span>
+                              </h3>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Relación de empleados dados de baja en la empresa con detalle del finiquito abonado y justificante contable.
+                              </p>
+                            </div>
+                            <span className="text-xs font-bold font-mono px-3 py-1 bg-rose-50 text-rose-900 border border-rose-200 rounded-full self-start sm:self-auto">
+                              {dismissedHiredList.length} {dismissedHiredList.length === 1 ? 'baja registrada' : 'bajas registradas'}
+                            </span>
+                          </div>
+
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
+                                  <th className="p-3.5">Empleado / Puesto</th>
+                                  <th className="p-3.5">Fecha contratación</th>
+                                  <th className="p-3.5">Fecha despido</th>
+                                  <th className="p-3.5">Concepto bancario</th>
+                                  <th className="p-3.5 text-right">Total Finiquito</th>
+                                  <th className="p-3.5 text-center">Estado</th>
+                                  <th className="p-3.5 text-right">Documento</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 font-medium">
+                                {dismissedHiredList.map((emp) => {
+                                  const fin = emp.finiquitoData;
+                                  const dismissalDateFormatted = emp.dismissalDate 
+                                    ? new Date(emp.dismissalDate).toLocaleDateString("es-ES") 
+                                    : (fin?.dismissalDate ? new Date(fin.dismissalDate).toLocaleDateString("es-ES") : "Liquidado");
+                                  const hireDateFormatted = emp.hireDate 
+                                    ? new Date(emp.hireDate).toLocaleDateString("es-ES") 
+                                    : "N/A";
+                                  const totalAmount = fin?.totalFiniquito || 0;
+
+                                  return (
+                                    <tr key={emp.id} className="hover:bg-slate-50/80 transition">
+                                      <td className="p-3.5">
+                                        <div className="flex items-center gap-2.5">
+                                          <img
+                                            src={emp.avatarUrl}
+                                            alt={emp.employeeName}
+                                            referrerPolicy="no-referrer"
+                                            className="w-8 h-8 rounded-xl object-cover border border-slate-200 shrink-0"
+                                            onError={(e) => {
+                                              const target = e.currentTarget as HTMLImageElement;
+                                              if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                                            }}
+                                          />
+                                          <div>
+                                            <div className="font-bold text-slate-900">{emp.employeeName}</div>
+                                            <span className="text-[10px] text-slate-500 uppercase font-semibold">
+                                              {emp.role === "camionero"
+                                                ? "Camionero"
+                                                : emp.role === "carretillero"
+                                                  ? "Carretillero"
+                                                  : emp.role === "mozo_almacen"
+                                                    ? "Mozo de almacén"
+                                                    : "Operario"}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="p-3.5 font-mono text-slate-600">
+                                        {hireDateFormatted}
+                                      </td>
+                                      <td className="p-3.5 font-mono text-slate-900 font-semibold">
+                                        {dismissalDateFormatted}
+                                      </td>
+                                      <td className="p-3.5 text-slate-600 max-w-xs truncate" title={fin?.bankConcept || `Finiquito por despido — ${emp.employeeName}`}>
+                                        «{fin?.bankConcept || `Finiquito por despido — ${emp.employeeName}`}»
+                                      </td>
+                                      <td className="p-3.5 font-mono text-right font-black text-emerald-700">
+                                        {formatNumber(totalAmount)} €
+                                      </td>
+                                      <td className="p-3.5 text-center">
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                          Baja liquidada
+                                        </span>
+                                      </td>
+                                      <td className="p-3.5 text-right">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setActiveDocumentModal({
+                                              type: "finiquito_document",
+                                              hiredEmployee: emp,
+                                              finiquitoData: fin,
+                                              studentName:
+                                                currentUser.name ||
+                                                data?.company?.name ||
+                                                "Alumno",
+                                              employeeName: emp.employeeName,
+                                            })
+                                          }
+                                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                                        >
+                                          <Receipt className="w-3.5 h-3.5 text-amber-300" />
+                                          <span>Ver finiquito (PDF)</span>
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -6186,6 +6408,288 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           data={activeDocumentModal}
           onClose={() => setActiveDocumentModal(null)}
         />
+      )}
+
+      {/* EMPLOYEE DISMISSAL & FINIQUITO CONFIRMATION MODAL */}
+      {dismissModalEmployee && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 z-50 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+            {/* Modal Header */}
+            <div className="bg-slate-900 text-white p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center">
+                  <UserMinus className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">
+                    Tramitación de Despido y Liquidación de Finiquito
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Cálculo oficial de haberes, compensación de vacaciones y liquidación económica
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!dismissModalSubmitting) {
+                    setDismissModalEmployee(null);
+                    setDismissFiniquitoPreview(null);
+                    setDismissModalError(null);
+                  }
+                }}
+                disabled={dismissModalSubmitting}
+                className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 overflow-y-auto space-y-5 text-xs text-slate-700">
+              {/* Employee Summary Card */}
+              <div className="flex items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+                <img
+                  src={dismissModalEmployee.avatarUrl}
+                  alt={dismissModalEmployee.employeeName}
+                  referrerPolicy="no-referrer"
+                  className="w-14 h-14 rounded-2xl object-cover border border-slate-300 shrink-0"
+                  onError={(e) => {
+                    const target = e.currentTarget as HTMLImageElement;
+                    if (target.src !== SVG_FALLBACK) target.src = SVG_FALLBACK;
+                  }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm text-slate-900 truncate">
+                      {dismissModalEmployee.employeeName}
+                    </h4>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                      {dismissModalEmployee.role || "Operario"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-[11px] text-slate-600">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Fecha de alta:</span>
+                      <strong className="font-mono text-slate-800">
+                        {dismissModalEmployee.hireDate ? dismissModalEmployee.hireDate.split("T")[0] : "No registrada"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Salario pactado (mes):</span>
+                      <strong className="font-mono text-slate-800">
+                        {formatNumber(dismissModalEmployee.grossSalaryMonthly || 0)} €
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Régimen de cobro:</span>
+                      <span className="font-semibold text-slate-800">12 mensualidades</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Loading State */}
+              {dismissModalLoading && (
+                <div className="py-12 text-center space-y-3">
+                  <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto" />
+                  <p className="text-xs font-semibold text-slate-600">
+                    Calculando desglose de conceptos contractuales y vacaciones...
+                  </p>
+                </div>
+              )}
+
+              {/* Error Alert Box */}
+              {dismissModalError && (
+                <div className="p-4 bg-rose-50 border border-rose-300 rounded-2xl text-rose-900 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <div className="font-bold">No se puede completar el cálculo o tramitación:</div>
+                    <p className="text-[11px] leading-relaxed">{dismissModalError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Calculation Breakdown */}
+              {dismissFiniquitoPreview && !dismissModalLoading && (() => {
+                const sal = dismissFiniquitoPreview.salaryProportional;
+                const vac = dismissFiniquitoPreview.vacation;
+                const companyBal = Number(data?.company?.balance || 0);
+                const hasSufficientFunds = companyBal >= dismissFiniquitoPreview.totalFiniquito;
+
+                return (
+                  <div className="space-y-4">
+                    <div className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-2 flex items-center justify-between">
+                      <span>Desglose de partidas del finiquito</span>
+                      <span className="text-[10px] font-normal text-slate-500 font-mono">
+                        Fecha de baja: {dismissFiniquitoPreview.dismissalDate.split("T")[0]}
+                      </span>
+                    </div>
+
+                    {/* Partida 1: Salario proporcional pendiente */}
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                            <Calendar className="w-4 h-4 text-blue-600" />
+                            <span>1. Salario proporcional pendiente</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Días trabajados desde el día 1 del mes (o fecha de alta) hasta el día del despido: <strong>{sal.startDate}</strong> al <strong>{sal.endDate}</strong> ({sal.daysWorked} de {sal.daysInMonth} días).
+                          </p>
+                        </div>
+                        <div className="font-mono font-bold text-sm text-slate-900">
+                          {formatNumber(sal.amount)} €
+                        </div>
+                      </div>
+
+                      {sal.alreadyPaidInPayroll ? (
+                        <div className="p-2 bg-blue-50 border border-blue-200 rounded-xl text-[11px] text-blue-900 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+                          <span>La nómina de este mes ya fue abonada previamente al trabajador. No se duplica importe en el finiquito.</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/60 font-mono">
+                          <span>Base diaria: {formatNumber(sal.dailyWage)} €/día</span>
+                          <span>{sal.daysWorked} días × {formatNumber(sal.dailyWage)} € = {formatNumber(sal.amount)} €</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Partida 2: Vacaciones no disfrutadas */}
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                            <Clock className="w-4 h-4 text-purple-600" />
+                            <span>2. Vacaciones no disfrutadas</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Devengadas en el año natural ({vac.accrualStartDate} al {vac.accrualEndDate}) a razón de 30 días/año ({vac.daysWorkedInYear} días computados).
+                          </p>
+                        </div>
+                        <div className="font-mono font-bold text-sm text-slate-900">
+                          {formatNumber(vac.amount)} €
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 p-2.5 bg-white rounded-xl border border-slate-200 text-center text-[11px] font-mono">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-sans">Devengadas</span>
+                          <strong className="text-slate-800">{vac.daysAccrued} d.</strong>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-sans">Disfrutadas</span>
+                          <strong className="text-slate-800">{vac.daysTaken} d.</strong>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-purple-700 block font-sans font-bold">Pendientes de pago</span>
+                          <strong className="text-purple-900">{vac.daysPending} d.</strong>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/60 font-mono">
+                        <span>Retribución diaria (12 pagas): {formatNumber(vac.dailyWage)} €/día</span>
+                        <span>{vac.daysPending} d. × {formatNumber(vac.dailyWage)} € = {formatNumber(vac.amount)} €</span>
+                      </div>
+                    </div>
+
+                    {/* Partida 3: Otros conceptos */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex justify-between items-center text-[11px]">
+                      <div>
+                        <span className="font-bold text-slate-800">3. Otros conceptos salariales pendientes</span>
+                        <span className="text-slate-500 block text-[10px]">Sin otros conceptos salariales devengados contemplados en el simulador</span>
+                      </div>
+                      <span className="font-mono font-bold text-slate-700">0,00 €</span>
+                    </div>
+
+                    {/* Partida 4: Indemnización por despido */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex justify-between items-center text-[11px]">
+                      <div>
+                        <span className="font-bold text-slate-800">4. Indemnización por extinción / despido</span>
+                        <span className="text-slate-500 block text-[10px]">Diferenciada del finiquito; sin regla de indemnización aplicable en la simulación</span>
+                      </div>
+                      <span className="font-mono font-bold text-slate-700">0,00 €</span>
+                    </div>
+
+                    {/* Total Liquidación Box */}
+                    <div className="p-4 bg-emerald-50 border-2 border-emerald-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono">
+                      <div>
+                        <span className="text-xs font-sans font-bold text-emerald-950 uppercase block">
+                          Total líquido a pagar al empleado:
+                        </span>
+                        <span className="text-[11px] text-emerald-800 font-sans">
+                          Adeudo automático bajo el concepto:
+                        </span>
+                        <div className="text-[11px] font-semibold text-emerald-950 mt-0.5">
+                          «Finiquito por despido — {dismissModalEmployee.employeeName}»
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black text-emerald-900 bg-white border border-emerald-400 px-4 py-2 rounded-xl shadow-xs self-start sm:self-auto">
+                        {formatNumber(dismissFiniquitoPreview.totalFiniquito)} €
+                      </div>
+                    </div>
+
+                    {/* Saldo y Verificación de Tesorería */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between text-xs ${
+                      hasSufficientFunds ? 'bg-slate-50 border-slate-200' : 'bg-rose-50 border-rose-300 text-rose-900'
+                    }`}>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Saldo bancario disponible de la empresa:</span>
+                        <strong className="font-mono text-sm text-slate-900">{formatNumber(companyBal)} €</strong>
+                      </div>
+                      {!hasSufficientFunds && (
+                        <div className="text-right text-rose-700 font-bold text-[11px] max-w-xs">
+                          ⚠️ Saldo insuficiente en la cuenta de la empresa para abonar el finiquito ({formatNumber(dismissFiniquitoPreview.totalFiniquito)} €).
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissModalEmployee(null);
+                  setDismissFiniquitoPreview(null);
+                  setDismissModalError(null);
+                }}
+                disabled={dismissModalSubmitting}
+                className="px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDismissal}
+                disabled={
+                  dismissModalLoading ||
+                  dismissModalSubmitting ||
+                  !dismissFiniquitoPreview ||
+                  Boolean(dismissModalError) ||
+                  (dismissFiniquitoPreview && Number(data?.company?.balance || 0) < dismissFiniquitoPreview.totalFiniquito)
+                }
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-2"
+              >
+                {dismissModalSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                    <span>Abonando finiquito y tramitando baja...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserMinus className="w-4 h-4 text-white" />
+                    <span>Confirmar despido y abonar finiquito</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* NAVE FLOOR PLAN MODAL */}

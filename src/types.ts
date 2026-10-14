@@ -855,6 +855,47 @@ export interface JobListing {
   createdAt?: string;
 }
 
+export interface FiniquitoData {
+  employeeId: string;
+  employeeName: string;
+  hireDate: string;
+  dismissalDate: string;
+  grossSalaryMonthly: number;
+  salaryProportional: {
+    startDate: string;
+    endDate: string;
+    daysWorked: number;
+    daysInMonth: number;
+    dailyWage: number;
+    amount: number;
+    alreadyPaidInPayroll: boolean;
+    payrollRecordId?: string;
+  };
+  vacation: {
+    accrualStartDate: string;
+    accrualEndDate: string;
+    daysWorkedInYear: number;
+    daysInYear: number;
+    daysAccrued: number;
+    daysTaken: number;
+    daysPending: number;
+    dailyWage: number;
+    amount: number;
+  };
+  otherConcepts: {
+    description: string;
+    amount: number;
+  };
+  severancePay: {
+    description: string;
+    amount: number;
+  };
+  totalFiniquito: number;
+  transferId?: string;
+  paidAt?: string;
+  bankConcept?: string;
+}
+
 export interface HiredEmployee {
   id: string;
   jobListingId: string;
@@ -873,6 +914,10 @@ export interface HiredEmployee {
   assignedWarehouseIndex?: number;
   shift?: number;
   avatarUrl?: string;
+  status?: 'activo' | 'despedido';
+  dismissalDate?: string;
+  finiquitoData?: FiniquitoData;
+  vacationDaysTaken?: number;
 }
 
 export interface PurchasedVehicle {

@@ -9,11 +9,11 @@ import {
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock, Truck, Download, RefreshCw
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord, RelocationInvoice, PurchasedVehicle } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord, RelocationInvoice, PurchasedVehicle, FiniquitoData } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 
-export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'machinery_relocation_invoice' | 'vehicle_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip';
+export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'machinery_relocation_invoice' | 'vehicle_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip' | 'finiquito_document';
 
 export interface DocumentViewerData {
   type: DocumentType;
@@ -22,6 +22,7 @@ export interface DocumentViewerData {
   machineryAcquisition?: MachineryAcquisition;
   relocationInvoice?: RelocationInvoice;
   vehicle?: PurchasedVehicle;
+  finiquitoData?: FiniquitoData;
   
   // Obligation statement fields
   obligation?: PaymentObligation;
@@ -71,6 +72,7 @@ export default function DocumentViewerModal({ data, onClose }: DocumentViewerMod
     if (data.type === 'loan_statement') return `Extracto_Prestamo_Bancario_${data.loan?.id || 'PR'}`;
     if (data.type === 'transfer_statement') return `Extracto_Transferencia_${data.transfer?.id || 'TX'}`;
     if (data.type === 'payroll_payslip') return `Nomina_${data.payrollRecord?.periodMonth || 'Mes'}-${data.payrollRecord?.periodYear || '2026'}_${data.employeeName || data.hiredEmployee?.employeeName || 'Empleado'}`;
+    if (data.type === 'finiquito_document') return `Finiquito_${data.employeeName || data.hiredEmployee?.employeeName || 'Empleado'}_${data.finiquitoData?.dismissalDate ? data.finiquitoData.dismissalDate.split('T')[0] : '2026'}`;
     return 'Documento_Contable';
   };
 
@@ -1474,6 +1476,221 @@ Estado Contable: EJECUTADO Y ABONADO
 
                 <div className="pt-6 border-t border-slate-200 text-center text-[10px] text-slate-400">
                   Documento e impreso oficial de nómina generado por el simulador contable corporativo.
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 7: OFFICIAL LIQUIDATION AND FINIQUITO DOCUMENT */}
+          {data.type === 'finiquito_document' && (() => {
+            const emp = data.hiredEmployee;
+            const fin = data.finiquitoData || emp?.finiquitoData;
+            const empName = data.employeeName || emp?.employeeName || 'Trabajador/a';
+            const compName = data.studentName || 'Empresa';
+            const compCif = data.studentNifCif || 'B-99887766';
+            
+            const hireDateStr = emp?.hireDate ? new Date(emp.hireDate).toLocaleDateString('es-ES') : (fin?.hireDate ? new Date(fin.hireDate).toLocaleDateString('es-ES') : '-');
+            const dismissalDateStr = fin?.dismissalDate ? new Date(fin.dismissalDate).toLocaleDateString('es-ES') : new Date().toLocaleDateString('es-ES');
+            
+            const grossMonthly = fin?.grossSalaryMonthly || emp?.grossSalaryMonthly || 0;
+            const totalFiniquito = fin?.totalFiniquito || 0;
+            const salProp = fin?.salaryProportional;
+            const vac = fin?.vacation;
+
+            return (
+              <div className="space-y-6 text-slate-800">
+                {/* HEADER */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b border-slate-200 pb-5">
+                  <div>
+                    <span className="text-[10px] font-mono tracking-widest text-rose-700 font-bold uppercase block mb-1">
+                      DOCUMENTO OFICIAL DE LIQUIDACIÓN Y EXTINCIÓN LABORAL
+                    </span>
+                    <h2 className="text-xl font-black text-slate-950 uppercase tracking-tight">
+                      RECIBO DE SALDO Y FINIQUITO
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Conforme al Real Decreto Legislativo 2/2015 (Estatuto de los Trabajadores) • 12 mensualidades anuales
+                    </p>
+                  </div>
+                  <div className="text-right sm:text-right font-mono self-end sm:self-auto shrink-0 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+                    <div className="text-[10px] text-slate-400 font-sans uppercase font-bold">Ref. Documental</div>
+                    <div className="font-bold text-slate-900">FIN-{emp?.id ? String(emp.id).slice(-6) : '2026'}-{dismissalDateStr.replace(/\//g, '')}</div>
+                    <div className="text-[10px] text-slate-500 font-sans mt-0.5">Fecha baja: <strong>{dismissalDateStr}</strong></div>
+                  </div>
+                </div>
+
+                {/* IDENTIFICACIÓN EMPRESA Y TRABAJADOR */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      Datos de la Empresa Pagadora
+                    </span>
+                    <div className="font-bold text-slate-950 text-sm">{compName}</div>
+                    <div><span className="text-slate-500">NIF / CIF:</span> <strong className="font-mono">{compCif}</strong></div>
+                    <div><span className="text-slate-500">Régimen:</span> <span>General de la Seguridad Social</span></div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      Datos del Trabajador
+                    </span>
+                    <div className="font-bold text-slate-950 text-sm">{empName}</div>
+                    <div><span className="text-slate-500">Puesto / Categoría:</span> <strong className="capitalize">{emp?.role === 'camionero' ? 'Camionero' : emp?.role === 'carretillero' ? 'Carretillero' : emp?.role === 'mozo_almacen' ? 'Mozo de almacén' : 'Operario industrial'}</strong></div>
+                    <div><span className="text-slate-500">Fecha de alta:</span> <strong className="font-mono">{hireDateStr}</strong></div>
+                    <div><span className="text-slate-500">Salario pactado (mes):</span> <strong className="font-mono">{formatNumber(grossMonthly)} €</strong> (12 pagas/año)</div>
+                  </div>
+                </div>
+
+                {/* DESGLOSE DE CONCEPTOS DE FINIQUITO */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="bg-slate-900 text-white px-4 py-2.5 font-bold text-xs uppercase tracking-wider flex justify-between items-center">
+                    <span>Desglose de partidas y liquidación de haberes</span>
+                    <span className="text-[11px] font-mono text-emerald-300">Moneda: EUR (€)</span>
+                  </div>
+
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200 text-[11px]">
+                        <th className="p-3">Concepto Liquidado</th>
+                        <th className="p-3">Período / Base computada</th>
+                        <th className="p-3 text-right">Días computados</th>
+                        <th className="p-3 text-right">Salario / día</th>
+                        <th className="p-3 text-right">Total Partida</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {/* Concepto 1: Salario proporcional pendiente */}
+                      <tr className="hover:bg-slate-50">
+                        <td className="p-3 font-medium">
+                          <div className="font-bold text-slate-900">Salario proporcional pendiente</div>
+                          <span className="text-[10px] text-slate-500">
+                            {salProp?.alreadyPaidInPayroll
+                              ? 'Nómina mensual ya liquidada con anterioridad en este período'
+                              : 'Días trabajados en el mes de baja devengados y no liquidados'}
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono text-slate-600">
+                          {salProp ? `${salProp.startDate} al ${salProp.endDate}` : '-'}
+                        </td>
+                        <td className="p-3 font-mono text-right text-slate-700">
+                          {salProp?.alreadyPaidInPayroll ? '0 días' : `${salProp?.daysWorked || 0} / ${salProp?.daysInMonth || 30} d.`}
+                        </td>
+                        <td className="p-3 font-mono text-right text-slate-700">
+                          {formatNumber(salProp?.dailyWage || 0)} €
+                        </td>
+                        <td className="p-3 font-mono font-bold text-right text-slate-900">
+                          {formatNumber(salProp?.amount || 0)} €
+                        </td>
+                      </tr>
+
+                      {/* Concepto 2: Vacaciones devengadas y no disfrutadas */}
+                      <tr className="hover:bg-slate-50">
+                        <td className="p-3 font-medium">
+                          <div className="font-bold text-slate-900">Vacaciones no disfrutadas</div>
+                          <span className="text-[10px] text-slate-500">
+                            30 días/año • {vac?.daysAccrued || 0} devengados - {vac?.daysTaken || 0} disfrutados
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono text-slate-600">
+                          {vac ? `${vac.accrualStartDate} al ${vac.accrualEndDate}` : '-'}
+                        </td>
+                        <td className="p-3 font-mono text-right text-slate-700">
+                          {vac?.daysPending || 0} d. pendientes
+                        </td>
+                        <td className="p-3 font-mono text-right text-slate-700">
+                          {formatNumber(vac?.dailyWage || 0)} €
+                        </td>
+                        <td className="p-3 font-mono font-bold text-right text-slate-900">
+                          {formatNumber(vac?.amount || 0)} €
+                        </td>
+                      </tr>
+
+                      {/* Concepto 3: Otros conceptos devengados */}
+                      <tr className="hover:bg-slate-50 text-slate-500">
+                        <td className="p-3">
+                          <div className="font-bold text-slate-700">Otros conceptos salariales</div>
+                          <span className="text-[10px]">{fin?.otherConcepts?.description || 'Sin otros conceptos devengados'}</span>
+                        </td>
+                        <td className="p-3 font-mono">-</td>
+                        <td className="p-3 font-mono text-right">-</td>
+                        <td className="p-3 font-mono text-right">-</td>
+                        <td className="p-3 font-mono font-bold text-right text-slate-700">
+                          {formatNumber(fin?.otherConcepts?.amount || 0)} €
+                        </td>
+                      </tr>
+
+                      {/* Concepto 4: Indemnización por despido (diferenciada del finiquito) */}
+                      <tr className="hover:bg-slate-50 text-slate-500">
+                        <td className="p-3">
+                          <div className="font-bold text-slate-700">Indemnización por extinción / despido</div>
+                          <span className="text-[10px]">{fin?.severancePay?.description || 'Diferenciada del finiquito; sin regla de indemnización en la simulación'}</span>
+                        </td>
+                        <td className="p-3 font-mono">-</td>
+                        <td className="p-3 font-mono text-right">-</td>
+                        <td className="p-3 font-mono text-right">-</td>
+                        <td className="p-3 font-mono font-bold text-right text-slate-700">
+                          {formatNumber(fin?.severancePay?.amount || 0)} €
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* TOTAL FINIQUITO A ABONAR */}
+                <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-4 flex justify-between items-center font-mono">
+                  <div>
+                    <span className="text-xs font-sans font-bold text-emerald-950 uppercase block">Total líquido de finiquito liquidado y abonado:</span>
+                    <span className="text-[11px] text-emerald-800 font-sans">
+                      Transferencia bancaria con concepto: «{fin?.bankConcept || `Finiquito por despido — ${empName}`}»
+                    </span>
+                  </div>
+                  <span className="text-2xl font-black px-4 py-1.5 rounded-lg border text-emerald-900 bg-white border-emerald-400 shadow-xs">
+                    {formatNumber(totalFiniquito)} €
+                  </span>
+                </div>
+
+                {/* JUSTIFICANTE BANCARIO */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2 text-xs">
+                  <h4 className="font-bold text-slate-800 text-[11px] uppercase tracking-wider border-b border-slate-200 pb-1.5">
+                    Registro de pago y trazabilidad financiera
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono">
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">ID Transferencia / Movimiento</span>
+                      <span className="font-bold text-slate-900 break-all">{fin?.transferId || 'TX-FINIQUITO'}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">Fecha y hora de cargo</span>
+                      <span className="font-bold text-slate-900">{fin?.paidAt ? new Date(fin.paidAt).toLocaleString('es-ES') : dismissalDateStr}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-sans block">Estado en tesorería</span>
+                      <span className="font-bold text-emerald-700">CARGADO EN CUENTA</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* DECLARACIÓN DE FINIQUITO Y FIRMAS */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-white text-[11px] text-slate-600 space-y-3 leading-relaxed">
+                  <p>
+                    El trabajador/a declara haber percibido en su cuenta corriente la totalidad de las cantidades consignadas en este documento en concepto de liquidación, saldo y finiquito por la extinción de su contrato de trabajo, quedando totalmente saldada y finiquitada cualquier deuda de carácter salarial o indemnizatorio dimanante de la relación laboral que unía a ambas partes.
+                  </p>
+                  <div className="grid grid-cols-2 gap-8 pt-4 border-t border-slate-100 text-center text-xs">
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-800">Por la Empresa</div>
+                      <div className="font-mono text-[10px] text-slate-400">Firmado digitalmente</div>
+                      <div className="font-semibold text-slate-700">{compName}</div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-800">El Trabajador / Trabajadora</div>
+                      <div className="font-mono text-[10px] text-slate-400">Firma electrónica verificada</div>
+                      <div className="font-semibold text-slate-700">{empName}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Documento de liquidación y finiquito emitido conforme a las normas contables y laborales del simulador empresarial.
                 </div>
               </div>
             );

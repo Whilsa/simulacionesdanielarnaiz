@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -423,6 +423,10 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS puesto VARCHAR(100);
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS turno INT DEFAULT 1;
       ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS estado VARCHAR(50) DEFAULT 'activo';
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS fecha_despido TIMESTAMPTZ;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS finiquito_data JSONB;
+      ALTER TABLE empleados_contratados ADD COLUMN IF NOT EXISTS dias_vacaciones_disfrutadas INT DEFAULT 0;
       CREATE INDEX IF NOT EXISTS idx_empleados_contratados_oferta_id ON empleados_contratados (oferta_id);
       DO $$
       BEGIN
@@ -1468,11 +1472,13 @@ async function syncJobListingToSupabase(job: JobListing) {
 async function syncHiredEmployeeToSupabase(emp: HiredEmployee, client?: pg.PoolClient) {
   if (!dbPool && !client) return;
   try {
+    const finiquitoJson = emp.finiquitoData ? JSON.stringify(emp.finiquitoData) : null;
     const queryText = `INSERT INTO empleados_contratados (
         id, oferta_id, alumno_id, alumno_nombre, nombre_empleado, puesto, genero, sueldo_bruto_mensual, edad, fecha_contratacion,
-        maquinaria_asignada_id, maquinaria_asignada_titulo, vehiculo_asignado_id, vehiculo_asignado_titulo, almacen_asignado_index, turno, avatar_url
+        maquinaria_asignada_id, maquinaria_asignada_titulo, vehiculo_asignado_id, vehiculo_asignado_titulo, almacen_asignado_index, turno, avatar_url,
+        estado, fecha_despido, finiquito_data, dias_vacaciones_disfrutadas
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        ON CONFLICT (id) DO UPDATE SET
          alumno_id = EXCLUDED.alumno_id,
          alumno_nombre = EXCLUDED.alumno_nombre,
@@ -1488,7 +1494,11 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee, client?: pg.PoolC
          vehiculo_asignado_titulo = EXCLUDED.vehiculo_asignado_titulo,
          almacen_asignado_index = EXCLUDED.almacen_asignado_index,
          turno = EXCLUDED.turno,
-         avatar_url = EXCLUDED.avatar_url`;
+         avatar_url = EXCLUDED.avatar_url,
+         estado = EXCLUDED.estado,
+         fecha_despido = EXCLUDED.fecha_despido,
+         finiquito_data = EXCLUDED.finiquito_data,
+         dias_vacaciones_disfrutadas = EXCLUDED.dias_vacaciones_disfrutadas`;
     const params = [
       emp.id,
       emp.jobListingId,
@@ -1506,7 +1516,11 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee, client?: pg.PoolC
       emp.assignedVehicleTitle || null,
       emp.assignedWarehouseIndex !== undefined ? emp.assignedWarehouseIndex : null,
       emp.shift || 1,
-      emp.avatarUrl || null
+      emp.avatarUrl || null,
+      emp.status || 'activo',
+      parseNullableSafeDate(emp.dismissalDate),
+      finiquitoJson,
+      emp.vacationDaysTaken || 0
     ];
 
     if (client) {
@@ -1521,6 +1535,15 @@ async function syncHiredEmployeeToSupabase(emp: HiredEmployee, client?: pg.PoolC
 }
 
 function mapHiredEmployeeRow(row: any): HiredEmployee {
+  let finiquitoObj: any = undefined;
+  if (row.finiquito_data) {
+    try {
+      finiquitoObj = typeof row.finiquito_data === 'string' ? JSON.parse(row.finiquito_data) : row.finiquito_data;
+    } catch (e) {
+      finiquitoObj = undefined;
+    }
+  }
+
   return {
     id: String(row.id),
     jobListingId: String(row.oferta_id),
@@ -1538,7 +1561,11 @@ function mapHiredEmployeeRow(row: any): HiredEmployee {
     assignedVehicleTitle: row.vehiculo_asignado_titulo ? String(row.vehiculo_asignado_titulo) : undefined,
     assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
     shift: Number(row.turno || 1),
-    avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined
+    avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
+    status: (row.estado || 'activo') as 'activo' | 'despedido',
+    dismissalDate: row.fecha_despido ? new Date(row.fecha_despido).toISOString() : undefined,
+    finiquitoData: finiquitoObj,
+    vacationDaysTaken: row.dias_vacaciones_disfrutadas !== undefined && row.dias_vacaciones_disfrutadas !== null ? Number(row.dias_vacaciones_disfrutadas) : 0
   };
 }
 
@@ -1555,7 +1582,7 @@ async function syncEmployeesFromSupabase(db?: DatabaseSchema): Promise<HiredEmpl
         currentDb.hiredEmployees = resEmp.rows.map(row => {
           const mapped = mapHiredEmployeeRow(row);
           const local = localMap.get(mapped.id);
-          if (local) {
+          if (local && mapped.status !== 'despedido') {
             // If local has assigned machinery/vehicle/warehouse and Supabase hasn't caught up, keep local and persist to PG
             if (local.assignedMachineryId && !mapped.assignedMachineryId) {
               mapped.assignedMachineryId = local.assignedMachineryId;
@@ -4896,10 +4923,10 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
   if (dbPool) {
     // 1. Process Payroll on day 26 or later of the corresponding month
     if (currentDay >= 26) {
-      // Find students who have hired employees
-      let studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
+      // Find students who have hired active employees
+      let studentsWithEmployees = new Set((db.hiredEmployees || []).filter(e => e.status !== 'despedido').map(e => e.studentId));
       try {
-        const empRes = await dbPool.query('SELECT DISTINCT alumno_id FROM empleados_contratados WHERE alumno_id IS NOT NULL');
+        const empRes = await dbPool.query("SELECT DISTINCT alumno_id FROM empleados_contratados WHERE alumno_id IS NOT NULL AND (estado IS NULL OR estado != 'despedido')");
         if (empRes && empRes.rows) {
           empRes.rows.forEach((r: any) => {
             if (r.alumno_id) studentsWithEmployees.add(r.alumno_id);
@@ -4922,10 +4949,10 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
             const studentRow = studentRes.rows[0];
             if (studentRow.role !== 'student') return;
 
-            // Fetch hired employees for this student
+            // Fetch active hired employees for this student (excluding dismissed)
             let myEmployees: any[] = [];
             const empDbRes = await client.query(
-              'SELECT * FROM empleados_contratados WHERE alumno_id = $1 ORDER BY fecha_contratacion ASC',
+              "SELECT * FROM empleados_contratados WHERE alumno_id = $1 AND (estado IS NULL OR estado != 'despedido') ORDER BY fecha_contratacion ASC",
               [studentId]
             );
             if (empDbRes && empDbRes.rows && empDbRes.rows.length > 0) {
@@ -4938,10 +4965,11 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
                 jobOfferId: r.oferta_id,
                 gender: r.genero,
                 age: r.edad,
-                role: r.puesto
+                role: r.puesto,
+                status: r.estado || 'activo'
               }));
             } else {
-              myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+              myEmployees = (db.hiredEmployees || []).filter(e => e.studentId === studentId && e.status !== 'despedido');
             }
 
             if (myEmployees.length === 0) return;
@@ -5405,13 +5433,13 @@ async function checkAndProcessAutomatedPayrollAndTaxes(db: DatabaseSchema): Prom
   // Fallback in-memory implementation when PostgreSQL is not configured
   // 1. Process Payroll on day 26 or later of the corresponding month
   if (currentDay >= 26) {
-    const studentsWithEmployees = new Set(db.hiredEmployees.map(e => e.studentId));
+    const studentsWithEmployees = new Set(db.hiredEmployees.filter(e => e.status !== 'despedido').map(e => e.studentId));
 
     for (const studentId of studentsWithEmployees) {
       const student = db.users.find(u => u.id === studentId && u.role === 'student');
       if (!student) continue;
 
-      const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId);
+      const myEmployees = db.hiredEmployees.filter(e => e.studentId === studentId && e.status !== 'despedido');
       if (myEmployees.length === 0) continue;
 
       // Verification system: filter out employees who have ALREADY been paid for currentMonth/currentYear
@@ -13396,7 +13424,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   }
 
   // 4. Upcoming Payroll & Derived Tax Obligations (Nóminas el día 26 del mes correspondiente y tributos el 20 TGSS / 15 AEAT)
-  const studentEmps = (db.hiredEmployees || []).filter(e => e.studentId === studentId || (student && (e.studentId === student.id || e.studentId === student.username)));
+  const studentEmps = (db.hiredEmployees || []).filter(e => (e.studentId === studentId || (student && (e.studentId === student.id || e.studentId === student.username))) && e.status !== 'despedido');
   if (studentEmps.length > 0) {
     const curYear = now.getFullYear();
     const curMonth = now.getMonth(); // 0-indexed
@@ -16282,6 +16310,12 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
             throw err;
           }
 
+          if (empRow.estado === 'despedido') {
+            const err: any = new Error('El empleado está despedido y no se le puede asignar maquinaria');
+            err.statusCode = 400;
+            throw err;
+          }
+
           const studentOwnerId = empRow.alumno_id;
           let targetMacId: string | null = null;
           let targetMacTitle: string | null = null;
@@ -16389,6 +16423,11 @@ app.put('/api/student/employees/:id/assign-machinery', async (req, res) => {
           err.statusCode = 403;
           throw err;
         }
+        if (emp.status === 'despedido') {
+          const err: any = new Error('El empleado está despedido y no se le puede asignar maquinaria');
+          err.statusCode = 400;
+          throw err;
+        }
         if (machineryId && machineryId !== 'unassign' && machineryId !== '') {
           const mac = (db.machineryAcquisitions || []).find(m => m.id === machineryId || m.machineryId === machineryId);
           if (!mac) {
@@ -16438,7 +16477,7 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
           // 1. Bloquear los empleados del alumno en orden determinista (id ASC) con FOR UPDATE
           const empRes = await client.query(
             `SELECT * FROM empleados_contratados 
-             WHERE alumno_id = $1 
+             WHERE alumno_id = $1 AND (estado IS NULL OR estado != 'despedido')
              ORDER BY id ASC 
              FOR UPDATE`,
             [studentId]
@@ -16551,7 +16590,7 @@ app.post('/api/student/employees/auto-assign-all', async (req, res) => {
         if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
 
         const studentMachines = db.machineryAcquisitions.filter(m => String(m.studentId) === String(studentId));
-        const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId) && (e.role === 'operario' || !e.role));
+        const studentEmps = db.hiredEmployees.filter(e => String(e.studentId) === String(studentId) && e.status !== 'despedido' && (e.role === 'operario' || !e.role));
 
         if (studentMachines.length === 0) {
           const err: any = new Error('No tienes maquinaria industrial adquirida');
@@ -16615,7 +16654,7 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
           // 1. Bloquear los empleados del alumno en orden determinista (id ASC) con FOR UPDATE
           const empRes = await client.query(
             `SELECT * FROM empleados_contratados 
-             WHERE alumno_id = $1 
+             WHERE alumno_id = $1 AND (estado IS NULL OR estado != 'despedido')
              ORDER BY id ASC 
              FOR UPDATE`,
             [studentId]
@@ -16626,7 +16665,7 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
           const updateRes = await client.query(
             `UPDATE empleados_contratados 
              SET maquinaria_asignada_id = NULL, maquinaria_asignada_titulo = NULL 
-             WHERE alumno_id = $1 
+             WHERE alumno_id = $1 AND (estado IS NULL OR estado != 'despedido')
              RETURNING *`,
             [studentId]
           );
@@ -16685,6 +16724,499 @@ app.post('/api/student/employees/unassign-all', async (req, res) => {
   } catch (err: any) {
     console.error('[Unassign-all Error]:', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar desvinculación masiva de operarios' });
+  }
+});
+
+// ================= EMPLOYEE DISMISSAL & FINIQUITO CALCULATION =================
+
+function calculateEmployeeFiniquito(
+  emp: {
+    id: string;
+    employeeName: string;
+    studentId: string;
+    hireDate?: string | null;
+    grossSalaryMonthly: number;
+    vacationDaysTaken?: number;
+    status?: string;
+  },
+  db: DatabaseSchema,
+  dismissalDateInput?: string | Date
+): { error?: string; finiquitoData?: FiniquitoData } {
+  if (emp.status === 'despedido') {
+    return { error: 'El empleado ya se encuentra despedido y su finiquito fue liquidado previamente.' };
+  }
+
+  // Verificar datos contractuales imprescindibles
+  if (emp.grossSalaryMonthly === undefined || emp.grossSalaryMonthly === null || Number(emp.grossSalaryMonthly) <= 0) {
+    return { error: 'Falta información contractual imprescindible: salario bruto mensual pactado.' };
+  }
+  if (!emp.hireDate) {
+    return { error: 'Falta información contractual imprescindible: fecha de contratación registrada.' };
+  }
+
+  const dismissalDateObj = dismissalDateInput ? new Date(dismissalDateInput) : new Date();
+  if (isNaN(dismissalDateObj.getTime())) {
+    return { error: 'Fecha de despido inválida.' };
+  }
+
+  const hireDateObj = new Date(emp.hireDate);
+  if (isNaN(hireDateObj.getTime())) {
+    return { error: 'Fecha de contratación registrada inválida.' };
+  }
+
+  if (dismissalDateObj.getTime() < hireDateObj.getTime()) {
+    return { error: 'La fecha de despido no puede ser anterior a la fecha de contratación.' };
+  }
+
+  const dismissalYear = dismissalDateObj.getFullYear();
+  const dismissalMonth = dismissalDateObj.getMonth() + 1; // 1-12
+  const dismissalDay = dismissalDateObj.getDate();
+
+  const hireYear = hireDateObj.getFullYear();
+  const hireMonth = hireDateObj.getMonth() + 1;
+  const hireDay = hireDateObj.getDate();
+
+  const grossMonthly = Number(emp.grossSalaryMonthly);
+
+  // 1. Salario proporcional pendiente (desde el día 1 del mes del despido o fecha de contratación hasta fecha de despido, ambas inclusive)
+  const alreadyPaidInPayroll = isEmployeePayrollPaid(db, emp.studentId, emp.id, emp.employeeName, dismissalMonth, dismissalYear);
+  const daysInMonth = new Date(dismissalYear, dismissalMonth, 0).getDate();
+
+  let startYear = dismissalYear;
+  let startMonth = dismissalMonth;
+  let startDay = 1;
+
+  if (hireYear === dismissalYear && hireMonth === dismissalMonth && hireDay > 1) {
+    startDay = hireDay;
+  }
+
+  const startDateStr = `${startYear}-${String(startMonth).padStart(2, '0')}-${String(startDay).padStart(2, '0')}`;
+  const endDateStr = `${dismissalYear}-${String(dismissalMonth).padStart(2, '0')}-${String(dismissalDay).padStart(2, '0')}`;
+
+  const daysWorked = Math.max(1, dismissalDay - startDay + 1);
+  const dailyWage = Math.round((grossMonthly / daysInMonth) * 100) / 100;
+  const salaryAmount = alreadyPaidInPayroll ? 0 : Math.round((grossMonthly / daysInMonth) * daysWorked * 100) / 100;
+
+  // 2. Vacaciones no disfrutadas (30 días naturales / año)
+  const isLeap = ((dismissalYear % 4 === 0 && dismissalYear % 100 !== 0) || dismissalYear % 400 === 0);
+  const daysInYear = isLeap ? 366 : 365;
+
+  const accrualStartDateObj = (hireYear === dismissalYear)
+    ? new Date(hireYear, hireMonth - 1, hireDay)
+    : new Date(dismissalYear, 0, 1);
+
+  const accrualEndDateObj = new Date(dismissalYear, dismissalMonth - 1, dismissalDay);
+
+  const accrualStartDateStr = `${accrualStartDateObj.getFullYear()}-${String(accrualStartDateObj.getMonth() + 1).padStart(2, '0')}-${String(accrualStartDateObj.getDate()).padStart(2, '0')}`;
+  const accrualEndDateStr = endDateStr;
+
+  const diffTime = Math.max(0, accrualEndDateObj.getTime() - accrualStartDateObj.getTime());
+  const daysWorkedInYear = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+  const daysAccrued = Math.round(((daysWorkedInYear / daysInYear) * 30) * 100) / 100;
+  const daysTaken = Number(emp.vacationDaysTaken || 0);
+  const daysPending = Math.max(0, Math.round((daysAccrued - daysTaken) * 100) / 100);
+
+  // Retribución diaria de vacaciones (12 mensualidades al año): salario mensual / 30
+  const vacationDailyWage = Math.round((grossMonthly / 30) * 100) / 100;
+  const vacationAmount = Math.round(daysPending * (grossMonthly / 30) * 100) / 100;
+
+  // 3. Otros conceptos salariales pendientes (sin otros conceptos devengados en el simulador)
+  const otherConcepts = {
+    description: 'Sin otros conceptos salariales devengados',
+    amount: 0
+  };
+
+  // 4. Indemnización por despido (diferenciada del finiquito; 0 según reglas del simulador)
+  const severancePay = {
+    description: 'Sin indemnización por despido aplicable según reglas de la simulación',
+    amount: 0
+  };
+
+  const totalFiniquito = Math.round((salaryAmount + vacationAmount + otherConcepts.amount + severancePay.amount) * 100) / 100;
+
+  const finiquitoData: FiniquitoData = {
+    employeeId: emp.id,
+    employeeName: emp.employeeName,
+    hireDate: emp.hireDate ? new Date(emp.hireDate).toISOString() : '',
+    dismissalDate: dismissalDateObj.toISOString(),
+    grossSalaryMonthly: grossMonthly,
+    salaryProportional: {
+      startDate: startDateStr,
+      endDate: endDateStr,
+      daysWorked,
+      daysInMonth,
+      dailyWage,
+      amount: salaryAmount,
+      alreadyPaidInPayroll
+    },
+    vacation: {
+      accrualStartDate: accrualStartDateStr,
+      accrualEndDate: accrualEndDateStr,
+      daysWorkedInYear,
+      daysInYear,
+      daysAccrued,
+      daysTaken,
+      daysPending,
+      dailyWage: vacationDailyWage,
+      amount: vacationAmount
+    },
+    otherConcepts,
+    severancePay,
+    totalFiniquito
+  };
+
+  return { finiquitoData };
+}
+
+app.post('/api/student/employees/:id/calculate-finiquito', async (req, res) => {
+  const { id } = req.params;
+  const reqStudentId = req.body?.studentId || (req.query?.studentId as string);
+
+  try {
+    const db = readDb();
+    if (dbPool) {
+      await syncEmployeesFromSupabase(db);
+    }
+
+    let emp = (db.hiredEmployees || []).find(e => e.id === id);
+    if (!emp) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    if (reqStudentId && String(emp.studentId) !== String(reqStudentId)) {
+      return res.status(403).json({ error: 'El empleado no pertenece al alumno especificado' });
+    }
+
+    const calcResult = calculateEmployeeFiniquito(emp, db, req.body?.dismissalDate);
+    if (calcResult.error || !calcResult.finiquitoData) {
+      return res.status(400).json({ error: calcResult.error || 'Error al calcular finiquito' });
+    }
+
+    return res.json({ success: true, finiquitoData: calcResult.finiquitoData });
+  } catch (err: any) {
+    console.error('[Calculate Finiquito Error]:', err);
+    return res.status(500).json({ error: err.message || 'Error al calcular finiquito' });
+  }
+});
+
+app.post('/api/student/employees/:id/dismiss', async (req, res) => {
+  const { id } = req.params;
+  const reqStudentId = req.body?.studentId || (req.query?.studentId as string);
+
+  if (!id) {
+    return res.status(400).json({ error: 'ID de empleado no especificado' });
+  }
+
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `dismiss_${id}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Bloquear al empleado con FOR UPDATE
+          const empRes = await client.query(
+            `SELECT * FROM empleados_contratados WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          if (!empRes || empRes.rows.length === 0) {
+            const err: any = new Error('Empleado no encontrado');
+            err.statusCode = 404;
+            throw err;
+          }
+          const empRow = empRes.rows[0];
+
+          if (reqStudentId && String(empRow.alumno_id) !== String(reqStudentId)) {
+            const err: any = new Error('El empleado no pertenece al alumno especificado');
+            err.statusCode = 403;
+            throw err;
+          }
+
+          if (empRow.estado === 'despedido') {
+            const err: any = new Error('El empleado ya se encuentra despedido y su finiquito fue liquidado previamente.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const studentOwnerId = empRow.alumno_id;
+
+          // 2. Bloquear cuenta del alumno con FOR UPDATE
+          const cuentaRes = await client.query(
+            `SELECT * FROM cuentas WHERE id = $1 FOR UPDATE`,
+            [studentOwnerId]
+          );
+          if (!cuentaRes || cuentaRes.rows.length === 0) {
+            const err: any = new Error('Cuenta de la empresa no encontrada');
+            err.statusCode = 404;
+            throw err;
+          }
+          const cuentaRow = cuentaRes.rows[0];
+
+          const mappedEmp = mapHiredEmployeeRow(empRow);
+          const currentDb = readDb();
+          const calcResult = calculateEmployeeFiniquito(mappedEmp, currentDb, now);
+          if (calcResult.error || !calcResult.finiquitoData) {
+            const err: any = new Error(calcResult.error || 'Error al calcular finiquito');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const finiquitoData = calcResult.finiquitoData;
+          const totalFiniquito = finiquitoData.totalFiniquito;
+          const currentBal = Number(cuentaRow.saldo);
+
+          // Verificar si hay saldo suficiente para pagar el finiquito
+          if (currentBal < totalFiniquito) {
+            const err: any = new Error(`Saldo insuficiente en la cuenta bancaria (${formatNumber(currentBal)} €) para abonar el finiquito de ${formatNumber(totalFiniquito)} €.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const txId = generateId('tx');
+          const bankConcept = `Finiquito por despido — ${mappedEmp.employeeName}`;
+          finiquitoData.transferId = txId;
+          finiquitoData.paidAt = nowIso;
+          finiquitoData.bankConcept = bankConcept;
+
+          let newBalance = currentBal;
+
+          // 3. Descontar saldo y registrar movimiento bancario si totalFiniquito > 0
+          if (totalFiniquito > 0) {
+            await client.query('UPDATE cuentas SET saldo = saldo - $1 WHERE id = $2', [totalFiniquito, studentOwnerId]);
+            newBalance = Number((currentBal - totalFiniquito).toFixed(2));
+
+            const empAccount = `ES${Math.floor(10 + Math.random() * 89)}00010002${String(mappedEmp.id).replace(/\D/g, '').padEnd(10, '0').slice(0, 10)}`;
+
+            await client.query(
+              `INSERT INTO movimientos (
+                id, cuenta_id, tipo, importe, fecha, concepto,
+                sender_id, sender_name, sender_account,
+                receiver_id, receiver_name, receiver_account
+              ) VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                txId + '-out',
+                studentOwnerId,
+                totalFiniquito,
+                nowIso,
+                bankConcept,
+                studentOwnerId,
+                cuentaRow.alumno,
+                cuentaRow.account_number,
+                `empleado-${mappedEmp.id}`,
+                mappedEmp.employeeName,
+                empAccount
+              ]
+            );
+          }
+
+          // 4. Actualizar estado a 'despedido', fecha_despido, finiquito_data y desasignar
+          const finiquitoJson = JSON.stringify(finiquitoData);
+          const updateEmpRes = await client.query(
+            `UPDATE empleados_contratados
+             SET
+               estado = 'despedido',
+               fecha_despido = $1,
+               finiquito_data = $2,
+               maquinaria_asignada_id = NULL,
+               maquinaria_asignada_titulo = NULL,
+               vehiculo_asignado_id = NULL,
+               vehiculo_asignado_titulo = NULL,
+               almacen_asignado_index = NULL
+             WHERE id = $3
+             RETURNING *`,
+            [nowIso, finiquitoJson, mappedEmp.id]
+          );
+
+          // 5. Desasignar de vehículos si estaba asignado como conductor
+          if (empRow.vehiculo_asignado_id) {
+            await client.query(
+              `UPDATE vehiculos_comprados
+               SET conductor_asignado_id = NULL,
+                   conductor_asignado_nombre = NULL,
+                   turno_asignado = NULL
+               WHERE conductor_asignado_id = $1`,
+              [mappedEmp.id]
+            );
+          }
+
+          const updatedEmpRow = updateEmpRes.rows[0];
+          const updatedEmployee = mapHiredEmployeeRow(updatedEmpRow);
+
+          // 6. Actualizar cache en memoria
+          try {
+            const memDb = readDb();
+            if (!memDb.hiredEmployees) memDb.hiredEmployees = [];
+            const empIdx = memDb.hiredEmployees.findIndex(e => e.id === mappedEmp.id);
+            if (empIdx !== -1) {
+              memDb.hiredEmployees[empIdx] = updatedEmployee;
+            } else {
+              memDb.hiredEmployees.push(updatedEmployee);
+            }
+
+            // Desvincular de vehículos en memoria
+            if (memDb.purchasedVehicles) {
+              const assignedV = memDb.purchasedVehicles.find(v => v.assignedDriverId === mappedEmp.id);
+              if (assignedV) {
+                assignedV.assignedDriverId = undefined;
+                assignedV.assignedDriverName = undefined;
+                assignedV.assignedShift = undefined;
+              }
+            }
+
+            // Actualizar saldo de usuario en memoria
+            const u = (memDb.users || []).find(usr => usr.id === studentOwnerId);
+            if (u) {
+              u.balance = newBalance;
+            }
+
+            // Registrar transferencia en memoria
+            if (!memDb.transfers) memDb.transfers = [];
+            if (totalFiniquito > 0) {
+              const transferObj: Transfer = {
+                id: txId,
+                senderId: studentOwnerId,
+                senderName: cuentaRow.alumno,
+                senderAccount: cuentaRow.account_number,
+                receiverId: `empleado-${mappedEmp.id}`,
+                receiverName: mappedEmp.employeeName,
+                receiverAccount: `ES00 0000 0000 0000 ${String(mappedEmp.id).slice(-4)}`,
+                amount: totalFiniquito,
+                concept: bankConcept,
+                timestamp: nowIso
+              };
+              memDb.transfers.unshift(transferObj);
+            }
+
+            writeDb(memDb);
+          } catch (memErr) {
+            console.warn('[Dismiss Employee] Warning updating in-memory cache:', memErr);
+          }
+
+          invalidateStudentSessionCache(studentOwnerId, 'company');
+          invalidateStudentSessionCache(studentOwnerId);
+
+          return {
+            success: true,
+            message: `Despido tramitado y finiquito abonado correctamente (${formatNumber(totalFiniquito)} €).`,
+            employee: updatedEmployee,
+            finiquito: finiquitoData,
+            newBalance
+          };
+        }, key);
+      } else {
+        // Fallback en memoria si dbPool no está inicializado
+        const db = readDb();
+        if (!db.hiredEmployees) db.hiredEmployees = [];
+        let emp = db.hiredEmployees.find(e => e.id === id);
+        if (!emp) {
+          const err: any = new Error('Empleado no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (reqStudentId && String(emp.studentId) !== String(reqStudentId)) {
+          const err: any = new Error('El empleado no pertenece al alumno especificado');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        if (emp.status === 'despedido') {
+          const err: any = new Error('El empleado ya se encuentra despedido y su finiquito fue liquidado previamente.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const calcResult = calculateEmployeeFiniquito(emp, db, now);
+        if (calcResult.error || !calcResult.finiquitoData) {
+          const err: any = new Error(calcResult.error || 'Error al calcular finiquito');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const finiquitoData = calcResult.finiquitoData;
+        const totalFiniquito = finiquitoData.totalFiniquito;
+
+        const student = (db.users || []).find(u => u.id === emp.studentId);
+        if (!student) {
+          const err: any = new Error('Cuenta de alumno no encontrada');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const currentBal = Number(student.balance || 0);
+        if (currentBal < totalFiniquito) {
+          const err: any = new Error(`Saldo insuficiente en la cuenta bancaria (${formatNumber(currentBal)} €) para abonar el finiquito de ${formatNumber(totalFiniquito)} €.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const txId = generateId('tx');
+        const bankConcept = `Finiquito por despido — ${emp.employeeName}`;
+        finiquitoData.transferId = txId;
+        finiquitoData.paidAt = nowIso;
+        finiquitoData.bankConcept = bankConcept;
+
+        let newBalance = currentBal;
+        if (totalFiniquito > 0) {
+          newBalance = Number((currentBal - totalFiniquito).toFixed(2));
+          student.balance = newBalance;
+
+          if (!db.transfers) db.transfers = [];
+          db.transfers.unshift({
+            id: txId,
+            senderId: student.id,
+            senderName: student.name,
+            senderAccount: student.accountNumber || 'ES00 0000 0000 0000 0000',
+            receiverId: `empleado-${emp.id}`,
+            receiverName: emp.employeeName,
+            receiverAccount: `ES00 0000 0000 0000 ${String(emp.id).slice(-4)}`,
+            amount: totalFiniquito,
+            concept: bankConcept,
+            timestamp: nowIso
+          });
+        }
+
+        emp.status = 'despedido';
+        emp.dismissalDate = nowIso;
+        emp.finiquitoData = finiquitoData;
+        emp.assignedMachineryId = undefined;
+        emp.assignedMachineryTitle = undefined;
+        emp.assignedVehicleId = undefined;
+        emp.assignedVehicleTitle = undefined;
+        emp.assignedWarehouseIndex = undefined;
+        emp.shift = undefined;
+
+        if (db.purchasedVehicles) {
+          const assignedV = db.purchasedVehicles.find(v => v.assignedDriverId === emp.id);
+          if (assignedV) {
+            assignedV.assignedDriverId = undefined;
+            assignedV.assignedDriverName = undefined;
+            assignedV.assignedShift = undefined;
+          }
+        }
+
+        writeDb(db);
+        invalidateStudentSessionCache(student.id, 'company');
+        invalidateStudentSessionCache(student.id);
+
+        return {
+          success: true,
+          message: `Despido tramitado y finiquito abonado correctamente (${formatNumber(totalFiniquito)} €).`,
+          employee: emp,
+          finiquito: finiquitoData,
+          newBalance
+        };
+      }
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Dismiss Error]:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al procesar el despido' });
   }
 });
 
@@ -19186,6 +19718,12 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
             throw err;
           }
 
+          if (empRow.estado === 'despedido') {
+            const err: any = new Error('El empleado está despedido y no se le puede asignar vehículos');
+            err.statusCode = 400;
+            throw err;
+          }
+
           const studentOwnerId = empRow.alumno_id;
           const previousVehicleId = empRow.vehiculo_asignado_id;
           const isAssigning = vehicleId && vehicleId !== 'unassign' && vehicleId !== '';
@@ -19362,6 +19900,12 @@ app.put('/api/student/employees/:id/assign-vehicle', async (req, res) => {
         if (reqStudentId && String(emp.studentId) !== String(reqStudentId)) {
           const err: any = new Error('El empleado no pertenece al alumno especificado');
           err.statusCode = 403;
+          throw err;
+        }
+
+        if (emp.status === 'despedido') {
+          const err: any = new Error('El empleado está despedido y no se le puede asignar vehículos');
+          err.statusCode = 400;
           throw err;
         }
 

@@ -143,6 +143,7 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
 
   const hasForklift = purchasedVehicles.some((v: any) => v.vehicleType === 'carretilla_elevadora');
   const hasWarehouseWorker = employees.some((e: any) => {
+    if (e.status === 'despedido') return false;
     const role = (e.role || '').toLowerCase();
     const title = (e.title || e.jobTitle || '').toLowerCase();
     return role === 'mozo_almacen' || role === 'mozo' || title.includes('mozo');
