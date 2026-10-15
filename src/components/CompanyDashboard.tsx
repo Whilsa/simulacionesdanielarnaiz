@@ -1440,7 +1440,9 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
       month: "long",
       year: "numeric",
     });
-    const hiredList = data.hiredEmployees;
+    const hiredList = data.hiredEmployees.filter(
+      (e) => e.status !== "despedido",
+    );
 
     const headers = [
       "Empleado",
@@ -1770,7 +1772,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   {
                     id: "employees" as const,
                     label: "Empleados",
-                    count: data.hiredEmployees?.length || 0,
+                    count:
+                      data.hiredEmployees?.filter(
+                        (e) => e.status !== "despedido",
+                      ).length || 0,
                     icon: Users,
                     badgeColor: "bg-blue-100 text-blue-800",
                   },
@@ -3900,7 +3905,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
                             <button
                               onClick={handleDownloadPayrollCsv}
-                              disabled={hiredList.length === 0}
+                              disabled={activeHiredList.length === 0}
                               className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-50"
                               title="Descargar detalle completo de las nóminas del mes actual"
                             >
@@ -4049,7 +4054,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {data.machineryAcquisitions.map((m, mIdx) => {
                                   const assignedToThisMachine =
-                                    hiredList.filter(
+                                    activeHiredList.filter(
                                       (e) => e.assignedMachineryId
                                         ? (String(e.assignedMachineryId) === String(m.id) || String(e.assignedMachineryId) === String(m.machineryId))
                                         : Boolean(e.assignedMachineryTitle && (e.assignedMachineryTitle === m.title || e.assignedMachineryTitle === m.lineTitle))
@@ -4176,7 +4181,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                               ).filter(
                                 (v) => v.vehicleType === "carretilla_elevadora",
                               ).length;
-                              const carretillerosList = hiredList.filter(
+                              const carretillerosList = activeHiredList.filter(
                                 (e) => e.role === "carretillero",
                               );
 

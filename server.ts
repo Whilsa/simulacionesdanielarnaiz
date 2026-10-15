@@ -10685,7 +10685,7 @@ app.get('/api/company/:studentId', async (req, res) => {
       totalMonthlyRentCommitments,
       activeLoansCount: loans.length,
       machineryCount: machineryAcquisitions.length,
-      hiredEmployeesCount: studentHiredEmployees.length,
+      hiredEmployeesCount: studentHiredEmployees.filter((e: any) => e.status !== "despedido").length,
       purchasedVehiclesCount: (db.purchasedVehicles || []).filter(v => v.studentId === studentId).length
     },
     acquisitions,
