@@ -15,6 +15,7 @@ import { User, Transfer, SystemLog, PropertyAcquisition, MachineryAcquisition, R
 import TeacherLoanManagement from './TeacherLoanManagement.js';
 import TeacherAssetsAndDebtsManagement from './TeacherAssetsAndDebtsManagement.js';
 import TeacherDeferredPaymentsVerification from './TeacherDeferredPaymentsVerification.js';
+import TeacherScrewdriverListingsManagement from './TeacherScrewdriverListingsManagement.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -56,7 +57,7 @@ const TEACHER_PRODUCT_PRESETS = {
 };
 
 export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }: TeacherDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials' | 'verification'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'assets' | 'transfers' | 'loans' | 'logs' | 'reset' | 'raw_materials' | 'verification' | 'screwdriver_listings'>('students');
   const [users, setUsers] = useState<User[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
@@ -971,6 +972,17 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
           >
             <Package className="w-4 h-4" />
             <span>Materias primas ({rmOrders.filter(o => o.status === 'pending').length})</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('screwdriver_listings')}
+            className={`py-3 px-4 font-semibold text-sm border-b-2 transition-all flex items-center space-x-2 cursor-pointer ${
+              activeTab === 'screwdriver_listings' 
+                ? 'border-amber-600 text-amber-600 bg-amber-50/20' 
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Store className="w-4 h-4" />
+            <span>Venta destornilladores (Nivel 2)</span>
           </button>
           <button 
             onClick={() => setActiveTab('transfers')}
@@ -1971,6 +1983,19 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 transition={{ duration: 0.2 }}
               >
                 <TeacherDeferredPaymentsVerification />
+              </motion.div>
+            )}
+
+            {/* SCREWDRIVER LISTINGS TAB (LEVEL 2 EXCLUSIVE) */}
+            {activeTab === 'screwdriver_listings' && (
+              <motion.div
+                key="screwdriver-listings-panel"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+              >
+                <TeacherScrewdriverListingsManagement />
               </motion.div>
             )}
 

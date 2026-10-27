@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Building2, Landmark, Calculator, AlertCircle, CheckCircle2, Clock, 
+  Building2, Landmark, Calculator, AlertCircle, CheckCircle2, Clock, Calendar,
   ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X, Receipt, XCircle
 } from 'lucide-react';
 import { User, BankLoan, PropertyAcquisition } from '../types.js';
@@ -30,6 +30,8 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestedAmount, setRequestedAmount] = useState('50000');
   const [termMonths, setTermMonths] = useState('36');
+  const [amortizationFrequency, setAmortizationFrequency] = useState<'monthly' | 'annual'>('monthly');
+  const [showPreviewTable, setShowPreviewTable] = useState(false);
   const [collateralType, setCollateralType] = useState<'property' | 'private_residence'>('property');
   const [selectedPropertyId, setSelectedPropertyId] = useState('');
   const [surfaceM2, setSurfaceM2] = useState('120');
@@ -89,12 +91,70 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
   const annualRate = euriborRate + spread; // 4.50%
   const openingFeeAmt = Number((0.001 * estimatedOfferedAmount).toFixed(2));
 
-  // Calculate monthly payment using French method
-  const monthlyRate = (annualRate / 100) / 12;
-  let estimatedMonthlyPayment = 0;
-  if (monthlyRate > 0 && estimatedOfferedAmount > 0) {
-    estimatedMonthlyPayment = Number((estimatedOfferedAmount * (monthlyRate * Math.pow(1 + monthlyRate, termMonthsNum)) / (Math.pow(1 + monthlyRate, termMonthsNum) - 1)).toFixed(2));
+  // Calculate payment using French method (monthly or annual)
+  const isAnnual = amortizationFrequency === 'annual';
+  const totalPeriods = isAnnual ? Math.max(1, Math.round(termMonthsNum / 12)) : termMonthsNum;
+  const periodRate = isAnnual ? (annualRate / 100) : (annualRate / 100) / 12;
+
+  let estimatedPeriodicPayment = 0;
+  if (periodRate > 0 && estimatedOfferedAmount > 0) {
+    estimatedPeriodicPayment = Number(
+      (estimatedOfferedAmount * (periodRate * Math.pow(1 + periodRate, totalPeriods)) / (Math.pow(1 + periodRate, totalPeriods) - 1)).toFixed(2)
+    );
   }
+
+  // Generate real-time preview amortization schedule
+  const previewSchedule = React.useMemo(() => {
+    if (estimatedOfferedAmount <= 0 || totalPeriods <= 0) return [];
+    const rows = [];
+    let pendingBalance = estimatedOfferedAmount;
+    let totalAmortized = 0;
+    const now = new Date();
+
+    for (let p = 1; p <= totalPeriods; p++) {
+      const dueDate = new Date(now);
+      if (isAnnual) {
+        dueDate.setFullYear(dueDate.getFullYear() + p);
+      } else {
+        dueDate.setMonth(dueDate.getMonth() + p);
+      }
+
+      const initialPending = pendingBalance;
+      const interest = Number((initialPending * periodRate).toFixed(2));
+      let principalAmortized = Number((estimatedPeriodicPayment - interest).toFixed(2));
+
+      if (p === totalPeriods || principalAmortized > pendingBalance) {
+        principalAmortized = pendingBalance;
+        const finalPayment = Number((principalAmortized + interest).toFixed(2));
+        pendingBalance = 0;
+        totalAmortized = Number((totalAmortized + principalAmortized).toFixed(2));
+        rows.push({
+          period: p,
+          dueDate: dueDate.toISOString(),
+          initialBalance: initialPending,
+          payment: finalPayment,
+          interest,
+          principal: principalAmortized,
+          totalAmortized,
+          pendingBalance: 0
+        });
+      } else {
+        pendingBalance = Number((pendingBalance - principalAmortized).toFixed(2));
+        totalAmortized = Number((totalAmortized + principalAmortized).toFixed(2));
+        rows.push({
+          period: p,
+          dueDate: dueDate.toISOString(),
+          initialBalance: initialPending,
+          payment: estimatedPeriodicPayment,
+          interest,
+          principal: principalAmortized,
+          totalAmortized,
+          pendingBalance: Math.max(0, pendingBalance)
+        });
+      }
+    }
+    return rows;
+  }, [estimatedOfferedAmount, totalPeriods, periodRate, estimatedPeriodicPayment, isAnnual]);
 
   const handlePropertyChange = (propertyId: string) => {
     setSelectedPropertyId(propertyId);
@@ -132,6 +192,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
           studentId: targetStudentId,
           requestedAmount: reqAmtNum,
           termMonths: termMonthsNum,
+          amortizationFrequency,
           collateralType,
           propertyId: collateralType === 'property' ? selectedPropertyId : undefined,
           surfaceM2: collateralType === 'private_residence' ? Number(surfaceM2) : undefined,
@@ -312,6 +373,15 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                       <span className="font-mono font-bold text-slate-900 text-sm">
                         Préstamo #{loan.id}
                       </span>
+                      {loan.amortizationFrequency === 'annual' ? (
+                        <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                          Amortización anual
+                        </span>
+                      ) : (
+                        <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                          Amortización mensual
+                        </span>
+                      )}
                       {isActive && (
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <CheckCircle2 className="w-3 h-3 mr-1" />
@@ -343,7 +413,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                       )}
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
-                      Garantía: <span className="font-semibold text-slate-700">
+                      Modalidad: <span className="font-semibold text-slate-700">{loan.amortizationFrequency === 'annual' ? 'Anual' : 'Mensual'}</span> • Garantía: <span className="font-semibold text-slate-700">
                         {loan.collateral.type === 'property' 
                           ? (loan.collateral.propertyTitle || 'Inmueble comercial') 
                           : `Vivienda privada (${loan.collateral.surfaceM2} m²)`}
@@ -375,7 +445,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                     <div className="space-y-1">
                       <p className="font-bold text-sm">¡El banco te ofrece {formatNumber(loan.offeredAmount)} €!</p>
                       <p className="text-xs text-amber-100">
-                        Cuota mensual: <strong className="font-mono text-white">{formatNumber(loan.monthlyPayment)} €</strong> • TIN: <strong className="font-mono text-white">{loan.annualInterestRate}%</strong> • Comisión apertura (1‰): <strong className="font-mono text-white">{formatNumber(loan.openingFee)} €</strong>
+                        {loan.amortizationFrequency === 'annual' ? 'Cuota anual' : 'Cuota mensual'}: <strong className="font-mono text-white">{formatNumber(loan.installmentPayment || loan.monthlyPayment)} € / {loan.amortizationFrequency === 'annual' ? 'año' : 'mes'}</strong> • Modalidad: <strong className="text-amber-200 uppercase">{loan.amortizationFrequency === 'annual' ? 'Anual' : 'Mensual'}</strong> • TIN: <strong className="font-mono text-white">{loan.annualInterestRate}%</strong> • Comisión apertura (1‰): <strong className="font-mono text-white">{formatNumber(loan.openingFee)} €</strong>
                       </p>
                     </div>
                     <div className="flex items-center space-x-2 shrink-0">
@@ -430,9 +500,11 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota mensual</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">
+                      {loan.amortizationFrequency === 'annual' ? 'Cuota anual' : 'Cuota mensual'}
+                    </span>
                     <span className="text-sm font-bold font-mono text-amber-800">
-                      {formatNumber(loan.monthlyPayment)} € / mes
+                      {formatNumber(loan.installmentPayment || loan.monthlyPayment)} € / {loan.amortizationFrequency === 'annual' ? 'año' : 'mes'}
                     </span>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -506,6 +578,46 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                     <option value="120">120 meses (10 años)</option>
                     <option value="180">180 meses (15 años)</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Modalidad de amortización */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  Modalidad de amortización
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setAmortizationFrequency('monthly')}
+                    className={`p-3 rounded-xl border text-left transition flex items-center space-x-2.5 cursor-pointer ${
+                      amortizationFrequency === 'monthly'
+                        ? 'border-amber-600 bg-amber-50/70 ring-2 ring-amber-500/20 text-amber-900 font-bold'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-600 font-medium'
+                    }`}
+                  >
+                    <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+                    <div>
+                      <p className="text-xs">Amortización mensual</p>
+                      <p className="text-[10px] text-slate-500 font-normal">Cuota mensual ({termMonthsNum} cuotas)</p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAmortizationFrequency('annual')}
+                    className={`p-3 rounded-xl border text-left transition flex items-center space-x-2.5 cursor-pointer ${
+                      amortizationFrequency === 'annual'
+                        ? 'border-amber-600 bg-amber-50/70 ring-2 ring-amber-500/20 text-amber-900 font-bold'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-600 font-medium'
+                    }`}
+                  >
+                    <Calendar className="w-4 h-4 text-amber-700 shrink-0" />
+                    <div>
+                      <p className="text-xs">Amortización anual</p>
+                      <p className="text-[10px] text-slate-500 font-normal">Cuota anual ({totalPeriods} cuotas de 1 año)</p>
+                    </div>
+                  </button>
                 </div>
               </div>
 
@@ -608,6 +720,12 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
               {/* Live Bank Breakdown Box */}
               <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-2 font-mono">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-[11px] text-slate-400 font-sans">Modalidad seleccionada:</span>
+                  <span className="font-bold text-amber-300 font-sans">
+                    {isAnnual ? 'Amortización anual' : 'Amortización mensual'} ({totalPeriods} periodos)
+                  </span>
+                </div>
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                   <span className="text-[11px] text-slate-400 font-sans">Límite máximo aprobado (80% tasación):</span>
                   <span className="font-bold text-amber-300">{formatNumber(maxLtvAutoApproved)} €</span>
                 </div>
@@ -624,9 +742,75 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                   <span className="text-rose-300">{formatNumber(openingFeeAmt)} €</span>
                 </div>
                 <div className="flex justify-between items-center pt-1 text-xs">
-                  <span className="font-sans font-bold text-slate-200">Cuota mensual estimada (francés):</span>
-                  <span className="font-extrabold text-amber-400 text-sm">{formatNumber(estimatedMonthlyPayment)} € / mes</span>
+                  <span className="font-sans font-bold text-slate-200">
+                    {isAnnual ? 'Cuota anual estimada (francés):' : 'Cuota mensual estimada (francés):'}
+                  </span>
+                  <span className="font-extrabold text-amber-400 text-sm">
+                    {formatNumber(estimatedPeriodicPayment)} € / {isAnnual ? 'año' : 'mes'}
+                  </span>
                 </div>
+              </div>
+
+              {/* Pre-Confirmation Amortization Table Preview */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+                <div className="p-3 bg-slate-100 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <FileText className="w-4 h-4 text-amber-800" />
+                    <span className="font-bold text-slate-800">
+                      Cuadro de amortización previo ({isAnnual ? 'anual' : 'mensual'})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreviewTable(prev => !prev)}
+                    className="text-amber-800 hover:text-amber-900 font-bold text-xs underline cursor-pointer"
+                  >
+                    {showPreviewTable ? 'Ocultar tabla' : `Mostrar cuadro completo (${previewSchedule.length} cuotas)`}
+                  </button>
+                </div>
+
+                {showPreviewTable && (
+                  <div className="max-h-56 overflow-y-auto p-2">
+                    <table className="w-full text-left text-[11px] border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 font-semibold text-[10px] uppercase">
+                          <th className="py-1 px-2">{isAnnual ? 'Año' : 'Cuota'}</th>
+                          <th className="py-1 px-2">Vencimiento</th>
+                          <th className="py-1 px-2 text-right">Saldo inicial</th>
+                          <th className="py-1 px-2 text-right">Cuota</th>
+                          <th className="py-1 px-2 text-right">Intereses</th>
+                          <th className="py-1 px-2 text-right">Amort. capital</th>
+                          <th className="py-1 px-2 text-right">Saldo final</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono text-[10px]">
+                        {previewSchedule.map(row => (
+                          <tr key={row.period} className="hover:bg-amber-50/50">
+                            <td className="py-1 px-2 font-bold text-slate-700">#{row.period}</td>
+                            <td className="py-1 px-2 text-slate-600 font-sans">
+                              {new Date(row.dueDate).toLocaleDateString('es-ES')}
+                            </td>
+                            <td className="py-1 px-2 text-right text-slate-700">
+                              {formatNumber(row.initialBalance)} €
+                            </td>
+                            <td className="py-1 px-2 text-right font-bold text-amber-900">
+                              {formatNumber(row.payment)} €
+                            </td>
+                            <td className="py-1 px-2 text-right text-rose-600">
+                              {formatNumber(row.interest)} €
+                            </td>
+                            <td className="py-1 px-2 text-right text-emerald-700">
+                              {formatNumber(row.principal)} €
+                            </td>
+                            <td className="py-1 px-2 text-right font-bold text-slate-900">
+                              {formatNumber(row.pendingBalance)} €
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end space-x-3 pt-3">

@@ -244,6 +244,7 @@ export interface RelocationInvoice {
 export interface AmortizationRow {
   period: number;
   dueDate: string;
+  initialBalance?: number;
   payment: number;
   interest: number;
   principal: number;
@@ -361,6 +362,8 @@ export interface BankLoan {
   spread: number;
   openingFee: number;
   monthlyPayment: number;
+  amortizationFrequency?: 'monthly' | 'annual';
+  installmentPayment?: number;
   collateral: LoanCollateral;
   status: LoanStatus;
   requiresTeacherApproval: boolean;
@@ -721,6 +724,36 @@ export interface MarketContact {
   createdAt: string;
 }
 
+export interface TeacherScrewdriverHistoryEntry {
+  id: string;
+  timestamp: string;
+  action: 'creacion' | 'edicion' | 'activacion' | 'desactivacion' | 'retirada' | 'venta';
+  description: string;
+  quantity?: number;
+  unitPrice?: number;
+  totalAmount?: number;
+  buyerId?: string;
+  buyerName?: string;
+  buyerAccount?: string;
+  previousStock?: number;
+  newStock?: number;
+}
+
+export interface TeacherScrewdriverListing {
+  id: string;
+  title: string;
+  description: string;
+  commercialConditions: string;
+  initialQuantity: number;
+  soldQuantity: number;
+  remainingQuantity: number;
+  unitPrice: number;
+  active: boolean;
+  history: TeacherScrewdriverHistoryEntry[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DatabaseSchema {
   users: User[];
   transfers: Transfer[];
@@ -746,6 +779,7 @@ export interface DatabaseSchema {
   rawMaterialAnnouncements?: RawMaterialAnnouncement[];
   rawMaterialOrders?: RawMaterialOrder[];
   rawMaterialInventories?: RawMaterialInventory[];
+  teacherScrewdriverListings?: TeacherScrewdriverListing[];
   marketMessages?: MarketMessage[];
   companyProfiles?: CompanyProfile[];
   marketContacts?: MarketContact[];

@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -712,6 +712,23 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       ALTER TABLE anuncios_materia_prima ADD COLUMN IF NOT EXISTS seller_province TEXT;
       ALTER TABLE registros_nomina ADD COLUMN IF NOT EXISTS detalles_empleados JSONB;
       ALTER TABLE registros_nomina ADD COLUMN IF NOT EXISTS paid_employee_ids JSONB;
+      ALTER TABLE prestamos ADD COLUMN IF NOT EXISTS modalidad VARCHAR(20) DEFAULT 'monthly';
+      ALTER TABLE prestamos ADD COLUMN IF NOT EXISTS cuota_periodica NUMERIC(12, 2);
+
+      CREATE TABLE IF NOT EXISTS profesor_anuncios_destornilladores (
+        id VARCHAR(255) PRIMARY KEY,
+        titulo TEXT NOT NULL,
+        descripcion TEXT,
+        condiciones_comerciales TEXT,
+        cantidad_inicial INT NOT NULL,
+        cantidad_vendida INT NOT NULL DEFAULT 0,
+        cantidad_restante INT NOT NULL,
+        precio_unitario NUMERIC(12, 2) NOT NULL,
+        activo BOOLEAN NOT NULL DEFAULT TRUE,
+        historial JSONB DEFAULT '[]'::jsonb,
+        fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        fecha_actualizacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
 
       CREATE TABLE IF NOT EXISTS perfiles_empresa (
         id VARCHAR(255) PRIMARY KEY,
@@ -1318,9 +1335,9 @@ async function syncLoanToSupabase(loan: BankLoan) {
         id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
         plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual,
         garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion,
-        estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion
+        estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion, modalidad, cuota_periodica
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       ON CONFLICT (id) DO UPDATE SET
         importe_ofrecido = EXCLUDED.importe_ofrecido,
         importe_concedido = EXCLUDED.importe_concedido,
@@ -1331,7 +1348,9 @@ async function syncLoanToSupabase(loan: BankLoan) {
         estado = EXCLUDED.estado,
         notas_profesor = EXCLUDED.notas_profesor,
         fecha_aceptacion = EXCLUDED.fecha_aceptacion,
-        tabla_amortizacion = EXCLUDED.tabla_amortizacion`,
+        tabla_amortizacion = EXCLUDED.tabla_amortizacion,
+        modalidad = EXCLUDED.modalidad,
+        cuota_periodica = EXCLUDED.cuota_periodica`,
       [
         loan.id,
         loan.studentId,
@@ -1356,11 +1375,55 @@ async function syncLoanToSupabase(loan: BankLoan) {
         loan.teacherNotes || null,
         parseSafeDate(loan.createdAt),
         parseNullableSafeDate(loan.acceptedAt),
-        JSON.stringify(loan.schedule)
+        JSON.stringify(loan.schedule),
+        loan.amortizationFrequency || 'monthly',
+        loan.installmentPayment || loan.monthlyPayment
       ]
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing loan to Supabase:', e);
+    throw e;
+  }
+}
+
+async function syncTeacherScrewdriverListingToSupabase(listing: TeacherScrewdriverListing, client?: pg.PoolClient) {
+  if (!dbPool && !client) return;
+  try {
+    const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+    await runner(
+      `INSERT INTO profesor_anuncios_destornilladores (
+        id, titulo, descripcion, condiciones_comerciales, cantidad_inicial, cantidad_vendida, cantidad_restante,
+        precio_unitario, activo, historial, fecha_creacion, fecha_actualizacion
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ON CONFLICT (id) DO UPDATE SET
+        titulo = EXCLUDED.titulo,
+        descripcion = EXCLUDED.descripcion,
+        condiciones_comerciales = EXCLUDED.condiciones_comerciales,
+        cantidad_inicial = EXCLUDED.cantidad_inicial,
+        cantidad_vendida = EXCLUDED.cantidad_vendida,
+        cantidad_restante = EXCLUDED.cantidad_restante,
+        precio_unitario = EXCLUDED.precio_unitario,
+        activo = EXCLUDED.activo,
+        historial = EXCLUDED.historial,
+        fecha_actualizacion = EXCLUDED.fecha_actualizacion`,
+      [
+        listing.id,
+        listing.title,
+        listing.description,
+        listing.commercialConditions,
+        listing.initialQuantity,
+        listing.soldQuantity,
+        listing.remainingQuantity,
+        listing.unitPrice,
+        listing.active,
+        JSON.stringify(listing.history || []),
+        parseSafeDate(listing.createdAt),
+        parseSafeDate(listing.updatedAt)
+      ]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error syncing screwdriver listing to Supabase:', e);
     throw e;
   }
 }
@@ -2955,6 +3018,8 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         spread: Number(row.diferencial || 1.00),
         openingFee: Number(row.comision_apertura),
         monthlyPayment: Number(row.cuota_mensual),
+        amortizationFrequency: (row.modalidad as 'monthly' | 'annual') || 'monthly',
+        installmentPayment: row.cuota_periodica ? Number(row.cuota_periodica) : Number(row.cuota_mensual),
         collateral: {
           type: String(row.garantia_tipo) as ('property' | 'private_residence'),
           propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
@@ -11004,30 +11069,43 @@ function calculateFrenchAmortization(
   principal: number,
   annualInterestRatePercent: number,
   termMonths: number,
-  startDateISO: string = new Date().toISOString()
-): { monthlyPayment: number; schedule: AmortizationRow[] } {
-  const r = (annualInterestRatePercent / 100) / 12;
-  let monthlyPayment = 0;
+  startDateISO: string = new Date().toISOString(),
+  frequency: 'monthly' | 'annual' = 'monthly'
+): { monthlyPayment: number; installmentPayment: number; schedule: AmortizationRow[] } {
+  const isAnnual = frequency === 'annual';
+  const numPeriods = isAnnual ? Math.max(1, Math.round(termMonths / 12)) : termMonths;
+  const r = isAnnual ? (annualInterestRatePercent / 100) : ((annualInterestRatePercent / 100) / 12);
+
+  let installmentPayment = 0;
   if (r > 0) {
-    monthlyPayment = principal * (r * Math.pow(1 + r, termMonths)) / (Math.pow(1 + r, termMonths) - 1);
+    installmentPayment = principal * (r * Math.pow(1 + r, numPeriods)) / (Math.pow(1 + r, numPeriods) - 1);
   } else {
-    monthlyPayment = principal / termMonths;
+    installmentPayment = principal / numPeriods;
   }
-  monthlyPayment = Number(monthlyPayment.toFixed(2));
+  installmentPayment = Number(installmentPayment.toFixed(2));
+
+  let monthlyPayment = isAnnual ? Number((installmentPayment / 12).toFixed(2)) : installmentPayment;
 
   let pendingBalance = principal;
   let totalAmortized = 0;
   const schedule: AmortizationRow[] = [];
   const baseDate = new Date(startDateISO);
 
-  for (let k = 1; k <= termMonths; k++) {
-    const dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0, 23, 59, 59, 999);
-    const interest = Number((pendingBalance * r).toFixed(2));
-    let principalPart = Number((monthlyPayment - interest).toFixed(2));
+  for (let k = 1; k <= numPeriods; k++) {
+    const dueDate = isAnnual
+      ? new Date(baseDate.getFullYear() + k, baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 999)
+      : new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0, 23, 59, 59, 999);
 
-    if (k === termMonths) {
+    const initialBalance = Number(pendingBalance.toFixed(2));
+    const interest = Number((initialBalance * r).toFixed(2));
+    let principalPart = Number((installmentPayment - interest).toFixed(2));
+
+    if (k === numPeriods) {
       principalPart = Number(pendingBalance.toFixed(2));
-      monthlyPayment = Number((principalPart + interest).toFixed(2));
+      installmentPayment = Number((principalPart + interest).toFixed(2));
+      if (!isAnnual) {
+        monthlyPayment = installmentPayment;
+      }
     }
 
     pendingBalance = Math.max(0, Number((pendingBalance - principalPart).toFixed(2)));
@@ -11036,7 +11114,8 @@ function calculateFrenchAmortization(
     schedule.push({
       period: k,
       dueDate: dueDate.toISOString(),
-      payment: monthlyPayment,
+      initialBalance,
+      payment: installmentPayment,
       interest,
       principal: principalPart,
       totalAmortized,
@@ -11045,7 +11124,7 @@ function calculateFrenchAmortization(
     });
   }
 
-  return { monthlyPayment, schedule };
+  return { monthlyPayment, installmentPayment, schedule };
 }
 
 function calculateMonthlyPenaltyInterest(principal: number, dueDate: Date | string, now: Date = new Date()): number {
@@ -12862,8 +12941,9 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 [newBalance, studentRow.id]
               );
 
-              // B. Insert main payment transfer in movimientos
-              const concept = item.concept || `Cuota ${targetRow.period}/${loanRow.plazo_meses} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
+              const isAnnual = loanRow.modalidad === 'annual';
+              const totalPeriods = isAnnual ? Math.max(1, Math.round(loanRow.plazo_meses / 12)) : loanRow.plazo_meses;
+              const concept = item.concept || `Cuota ${isAnnual ? 'anual ' : ''}${targetRow.period}/${totalPeriods} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
               const senderAccount = studentRow.account_number || student.accountNumber || '';
               const senderName = studentRow.alumno || student.name || '';
 
@@ -13364,14 +13444,18 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
               sourceType: 'loan',
               type: 'cuota_prestamo',
               title: `Préstamo hipotecario (Ref: ${loan.id})`,
-              concept: `Cuota mensual de amortización ${row.period}/${loan.termMonths}`,
+              concept: loan.amortizationFrequency === 'annual'
+                ? `Cuota anual de amortización ${row.period}/${Math.max(1, Math.round(loan.termMonths / 12))}`
+                : `Cuota mensual de amortización ${row.period}/${loan.termMonths}`,
               dueDate: row.dueDate,
               principalAmount: principal,
               penaltyInterest: penalty,
               totalAmount: Number((principal + penalty).toFixed(2)),
               isOverdue: dDate <= now,
               daysRemaining: daysRem,
-              installmentInfo: `Cuota ${row.period}/${loan.termMonths}`,
+              installmentInfo: loan.amortizationFrequency === 'annual'
+                ? `Cuota anual ${row.period}/${Math.max(1, Math.round(loan.termMonths / 12))}`
+                : `Cuota ${row.period}/${loan.termMonths}`,
               loanId: loan.id
             };
 
@@ -14820,7 +14904,8 @@ app.post('/api/loans/request', async (req, res) => {
           const maxLtvAmount = Number((0.80 * apprVal).toFixed(2));
           const offeredAmount = Math.min(reqAmt, maxLtvAmount);
           const openingFee = Number((0.001 * offeredAmount).toFixed(2));
-          const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
+          const frequency: 'monthly' | 'annual' = req.body.amortizationFrequency === 'annual' ? 'annual' : 'monthly';
+          const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM, new Date().toISOString(), frequency);
 
           const loanId = `prestamo-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 7)}`;
           const nowIso = new Date().toISOString();
@@ -14839,6 +14924,8 @@ app.post('/api/loans/request', async (req, res) => {
             spread,
             openingFee,
             monthlyPayment,
+            amortizationFrequency: frequency,
+            installmentPayment,
             collateral: {
               type: collateralType as ('property' | 'private_residence'),
               propertyId: propertyId ? String(propertyId) : undefined,
@@ -14858,9 +14945,9 @@ app.post('/api/loans/request', async (req, res) => {
               id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido,
               plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual,
               garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion,
-              estado, requiere_profesor, notas_profesor, fecha_creacion, tabla_amortizacion
+              estado, requiere_profesor, notas_profesor, fecha_creacion, tabla_amortizacion, modalidad, cuota_periodica
             ) VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
             )`,
             [
               newLoan.id,
@@ -14885,7 +14972,9 @@ app.post('/api/loans/request', async (req, res) => {
               requiresTeacherApproval,
               null,
               nowIso,
-              JSON.stringify(schedule)
+              JSON.stringify(schedule),
+              frequency,
+              installmentPayment
             ]
           );
 
@@ -14955,7 +15044,8 @@ app.post('/api/loans/request', async (req, res) => {
         }
 
         const openingFee = Number((0.001 * offeredAmount).toFixed(2));
-        const { monthlyPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM);
+        const frequency: 'monthly' | 'annual' = req.body.amortizationFrequency === 'annual' ? 'annual' : 'monthly';
+        const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(offeredAmount, annualInterestRate, termM, new Date().toISOString(), frequency);
 
         const loanId = `prestamo-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 7)}`;
         const nowIso = new Date().toISOString();
@@ -14974,6 +15064,8 @@ app.post('/api/loans/request', async (req, res) => {
           spread,
           openingFee,
           monthlyPayment,
+          amortizationFrequency: frequency,
+          installmentPayment,
           collateral: {
             type: collateralType as ('property' | 'private_residence'),
             propertyId: propertyId ? String(propertyId) : undefined,
@@ -15057,7 +15149,7 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
                     plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
                     garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
-                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion, modalidad, cuota_periodica 
              FROM prestamos 
              WHERE id = $1 FOR UPDATE`,
             [id]
@@ -15131,7 +15223,8 @@ app.post('/api/loans/:id/accept', async (req, res) => {
               offeredAmount,
               Number(loanRow.tipo_interes),
               Number(loanRow.plazo_meses),
-              new Date().toISOString()
+              new Date().toISOString(),
+              (loanRow.modalidad as any) || 'monthly'
             );
             schedule = amort.schedule;
           }
@@ -15215,6 +15308,8 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             spread: Number(loanRow.diferencial),
             openingFee: openingFee,
             monthlyPayment: Number(loanRow.cuota_mensual),
+            amortizationFrequency: (loanRow.modalidad as any) || 'monthly',
+            installmentPayment: loanRow.cuota_periodica ? Number(loanRow.cuota_periodica) : Number(loanRow.cuota_mensual),
             collateral: {
               type: loanRow.garantia_tipo,
               propertyId: loanRow.garantia_inmueble_id,
@@ -15642,8 +15737,8 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
 
             const openingFee = Number((0.001 * finalAmount).toFixed(2));
             const notes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
-
-            const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
+            const loanFreq: 'monthly' | 'annual' = (loanRow.modalidad as any) || 'monthly';
+            const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm, new Date().toISOString(), loanFreq);
 
             await client.query(
               `UPDATE prestamos 
@@ -15654,9 +15749,10 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
                    comision_apertura = $4, 
                    cuota_mensual = $5, 
                    notas_profesor = $6, 
-                   tabla_amortizacion = $7 
-               WHERE id = $8`,
-              [finalAmount, finalTerm, finalRate, openingFee, monthlyPayment, notes, JSON.stringify(schedule), loanRow.id]
+                   tabla_amortizacion = $7,
+                   cuota_periodica = $8 
+               WHERE id = $9`,
+              [finalAmount, finalTerm, finalRate, openingFee, monthlyPayment, notes, JSON.stringify(schedule), installmentPayment, loanRow.id]
             );
 
             updatedLoanData = {
@@ -15673,6 +15769,8 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
               spread: Number(loanRow.diferencial || 1.00),
               openingFee: openingFee,
               monthlyPayment: monthlyPayment,
+              amortizationFrequency: loanFreq,
+              installmentPayment: installmentPayment,
               collateral: {
                 type: loanRow.garantia_tipo,
                 propertyId: loanRow.garantia_inmueble_id,
@@ -15730,8 +15828,10 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
           loan.openingFee = Number((0.001 * finalAmount).toFixed(2));
           loan.teacherNotes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
 
-          const { monthlyPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm);
+          const loanFreq: 'monthly' | 'annual' = loan.amortizationFrequency || 'monthly';
+          const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm, new Date().toISOString(), loanFreq);
           loan.monthlyPayment = monthlyPayment;
+          loan.installmentPayment = installmentPayment;
           loan.schedule = schedule;
           loan.status = 'teacher_offered';
         }
@@ -20965,6 +21065,765 @@ app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/
   } catch (error: any) {
     const statusCode = error.statusCode || 400;
     return res.status(statusCode).json({ error: error.message || 'Error al eliminar el anuncio de materia prima' });
+  }
+});
+
+// ---------------- TEACHER FINISHED SCREWDRIVER ANNOUNCEMENTS & LEVEL 2 EXCLUSIVE PURCHASE ----------------
+
+app.get('/api/teacher/screwdriver-listings', async (req, res) => {
+  try {
+    let listings: TeacherScrewdriverListing[] = [];
+    if (dbPool) {
+      const q = await safeDbQuery('SELECT * FROM profesor_anuncios_destornilladores ORDER BY fecha_creacion DESC');
+      if (q && q.rows) {
+        listings = q.rows.map((row: any) => ({
+          id: String(row.id),
+          title: String(row.titulo),
+          description: String(row.descripcion || ''),
+          commercialConditions: String(row.condiciones_comerciales || ''),
+          initialQuantity: Number(row.cantidad_inicial || 0),
+          soldQuantity: Number(row.cantidad_vendida || 0),
+          remainingQuantity: Number(row.cantidad_restante || 0),
+          unitPrice: Number(row.precio_unitario || 0),
+          active: Boolean(row.activo),
+          history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+    } else {
+      const db = readDb();
+      listings = db.teacherScrewdriverListings || [];
+    }
+    return res.json({ success: true, listings });
+  } catch (err: any) {
+    console.error('Error fetching teacher screwdriver listings:', err);
+    return res.status(500).json({ error: 'Error al consultar los anuncios de destornilladores' });
+  }
+});
+
+app.post('/api/teacher/screwdriver-listings', async (req, res) => {
+  const { title, description, commercialConditions, initialQuantity, unitPrice } = req.body;
+  const qty = Number(initialQuantity);
+  const price = Number(unitPrice);
+
+  if (!title || typeof title !== 'string' || title.trim() === '') {
+    return res.status(400).json({ error: 'Debes indicar un título descriptivo para el anuncio.' });
+  }
+  if (!qty || !Number.isInteger(qty) || qty <= 0) {
+    return res.status(400).json({ error: 'La cantidad disponible debe ser un número entero mayor que cero.' });
+  }
+  if (!price || isNaN(price) || price <= 0) {
+    return res.status(400).json({ error: 'El precio por unidad debe ser superior a cero.' });
+  }
+
+  const conditions = typeof commercialConditions === 'string' && commercialConditions.trim() !== ''
+    ? commercialConditions.trim()
+    : 'Entrega inmediata en almacén de producto terminado. Pago al contado mediante transferencia bancaria. Producto verificado y apto para comercialización directa.';
+
+  const nowIso = new Date().toISOString();
+  const id = `prof-dest-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+
+  const newHistory: TeacherScrewdriverHistoryEntry = {
+    id: generateId('hist'),
+    timestamp: nowIso,
+    action: 'creacion',
+    description: `Publicación inicial del anuncio con ${qty} unidades a ${price.toFixed(2)} €/u.`,
+    quantity: qty,
+    unitPrice: price,
+    newStock: qty
+  };
+
+  const newListing: TeacherScrewdriverListing = {
+    id,
+    title: title.trim(),
+    description: (description || '').trim(),
+    commercialConditions: conditions,
+    initialQuantity: qty,
+    soldQuantity: 0,
+    remainingQuantity: qty,
+    unitPrice: Number(price.toFixed(2)),
+    active: true,
+    history: [newHistory],
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  try {
+    if (dbPool) {
+      await withPostgresTransaction(async (client) => {
+        await syncTeacherScrewdriverListingToSupabase(newListing, client);
+      });
+    }
+
+    const db = readDb();
+    if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+    db.teacherScrewdriverListings.unshift(newListing);
+    writeDb(db);
+
+    return res.json({ success: true, message: 'Anuncio de destornilladores terminados publicado con éxito.', listing: newListing });
+  } catch (err: any) {
+    console.error('Error creating teacher screwdriver listing:', err);
+    return res.status(500).json({ error: err.message || 'Error al guardar el anuncio de destornilladores.' });
+  }
+});
+
+app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
+  const { id } = req.params;
+  const { title, description, commercialConditions, unitPrice, initialQuantity, remainingQuantity } = req.body;
+
+  try {
+    if (dbPool) {
+      const result = await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT * FROM profesor_anuncios_destornilladores WHERE id = $1 FOR UPDATE', [id]);
+        if (!lockRes || lockRes.rows.length === 0) {
+          const err: any = new Error('Anuncio no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const row = lockRes.rows[0];
+        let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+
+        const newTitle = title !== undefined ? String(title).trim() : row.titulo;
+        const newDesc = description !== undefined ? String(description).trim() : row.descripcion;
+        const newCond = commercialConditions !== undefined ? String(commercialConditions).trim() : row.condiciones_comerciales;
+        const newPrice = unitPrice !== undefined ? Number(Number(unitPrice).toFixed(2)) : Number(row.precio_unitario);
+        const newInit = initialQuantity !== undefined ? Number(initialQuantity) : Number(row.cantidad_inicial);
+        const newRem = remainingQuantity !== undefined ? Number(remainingQuantity) : Number(row.cantidad_restante);
+        const sold = Math.max(0, newInit - newRem);
+
+        const nowIso = new Date().toISOString();
+        hist.unshift({
+          id: generateId('hist'),
+          timestamp: nowIso,
+          action: 'edicion',
+          description: `Modificación de condiciones del anuncio. Precio: ${newPrice} €/u, Stock restante: ${newRem} u.`,
+          unitPrice: newPrice,
+          previousStock: Number(row.cantidad_restante),
+          newStock: newRem
+        });
+
+        await client.query(
+          `UPDATE profesor_anuncios_destornilladores
+           SET titulo = $1, descripcion = $2, condiciones_comerciales = $3, precio_unitario = $4,
+               cantidad_inicial = $5, cantidad_restante = $6, cantidad_vendida = $7, historial = $8, fecha_actualizacion = NOW()
+           WHERE id = $9`,
+          [newTitle, newDesc, newCond, newPrice, newInit, newRem, sold, JSON.stringify(hist), id]
+        );
+
+        return {
+          id,
+          title: newTitle,
+          description: newDesc,
+          commercialConditions: newCond,
+          initialQuantity: newInit,
+          soldQuantity: sold,
+          remainingQuantity: newRem,
+          unitPrice: newPrice,
+          active: Boolean(row.activo),
+          history: hist,
+          createdAt: row.fecha_creacion,
+          updatedAt: nowIso
+        };
+      });
+
+      const db = readDb();
+      if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+      const idx = db.teacherScrewdriverListings.findIndex(l => l.id === id);
+      if (idx !== -1) {
+        db.teacherScrewdriverListings[idx] = result;
+      } else {
+        db.teacherScrewdriverListings.unshift(result);
+      }
+      writeDb(db);
+
+      return res.json({ success: true, message: 'Anuncio actualizado con éxito.', listing: result });
+    } else {
+      const db = readDb();
+      if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+      const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+      if (!listing) return res.status(404).json({ error: 'Anuncio no encontrado' });
+
+      if (title !== undefined) listing.title = String(title).trim();
+      if (description !== undefined) listing.description = String(description).trim();
+      if (commercialConditions !== undefined) listing.commercialConditions = String(commercialConditions).trim();
+      if (unitPrice !== undefined) listing.unitPrice = Number(Number(unitPrice).toFixed(2));
+      if (initialQuantity !== undefined) listing.initialQuantity = Number(initialQuantity);
+      if (remainingQuantity !== undefined) listing.remainingQuantity = Number(remainingQuantity);
+      listing.soldQuantity = Math.max(0, listing.initialQuantity - listing.remainingQuantity);
+      listing.updatedAt = new Date().toISOString();
+
+      if (!listing.history) listing.history = [];
+      listing.history.unshift({
+        id: generateId('hist'),
+        timestamp: listing.updatedAt,
+        action: 'edicion',
+        description: `Modificación de anuncio. Precio: ${listing.unitPrice} €/u, Stock restante: ${listing.remainingQuantity} u.`,
+        unitPrice: listing.unitPrice,
+        newStock: listing.remainingQuantity
+      });
+
+      writeDb(db);
+      return res.json({ success: true, message: 'Anuncio actualizado con éxito.', listing });
+    }
+  } catch (err: any) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al actualizar el anuncio' });
+  }
+});
+
+app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (dbPool) {
+      const result = await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT * FROM profesor_anuncios_destornilladores WHERE id = $1 FOR UPDATE', [id]);
+        if (!lockRes || lockRes.rows.length === 0) {
+          const err: any = new Error('Anuncio no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        const row = lockRes.rows[0];
+        const nextActive = !row.activo;
+        const nowIso = new Date().toISOString();
+        let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+        hist.unshift({
+          id: generateId('hist'),
+          timestamp: nowIso,
+          action: nextActive ? 'activacion' : 'desactivacion',
+          description: nextActive ? 'Anuncio activado para venta a alumnos de Nivel 2.' : 'Anuncio pausado/desactivado por el profesor.',
+          newStock: Number(row.cantidad_restante)
+        });
+
+        await client.query(
+          `UPDATE profesor_anuncios_destornilladores SET activo = $1, historial = $2, fecha_actualizacion = NOW() WHERE id = $3`,
+          [nextActive, JSON.stringify(hist), id]
+        );
+
+        return { id, active: nextActive, history: hist };
+      });
+
+      const db = readDb();
+      if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+      const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+      if (listing) {
+        listing.active = result.active;
+        listing.history = result.history;
+        listing.updatedAt = new Date().toISOString();
+        writeDb(db);
+      }
+
+      return res.json({ success: true, message: result.active ? 'Anuncio activado con éxito.' : 'Anuncio desactivado.', active: result.active });
+    } else {
+      const db = readDb();
+      if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+      const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+      if (!listing) return res.status(404).json({ error: 'Anuncio no encontrado' });
+
+      listing.active = !listing.active;
+      listing.updatedAt = new Date().toISOString();
+      if (!listing.history) listing.history = [];
+      listing.history.unshift({
+        id: generateId('hist'),
+        timestamp: listing.updatedAt,
+        action: listing.active ? 'activacion' : 'desactivacion',
+        description: listing.active ? 'Anuncio activado para venta a alumnos de Nivel 2.' : 'Anuncio pausado/desactivado por el profesor.',
+        newStock: listing.remainingQuantity
+      });
+      writeDb(db);
+      return res.json({ success: true, message: listing.active ? 'Anuncio activado con éxito.' : 'Anuncio desactivado.', active: listing.active });
+    }
+  } catch (err: any) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al cambiar estado del anuncio' });
+  }
+});
+
+app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (dbPool) {
+      await withPostgresTransaction(async (client) => {
+        const lockRes = await client.query('SELECT * FROM profesor_anuncios_destornilladores WHERE id = $1 FOR UPDATE', [id]);
+        if (!lockRes || lockRes.rows.length === 0) {
+          return;
+        }
+        const row = lockRes.rows[0];
+        let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+        hist.unshift({
+          id: generateId('hist'),
+          timestamp: new Date().toISOString(),
+          action: 'retirada',
+          description: 'Anuncio retirado definitivamente de la venta comercial por el profesor.'
+        });
+        await client.query(
+          `UPDATE profesor_anuncios_destornilladores SET activo = false, cantidad_restante = 0, historial = $1, fecha_actualizacion = NOW() WHERE id = $2`,
+          [JSON.stringify(hist), id]
+        );
+      });
+    }
+
+    const db = readDb();
+    if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+    const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+    if (listing) {
+      listing.active = false;
+      listing.remainingQuantity = 0;
+      if (!listing.history) listing.history = [];
+      listing.history.unshift({
+        id: generateId('hist'),
+        timestamp: new Date().toISOString(),
+        action: 'retirada',
+        description: 'Anuncio retirado definitivamente de la venta comercial por el profesor.'
+      });
+      writeDb(db);
+    }
+    return res.json({ success: true, message: 'Anuncio retirado de la venta correctamente.' });
+  } catch (err: any) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al retirar el anuncio' });
+  }
+});
+
+// Student querying teacher screwdriver listings - STRICT LEVEL 2 VALIDATION ON SERVER
+app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
+  const studentId = req.query.studentId as string;
+  if (!studentId) {
+    return res.status(400).json({ error: 'Falta el identificador del alumno (studentId).' });
+  }
+
+  try {
+    // 1. Verify student level from DB (SERVER-SIDE MANDATORY ENFORCEMENT)
+    let studentLevel: number | undefined;
+    if (dbPool) {
+      const qUser = await safeDbQuery(
+        `SELECT id, level, role FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
+        [studentId]
+      );
+      if (!qUser || qUser.rows.length === 0) {
+        return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
+      }
+      studentLevel = Number(qUser.rows[0].level || 1);
+    } else {
+      const db = readDb();
+      const u = db.users.find(x => x.id === studentId || x.username === studentId);
+      if (!u) {
+        return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
+      }
+      studentLevel = u.level || 1;
+    }
+
+    // Strict check: ONLY Level 2 accounts can query these listings!
+    if (studentLevel !== 2) {
+      return res.status(403).json({
+        error: `Acceso restringido: Solo las cuentas de nivel 2 pueden consultar los anuncios de destornilladores terminados del profesor. Tu nivel actual es ${studentLevel}.`
+      });
+    }
+
+    // 2. Fetch active listings with remainingQuantity > 0
+    let activeListings: TeacherScrewdriverListing[] = [];
+    if (dbPool) {
+      const q = await safeDbQuery(
+        `SELECT * FROM profesor_anuncios_destornilladores 
+         WHERE activo = true AND cantidad_restante > 0 
+         ORDER BY fecha_creacion DESC`
+      );
+      if (q && q.rows) {
+        activeListings = q.rows.map((row: any) => ({
+          id: String(row.id),
+          title: String(row.titulo),
+          description: String(row.descripcion || ''),
+          commercialConditions: String(row.condiciones_comerciales || ''),
+          initialQuantity: Number(row.cantidad_inicial || 0),
+          soldQuantity: Number(row.cantidad_vendida || 0),
+          remainingQuantity: Number(row.cantidad_restante || 0),
+          unitPrice: Number(row.precio_unitario || 0),
+          active: Boolean(row.activo),
+          history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+    } else {
+      const db = readDb();
+      activeListings = (db.teacherScrewdriverListings || []).filter(l => l.active && l.remainingQuantity > 0);
+    }
+
+    return res.json({ success: true, listings: activeListings });
+  } catch (err: any) {
+    console.error('Error fetching student screwdriver listings:', err);
+    return res.status(500).json({ error: 'Error al consultar destornilladores disponibles.' });
+  }
+});
+
+// Student purchasing teacher screwdrivers - ATOMIC WITH ACID TRANSACTION & STRICT LEVEL 2 VALIDATION
+app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
+  const { id } = req.params;
+  const { studentId, quantity } = req.body;
+
+  if (!studentId) {
+    return res.status(400).json({ error: 'Falta el identificador del comprador (studentId).' });
+  }
+
+  const qty = Number(quantity);
+  if (!qty || !Number.isInteger(qty) || qty <= 0) {
+    return res.status(400).json({ error: 'La cantidad a comprar debe ser un número entero mayor que cero.' });
+  }
+
+  const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
+  const idemKey = rawIdemKey || `buy_teach_dest_${studentId}_${id}_${qty}_${Math.floor(Date.now() / 4000)}`;
+
+  try {
+    const result = await executeWithIdempotency(idemKey, async (key) => {
+      if (dbPool) {
+        return await withPostgresTransaction(async (client) => {
+          // 1. Lock student account row in cuentas
+          const studentLock = await client.query(
+            `SELECT id, alumno, saldo, usuario, account_number, role, level 
+             FROM cuentas 
+             WHERE id = $1 OR LOWER(usuario) = LOWER($1) 
+             FOR UPDATE`,
+            [studentId]
+          );
+
+          if (!studentLock || studentLock.rows.length === 0) {
+            const err: any = new Error('Cuenta de estudiante no encontrada.');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const buyerRow = studentLock.rows[0];
+          const buyerLevel = Number(buyerRow.level || 1);
+
+          // MANDATORY SERVER-SIDE LEVEL 2 CHECK
+          if (buyerLevel !== 2) {
+            const err: any = new Error(
+              `Acceso denegado: Solo las cuentas de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
+            );
+            err.statusCode = 403;
+            throw err;
+          }
+
+          // 2. Lock announcement row in profesor_anuncios_destornilladores
+          const annLock = await client.query(
+            `SELECT * FROM profesor_anuncios_destornilladores WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+
+          if (!annLock || annLock.rows.length === 0) {
+            const err: any = new Error('Anuncio de destornilladores no encontrado.');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          const annRow = annLock.rows[0];
+
+          if (!annRow.activo) {
+            const err: any = new Error('Este anuncio se encuentra actualmente pausado o retirado de la venta.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const currentStock = Number(annRow.cantidad_restante || 0);
+          if (qty > currentStock) {
+            const err: any = new Error(
+              `Existencias insuficientes: Solo quedan ${currentStock} unidades disponibles en este anuncio (solicitadas: ${qty}).`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const unitPrice = Number(annRow.precio_unitario);
+          const totalAmount = Number((qty * unitPrice).toFixed(2));
+          const currentBalance = Number(buyerRow.saldo);
+
+          if (currentBalance < totalAmount) {
+            const err: any = new Error(
+              `Saldo insuficiente: El importe total de la compra es ${formatCurrency(totalAmount)}, pero tu saldo disponible es de ${formatCurrency(currentBalance)}.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const newBalance = Number((currentBalance - totalAmount).toFixed(2));
+          const newRemaining = currentStock - qty;
+          const newSold = Number(annRow.cantidad_vendida || 0) + qty;
+          const nowIso = new Date().toISOString();
+
+          // 3. Deduct balance from student account in cuentas
+          await client.query(
+            `UPDATE cuentas SET saldo = $1 WHERE id = $2`,
+            [newBalance, buyerRow.id]
+          );
+
+          // 4. Update announcement stock and append sale to operation history
+          let hist: TeacherScrewdriverHistoryEntry[] = annRow.historial
+            ? (typeof annRow.historial === 'string' ? JSON.parse(annRow.historial) : annRow.historial)
+            : [];
+
+          hist.unshift({
+            id: generateId('hist'),
+            timestamp: nowIso,
+            action: 'venta',
+            description: `Venta de ${qty} destornilladores terminados a ${buyerRow.alumno} (${buyerRow.account_number}) por un total de ${formatCurrency(totalAmount)}.`,
+            quantity: qty,
+            unitPrice,
+            totalAmount,
+            buyerId: buyerRow.id,
+            buyerName: buyerRow.alumno,
+            buyerAccount: buyerRow.account_number,
+            previousStock: currentStock,
+            newStock: newRemaining
+          });
+
+          await client.query(
+            `UPDATE profesor_anuncios_destornilladores 
+             SET cantidad_restante = $1, cantidad_vendida = $2, historial = $3, fecha_actualizacion = NOW() 
+             WHERE id = $4`,
+            [newRemaining, newSold, JSON.stringify(hist), id]
+          );
+
+          // 5. Register accounting movement in movimientos
+          const txId = generateId('tx');
+          const concept = `Compra comercial de ${qty} destornilladores terminados al Profesor (${unitPrice.toFixed(2)} €/u)`;
+
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txId + '-out',
+              buyerRow.id,
+              totalAmount,
+              nowIso,
+              concept,
+              buyerRow.id,
+              buyerRow.alumno,
+              buyerRow.account_number || '',
+              'profesor-1',
+              'Profesor / BricoMaster Distribuciones S.A.',
+              'ES000000000000000000'
+            ]
+          );
+
+          // 6. Update finished goods inventory in materias_primas_inventario (WITHOUT treating as raw materials or own production)
+          let invRes = await client.query(
+            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+            [buyerRow.id]
+          );
+
+          if (!invRes || invRes.rows.length === 0) {
+            await client.query(
+              `INSERT INTO materias_primas_inventario (
+                alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+                pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
+                productos_ensamblados, destornilladores_punta_estrella, fecha_actualizacion
+              ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $4, NOW())`,
+              [buyerRow.id, buyerRow.alumno, qty, qty]
+            );
+          } else {
+            await client.query(
+              `UPDATE materias_primas_inventario
+               SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
+                   destornilladores_punta_estrella = COALESCE(destornilladores_punta_estrella, 0) + $1,
+                   fecha_actualizacion = NOW()
+               WHERE alumno_id = $2`,
+              [qty, buyerRow.id]
+            );
+          }
+
+          const transferRecord: Transfer = {
+            id: txId,
+            senderId: buyerRow.id,
+            senderName: buyerRow.alumno,
+            senderAccount: buyerRow.account_number || '',
+            receiverId: 'profesor-1',
+            receiverName: 'Profesor / BricoMaster Distribuciones S.A.',
+            receiverAccount: 'ES000000000000000000',
+            amount: totalAmount,
+            concept,
+            timestamp: nowIso
+          };
+
+          return {
+            success: true,
+            message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados por ${formatCurrency(totalAmount)}. El producto ha sido depositado directamente en tu almacén de productos terminados.`,
+            updatedBalance: newBalance,
+            remainingStock: newRemaining,
+            totalPaid: totalAmount,
+            quantityBought: qty,
+            _postCommit: {
+              buyerId: buyerRow.id,
+              newBalance,
+              listingId: id,
+              newRemaining,
+              newSold,
+              hist,
+              qty,
+              transferRecord
+            }
+          };
+        }, key);
+      } else {
+        // Fallback in-memory mode
+        const db = readDb();
+        const buyer = db.users.find(u => u.id === studentId || u.username === studentId);
+        if (!buyer) {
+          const err: any = new Error('Estudiante no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const buyerLevel = Number(buyer.level || 1);
+        if (buyerLevel !== 2) {
+          const err: any = new Error(
+            `Acceso denegado: Solo las cuentas de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
+          );
+          err.statusCode = 403;
+          throw err;
+        }
+
+        if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+        const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+        if (!listing) {
+          const err: any = new Error('Anuncio no encontrado');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (!listing.active) {
+          const err: any = new Error('El anuncio no se encuentra activo');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (qty > listing.remainingQuantity) {
+          const err: any = new Error(`Stock insuficiente: solo quedan ${listing.remainingQuantity} u. disponibles`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const totalAmount = Number((qty * listing.unitPrice).toFixed(2));
+        if (buyer.balance < totalAmount) {
+          const err: any = new Error(`Saldo insuficiente: necesitas ${formatCurrency(totalAmount)}`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        buyer.balance = Number((buyer.balance - totalAmount).toFixed(2));
+        listing.remainingQuantity -= qty;
+        listing.soldQuantity += qty;
+        listing.updatedAt = new Date().toISOString();
+
+        if (!listing.history) listing.history = [];
+        listing.history.unshift({
+          id: generateId('hist'),
+          timestamp: listing.updatedAt,
+          action: 'venta',
+          description: `Venta de ${qty} destornilladores a ${buyer.name} por ${formatCurrency(totalAmount)}`,
+          quantity: qty,
+          unitPrice: listing.unitPrice,
+          totalAmount,
+          buyerId: buyer.id,
+          buyerName: buyer.name,
+          previousStock: listing.remainingQuantity + qty,
+          newStock: listing.remainingQuantity
+        });
+
+        // Add to finished goods in memory
+        if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+        let inv = db.rawMaterialInventories.find(i => i.studentId === buyer.id);
+        if (!inv) {
+          inv = {
+            studentId: buyer.id,
+            ironKg: 0,
+            metalKg: 0,
+            plasticKg: 0,
+            epoxiKg: 0,
+            producedRodsUnits: 0,
+            producedScrewdriversUnits: qty,
+            starScrewdriversUnits: qty,
+            lastCalculatedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          db.rawMaterialInventories.push(inv);
+        } else {
+          inv.producedScrewdriversUnits = (inv.producedScrewdriversUnits || 0) + qty;
+          (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + qty;
+          inv.updatedAt = new Date().toISOString();
+        }
+
+        const txId = generateId('tx');
+        const transferRecord: Transfer = {
+          id: txId,
+          senderId: buyer.id,
+          senderName: buyer.name,
+          senderAccount: buyer.accountNumber || '',
+          receiverId: 'profesor-1',
+          receiverName: 'Profesor / BricoMaster Distribuciones S.A.',
+          receiverAccount: 'ES000000000000000000',
+          amount: totalAmount,
+          concept: `Compra comercial de ${qty} destornilladores terminados al Profesor (${listing.unitPrice.toFixed(2)} €/u)`,
+          timestamp: new Date().toISOString()
+        };
+        if (!db.transfers) db.transfers = [];
+        db.transfers.unshift(transferRecord);
+        writeDb(db);
+
+        return {
+          success: true,
+          message: `Compra realizada con éxito. Se han adquirido ${qty} destornilladores terminados por ${formatCurrency(totalAmount)}.`,
+          updatedBalance: buyer.balance,
+          remainingStock: listing.remainingQuantity,
+          totalPaid: totalAmount,
+          quantityBought: qty
+        };
+      }
+    });
+
+    // POST COMMIT in-memory cache sync for postgres mode
+    if (result && (result as any)._postCommit) {
+      const pc = (result as any)._postCommit;
+      const db = readDb();
+      const b = (db.users || []).find(u => u.id === pc.buyerId);
+      if (b) b.balance = pc.newBalance;
+
+      if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
+      const l = db.teacherScrewdriverListings.find(x => x.id === pc.listingId);
+      if (l) {
+        l.remainingQuantity = pc.newRemaining;
+        l.soldQuantity = pc.newSold;
+        l.history = pc.hist;
+        l.updatedAt = new Date().toISOString();
+      }
+
+      if (!db.transfers) db.transfers = [];
+      db.transfers.unshift(pc.transferRecord);
+
+      if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+      let inv = db.rawMaterialInventories.find(i => i.studentId === pc.buyerId);
+      if (!inv) {
+        inv = {
+          studentId: pc.buyerId,
+          ironKg: 0,
+          metalKg: 0,
+          plasticKg: 0,
+          epoxiKg: 0,
+          producedRodsUnits: 0,
+          producedScrewdriversUnits: pc.qty,
+          starScrewdriversUnits: pc.qty,
+          lastCalculatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        db.rawMaterialInventories.push(inv);
+      } else {
+        inv.producedScrewdriversUnits = (inv.producedScrewdriversUnits || 0) + pc.qty;
+        (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + pc.qty;
+        inv.updatedAt = new Date().toISOString();
+      }
+
+      writeDb(db);
+      delete (result as any)._postCommit;
+    }
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error executing screwdriver purchase:', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Error al ejecutar la compra de destornilladores.' });
   }
 });
 

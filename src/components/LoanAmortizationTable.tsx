@@ -51,7 +51,13 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
         </div>
 
         {/* Loan Key Parameters Summary */}
-        <div className="bg-amber-50/70 border-b border-amber-100/80 p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+        <div className="bg-amber-50/70 border-b border-amber-100/80 p-4 grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
+          <div>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Modalidad de amortización</span>
+            <span className="font-bold text-amber-900 text-sm">
+              {loan.amortizationFrequency === 'annual' ? 'Amortización anual' : 'Amortización mensual'}
+            </span>
+          </div>
           <div>
             <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Capital concedido / ofrecido</span>
             <span className="font-bold text-slate-900 text-sm font-mono">
@@ -71,9 +77,11 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
             </span>
           </div>
           <div>
-            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">Cuota mensual constante</span>
+            <span className="text-slate-500 uppercase font-semibold text-[10px] tracking-wider block">
+              {loan.amortizationFrequency === 'annual' ? 'Cuota anual constante' : 'Cuota mensual constante'}
+            </span>
             <span className="font-bold text-amber-800 text-sm font-mono">
-              {formatNumber(loan.monthlyPayment)} € / mes
+              {formatNumber(loan.installmentPayment || loan.monthlyPayment)} € / {loan.amortizationFrequency === 'annual' ? 'año' : 'mes'}
             </span>
           </div>
         </div>
@@ -83,13 +91,14 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider text-[10px] bg-slate-50">
-                <th className="py-2.5 px-3 rounded-l-lg">Cuota #</th>
+                <th className="py-2.5 px-3 rounded-l-lg">{loan.amortizationFrequency === 'annual' ? 'Año / Cuota' : 'Cuota #'}</th>
                 <th className="py-2.5 px-3">Fecha de vencimiento</th>
-                <th className="py-2.5 px-3 text-right">Cuota a pagar</th>
+                <th className="py-2.5 px-3 text-right">Saldo inicial pendiente</th>
+                <th className="py-2.5 px-3 text-right">Importe de la cuota</th>
                 <th className="py-2.5 px-3 text-right">Intereses</th>
-                <th className="py-2.5 px-3 text-right">Capital amortizado</th>
+                <th className="py-2.5 px-3 text-right">Amortización de capital</th>
                 <th className="py-2.5 px-3 text-right">Total amortizado</th>
-                <th className="py-2.5 px-3 text-right">Capital pendiente</th>
+                <th className="py-2.5 px-3 text-right">Saldo final pendiente</th>
                 <th className="py-2.5 px-3 text-center">Estado</th>
                 <th className="py-2.5 px-3 text-right rounded-r-lg">Recibo</th>
               </tr>
@@ -102,6 +111,7 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                   month: '2-digit',
                   year: 'numeric'
                 });
+                const initialPending = row.initialBalance ?? Number((row.pendingBalance + row.principal).toFixed(2));
 
                 return (
                   <tr 
@@ -109,13 +119,16 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
                     className={`hover:bg-amber-50/40 transition-colors ${row.paid ? 'bg-emerald-50/30' : ''}`}
                   >
                     <td className="py-2.5 px-3 font-bold text-slate-700">
-                      {row.period}
+                      {loan.amortizationFrequency === 'annual' ? `Año ${row.period}` : `Cuota ${row.period}`}
                     </td>
                     <td className="py-2.5 px-3 text-slate-600 font-sans">
                       <span className="flex items-center space-x-1">
                         <Calendar className="w-3 h-3 text-slate-400 shrink-0" />
                         <span>{formattedDate}</span>
                       </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-medium text-slate-700">
+                      {formatNumber(initialPending)} €
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-amber-900">
                       {formatNumber(row.payment)} €
@@ -165,7 +178,7 @@ export default function LoanAmortizationTable({ loan, onClose }: LoanAmortizatio
         {/* Footer */}
         <div className="border-t border-slate-100 p-4 bg-slate-50 flex justify-between items-center text-xs text-slate-500">
           <p>
-            * Amortización calculada mediante la fórmula de cuota fija mensual constante (Sistema Francés).
+            * Amortización calculada mediante la fórmula de cuota fija {loan.amortizationFrequency === 'annual' ? 'anual' : 'mensual'} constante (Sistema Francés).
           </p>
           <button
             onClick={onClose}

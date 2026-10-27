@@ -228,6 +228,15 @@ export default function TeacherLoanManagement() {
                           Requiere revisión del profesor
                         </span>
                       )}
+                      {loan.amortizationFrequency === 'annual' ? (
+                        <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                          Amortización anual
+                        </span>
+                      ) : (
+                        <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                          Amortización mensual
+                        </span>
+                      )}
                       {isActive && (
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center">
                           <CheckCircle2 className="w-3 h-3 mr-1" />
@@ -288,13 +297,15 @@ export default function TeacherLoanManagement() {
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Plazo</span>
                     <span className="text-xs font-bold text-slate-800">
-                      {loan.termMonths} meses
+                      {loan.termMonths} meses ({formatNumber(loan.termMonths / 12, 1)} años)
                     </span>
                   </div>
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Cuota mensual</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">
+                      {loan.amortizationFrequency === 'annual' ? 'Cuota anual' : 'Cuota mensual'}
+                    </span>
                     <span className="text-xs font-bold font-mono text-amber-800">
-                      {formatNumber(loan.monthlyPayment)} €
+                      {formatNumber(loan.installmentPayment || loan.monthlyPayment)} € / {loan.amortizationFrequency === 'annual' ? 'año' : 'mes'}
                     </span>
                   </div>
                 </div>

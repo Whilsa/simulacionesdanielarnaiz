@@ -9,6 +9,7 @@ import type { User, RawMaterialAnnouncement, RawMaterialOrder, PurchasedVehicle,
 import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
 import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
+import StudentFinishedScrewdriversSection from './StudentFinishedScrewdriversSection.js';
 import {
   Package,
   Layers,
@@ -65,7 +66,7 @@ import {
 
 interface RawMaterialsPortalProps {
   currentUser: User;
-  initialTab?: 'catalogo' | 'mensajeria' | 'facturacion';
+  initialTab?: 'catalogo' | 'mensajeria' | 'facturacion' | 'destornilladores_terminados';
   onRefreshUser?: () => void;
   onUserBalanceUpdated?: (newBalance: number) => void;
 }
@@ -187,7 +188,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [showLevelRestrictionModal, setShowLevelRestrictionModal] = useState(false);
 
   // Main Mercado Cards Tabs State
-  const [activeMainTab, setActiveMainTab] = useState<'catalogo' | 'mensajeria' | 'facturacion'>(initialTab || 'catalogo');
+  const [activeMainTab, setActiveMainTab] = useState<'catalogo' | 'mensajeria' | 'facturacion' | 'destornilladores_terminados'>(initialTab || 'catalogo');
 
   useEffect(() => {
     if (initialTab) {
@@ -2920,6 +2921,18 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         </button>
 
         <button
+          onClick={() => setActiveMainTab('destornilladores_terminados')}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeMainTab === 'destornilladores_terminados'
+              ? 'bg-emerald-500 text-slate-950 shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+          }`}
+        >
+          <Store className="w-4 h-4" />
+          <span>Compra de destornilladores terminados (Nivel 2)</span>
+        </button>
+
+        <button
           onClick={() => setActiveMainTab('facturacion')}
           className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
             activeMainTab === 'facturacion'
@@ -2931,6 +2944,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           <span>Facturas ({orders.filter(isOfficialCommercialInvoice).length})</span>
         </button>
       </div>
+
+      {/* TAB: COMPRA DE DESTORNILLADORES TERMINADOS (EXCLUSIVO NIVEL 2) */}
+      {activeMainTab === 'destornilladores_terminados' && (
+        <StudentFinishedScrewdriversSection
+          currentUser={currentUser}
+          onRefreshUser={onRefreshUser}
+          onUserBalanceUpdated={onUserBalanceUpdated}
+        />
+      )}
 
       {/* 1. TAB: CATALOGO / PERFILES DE EMPRESA Y MERCADO */}
       {activeMainTab === 'catalogo' && (
