@@ -91,9 +91,21 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
   const annualRate = euriborRate + spread; // 4.50%
   const openingFeeAmt = Number((0.001 * estimatedOfferedAmount).toFixed(2));
 
+  // Helper for safe calendar arithmetic (leap years, month ends)
+  const addSafeMonths = (baseDate: Date, monthsToAdd: number): Date => {
+    const d = new Date(baseDate);
+    const targetDay = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + monthsToAdd);
+    const maxDays = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(targetDay, maxDays));
+    return d;
+  };
+
   // Calculate payment using French method (monthly or annual)
   const isAnnual = amortizationFrequency === 'annual';
-  const totalPeriods = isAnnual ? Math.max(1, Math.round(termMonthsNum / 12)) : termMonthsNum;
+  // Respect the agreed maturity: do not round arbitrarily to fewer years. E.g., 18 months -> 2 annual installments
+  const totalPeriods = isAnnual ? Math.max(1, Math.ceil(termMonthsNum / 12)) : termMonthsNum;
   const periodRate = isAnnual ? (annualRate / 100) : (annualRate / 100) / 12;
 
   let estimatedPeriodicPayment = 0;
@@ -112,17 +124,23 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
     const now = new Date();
 
     for (let p = 1; p <= totalPeriods; p++) {
-      const dueDate = new Date(now);
+      let dueDate: Date;
       if (isAnnual) {
-        dueDate.setFullYear(dueDate.getFullYear() + p);
+        if (p === totalPeriods) {
+          dueDate = addSafeMonths(now, termMonthsNum);
+        } else {
+          dueDate = addSafeMonths(now, p * 12);
+        }
       } else {
-        dueDate.setMonth(dueDate.getMonth() + p);
+        dueDate = addSafeMonths(now, p);
       }
+      dueDate.setHours(23, 59, 59, 999);
 
       const initialPending = pendingBalance;
       const interest = Number((initialPending * periodRate).toFixed(2));
       let principalAmortized = Number((estimatedPeriodicPayment - interest).toFixed(2));
 
+      // Cent adjustment on final installment to guarantee pending balance ends at exactly 0.00 €
       if (p === totalPeriods || principalAmortized > pendingBalance) {
         principalAmortized = pendingBalance;
         const finalPayment = Number((principalAmortized + interest).toFixed(2));
@@ -154,7 +172,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
       }
     }
     return rows;
-  }, [estimatedOfferedAmount, totalPeriods, periodRate, estimatedPeriodicPayment, isAnnual]);
+  }, [estimatedOfferedAmount, totalPeriods, periodRate, estimatedPeriodicPayment, isAnnual, termMonthsNum]);
 
   const handlePropertyChange = (propertyId: string) => {
     setSelectedPropertyId(propertyId);

@@ -46,7 +46,13 @@ export default function StudentFinishedScrewdriversSection({
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/teacher/screwdriver-listings/student?studentId=${encodeURIComponent(currentUser.id)}`);
+      const res = await fetch(`/api/teacher/screwdriver-listings/student?studentId=${encodeURIComponent(currentUser.id)}`, {
+        headers: {
+          'x-user-id': currentUser.id,
+          'x-username': currentUser.username,
+          'x-user-role': currentUser.role
+        }
+      });
       if (res.status === 403) {
         setError('Acceso restringido: Solo las cuentas de nivel 2 pueden consultar estos anuncios.');
         setListings([]);
@@ -99,7 +105,12 @@ export default function StudentFinishedScrewdriversSection({
     try {
       const res = await fetch(`/api/teacher/screwdriver-listings/${selectedListing.id}/buy`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id,
+          'x-username': currentUser.username,
+          'x-user-role': currentUser.role
+        },
         body: JSON.stringify({
           studentId: currentUser.id,
           quantity: qty
@@ -111,7 +122,7 @@ export default function StudentFinishedScrewdriversSection({
         throw new Error(data.error || 'No se pudo completar la compra.');
       }
 
-      setSuccess(`¡Compra completada con éxito! Se han añadido ${qty} destornilladores terminados a tu inventario y se han cargado ${formatNumber(data.totalPrice || totalCost)} € en tu cuenta.`);
+      setSuccess(`¡Compra completada con éxito! Se han añadido ${qty} destornilladores terminados a tu inventario y se han cargado ${formatNumber(data.totalPaid || data.totalPrice || totalCost)} € en tu cuenta.`);
       setSelectedListing(null);
 
       if (data.newBalance !== undefined && onUserBalanceUpdated) {

@@ -8,10 +8,14 @@ import {
   Store, Plus, Edit, Power, Trash2, History, CheckCircle2, 
   XCircle, Clock, AlertCircle, RefreshCw, X, Check, ShieldAlert, PackageCheck
 } from 'lucide-react';
-import { TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry } from '../types.js';
+import { User, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 
-export default function TeacherScrewdriverListingsManagement() {
+interface TeacherScrewdriverListingsManagementProps {
+  currentUser?: User;
+}
+
+export default function TeacherScrewdriverListingsManagement({ currentUser }: TeacherScrewdriverListingsManagementProps = {}) {
   const [listings, setListings] = useState<TeacherScrewdriverListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -30,6 +34,18 @@ export default function TeacherScrewdriverListingsManagement() {
   // History modal state
   const [historyListing, setHistoryListing] = useState<TeacherScrewdriverListing | null>(null);
 
+  const getAuthHeaders = (includeJson = true) => {
+    const headers: Record<string, string> = {
+      'x-user-id': currentUser?.id || 'profesor-1',
+      'x-username': currentUser?.username || 'pupdaniel',
+      'x-user-role': 'teacher'
+    };
+    if (includeJson) {
+      headers['Content-Type'] = 'application/json';
+    }
+    return headers;
+  };
+
   useEffect(() => {
     fetchListings();
   }, []);
@@ -37,7 +53,9 @@ export default function TeacherScrewdriverListingsManagement() {
   const fetchListings = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/teacher/screwdriver-listings');
+      const res = await fetch('/api/teacher/screwdriver-listings', {
+        headers: getAuthHeaders(false)
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.listings) {
@@ -101,7 +119,7 @@ export default function TeacherScrewdriverListingsManagement() {
       if (editingListing) {
         const res = await fetch(`/api/teacher/screwdriver-listings/${editingListing.id}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(true),
           body: JSON.stringify({
             title: formTitle.trim(),
             description: formDescription.trim(),
@@ -116,7 +134,7 @@ export default function TeacherScrewdriverListingsManagement() {
       } else {
         const res = await fetch('/api/teacher/screwdriver-listings', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(true),
           body: JSON.stringify({
             title: formTitle.trim(),
             description: formDescription.trim(),
@@ -144,11 +162,12 @@ export default function TeacherScrewdriverListingsManagement() {
     setSuccess('');
     try {
       const res = await fetch(`/api/teacher/screwdriver-listings/${listing.id}/toggle`, {
-        method: 'PATCH'
+        method: 'PATCH',
+        headers: getAuthHeaders(false)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al cambiar estado.');
-      setSuccess(`Anuncio ${data.listing?.status === 'activo' ? 'activado' : 'desactivado'} correctamente.`);
+      setSuccess(`Anuncio ${data.active ? 'activado' : 'desactivado'} correctamente.`);
       await fetchListings();
     } catch (err: any) {
       setError(err.message || 'Error al cambiar estado del anuncio.');
@@ -163,7 +182,8 @@ export default function TeacherScrewdriverListingsManagement() {
     setSuccess('');
     try {
       const res = await fetch(`/api/teacher/screwdriver-listings/${listing.id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders(false)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al retirar el anuncio.');

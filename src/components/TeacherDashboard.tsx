@@ -896,13 +896,26 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
             <p className="text-sm text-slate-500">Supervisa cuentas, audita transferencias y simula flujos de caja en el aula.</p>
           </div>
           
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center justify-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm px-4 py-2.5 rounded-xl shadow-md shadow-amber-100 transition-all cursor-pointer w-full md:w-auto"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Crear cuenta alumno</span>
-          </button>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
+            <button
+              onClick={() => setActiveTab('screwdriver_listings')}
+              className={`flex items-center justify-center space-x-2 font-semibold text-sm px-4 py-2.5 rounded-xl border transition-all cursor-pointer ${
+                activeTab === 'screwdriver_listings'
+                  ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-xs'
+              }`}
+            >
+              <Store className="w-4 h-4 text-amber-600" />
+              <span>Anuncios destornilladores (Nivel 2)</span>
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center justify-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm px-4 py-2.5 rounded-xl shadow-md shadow-amber-100 transition-all cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Crear cuenta alumno</span>
+            </button>
+          </div>
         </div>
 
         {/* Financial Metrics Cards */}
@@ -1995,7 +2008,7 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
               >
-                <TeacherScrewdriverListingsManagement />
+                <TeacherScrewdriverListingsManagement currentUser={currentUser} />
               </motion.div>
             )}
 

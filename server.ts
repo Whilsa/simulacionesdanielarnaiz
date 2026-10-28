@@ -2812,6 +2812,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
     const resMessages = (await safeDbQuery('SELECT * FROM market_messages ORDER BY timestamp ASC')) || { rows: [] };
     const resLawsuits = (await safeDbQuery('SELECT * FROM demandas_judiciales ORDER BY fecha_creacion DESC')) || { rows: [] };
     const resNotif = (await safeDbQuery('SELECT * FROM notificaciones ORDER BY created_at DESC')) || { rows: [] };
+    const resTeacherScrewdriverListings = (await safeDbQuery('SELECT * FROM profesor_anuncios_destornilladores ORDER BY fecha_creacion DESC')) || { rows: [] };
 
       const db = readDb();
 
@@ -3602,10 +3603,26 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         relatedAnnouncementId: row.related_announcement_id ? String(row.related_announcement_id) : undefined
       })) : [];
 
+      // Reconstruct db.teacherScrewdriverListings from Supabase "profesor_anuncios_destornilladores"
+      db.teacherScrewdriverListings = (resTeacherScrewdriverListings && resTeacherScrewdriverListings.rows) ? resTeacherScrewdriverListings.rows.map((row: any) => ({
+        id: String(row.id),
+        title: String(row.titulo),
+        description: String(row.descripcion || ''),
+        commercialConditions: String(row.condiciones_comerciales || ''),
+        initialQuantity: Number(row.cantidad_inicial || 0),
+        soldQuantity: Number(row.cantidad_vendida || 0),
+        remainingQuantity: Number(row.cantidad_restante || 0),
+        unitPrice: Number(row.precio_unitario || 0),
+        active: Boolean(row.activo),
+        history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
+        createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+        updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+      })) : [];
+
       db.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
       clearAllSessionCaches();
-      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes, ${resContracts.rows.length} electricity contracts, ${resFloorPlans.rows.length} floor plans from Supabase!`);
+      console.log(`[Supabase Restore] Successfully restored ${resCuentas.rows.length} accounts, ${restoredTransfers.length} transfers, ${db.properties.length} properties, ${db.acquisitions.length} acquisitions, ${db.paymentObligations.length} obligations, ${resLoans.rows.length} loans, ${db.teacherScrewdriverListings.length} teacher screwdriver listings, ${resJobs.rows.length} jobs, ${resEmployees.rows.length} employees, ${resPayrolls.rows.length} payrolls, ${resTaxes.rows.length} taxes, ${resContracts.rows.length} electricity contracts, ${resFloorPlans.rows.length} floor plans from Supabase!`);
       return { restoredUsers: resCuentas.rows.length, restoredMovements: resMov.rows.length };
   } catch (e) {
     console.error('[Supabase Restore Error]', e);
@@ -11065,6 +11082,16 @@ app.post('/api/taxes/pay', async (req, res) => {
 
 // ---------------- LOAN MANAGEMENT SYSTEM ----------------
 
+function addSafeMonths(baseDate: Date, monthsToAdd: number): Date {
+  const d = new Date(baseDate);
+  const targetDay = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + monthsToAdd);
+  const maxDaysInTargetMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(targetDay, maxDaysInTargetMonth));
+  return d;
+}
+
 function calculateFrenchAmortization(
   principal: number,
   annualInterestRatePercent: number,
@@ -11073,7 +11100,8 @@ function calculateFrenchAmortization(
   frequency: 'monthly' | 'annual' = 'monthly'
 ): { monthlyPayment: number; installmentPayment: number; schedule: AmortizationRow[] } {
   const isAnnual = frequency === 'annual';
-  const numPeriods = isAnnual ? Math.max(1, Math.round(termMonths / 12)) : termMonths;
+  // Respect the agreed maturity: do not round arbitrarily to fewer years. E.g., 18 months -> 2 annual installments
+  const numPeriods = isAnnual ? Math.max(1, Math.ceil(termMonths / 12)) : termMonths;
   const r = isAnnual ? (annualInterestRatePercent / 100) : ((annualInterestRatePercent / 100) / 12);
 
   let installmentPayment = 0;
@@ -11092,15 +11120,28 @@ function calculateFrenchAmortization(
   const baseDate = new Date(startDateISO);
 
   for (let k = 1; k <= numPeriods; k++) {
-    const dueDate = isAnnual
-      ? new Date(baseDate.getFullYear() + k, baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 999)
-      : new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0, 23, 59, 59, 999);
+    let dueDate: Date;
+    if (isAnnual) {
+      // For intermediate annual periods, add k * 12 months.
+      // For the final installment, respect the EXACT agreed maturity date (termMonths), even if not a multiple of 12!
+      if (k === numPeriods) {
+        dueDate = addSafeMonths(baseDate, termMonths);
+      } else {
+        dueDate = addSafeMonths(baseDate, k * 12);
+      }
+      dueDate.setHours(23, 59, 59, 999);
+    } else {
+      // Preserve exact existing behavior for monthly loans
+      dueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + k, 0, 23, 59, 59, 999);
+    }
 
     const initialBalance = Number(pendingBalance.toFixed(2));
     const interest = Number((initialBalance * r).toFixed(2));
     let principalPart = Number((installmentPayment - interest).toFixed(2));
 
-    if (k === numPeriods) {
+    // Cent adjustment on the final installment or if principal exceeds remaining balance:
+    // Ensures final pending balance terminates at exactly 0.00 €
+    if (k === numPeriods || principalPart > pendingBalance) {
       principalPart = Number(pendingBalance.toFixed(2));
       installmentPayment = Number((principalPart + interest).toFixed(2));
       if (!isAnnual) {
@@ -12942,7 +12983,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               );
 
               const isAnnual = loanRow.modalidad === 'annual';
-              const totalPeriods = isAnnual ? Math.max(1, Math.round(loanRow.plazo_meses / 12)) : loanRow.plazo_meses;
+              const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loanRow.plazo_meses / 12)) : loanRow.plazo_meses;
               const concept = item.concept || `Cuota ${isAnnual ? 'anual ' : ''}${targetRow.period}/${totalPeriods} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
               const senderAccount = studentRow.account_number || student.accountNumber || '';
               const senderName = studentRow.alumno || student.name || '';
@@ -14663,7 +14704,8 @@ app.get('/api/loans', async (req, res) => {
           id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
           plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
           garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
-          estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+          estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion,
+          modalidad, cuota_periodica
         FROM prestamos
       `;
       const params: any[] = [];
@@ -14705,6 +14747,9 @@ app.get('/api/loans', async (req, res) => {
             ? Number(row.importe_concedido) 
             : ((row.estado === 'offered' || row.estado === 'active' || row.estado === 'teacher_offered') ? Number(row.importe_ofrecido || 0) : undefined);
 
+          const freq: 'monthly' | 'annual' = (row.modalidad as any) === 'annual' ? 'annual' : 'monthly';
+          const instPayment = row.cuota_periodica ? Number(row.cuota_periodica) : Number(row.cuota_mensual || 0);
+
           return {
             id: String(row.id),
             studentId: String(row.alumno_id),
@@ -14719,6 +14764,8 @@ app.get('/api/loans', async (req, res) => {
             spread: Number(row.diferencial || 1.0),
             openingFee: Number(row.comision_apertura || 0),
             monthlyPayment: Number(row.cuota_mensual || 0),
+            amortizationFrequency: freq,
+            installmentPayment: instPayment,
             collateral: {
               type: (row.garantia_tipo as 'property' | 'private_residence') || 'property',
               propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
@@ -17731,7 +17778,8 @@ app.put('/api/loans/:id', async (req, res) => {
           // 5. Recalculate French amortization schedule and opening fee (1‰ = 0.001 * offeredAmount)
           const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
           const startDate = loanRow.fecha_creacion ? new Date(loanRow.fecha_creacion).toISOString() : new Date().toISOString();
-          const { monthlyPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate);
+          const loanFreq: 'monthly' | 'annual' = (loanRow.modalidad as any) === 'annual' ? 'annual' : 'monthly';
+          const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate, loanFreq);
 
           // 6. Update in PostgreSQL
           await client.query(
@@ -17741,9 +17789,10 @@ app.put('/api/loans/:id', async (req, res) => {
                  tipo_interes = $3, 
                  comision_apertura = $4, 
                  cuota_mensual = $5, 
-                 tabla_amortizacion = $6 
-             WHERE id = $7`,
-            [newOfferedAmount, newTerm, newRate, openingFee, monthlyPayment, JSON.stringify(schedule), loanRow.id]
+                 tabla_amortizacion = $6,
+                 cuota_periodica = $7 
+             WHERE id = $8`,
+            [newOfferedAmount, newTerm, newRate, openingFee, monthlyPayment, JSON.stringify(schedule), installmentPayment, loanRow.id]
           );
 
           const updatedLoan: BankLoan = {
@@ -17760,6 +17809,8 @@ app.put('/api/loans/:id', async (req, res) => {
             spread: Number(loanRow.diferencial || 1.00),
             openingFee,
             monthlyPayment,
+            amortizationFrequency: loanFreq,
+            installmentPayment,
             collateral: {
               type: loanRow.garantia_tipo,
               propertyId: loanRow.garantia_inmueble_id,
@@ -17838,13 +17889,16 @@ app.put('/api/loans/:id', async (req, res) => {
 
         const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
         const startDate = loan.createdAt || new Date().toISOString();
-        const { monthlyPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate);
+        const loanFreq: 'monthly' | 'annual' = (loan.amortizationFrequency as any) === 'annual' ? 'annual' : 'monthly';
+        const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate, loanFreq);
 
         loan.offeredAmount = newOfferedAmount;
         loan.annualInterestRate = newRate;
         loan.termMonths = newTerm;
         loan.openingFee = openingFee;
         loan.monthlyPayment = monthlyPayment;
+        loan.amortizationFrequency = loanFreq;
+        loan.installmentPayment = installmentPayment;
         loan.schedule = schedule;
 
         writeDb(db);
@@ -21070,6 +21124,67 @@ app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/
 
 // ---------------- TEACHER FINISHED SCREWDRIVER ANNOUNCEMENTS & LEVEL 2 EXCLUSIVE PURCHASE ----------------
 
+async function isAuthorizedTeacher(req: express.Request, client?: pg.PoolClient): Promise<boolean> {
+  const callingUserId = (req.headers['x-user-id'] as string) || req.body?.userId || req.body?.requesterId || (req.query?.userId as string);
+  const callingUsername = (req.headers['x-username'] as string) || req.body?.username || (req.query?.username as string);
+
+  // 1. Direct recognized teacher identifiers
+  if (
+    callingUserId === 'profesor-1' ||
+    callingUserId === 'pupdaniel' ||
+    callingUsername === 'pupdaniel' ||
+    (typeof callingUserId === 'string' && callingUserId.toLowerCase() === 'pupdaniel') ||
+    (typeof callingUsername === 'string' && callingUsername.toLowerCase() === 'pupdaniel')
+  ) {
+    return true;
+  }
+
+  // 2. Database validation against cuentas table
+  if (dbPool || client) {
+    try {
+      const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+      if (callingUserId) {
+        const q = await runner(
+          `SELECT id, usuario, role FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
+          [callingUserId]
+        );
+        if (q && q.rows.length > 0) {
+          const row = q.rows[0];
+          if (row.role === 'teacher' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
+            return true;
+          }
+        }
+      }
+      if (callingUsername) {
+        const q2 = await runner(
+          `SELECT id, usuario, role FROM cuentas WHERE LOWER(usuario) = LOWER($1) LIMIT 1`,
+          [callingUsername]
+        );
+        if (q2 && q2.rows.length > 0) {
+          const row = q2.rows[0];
+          if (row.role === 'teacher' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
+            return true;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[isAuthorizedTeacher] DB query error:', e);
+    }
+  }
+
+  // 3. In-memory check against db.users
+  const db = readDb();
+  const memUser = (db.users || []).find(u => 
+    (callingUserId && (u.id === callingUserId || u.username === callingUserId || u.id?.toLowerCase() === callingUserId.toLowerCase() || u.username?.toLowerCase() === callingUserId.toLowerCase())) ||
+    (callingUsername && (u.username === callingUsername || u.username?.toLowerCase() === callingUsername.toLowerCase()))
+  );
+  if (memUser && (memUser.role === 'teacher' || memUser.id === 'profesor-1' || memUser.username === 'pupdaniel')) {
+    return true;
+  }
+
+  return false;
+}
+
 app.get('/api/teacher/screwdriver-listings', async (req, res) => {
   try {
     let listings: TeacherScrewdriverListing[] = [];
@@ -21103,6 +21218,11 @@ app.get('/api/teacher/screwdriver-listings', async (req, res) => {
 });
 
 app.post('/api/teacher/screwdriver-listings', async (req, res) => {
+  // Strict server-side teacher verification
+  if (!(await isAuthorizedTeacher(req))) {
+    return res.status(403).json({ error: 'Acceso no autorizado: Solo el profesor puede publicar anuncios de destornilladores.' });
+  }
+
   const { title, description, commercialConditions, initialQuantity, unitPrice } = req.body;
   const qty = Number(initialQuantity);
   const price = Number(unitPrice);
@@ -21169,6 +21289,11 @@ app.post('/api/teacher/screwdriver-listings', async (req, res) => {
 });
 
 app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
+  // Strict server-side teacher verification
+  if (!(await isAuthorizedTeacher(req))) {
+    return res.status(403).json({ error: 'Acceso no autorizado: Solo el profesor puede editar anuncios de destornilladores.' });
+  }
+
   const { id } = req.params;
   const { title, description, commercialConditions, unitPrice, initialQuantity, remainingQuantity } = req.body;
 
@@ -21272,6 +21397,11 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
 });
 
 app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
+  // Strict server-side teacher verification
+  if (!(await isAuthorizedTeacher(req))) {
+    return res.status(403).json({ error: 'Acceso no autorizado: Solo el profesor puede activar o pausar anuncios de destornilladores.' });
+  }
+
   const { id } = req.params;
   try {
     if (dbPool) {
@@ -21338,6 +21468,11 @@ app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
 });
 
 app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
+  // Strict server-side teacher verification
+  if (!(await isAuthorizedTeacher(req))) {
+    return res.status(403).json({ error: 'Acceso no autorizado: Solo el profesor puede retirar anuncios de destornilladores.' });
+  }
+
   const { id } = req.params;
   try {
     if (dbPool) {
@@ -21384,14 +21519,15 @@ app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
 
 // Student querying teacher screwdriver listings - STRICT LEVEL 2 VALIDATION ON SERVER
 app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
-  const studentId = req.query.studentId as string;
+  const studentId = (req.query.studentId as string) || (req.headers['x-user-id'] as string) || (req.headers['x-username'] as string);
   if (!studentId) {
     return res.status(400).json({ error: 'Falta el identificador del alumno (studentId).' });
   }
 
   try {
-    // 1. Verify student level from DB (SERVER-SIDE MANDATORY ENFORCEMENT)
+    // 1. Verify student level and role strictly from DB (SERVER-SIDE MANDATORY ENFORCEMENT)
     let studentLevel: number | undefined;
+    let studentRole: string | undefined;
     if (dbPool) {
       const qUser = await safeDbQuery(
         `SELECT id, level, role FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
@@ -21401,19 +21537,21 @@ app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
         return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
       }
       studentLevel = Number(qUser.rows[0].level || 1);
+      studentRole = String(qUser.rows[0].role || 'student');
     } else {
       const db = readDb();
-      const u = db.users.find(x => x.id === studentId || x.username === studentId);
+      const u = db.users.find(x => x.id === studentId || x.username === studentId || x.id?.toLowerCase() === studentId.toLowerCase() || x.username?.toLowerCase() === studentId.toLowerCase());
       if (!u) {
         return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
       }
       studentLevel = u.level || 1;
+      studentRole = u.role || 'student';
     }
 
-    // Strict check: ONLY Level 2 accounts can query these listings!
-    if (studentLevel !== 2) {
+    // Strict check: ONLY Level 2 student accounts can query these listings!
+    if (studentLevel !== 2 || studentRole !== 'student') {
       return res.status(403).json({
-        error: `Acceso restringido: Solo las cuentas de nivel 2 pueden consultar los anuncios de destornilladores terminados del profesor. Tu nivel actual es ${studentLevel}.`
+        error: `Acceso restringido: Solo las cuentas de alumno de nivel 2 pueden consultar los anuncios de destornilladores terminados del profesor. Tu nivel actual es ${studentLevel}.`
       });
     }
 
@@ -21457,8 +21595,9 @@ app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
 app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
   const { id } = req.params;
   const { studentId, quantity } = req.body;
+  const callingStudentId = studentId || (req.headers['x-user-id'] as string) || (req.headers['x-username'] as string);
 
-  if (!studentId) {
+  if (!callingStudentId) {
     return res.status(400).json({ error: 'Falta el identificador del comprador (studentId).' });
   }
 
@@ -21468,7 +21607,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
   }
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
-  const idemKey = rawIdemKey || `buy_teach_dest_${studentId}_${id}_${qty}_${Math.floor(Date.now() / 4000)}`;
+  const idemKey = rawIdemKey || `buy_teach_dest_${callingStudentId}_${id}_${qty}_${Math.floor(Date.now() / 4000)}`;
 
   try {
     const result = await executeWithIdempotency(idemKey, async (key) => {
@@ -21480,7 +21619,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
              FROM cuentas 
              WHERE id = $1 OR LOWER(usuario) = LOWER($1) 
              FOR UPDATE`,
-            [studentId]
+            [callingStudentId]
           );
 
           if (!studentLock || studentLock.rows.length === 0) {
@@ -21491,11 +21630,12 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
           const buyerRow = studentLock.rows[0];
           const buyerLevel = Number(buyerRow.level || 1);
+          const buyerRole = String(buyerRow.role || 'student');
 
           // MANDATORY SERVER-SIDE LEVEL 2 CHECK
-          if (buyerLevel !== 2) {
+          if (buyerLevel !== 2 || buyerRole !== 'student') {
             const err: any = new Error(
-              `Acceso denegado: Solo las cuentas de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
+              `Acceso denegado: Solo las cuentas de alumno de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
             );
             err.statusCode = 403;
             throw err;
@@ -21602,30 +21742,57 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             ]
           );
 
-          // 6. Update finished goods inventory in materias_primas_inventario (WITHOUT treating as raw materials or own production)
+          // 6. Model-aware recognition: distinguish flat vs star screwdriver from listing title/description
+          const annText = `${annRow.titulo} ${annRow.descripcion || ''}`.toLowerCase();
+          const isFlatScrewdriver = /plana|plano|pala|metal|slotted/i.test(annText);
+
           let invRes = await client.query(
             `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
             [buyerRow.id]
           );
 
           if (!invRes || invRes.rows.length === 0) {
-            await client.query(
-              `INSERT INTO materias_primas_inventario (
-                alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
-                pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
-                productos_ensamblados, destornilladores_punta_estrella, fecha_actualizacion
-              ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $4, NOW())`,
-              [buyerRow.id, buyerRow.alumno, qty, qty]
-            );
+            if (isFlatScrewdriver) {
+              await client.query(
+                `INSERT INTO materias_primas_inventario (
+                  alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+                  pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
+                  productos_ensamblados, destornilladores_punta_plana, destornilladores_metal, fecha_actualizacion
+                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, NOW())`,
+                [buyerRow.id, buyerRow.alumno, qty]
+              );
+            } else {
+              await client.query(
+                `INSERT INTO materias_primas_inventario (
+                  alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+                  pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
+                  productos_ensamblados, destornilladores_punta_estrella, destornilladores_hierro, fecha_actualizacion
+                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, NOW())`,
+                [buyerRow.id, buyerRow.alumno, qty]
+              );
+            }
           } else {
-            await client.query(
-              `UPDATE materias_primas_inventario
-               SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
-                   destornilladores_punta_estrella = COALESCE(destornilladores_punta_estrella, 0) + $1,
-                   fecha_actualizacion = NOW()
-               WHERE alumno_id = $2`,
-              [qty, buyerRow.id]
-            );
+            if (isFlatScrewdriver) {
+              await client.query(
+                `UPDATE materias_primas_inventario
+                 SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
+                     destornilladores_punta_plana = COALESCE(destornilladores_punta_plana, 0) + $1,
+                     destornilladores_metal = COALESCE(destornilladores_metal, 0) + $1,
+                     fecha_actualizacion = NOW()
+                 WHERE alumno_id = $2`,
+                [qty, buyerRow.id]
+              );
+            } else {
+              await client.query(
+                `UPDATE materias_primas_inventario
+                 SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
+                     destornilladores_punta_estrella = COALESCE(destornilladores_punta_estrella, 0) + $1,
+                     destornilladores_hierro = COALESCE(destornilladores_hierro, 0) + $1,
+                     fecha_actualizacion = NOW()
+                 WHERE alumno_id = $2`,
+                [qty, buyerRow.id]
+              );
+            }
           }
 
           const transferRecord: Transfer = {
@@ -21643,11 +21810,13 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
           return {
             success: true,
-            message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados por ${formatCurrency(totalAmount)}. El producto ha sido depositado directamente en tu almacén de productos terminados.`,
+            message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por ${formatCurrency(totalAmount)}. El producto ha sido depositado directamente en tu inventario de productos terminados.`,
             updatedBalance: newBalance,
+            newBalance,
             remainingStock: newRemaining,
             totalPaid: totalAmount,
             quantityBought: qty,
+            isFlat: isFlatScrewdriver,
             _postCommit: {
               buyerId: buyerRow.id,
               newBalance,
@@ -21656,6 +21825,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
               newSold,
               hist,
               qty,
+              isFlat: isFlatScrewdriver,
               transferRecord
             }
           };
@@ -21663,7 +21833,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
       } else {
         // Fallback in-memory mode
         const db = readDb();
-        const buyer = db.users.find(u => u.id === studentId || u.username === studentId);
+        const buyer = db.users.find(u => u.id === callingStudentId || u.username === callingStudentId);
         if (!buyer) {
           const err: any = new Error('Estudiante no encontrado');
           err.statusCode = 404;
@@ -21671,9 +21841,10 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
         }
 
         const buyerLevel = Number(buyer.level || 1);
-        if (buyerLevel !== 2) {
+        const buyerRole = String(buyer.role || 'student');
+        if (buyerLevel !== 2 || buyerRole !== 'student') {
           const err: any = new Error(
-            `Acceso denegado: Solo las cuentas de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
+            `Acceso denegado: Solo las cuentas de alumno de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
           );
           err.statusCode = 403;
           throw err;
@@ -21724,7 +21895,10 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           newStock: listing.remainingQuantity
         });
 
-        // Add to finished goods in memory
+        const annText = `${listing.title} ${listing.description || ''}`.toLowerCase();
+        const isFlatScrewdriver = /plana|plano|pala|metal|slotted/i.test(annText);
+
+        // Add to finished goods in memory without treating as raw materials or own production
         if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
         let inv = db.rawMaterialInventories.find(i => i.studentId === buyer.id);
         if (!inv) {
@@ -21736,14 +21910,23 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             epoxiKg: 0,
             producedRodsUnits: 0,
             producedScrewdriversUnits: qty,
-            starScrewdriversUnits: qty,
+            starScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
+            flatScrewdriversUnits: isFlatScrewdriver ? qty : 0,
+            ironScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
+            metalScrewdriversUnits: isFlatScrewdriver ? qty : 0,
             lastCalculatedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
           db.rawMaterialInventories.push(inv);
         } else {
           inv.producedScrewdriversUnits = (inv.producedScrewdriversUnits || 0) + qty;
-          (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + qty;
+          if (isFlatScrewdriver) {
+            inv.flatScrewdriversUnits = ((inv as any).flatScrewdriversUnits || 0) + qty;
+            (inv as any).metalScrewdriversUnits = ((inv as any).metalScrewdriversUnits || 0) + qty;
+          } else {
+            (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + qty;
+            (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + qty;
+          }
           inv.updatedAt = new Date().toISOString();
         }
 
@@ -21766,8 +21949,9 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
         return {
           success: true,
-          message: `Compra realizada con éxito. Se han adquirido ${qty} destornilladores terminados por ${formatCurrency(totalAmount)}.`,
+          message: `Compra realizada con éxito. Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por ${formatCurrency(totalAmount)}.`,
           updatedBalance: buyer.balance,
+          newBalance: buyer.balance,
           remainingStock: listing.remainingQuantity,
           totalPaid: totalAmount,
           quantityBought: qty
@@ -21805,14 +21989,23 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           epoxiKg: 0,
           producedRodsUnits: 0,
           producedScrewdriversUnits: pc.qty,
-          starScrewdriversUnits: pc.qty,
+          starScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
+          flatScrewdriversUnits: pc.isFlat ? pc.qty : 0,
+          ironScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
+          metalScrewdriversUnits: pc.isFlat ? pc.qty : 0,
           lastCalculatedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
         db.rawMaterialInventories.push(inv);
       } else {
         inv.producedScrewdriversUnits = (inv.producedScrewdriversUnits || 0) + pc.qty;
-        (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + pc.qty;
+        if (pc.isFlat) {
+          inv.flatScrewdriversUnits = ((inv as any).flatScrewdriversUnits || 0) + pc.qty;
+          (inv as any).metalScrewdriversUnits = ((inv as any).metalScrewdriversUnits || 0) + pc.qty;
+        } else {
+          (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + pc.qty;
+          (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + pc.qty;
+        }
         inv.updatedAt = new Date().toISOString();
       }
 

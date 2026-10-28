@@ -10,6 +10,7 @@ import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
 import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import StudentFinishedScrewdriversSection from './StudentFinishedScrewdriversSection.js';
+import TeacherScrewdriverListingsManagement from './TeacherScrewdriverListingsManagement.js';
 import {
   Package,
   Layers,
@@ -2929,7 +2930,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           }`}
         >
           <Store className="w-4 h-4" />
-          <span>Compra de destornilladores terminados (Nivel 2)</span>
+          <span>{currentUser.role === 'teacher' ? 'Gestión de destornilladores terminados' : 'Compra de destornilladores terminados (Nivel 2)'}</span>
         </button>
 
         <button
@@ -2945,13 +2946,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         </button>
       </div>
 
-      {/* TAB: COMPRA DE DESTORNILLADORES TERMINADOS (EXCLUSIVO NIVEL 2) */}
+      {/* TAB: COMPRA / GESTIÓN DE DESTORNILLADORES TERMINADOS */}
       {activeMainTab === 'destornilladores_terminados' && (
-        <StudentFinishedScrewdriversSection
-          currentUser={currentUser}
-          onRefreshUser={onRefreshUser}
-          onUserBalanceUpdated={onUserBalanceUpdated}
-        />
+        currentUser.role === 'teacher' ? (
+          <TeacherScrewdriverListingsManagement currentUser={currentUser} />
+        ) : (
+          <StudentFinishedScrewdriversSection
+            currentUser={currentUser}
+            onRefreshUser={onRefreshUser}
+            onUserBalanceUpdated={onUserBalanceUpdated}
+          />
+        )
       )}
 
       {/* 1. TAB: CATALOGO / PERFILES DE EMPRESA Y MERCADO */}
