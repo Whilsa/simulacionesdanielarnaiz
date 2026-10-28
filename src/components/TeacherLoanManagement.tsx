@@ -76,6 +76,7 @@ export default function TeacherLoanManagement() {
           offeredAmount: action === 'approve' ? Number(editAmount) : undefined,
           annualInterestRate: action === 'approve' ? Number(editRate) : undefined,
           termMonths: action === 'approve' ? Number(editTerm) : undefined,
+          amortizationFrequency: reviewLoan.amortizationFrequency,
           teacherNotes
         })
       });
@@ -338,8 +339,13 @@ export default function TeacherLoanManagement() {
 
             <div className="p-6 space-y-4 text-xs">
               
-              <div className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-amber-900 text-xs">
-                <p className="font-bold">Garantía hipotecaria presentada:</p>
+              <div className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-amber-900 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <p className="font-bold">Garantía hipotecaria presentada:</p>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200/80 text-amber-900 border border-amber-300">
+                    {reviewLoan.amortizationFrequency === 'annual' ? 'Amortización anual' : 'Amortización mensual'}
+                  </span>
+                </div>
                 <p className="mt-0.5">
                   Tasación de <strong className="font-mono">{formatNumber(reviewLoan.collateral.appraisalValue)} €</strong>. El importe solicitado es de {formatNumber(reviewLoan.requestedAmount)} €.
                 </p>

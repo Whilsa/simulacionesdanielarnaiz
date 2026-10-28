@@ -12668,14 +12668,15 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
     propertyTitle?: string;
     schedule: AmortizationRow[];
     loanRef?: BankLoan;
+    modalidad?: string;
   }
 
   const candidateLoansByStudent = new Map<string, CandidateLoan[]>();
   if (dbPool) {
     try {
       const q = canonicalTargetId
-        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = 'active'`
-        : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion FROM prestamos WHERE estado = 'active'`;
+        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = 'active'`
+        : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE estado = 'active'`;
       const p = canonicalTargetId ? [canonicalTargetId, targetStudentId || canonicalTargetId] : [];
       const pgLoansRes = await dbPool.query(q, p);
       for (const r of pgLoansRes.rows) {
@@ -12689,6 +12690,8 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
         if (memRef) {
           memRef.schedule = sched;
           memRef.status = (r.estado as any) || 'active';
+          memRef.amortizationFrequency = (r.modalidad as any) || 'monthly';
+          if (r.cuota_periodica) memRef.installmentPayment = Number(r.cuota_periodica);
           if (r.garantia_inmueble_titulo) {
             if (!memRef.collateral) memRef.collateral = {} as any;
             memRef.collateral.propertyTitle = r.garantia_inmueble_titulo;
@@ -12710,6 +12713,8 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             spread: Number(r.diferencial || 1.00),
             openingFee: Number(r.comision_apertura || 0),
             monthlyPayment: Number(r.cuota_mensual || 0),
+            amortizationFrequency: (r.modalidad as any) || 'monthly',
+            installmentPayment: r.cuota_periodica ? Number(r.cuota_periodica) : Number(r.cuota_mensual || 0),
             collateral: {
               type: String(r.garantia_tipo || 'property') as any,
               propertyId: r.garantia_inmueble_id,
@@ -12731,7 +12736,8 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
           termMonths: Number(r.plazo_meses),
           propertyTitle: r.garantia_inmueble_titulo,
           schedule: sched,
-          loanRef: memRef
+          loanRef: memRef,
+          modalidad: r.modalidad || 'monthly'
         };
         const curList = candidateLoansByStudent.get(r.alumno_id) || [];
         curList.push(lObj);
@@ -12838,13 +12844,16 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
             const periodNum = row.period || (row as any).installmentNumber || (idx + 1);
 
+            const isAnnual = (loan.modalidad || loan.loanRef?.amortizationFrequency) === 'annual';
+            const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loan.termMonths / 12)) : loan.termMonths;
+
             pendingItems.push({
               id: `${loan.id}-row-${periodNum}`,
               sourceType: 'loan',
               dueDate: dDate,
               principal,
               penaltyInterest: penalty,
-              concept: `Cuota ${periodNum}/${loan.termMonths} de préstamo hipotecario (${loan.propertyTitle || 'Garantía inmobiliaria'})`,
+              concept: `Cuota ${isAnnual ? 'anual ' : ''}${periodNum}/${totalPeriods} de préstamo hipotecario (${loan.propertyTitle || 'Garantía inmobiliaria'})`,
               loanId: loan.id,
               loanRef: loan.loanRef,
               loanRowIndex: idx,
@@ -12867,7 +12876,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             const txResult = await withPostgresTransaction(async (client) => {
               // 1. LOCK 1: Exclusive lock on the loan row in prestamos
               const loanLockRes = await client.query(
-                `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, estado, tabla_amortizacion, plazo_meses, garantia_inmueble_titulo
+                `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, estado, tabla_amortizacion, plazo_meses, garantia_inmueble_titulo, modalidad, cuota_periodica
                  FROM prestamos
                  WHERE id = $1
                  FOR UPDATE`,
@@ -13009,7 +13018,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               let penaltyTx: Transfer | null = null;
               if (penaltyPaid > 0) {
                 const penaltyTxId = generateId('tx');
-                const penaltyConcept = `Intereses de demora por retraso en cuota ${targetRow.period}/${loanRow.plazo_meses} de préstamo hipotecario`;
+                const penaltyConcept = `Intereses de demora por retraso en cuota ${targetRow.period}/${totalPeriods} de préstamo hipotecario`;
                 const penaltyIso = new Date(Date.now() + 100).toISOString();
 
                 await client.query(
@@ -15256,7 +15265,12 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             throw err;
           }
 
-          // Ensure valid amortization schedule
+          // Ensure valid amortization schedule matching stored modality
+          const loanFreq: 'monthly' | 'annual' = (loanRow.modalidad as any) === 'annual' ? 'annual' : 'monthly';
+          const expectedPeriods = loanFreq === 'annual' ? Math.max(1, Math.ceil(Number(loanRow.plazo_meses) / 12)) : Number(loanRow.plazo_meses);
+          let monthlyPayment = Number(loanRow.cuota_mensual);
+          let installmentPayment = loanRow.cuota_periodica ? Number(loanRow.cuota_periodica) : Number(loanRow.cuota_mensual);
+
           let schedule = loanRow.tabla_amortizacion;
           if (typeof schedule === 'string') {
             try {
@@ -15265,15 +15279,17 @@ app.post('/api/loans/:id/accept', async (req, res) => {
               schedule = null;
             }
           }
-          if (!Array.isArray(schedule) || schedule.length === 0) {
+          if (!Array.isArray(schedule) || schedule.length !== expectedPeriods) {
             const amort = calculateFrenchAmortization(
               offeredAmount,
               Number(loanRow.tipo_interes),
               Number(loanRow.plazo_meses),
-              new Date().toISOString(),
-              (loanRow.modalidad as any) || 'monthly'
+              loanRow.fecha_creacion ? new Date(loanRow.fecha_creacion).toISOString() : new Date().toISOString(),
+              loanFreq
             );
             schedule = amort.schedule;
+            monthlyPayment = amort.monthlyPayment;
+            installmentPayment = amort.installmentPayment;
           }
           const studentBalance = Number(Number(studentRow.saldo).toFixed(2));
 
@@ -15294,9 +15310,15 @@ app.post('/api/loans/:id/accept', async (req, res) => {
           // 7. UPDATE prestamos
           await client.query(
             `UPDATE prestamos 
-             SET estado = 'active', importe_concedido = $1, fecha_aceptacion = $2, tabla_amortizacion = $3 
-             WHERE id = $4`,
-            [offeredAmount, nowIso, JSON.stringify(schedule), loanRow.id]
+             SET estado = 'active', 
+                 importe_concedido = $1, 
+                 fecha_aceptacion = $2, 
+                 tabla_amortizacion = $3, 
+                 cuota_mensual = $4, 
+                 cuota_periodica = $5, 
+                 modalidad = $6 
+             WHERE id = $7`,
+            [offeredAmount, nowIso, JSON.stringify(schedule), monthlyPayment, installmentPayment, loanFreq, loanRow.id]
           );
 
           // 8. INSERT movimientos
@@ -15354,9 +15376,9 @@ app.post('/api/loans/:id/accept', async (req, res) => {
             euriborRate: Number(loanRow.euribor),
             spread: Number(loanRow.diferencial),
             openingFee: openingFee,
-            monthlyPayment: Number(loanRow.cuota_mensual),
-            amortizationFrequency: (loanRow.modalidad as any) || 'monthly',
-            installmentPayment: loanRow.cuota_periodica ? Number(loanRow.cuota_periodica) : Number(loanRow.cuota_mensual),
+            monthlyPayment: monthlyPayment,
+            amortizationFrequency: loanFreq,
+            installmentPayment: installmentPayment,
             collateral: {
               type: loanRow.garantia_tipo,
               propertyId: loanRow.garantia_inmueble_id,
@@ -15402,6 +15424,22 @@ app.post('/api/loans/:id/accept', async (req, res) => {
         }
         if (student.balance < loan.openingFee) { const err: any = new Error('Saldo insuficiente para abonar la comisión de apertura'); err.statusCode = 400; throw err; }
 
+        const loanFreq: 'monthly' | 'annual' = (loan.amortizationFrequency as any) === 'annual' ? 'annual' : 'monthly';
+        const expectedPeriods = loanFreq === 'annual' ? Math.max(1, Math.ceil(loan.termMonths / 12)) : loan.termMonths;
+        if (!Array.isArray(loan.schedule) || loan.schedule.length !== expectedPeriods) {
+          const amort = calculateFrenchAmortization(
+            loan.offeredAmount,
+            loan.annualInterestRate,
+            loan.termMonths,
+            loan.createdAt || new Date().toISOString(),
+            loanFreq
+          );
+          loan.schedule = amort.schedule;
+          loan.monthlyPayment = amort.monthlyPayment;
+          loan.installmentPayment = amort.installmentPayment;
+        }
+        loan.amortizationFrequency = loanFreq;
+
         student.balance = Number((student.balance - loan.openingFee + loan.offeredAmount).toFixed(2));
         loan.approvedAmount = loan.offeredAmount;
         loan.status = 'active';
@@ -15424,6 +15462,9 @@ app.post('/api/loans/:id/accept', async (req, res) => {
           db.loans[lIdx].approvedAmount = pc.offeredAmount;
           db.loans[lIdx].acceptedAt = pc.nowIso;
           db.loans[lIdx].schedule = pc.updatedLoanData.schedule;
+          db.loans[lIdx].monthlyPayment = pc.updatedLoanData.monthlyPayment;
+          db.loans[lIdx].installmentPayment = pc.updatedLoanData.installmentPayment;
+          db.loans[lIdx].amortizationFrequency = pc.updatedLoanData.amortizationFrequency;
         } else {
           if (!db.loans) db.loans = [];
           db.loans.push(pc.updatedLoanData);
@@ -15669,7 +15710,8 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
             `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
                     plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
                     garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
-                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion,
+                    modalidad, cuota_periodica 
              FROM prestamos 
              WHERE id = $1 FOR UPDATE`,
             [id]
@@ -15744,6 +15786,8 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
               spread: Number(loanRow.diferencial || 1.00),
               openingFee: Number(loanRow.comision_apertura),
               monthlyPayment: Number(loanRow.cuota_mensual),
+              amortizationFrequency: (loanRow.modalidad as any) || 'monthly',
+              installmentPayment: loanRow.cuota_periodica ? Number(loanRow.cuota_periodica) : Number(loanRow.cuota_mensual),
               collateral: {
                 type: loanRow.garantia_tipo,
                 propertyId: loanRow.garantia_inmueble_id,
@@ -15784,8 +15828,14 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
 
             const openingFee = Number((0.001 * finalAmount).toFixed(2));
             const notes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
-            const loanFreq: 'monthly' | 'annual' = (loanRow.modalidad as any) || 'monthly';
-            const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm, new Date().toISOString(), loanFreq);
+            const loanFreq: 'monthly' | 'annual' = (req.body.amortizationFrequency === 'annual' || req.body.modalidad === 'annual' || loanRow.modalidad === 'annual') ? 'annual' : 'monthly';
+            const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(
+              finalAmount, 
+              finalRate, 
+              finalTerm, 
+              loanRow.fecha_creacion ? new Date(loanRow.fecha_creacion).toISOString() : new Date().toISOString(), 
+              loanFreq
+            );
 
             await client.query(
               `UPDATE prestamos 
@@ -15797,9 +15847,10 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
                    cuota_mensual = $5, 
                    notas_profesor = $6, 
                    tabla_amortizacion = $7,
-                   cuota_periodica = $8 
-               WHERE id = $9`,
-              [finalAmount, finalTerm, finalRate, openingFee, monthlyPayment, notes, JSON.stringify(schedule), installmentPayment, loanRow.id]
+                   cuota_periodica = $8,
+                   modalidad = $9 
+               WHERE id = $10`,
+              [finalAmount, finalTerm, finalRate, openingFee, monthlyPayment, notes, JSON.stringify(schedule), installmentPayment, loanFreq, loanRow.id]
             );
 
             updatedLoanData = {
@@ -15875,8 +15926,15 @@ app.post('/api/teacher/loans/:id/review', async (req, res) => {
           loan.openingFee = Number((0.001 * finalAmount).toFixed(2));
           loan.teacherNotes = teacherNotes || 'Condiciones revisadas y aprobadas por el Profesor.';
 
-          const loanFreq: 'monthly' | 'annual' = loan.amortizationFrequency || 'monthly';
-          const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(finalAmount, finalRate, finalTerm, new Date().toISOString(), loanFreq);
+          const loanFreq: 'monthly' | 'annual' = (req.body.amortizationFrequency === 'annual' || req.body.modalidad === 'annual' || loan.amortizationFrequency === 'annual') ? 'annual' : 'monthly';
+          const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(
+            finalAmount, 
+            finalRate, 
+            finalTerm, 
+            loan.createdAt || new Date().toISOString(), 
+            loanFreq
+          );
+          loan.amortizationFrequency = loanFreq;
           loan.monthlyPayment = monthlyPayment;
           loan.installmentPayment = installmentPayment;
           loan.schedule = schedule;
@@ -17713,7 +17771,8 @@ app.put('/api/loans/:id', async (req, res) => {
             `SELECT id, alumno_id, alumno_nombre, alumno_cuenta, importe_solicitado, importe_ofrecido, importe_concedido, 
                     plazo_meses, tipo_interes, euribor, diferencial, comision_apertura, cuota_mensual, 
                     garantia_tipo, garantia_inmueble_id, garantia_inmueble_titulo, garantia_superficie_m2, garantia_valor_tasacion, 
-                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion 
+                    estado, requiere_profesor, notas_profesor, fecha_creacion, fecha_aceptacion, tabla_amortizacion,
+                    modalidad, cuota_periodica 
              FROM prestamos 
              WHERE id = $1 FOR UPDATE`,
             [id]
@@ -17778,7 +17837,7 @@ app.put('/api/loans/:id', async (req, res) => {
           // 5. Recalculate French amortization schedule and opening fee (1‰ = 0.001 * offeredAmount)
           const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
           const startDate = loanRow.fecha_creacion ? new Date(loanRow.fecha_creacion).toISOString() : new Date().toISOString();
-          const loanFreq: 'monthly' | 'annual' = (loanRow.modalidad as any) === 'annual' ? 'annual' : 'monthly';
+          const loanFreq: 'monthly' | 'annual' = (req.body.amortizationFrequency === 'annual' || req.body.modalidad === 'annual' || (loanRow.modalidad as any) === 'annual') ? 'annual' : 'monthly';
           const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate, loanFreq);
 
           // 6. Update in PostgreSQL
@@ -17790,9 +17849,10 @@ app.put('/api/loans/:id', async (req, res) => {
                  comision_apertura = $4, 
                  cuota_mensual = $5, 
                  tabla_amortizacion = $6,
-                 cuota_periodica = $7 
-             WHERE id = $8`,
-            [newOfferedAmount, newTerm, newRate, openingFee, monthlyPayment, JSON.stringify(schedule), installmentPayment, loanRow.id]
+                 cuota_periodica = $7,
+                 modalidad = $8 
+             WHERE id = $9`,
+            [newOfferedAmount, newTerm, newRate, openingFee, monthlyPayment, JSON.stringify(schedule), installmentPayment, loanFreq, loanRow.id]
           );
 
           const updatedLoan: BankLoan = {
@@ -17889,7 +17949,7 @@ app.put('/api/loans/:id', async (req, res) => {
 
         const openingFee = Number((0.001 * newOfferedAmount).toFixed(2));
         const startDate = loan.createdAt || new Date().toISOString();
-        const loanFreq: 'monthly' | 'annual' = (loan.amortizationFrequency as any) === 'annual' ? 'annual' : 'monthly';
+        const loanFreq: 'monthly' | 'annual' = (req.body.amortizationFrequency === 'annual' || req.body.modalidad === 'annual' || (loan.amortizationFrequency as any) === 'annual') ? 'annual' : 'monthly';
         const { monthlyPayment, installmentPayment, schedule } = calculateFrenchAmortization(newOfferedAmount, newRate, newTerm, startDate, loanFreq);
 
         loan.offeredAmount = newOfferedAmount;
