@@ -7,7 +7,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Landmark, ArrowUpRight, ArrowDownLeft, Send, Copy, Check, 
-  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText, Sparkles
+  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText, Sparkles, Store
 } from 'lucide-react';
 import { User, Transfer, BankLoan } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -20,9 +20,10 @@ interface StudentDashboardProps {
   currentUser: User;
   onLogout: () => void;
   onBackToHub?: () => void;
+  onOpenFinishedScrewdrivers?: () => void;
 }
 
-export default function StudentDashboard({ currentUser, onLogout, onBackToHub }: StudentDashboardProps) {
+export default function StudentDashboard({ currentUser, onLogout, onBackToHub, onOpenFinishedScrewdrivers }: StudentDashboardProps) {
   const [balance, setBalance] = useState(currentUser.balance);
   const [bankTab, setBankTab] = useState<'operaciones' | 'vencimientos' | 'hipotecaria'>('operaciones');
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -402,6 +403,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub }:
                 <p className="text-sm font-semibold">{currentUser.name}</p>
                 <p className="text-xs text-amber-200">Titular de la cuenta</p>
               </div>
+
               <button
                 onClick={() => setShowPasswordModal(true)}
                 className="flex items-center space-x-1.5 bg-amber-800/80 hover:bg-amber-700/80 px-3 py-2 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer border border-amber-600/50"

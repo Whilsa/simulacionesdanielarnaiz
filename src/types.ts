@@ -462,6 +462,7 @@ export interface RawMaterialOrder {
   insuranceCost?: number;
   hasInsurance?: boolean;
   ivaAmount: number;
+  ivaRate?: number;
   transportCost: number;
   distanceKm?: number;
   chargedPallets?: number;
@@ -731,6 +732,11 @@ export interface TeacherScrewdriverHistoryEntry {
   description: string;
   quantity?: number;
   unitPrice?: number;
+  unitTransportCost?: number;
+  transportCost?: number;
+  taxableBase?: number;
+  ivaRate?: number;
+  ivaAmount?: number;
   totalAmount?: number;
   buyerId?: string;
   buyerName?: string;
@@ -748,7 +754,9 @@ export interface TeacherScrewdriverListing {
   soldQuantity: number;
   remainingQuantity: number;
   unitPrice: number;
+  unitTransportCost?: number;
   active: boolean;
+  status?: 'activo' | 'inactivo';
   history: TeacherScrewdriverHistoryEntry[];
   createdAt: string;
   updatedAt: string;

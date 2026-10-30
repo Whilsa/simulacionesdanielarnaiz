@@ -29,6 +29,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
   const [formCommercialConditions, setFormCommercialConditions] = useState('');
   const [formQuantity, setFormQuantity] = useState('500');
   const [formUnitPrice, setFormUnitPrice] = useState('4.50');
+  const [formUnitTransportCost, setFormUnitTransportCost] = useState('0.00');
   const [submitting, setSubmitting] = useState(false);
 
   // History modal state
@@ -78,6 +79,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
     setFormCommercialConditions('Pago íntegro al contado con débito inmediato en cuenta. Exclusivo empresas Nivel 2.');
     setFormQuantity('500');
     setFormUnitPrice('4.50');
+    setFormUnitTransportCost('0.00');
     setError('');
     setIsModalOpen(true);
   };
@@ -89,6 +91,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
     setFormCommercialConditions(listing.commercialConditions || '');
     setFormQuantity(String(listing.remainingQuantity));
     setFormUnitPrice(String(listing.unitPrice));
+    setFormUnitTransportCost(String(listing.unitTransportCost !== undefined ? listing.unitTransportCost : '0.00'));
     setError('');
     setIsModalOpen(true);
   };
@@ -100,6 +103,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
 
     const qty = Number(formQuantity);
     const price = Number(formUnitPrice);
+    const transport = Number(formUnitTransportCost);
 
     if (!formTitle.trim()) {
       setError('El título del anuncio es obligatorio.');
@@ -111,6 +115,10 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
     }
     if (isNaN(price) || price <= 0) {
       setError('Introduce un precio unitario mayor a cero.');
+      return;
+    }
+    if (isNaN(transport) || transport < 0) {
+      setError('Introduce unos gastos de transporte por unidad válidos (mayor o igual a 0).');
       return;
     }
 
@@ -125,7 +133,8 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
             description: formDescription.trim(),
             commercialConditions: formCommercialConditions.trim(),
             remainingQuantity: qty,
-            unitPrice: price
+            unitPrice: price,
+            unitTransportCost: transport
           })
         });
         const data = await res.json();
@@ -140,7 +149,8 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
             description: formDescription.trim(),
             commercialConditions: formCommercialConditions.trim(),
             initialQuantity: qty,
-            unitPrice: price
+            unitPrice: price,
+            unitTransportCost: transport
           })
         });
         const data = await res.json();
@@ -306,6 +316,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
                 <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider text-[10px] bg-slate-50/80">
                   <th className="py-3 px-4">Anuncio / Condiciones</th>
                   <th className="py-3 px-3 text-right">Precio unitario</th>
+                  <th className="py-3 px-3 text-right">Transporte / ud</th>
                   <th className="py-3 px-3 text-right">Cant. inicial</th>
                   <th className="py-3 px-3 text-right">Cant. vendida</th>
                   <th className="py-3 px-3 text-right">Cant. restante</th>
@@ -337,6 +348,13 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold text-amber-900">
                         {formatNumber(item.unitPrice, 2)} € / ud
+                      </td>
+                      <td className="py-3 px-3 text-right font-mono font-medium text-slate-700">
+                        {Number(item.unitTransportCost || 0) > 0 ? (
+                          <span className="text-amber-800 font-bold">+{formatNumber(item.unitTransportCost, 2)} €</span>
+                        ) : (
+                          <span className="text-emerald-700 font-semibold">0,00 € (Gratis)</span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-right font-mono text-slate-600">
                         {formatNumber(item.initialQuantity)} uds
@@ -480,10 +498,10 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    {editingListing ? 'Cantidad restante' : 'Cantidad inicial disponible'}
+                    {editingListing ? 'Cantidad restante' : 'Cantidad inicial'}
                   </label>
                   <input
                     type="number"
@@ -508,6 +526,21 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
                     onChange={(e) => setFormUnitPrice(e.target.value)}
                     required
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-sm font-bold text-amber-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Transporte / ud (€)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formUnitTransportCost}
+                    onChange={(e) => setFormUnitTransportCost(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-sm font-bold text-slate-900"
                   />
                 </div>
               </div>
@@ -597,13 +630,13 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
                             <span className="text-[10px] text-slate-400 font-mono">{dateFormatted}</span>
                           </div>
 
-                          <p className="font-semibold text-slate-800">{entry.details}</p>
+                          <p className="font-semibold text-slate-800">{entry.description || (entry as any).details}</p>
 
                           {entry.action === 'venta' && entry.buyerName && (
                             <div className="mt-1.5 pt-1.5 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
                               <span className="text-slate-600">Comprador: <strong>{entry.buyerName}</strong></span>
                               <span className="font-bold text-emerald-700 font-mono">
-                                + {formatNumber(entry.totalPrice || 0)} €
+                                + {formatNumber(entry.totalAmount || (entry as any).totalPrice || 0)} €
                               </span>
                             </div>
                           )}

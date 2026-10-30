@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wrench, ShieldCheck, ShieldAlert, ShoppingCart, CheckCircle2, 
-  AlertCircle, RefreshCw, Check, X, Package, DollarSign, Store
+  AlertCircle, RefreshCw, Check, X, Package, DollarSign, Store, ArrowLeft
 } from 'lucide-react';
 import { User, TeacherScrewdriverListing } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
@@ -15,12 +15,14 @@ interface StudentFinishedScrewdriversSectionProps {
   currentUser: User;
   onRefreshUser?: () => void;
   onUserBalanceUpdated?: (newBalance: number) => void;
+  onBack?: () => void;
 }
 
 export default function StudentFinishedScrewdriversSection({
   currentUser,
   onRefreshUser,
-  onUserBalanceUpdated
+  onUserBalanceUpdated,
+  onBack
 }: StudentFinishedScrewdriversSectionProps) {
   const [listings, setListings] = useState<TeacherScrewdriverListing[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,7 +34,7 @@ export default function StudentFinishedScrewdriversSection({
   const [buyQuantity, setBuyQuantity] = useState('10');
   const [submitting, setSubmitting] = useState(false);
 
-  const isLevel2 = currentUser.level === 2;
+  const isLevel2 = Number(currentUser.level) === 2;
 
   useEffect(() => {
     if (isLevel2) {
@@ -46,11 +48,12 @@ export default function StudentFinishedScrewdriversSection({
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/teacher/screwdriver-listings/student?studentId=${encodeURIComponent(currentUser.id)}`, {
+      const studentIdentifier = currentUser.id || currentUser.username;
+      const res = await fetch(`/api/teacher/screwdriver-listings/student?studentId=${encodeURIComponent(studentIdentifier)}`, {
         headers: {
-          'x-user-id': currentUser.id,
-          'x-username': currentUser.username,
-          'x-user-role': currentUser.role
+          'x-user-id': currentUser.id || '',
+          'x-username': currentUser.username || '',
+          'x-user-role': currentUser.role || 'student'
         }
       });
       if (res.status === 403) {
@@ -92,9 +95,17 @@ export default function StudentFinishedScrewdriversSection({
       return;
     }
 
-    const totalCost = Number((qty * selectedListing.unitPrice).toFixed(2));
+    const unitP = Number(selectedListing.unitPrice || 0);
+    const unitTrans = Math.max(0, Number(selectedListing.unitTransportCost || 0));
+    const prodTotal = Number((qty * unitP).toFixed(2));
+    const transTotal = Number((qty * unitTrans).toFixed(2));
+    const taxableBase = Number((prodTotal + transTotal).toFixed(2));
+    const ivaRate = 21;
+    const ivaAmount = Math.round((taxableBase * 0.21) * 100) / 100;
+    const totalCost = Number((taxableBase + ivaAmount).toFixed(2));
+
     if ((currentUser.balance || 0) < totalCost) {
-      setError(`Saldo bancario insuficiente. Se requieren ${formatNumber(totalCost)} € y tu saldo actual es de ${formatNumber(currentUser.balance || 0)} €.`);
+      setError(`Saldo bancario insuficiente. Se requieren ${formatNumber(totalCost)} € (Base imponible: ${formatNumber(taxableBase)} €, IVA 21%: ${formatNumber(ivaAmount)} €) y tu saldo actual es de ${formatNumber(currentUser.balance || 0)} €.`);
       return;
     }
 
@@ -107,12 +118,12 @@ export default function StudentFinishedScrewdriversSection({
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'x-user-id': currentUser.id,
-          'x-username': currentUser.username,
-          'x-user-role': currentUser.role
+          'x-user-id': currentUser.id || '',
+          'x-username': currentUser.username || '',
+          'x-user-role': currentUser.role || 'student'
         },
         body: JSON.stringify({
-          studentId: currentUser.id,
+          studentId: currentUser.id || currentUser.username,
           quantity: qty
         })
       });
@@ -122,7 +133,7 @@ export default function StudentFinishedScrewdriversSection({
         throw new Error(data.error || 'No se pudo completar la compra.');
       }
 
-      setSuccess(`¡Compra completada con éxito! Se han añadido ${qty} destornilladores terminados a tu inventario y se han cargado ${formatNumber(data.totalPaid || data.totalPrice || totalCost)} € en tu cuenta.`);
+      setSuccess(`¡Compra completada con éxito! Se han adquirido ${qty} destornilladores terminados por un total de ${formatNumber(data.totalPaid || data.totalAmount || totalCost)} € (Base: ${formatNumber(data.taxableBase || taxableBase)} € + IVA 21%: ${formatNumber(data.ivaAmount || ivaAmount)} €). Se ha registrado la factura comercial oficial ${data.invoiceNumber || ''}, disponible en Mercado -> Facturas.`);
       setSelectedListing(null);
 
       if (data.newBalance !== undefined && onUserBalanceUpdated) {
@@ -164,7 +175,10 @@ export default function StudentFinishedScrewdriversSection({
   }
 
   // Active listings with remaining stock
-  const availableListings = listings.filter(l => l.status === 'activo' && l.remainingQuantity > 0);
+  const availableListings = listings.filter(l => 
+    (l.active !== false || (l as any).status === 'activo' || (l as any).activo === true) && 
+    Number(l.remainingQuantity) > 0
+  );
 
   return (
     <div className="space-y-6">
@@ -173,6 +187,15 @@ export default function StudentFinishedScrewdriversSection({
       <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 border border-emerald-800/40 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="space-y-1">
           <div className="flex items-center space-x-2">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition mr-1 cursor-pointer border border-slate-700"
+                title="Volver"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            )}
             <span className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl">
               <Store className="w-5 h-5" />
             </span>
@@ -188,14 +211,25 @@ export default function StudentFinishedScrewdriversSection({
           </p>
         </div>
 
-        <button
-          onClick={fetchStudentListings}
-          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition border border-slate-700 cursor-pointer flex items-center space-x-1.5 text-xs font-semibold"
-          title="Actualizar anuncios"
-        >
-          <RefreshCw className="w-4 h-4" />
-          <span>Actualizar</span>
-        </button>
+        <div className="flex items-center space-x-2 self-end md:self-auto">
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition border border-slate-700 cursor-pointer flex items-center space-x-1.5 text-xs font-semibold"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Volver</span>
+            </button>
+          )}
+          <button
+            onClick={fetchStudentListings}
+            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition border border-slate-700 cursor-pointer flex items-center space-x-1.5 text-xs font-semibold"
+            title="Actualizar anuncios"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>Actualizar</span>
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -253,7 +287,10 @@ export default function StudentFinishedScrewdriversSection({
                     <span className="font-mono text-xl font-bold text-emerald-400">
                       {formatNumber(listing.unitPrice, 2)} €
                     </span>
-                    <span className="text-[10px] text-slate-500 block">por destornillador</span>
+                    <span className="text-[10px] text-slate-500 block">por destornillador (+ 21% IVA)</span>
+                    <span className="text-[10px] font-mono block mt-0.5 text-amber-300">
+                      {Number(listing.unitTransportCost || 0) > 0 ? `+ ${formatNumber(listing.unitTransportCost, 2)} € transporte / ud` : 'Transporte gratuito (0 €)'}
+                    </span>
                   </div>
                 </div>
 
@@ -323,81 +360,116 @@ export default function StudentFinishedScrewdriversSection({
                 )}
               </div>
 
-              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 font-mono">
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-sans">Precio unitario:</span>
-                  <span className="font-bold text-white">{formatNumber(selectedListing.unitPrice, 2)} € / ud</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-sans">Existencias disponibles:</span>
-                  <span className="font-bold text-emerald-400">{formatNumber(selectedListing.remainingQuantity)} uds</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-sans">Tu saldo actual:</span>
-                  <span className="font-bold text-amber-300">{formatNumber(currentUser.balance || 0)} €</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
-                  Cantidad a comprar (uds):
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max={selectedListing.remainingQuantity}
-                  step="1"
-                  value={buyQuantity}
-                  onChange={(e) => setBuyQuantity(e.target.value)}
-                  required
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white font-mono text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Real-time total calculation */}
               {(() => {
                 const qtyNum = Number(buyQuantity) || 0;
-                const totalCost = Number((qtyNum * selectedListing.unitPrice).toFixed(2));
+                const unitP = Number(selectedListing.unitPrice || 0);
+                const unitTrans = Math.max(0, Number(selectedListing.unitTransportCost || 0));
+                const prodTotal = Number((qtyNum * unitP).toFixed(2));
+                const transTotal = Number((qtyNum * unitTrans).toFixed(2));
+                const taxableBase = Number((prodTotal + transTotal).toFixed(2));
+                const ivaRate = 21;
+                const ivaAmount = Math.round((taxableBase * 0.21) * 100) / 100;
+                const totalCost = Number((taxableBase + ivaAmount).toFixed(2));
                 const hasSufficient = (currentUser.balance || 0) >= totalCost;
 
                 return (
-                  <div className={`p-4 rounded-xl border ${hasSufficient ? 'bg-emerald-950/40 border-emerald-700/60' : 'bg-rose-950/40 border-rose-700/60'} space-y-1`}>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-300">Importe total a pagar:</span>
-                      <span className={`font-mono text-base font-extrabold ${hasSufficient ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {formatNumber(totalCost)} €
-                      </span>
+                  <>
+                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 font-mono text-xs">
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">Precio unitario:</span>
+                        <span className="font-bold text-white">{formatNumber(unitP, 2)} € / ud <span className="text-[10px] text-slate-400 font-sans font-normal">(sin IVA)</span></span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">Gasto de transporte por unidad:</span>
+                        <span className="font-bold text-amber-400">
+                          {unitTrans > 0 ? `${formatNumber(unitTrans, 2)} € / ud` : '0,00 € (Transporte gratuito)'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">Existencias disponibles:</span>
+                        <span className="font-bold text-emerald-400">{formatNumber(selectedListing.remainingQuantity)} uds</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300 border-t border-slate-800 pt-1.5">
+                        <span className="font-sans">Tu saldo actual disponible:</span>
+                        <span className="font-bold text-amber-300">{formatNumber(currentUser.balance || 0)} €</span>
+                      </div>
                     </div>
-                    {!hasSufficient && (
-                      <p className="text-[11px] text-rose-300 pt-1">
-                        ⚠️ Saldo bancario insuficiente para completar esta orden.
-                      </p>
-                    )}
-                  </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
+                        Cantidad a comprar (uds):
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max={selectedListing.remainingQuantity}
+                        step="1"
+                        value={buyQuantity}
+                        onChange={(e) => setBuyQuantity(e.target.value)}
+                        required
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white font-mono text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* Desglose detallado de la operación según normativa fiscal */}
+                    <div className={`p-4 rounded-xl border ${hasSufficient ? 'bg-emerald-950/40 border-emerald-700/60' : 'bg-rose-950/40 border-rose-700/60'} space-y-2 font-mono text-xs`}>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">1. Importe de los productos ({qtyNum} uds):</span>
+                        <span className="font-bold text-white">{formatNumber(prodTotal, 2)} €</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">2. Gastos de transporte:</span>
+                        <span className="font-bold text-amber-400">+{formatNumber(transTotal, 2)} €</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-200 border-t border-slate-800/80 pt-1.5">
+                        <span className="font-sans font-semibold">3. Base imponible:</span>
+                        <span className="font-bold text-white">{formatNumber(taxableBase, 2)} €</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">4. Tipo de IVA aplicado:</span>
+                        <span className="font-bold text-cyan-400">{ivaRate}%</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-300">
+                        <span className="font-sans">5. Cuota de IVA (21%):</span>
+                        <span className="font-bold text-cyan-400">+{formatNumber(ivaAmount, 2)} €</span>
+                      </div>
+                      <div className="flex justify-between items-center border-t border-slate-700/80 pt-2 font-mono">
+                        <span className="font-sans font-bold text-white text-xs">6. Total que debe pagar el alumno:</span>
+                        <span className={`text-base font-extrabold ${hasSufficient ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {formatNumber(totalCost, 2)} €
+                        </span>
+                      </div>
+                      {!hasSufficient && (
+                        <p className="text-[11px] text-rose-300 pt-1 font-sans">
+                          ⚠️ Saldo bancario insuficiente ({formatNumber(totalCost, 2)} € necesarios vs {formatNumber(currentUser.balance || 0)} € disponibles).
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-950/90 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 leading-relaxed">
+                      ℹ️ <strong>Factura comercial oficial:</strong> La compra registrará una factura comercial oficial (FACT-2026-XXXX) accesible desde Mercado &rarr; Facturas, transferirá los fondos y sumará las existencias a tu inventario de productos terminados.
+                    </div>
+
+                    <div className="flex justify-end space-x-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedListing(null)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={submitting || !hasSufficient || qtyNum <= 0 || qtyNum > selectedListing.remainingQuantity}
+                        className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition cursor-pointer flex items-center space-x-1.5"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>{submitting ? 'Procesando...' : 'Confirmar compra'}</span>
+                      </button>
+                    </div>
+                  </>
                 );
               })()}
-
-              <div className="bg-slate-950/90 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 leading-relaxed">
-                ℹ️ <strong>Ejecución atómica:</strong> Al confirmar, el sistema reservará las existencias mediante bloqueo de concurrencia, debitará el importe de tu cuenta bancaria y sumará las unidades directamente a tu inventario de productos terminados.
-              </div>
-
-              <div className="flex justify-end space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedListing(null)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting || ((Number(buyQuantity) || 0) * selectedListing.unitPrice) > (currentUser.balance || 0)}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition cursor-pointer flex items-center space-x-1.5"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{submitting ? 'Procesando...' : 'Confirmar compra'}</span>
-                </button>
-              </div>
             </form>
           </div>
         </div>

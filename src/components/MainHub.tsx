@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan, PurchasedVehicle } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck, Package, Lock, MessageSquare, Scale
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck, Package, Lock, MessageSquare, Scale, Store
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
@@ -18,12 +18,13 @@ interface MainHubProps {
   onSelectModule: (module: 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials' | 'court') => void;
   onLogout: () => void;
   onOpenDirectMessaging?: () => void;
+  onOpenFinishedScrewdrivers?: () => void;
   availablePropertiesCount?: number;
 }
 
 type ModuleType = 'bank' | 'company' | 'real_estate' | 'machinery' | 'jobs' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials' | 'court';
 
-export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenDirectMessaging, availablePropertiesCount = 5 }: MainHubProps) {
+export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenDirectMessaging, onOpenFinishedScrewdrivers, availablePropertiesCount = 5 }: MainHubProps) {
   const isTeacher = currentUser.role === 'teacher';
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
@@ -789,6 +790,27 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
                 </>
               )}
             </div>
+
+            {userLevel === 2 && onOpenFinishedScrewdrivers && (
+              <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-emerald-950 block">¿Deseas comprar destornilladores terminados al profesor?</span>
+                  <p className="text-[11px] text-emerald-700 leading-relaxed">
+                    La compra de lotes terminados ofertados por el docente no requiere carretilla ni mozo de almacén. Puedes acceder directamente.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMarketLockModal(false);
+                    onOpenFinishedScrewdrivers();
+                  }}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shrink-0 cursor-pointer shadow-xs whitespace-nowrap"
+                >
+                  Ir a destornilladores terminados
+                </button>
+              </div>
+            )}
 
             <div className="flex justify-end pt-2">
               <button

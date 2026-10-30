@@ -724,11 +724,13 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         cantidad_vendida INT NOT NULL DEFAULT 0,
         cantidad_restante INT NOT NULL,
         precio_unitario NUMERIC(12, 2) NOT NULL,
+        coste_transporte_unitario NUMERIC(12, 2) NOT NULL DEFAULT 0,
         activo BOOLEAN NOT NULL DEFAULT TRUE,
         historial JSONB DEFAULT '[]'::jsonb,
         fecha_creacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         fecha_actualizacion TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE profesor_anuncios_destornilladores ADD COLUMN IF NOT EXISTS coste_transporte_unitario NUMERIC(12, 2) DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS perfiles_empresa (
         id VARCHAR(255) PRIMARY KEY,
@@ -1393,9 +1395,9 @@ async function syncTeacherScrewdriverListingToSupabase(listing: TeacherScrewdriv
     await runner(
       `INSERT INTO profesor_anuncios_destornilladores (
         id, titulo, descripcion, condiciones_comerciales, cantidad_inicial, cantidad_vendida, cantidad_restante,
-        precio_unitario, activo, historial, fecha_creacion, fecha_actualizacion
+        precio_unitario, coste_transporte_unitario, activo, historial, fecha_creacion, fecha_actualizacion
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (id) DO UPDATE SET
         titulo = EXCLUDED.titulo,
         descripcion = EXCLUDED.descripcion,
@@ -1404,6 +1406,7 @@ async function syncTeacherScrewdriverListingToSupabase(listing: TeacherScrewdriv
         cantidad_vendida = EXCLUDED.cantidad_vendida,
         cantidad_restante = EXCLUDED.cantidad_restante,
         precio_unitario = EXCLUDED.precio_unitario,
+        coste_transporte_unitario = EXCLUDED.coste_transporte_unitario,
         activo = EXCLUDED.activo,
         historial = EXCLUDED.historial,
         fecha_actualizacion = EXCLUDED.fecha_actualizacion`,
@@ -1416,6 +1419,7 @@ async function syncTeacherScrewdriverListingToSupabase(listing: TeacherScrewdriv
         listing.soldQuantity,
         listing.remainingQuantity,
         listing.unitPrice,
+        listing.unitTransportCost || 0,
         listing.active,
         JSON.stringify(listing.history || []),
         parseSafeDate(listing.createdAt),
@@ -21260,7 +21264,9 @@ app.get('/api/teacher/screwdriver-listings', async (req, res) => {
           soldQuantity: Number(row.cantidad_vendida || 0),
           remainingQuantity: Number(row.cantidad_restante || 0),
           unitPrice: Number(row.precio_unitario || 0),
+          unitTransportCost: Number(row.coste_transporte_unitario || 0),
           active: Boolean(row.activo),
+          status: row.activo ? 'activo' : 'inactivo',
           history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
           createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
           updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
@@ -21268,7 +21274,11 @@ app.get('/api/teacher/screwdriver-listings', async (req, res) => {
       }
     } else {
       const db = readDb();
-      listings = db.teacherScrewdriverListings || [];
+      listings = (db.teacherScrewdriverListings || []).map(l => ({
+        ...l,
+        unitTransportCost: Number(l.unitTransportCost || 0),
+        status: (l.active !== false ? 'activo' : 'inactivo') as 'activo' | 'inactivo'
+      }));
     }
     return res.json({ success: true, listings });
   } catch (err: any) {
@@ -21283,9 +21293,10 @@ app.post('/api/teacher/screwdriver-listings', async (req, res) => {
     return res.status(403).json({ error: 'Acceso no autorizado: Solo el profesor puede publicar anuncios de destornilladores.' });
   }
 
-  const { title, description, commercialConditions, initialQuantity, unitPrice } = req.body;
+  const { title, description, commercialConditions, initialQuantity, unitPrice, unitTransportCost } = req.body;
   const qty = Number(initialQuantity);
   const price = Number(unitPrice);
+  const transportCost = unitTransportCost !== undefined && unitTransportCost !== null ? Number(unitTransportCost) : 0;
 
   if (!title || typeof title !== 'string' || title.trim() === '') {
     return res.status(400).json({ error: 'Debes indicar un título descriptivo para el anuncio.' });
@@ -21295,6 +21306,9 @@ app.post('/api/teacher/screwdriver-listings', async (req, res) => {
   }
   if (!price || isNaN(price) || price <= 0) {
     return res.status(400).json({ error: 'El precio por unidad debe ser superior a cero.' });
+  }
+  if (isNaN(transportCost) || transportCost < 0) {
+    return res.status(400).json({ error: 'Los gastos de transporte por unidad deben ser un número mayor o igual a 0.' });
   }
 
   const conditions = typeof commercialConditions === 'string' && commercialConditions.trim() !== ''
@@ -21308,9 +21322,10 @@ app.post('/api/teacher/screwdriver-listings', async (req, res) => {
     id: generateId('hist'),
     timestamp: nowIso,
     action: 'creacion',
-    description: `Publicación inicial del anuncio con ${qty} unidades a ${price.toFixed(2)} €/u.`,
+    description: `Publicación inicial del anuncio con ${qty} unidades a ${price.toFixed(2)} €/u (Gastos de transporte: ${transportCost.toFixed(2)} €/u).`,
     quantity: qty,
     unitPrice: price,
+    unitTransportCost: transportCost,
     newStock: qty
   };
 
@@ -21323,6 +21338,7 @@ app.post('/api/teacher/screwdriver-listings', async (req, res) => {
     soldQuantity: 0,
     remainingQuantity: qty,
     unitPrice: Number(price.toFixed(2)),
+    unitTransportCost: Number(transportCost.toFixed(2)),
     active: true,
     history: [newHistory],
     createdAt: nowIso,
@@ -21355,7 +21371,7 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
   }
 
   const { id } = req.params;
-  const { title, description, commercialConditions, unitPrice, initialQuantity, remainingQuantity } = req.body;
+  const { title, description, commercialConditions, unitPrice, initialQuantity, remainingQuantity, unitTransportCost } = req.body;
 
   try {
     if (dbPool) {
@@ -21373,6 +21389,7 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
         const newDesc = description !== undefined ? String(description).trim() : row.descripcion;
         const newCond = commercialConditions !== undefined ? String(commercialConditions).trim() : row.condiciones_comerciales;
         const newPrice = unitPrice !== undefined ? Number(Number(unitPrice).toFixed(2)) : Number(row.precio_unitario);
+        const newTransport = unitTransportCost !== undefined ? Math.max(0, Number(Number(unitTransportCost).toFixed(2))) : Number(row.coste_transporte_unitario || 0);
         const newInit = initialQuantity !== undefined ? Number(initialQuantity) : Number(row.cantidad_inicial);
         const newRem = remainingQuantity !== undefined ? Number(remainingQuantity) : Number(row.cantidad_restante);
         const sold = Math.max(0, newInit - newRem);
@@ -21382,18 +21399,19 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
           id: generateId('hist'),
           timestamp: nowIso,
           action: 'edicion',
-          description: `Modificación de condiciones del anuncio. Precio: ${newPrice} €/u, Stock restante: ${newRem} u.`,
+          description: `Modificación de condiciones del anuncio. Precio: ${newPrice} €/u, Transporte: ${newTransport} €/u, Stock restante: ${newRem} u.`,
           unitPrice: newPrice,
+          unitTransportCost: newTransport,
           previousStock: Number(row.cantidad_restante),
           newStock: newRem
         });
 
         await client.query(
           `UPDATE profesor_anuncios_destornilladores
-           SET titulo = $1, descripcion = $2, condiciones_comerciales = $3, precio_unitario = $4,
-               cantidad_inicial = $5, cantidad_restante = $6, cantidad_vendida = $7, historial = $8, fecha_actualizacion = NOW()
-           WHERE id = $9`,
-          [newTitle, newDesc, newCond, newPrice, newInit, newRem, sold, JSON.stringify(hist), id]
+           SET titulo = $1, descripcion = $2, condiciones_comerciales = $3, precio_unitario = $4, coste_transporte_unitario = $5,
+               cantidad_inicial = $6, cantidad_restante = $7, cantidad_vendida = $8, historial = $9, fecha_actualizacion = NOW()
+           WHERE id = $10`,
+          [newTitle, newDesc, newCond, newPrice, newTransport, newInit, newRem, sold, JSON.stringify(hist), id]
         );
 
         return {
@@ -21405,6 +21423,7 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
           soldQuantity: sold,
           remainingQuantity: newRem,
           unitPrice: newPrice,
+          unitTransportCost: newTransport,
           active: Boolean(row.activo),
           history: hist,
           createdAt: row.fecha_creacion,
@@ -21433,6 +21452,7 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
       if (description !== undefined) listing.description = String(description).trim();
       if (commercialConditions !== undefined) listing.commercialConditions = String(commercialConditions).trim();
       if (unitPrice !== undefined) listing.unitPrice = Number(Number(unitPrice).toFixed(2));
+      if (unitTransportCost !== undefined) listing.unitTransportCost = Math.max(0, Number(Number(unitTransportCost).toFixed(2)));
       if (initialQuantity !== undefined) listing.initialQuantity = Number(initialQuantity);
       if (remainingQuantity !== undefined) listing.remainingQuantity = Number(remainingQuantity);
       listing.soldQuantity = Math.max(0, listing.initialQuantity - listing.remainingQuantity);
@@ -21443,8 +21463,9 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
         id: generateId('hist'),
         timestamp: listing.updatedAt,
         action: 'edicion',
-        description: `Modificación de anuncio. Precio: ${listing.unitPrice} €/u, Stock restante: ${listing.remainingQuantity} u.`,
+        description: `Modificación de anuncio. Precio: ${listing.unitPrice} €/u, Transporte: ${listing.unitTransportCost || 0} €/u, Stock restante: ${listing.remainingQuantity} u.`,
         unitPrice: listing.unitPrice,
+        unitTransportCost: listing.unitTransportCost || 0,
         newStock: listing.remainingQuantity
       });
 
@@ -21580,9 +21601,13 @@ app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
 // Student querying teacher screwdriver listings - STRICT LEVEL 2 VALIDATION ON SERVER
 app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
   const studentId = (req.query.studentId as string) || (req.headers['x-user-id'] as string) || (req.headers['x-username'] as string);
-  if (!studentId) {
+  const headerUsername = (req.headers['x-username'] as string) || '';
+  if (!studentId && !headerUsername) {
     return res.status(400).json({ error: 'Falta el identificador del alumno (studentId).' });
   }
+
+  const lookupId = studentId || headerUsername;
+  const lookupUser = headerUsername || studentId;
 
   try {
     // 1. Verify student level and role strictly from DB (SERVER-SIDE MANDATORY ENFORCEMENT)
@@ -21590,26 +21615,34 @@ app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
     let studentRole: string | undefined;
     if (dbPool) {
       const qUser = await safeDbQuery(
-        `SELECT id, level, role FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
-        [studentId]
+        `SELECT id, level, role FROM cuentas 
+         WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR id = $2 OR LOWER(usuario) = LOWER($2) 
+         LIMIT 1`,
+        [lookupId, lookupUser]
       );
       if (!qUser || qUser.rows.length === 0) {
         return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
       }
       studentLevel = Number(qUser.rows[0].level || 1);
-      studentRole = String(qUser.rows[0].role || 'student');
+      studentRole = String(qUser.rows[0].role || 'student').toLowerCase();
     } else {
       const db = readDb();
-      const u = db.users.find(x => x.id === studentId || x.username === studentId || x.id?.toLowerCase() === studentId.toLowerCase() || x.username?.toLowerCase() === studentId.toLowerCase());
+      const u = db.users.find(x => 
+        x.id === lookupId || x.username === lookupId ||
+        x.id === lookupUser || x.username === lookupUser ||
+        x.id?.toLowerCase() === lookupId.toLowerCase() || x.username?.toLowerCase() === lookupId.toLowerCase() ||
+        x.id?.toLowerCase() === lookupUser.toLowerCase() || x.username?.toLowerCase() === lookupUser.toLowerCase()
+      );
       if (!u) {
         return res.status(404).json({ error: 'Cuenta de estudiante no encontrada.' });
       }
-      studentLevel = u.level || 1;
-      studentRole = u.role || 'student';
+      studentLevel = Number(u.level || 1);
+      studentRole = String(u.role || 'student').toLowerCase();
     }
 
     // Strict check: ONLY Level 2 student accounts can query these listings!
-    if (studentLevel !== 2 || studentRole !== 'student') {
+    const isStudent = studentRole === 'student' || studentRole === 'alumno' || studentRole === 'estudiante' || (!['teacher', 'profesor', 'admin'].includes(studentRole));
+    if (studentLevel !== 2 || !isStudent) {
       return res.status(403).json({
         error: `Acceso restringido: Solo las cuentas de alumno de nivel 2 pueden consultar los anuncios de destornilladores terminados del profesor. Tu nivel actual es ${studentLevel}.`
       });
@@ -21633,7 +21666,9 @@ app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
           soldQuantity: Number(row.cantidad_vendida || 0),
           remainingQuantity: Number(row.cantidad_restante || 0),
           unitPrice: Number(row.precio_unitario || 0),
+          unitTransportCost: Number(row.coste_transporte_unitario || 0),
           active: Boolean(row.activo),
+          status: row.activo ? 'activo' : 'inactivo',
           history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
           createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
           updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
@@ -21641,7 +21676,14 @@ app.get('/api/teacher/screwdriver-listings/student', async (req, res) => {
       }
     } else {
       const db = readDb();
-      activeListings = (db.teacherScrewdriverListings || []).filter(l => l.active && l.remainingQuantity > 0);
+      activeListings = (db.teacherScrewdriverListings || [])
+        .filter(l => (l.active !== false || (l as any).status === 'activo') && l.remainingQuantity > 0)
+        .map(l => ({
+          ...l,
+          unitTransportCost: Number(l.unitTransportCost || 0),
+          active: l.active !== false,
+          status: (l.active !== false ? 'activo' : 'inactivo') as 'activo' | 'inactivo'
+        }));
     }
 
     return res.json({ success: true, listings: activeListings });
@@ -21674,12 +21716,13 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
       if (dbPool) {
         return await withPostgresTransaction(async (client) => {
           // 1. Lock student account row in cuentas
+          const callingHeaderUser = (req.headers['x-username'] as string) || '';
           const studentLock = await client.query(
             `SELECT id, alumno, saldo, usuario, account_number, role, level 
              FROM cuentas 
-             WHERE id = $1 OR LOWER(usuario) = LOWER($1) 
+             WHERE id = $1 OR LOWER(usuario) = LOWER($1) OR id = $2 OR LOWER(usuario) = LOWER($2) 
              FOR UPDATE`,
-            [callingStudentId]
+            [callingStudentId, callingHeaderUser || callingStudentId]
           );
 
           if (!studentLock || studentLock.rows.length === 0) {
@@ -21690,10 +21733,11 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
           const buyerRow = studentLock.rows[0];
           const buyerLevel = Number(buyerRow.level || 1);
-          const buyerRole = String(buyerRow.role || 'student');
+          const buyerRole = String(buyerRow.role || 'student').toLowerCase();
+          const isStudentRole = buyerRole === 'student' || buyerRole === 'alumno' || buyerRole === 'estudiante' || (!['teacher', 'profesor', 'admin'].includes(buyerRole));
 
           // MANDATORY SERVER-SIDE LEVEL 2 CHECK
-          if (buyerLevel !== 2 || buyerRole !== 'student') {
+          if (buyerLevel !== 2 || !isStudentRole) {
             const err: any = new Error(
               `Acceso denegado: Solo las cuentas de alumno de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
             );
@@ -21731,12 +21775,18 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           }
 
           const unitPrice = Number(annRow.precio_unitario);
-          const totalAmount = Number((qty * unitPrice).toFixed(2));
+          const unitTransportCost = Math.max(0, Number(annRow.coste_transporte_unitario || 0));
+          const productsAmount = Number((qty * unitPrice).toFixed(2));
+          const transportCost = Number((qty * unitTransportCost).toFixed(2));
+          const taxableBase = Number((productsAmount + transportCost).toFixed(2));
+          const ivaRate = 21;
+          const ivaAmount = Math.round((taxableBase * 0.21) * 100) / 100;
+          const totalAmount = Number((taxableBase + ivaAmount).toFixed(2));
           const currentBalance = Number(buyerRow.saldo);
 
           if (currentBalance < totalAmount) {
             const err: any = new Error(
-              `Saldo insuficiente: El importe total de la compra es ${formatCurrency(totalAmount)}, pero tu saldo disponible es de ${formatCurrency(currentBalance)}.`
+              `Saldo insuficiente: El importe total de la compra (IVA 21% incluido) es ${formatCurrency(totalAmount)} (productos: ${formatCurrency(productsAmount)}, transporte: ${formatCurrency(transportCost)}, IVA 21%: ${formatCurrency(ivaAmount)}), pero tu saldo disponible es de ${formatCurrency(currentBalance)}.`
             );
             err.statusCode = 400;
             throw err;
@@ -21746,6 +21796,13 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           const newRemaining = currentStock - qty;
           const newSold = Number(annRow.cantidad_vendida || 0) + qty;
           const nowIso = new Date().toISOString();
+          const txId = generateId('tx');
+
+          // Deterministic unique invoice number based on transaction
+          let invHash = 0;
+          const seedStr = `${id}_${buyerRow.id}_${txId}_${qty}`;
+          for (let i = 0; i < seedStr.length; i++) invHash = (invHash << 5) - invHash + seedStr.charCodeAt(i);
+          const invoiceNum = `FACT-2026-${Math.abs(invHash) % 9000 + 1000}`;
 
           // 3. Deduct balance from student account in cuentas
           await client.query(
@@ -21762,9 +21819,14 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             id: generateId('hist'),
             timestamp: nowIso,
             action: 'venta',
-            description: `Venta de ${qty} destornilladores terminados a ${buyerRow.alumno} (${buyerRow.account_number}) por un total de ${formatCurrency(totalAmount)}.`,
+            description: `Venta de ${qty} destornilladores terminados a ${buyerRow.alumno} (${buyerRow.account_number}) por un total de ${formatCurrency(totalAmount)} (Base: ${formatCurrency(taxableBase)}, IVA 21%: ${formatCurrency(ivaAmount)}). Factura: ${invoiceNum}.`,
             quantity: qty,
             unitPrice,
+            unitTransportCost,
+            transportCost,
+            taxableBase,
+            ivaRate,
+            ivaAmount,
             totalAmount,
             buyerId: buyerRow.id,
             buyerName: buyerRow.alumno,
@@ -21781,8 +21843,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           );
 
           // 5. Register accounting movement in movimientos
-          const txId = generateId('tx');
-          const concept = `Compra comercial de ${qty} destornilladores terminados al Profesor (${unitPrice.toFixed(2)} €/u)`;
+          const concept = `Compra de ${qty} destornilladores terminados al Profesor (Base: ${taxableBase.toFixed(2)} € + IVA 21%: ${ivaAmount.toFixed(2)} €) - Factura ${invoiceNum}`;
 
           await client.query(
             `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
@@ -21855,6 +21916,67 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             }
           }
 
+          // 7. Register official commercial invoice in materias_primas_pedidos
+          const orderRecordId = `rmord_dest_${txId}`;
+          const productTitle = annRow.titulo || 'Destornilladores terminados';
+          const orderRecord: RawMaterialOrder = {
+            id: orderRecordId,
+            studentId: buyerRow.id,
+            studentName: buyerRow.alumno,
+            buyerLevel: 2,
+            sellerId: 'profesor-1',
+            sellerName: 'Profesor / BricoMaster Distribuciones S.A.',
+            sellerLevel: 'official',
+            announcementId: `screwdriver-ann-${id}`,
+            materialType: 'producto_final',
+            materialTitle: `${productTitle} (${qty} uds)`,
+            quantity: qty,
+            unitWeightKg: 0,
+            totalKg: 0,
+            unitPrice: unitPrice,
+            basePrice: productsAmount,
+            subtotalAmount: productsAmount,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            taxableBase: taxableBase,
+            ivaRate: 21,
+            vatRate: 21,
+            ivaAmount: ivaAmount,
+            vatAmount: ivaAmount,
+            transportCost: transportCost,
+            transportMethod: 'vendedor_envio',
+            needsTransport: transportCost > 0,
+            totalAmount: totalAmount,
+            status: 'facturado',
+            invoiceNumber: invoiceNum,
+            requestedAt: nowIso,
+            approvedAt: nowIso,
+            deliveredAt: nowIso,
+            invoicedAt: nowIso,
+            inventoryCredited: true,
+            deliveryAddress: 'Almacén Central / Inmueble del alumno',
+            destinationNaveId: 'default_nave',
+            items: [{
+              announcementId: `screwdriver-ann-${id}`,
+              materialType: 'producto_final',
+              materialTitle: productTitle,
+              title: productTitle,
+              quantity: qty,
+              unitWeightKg: 0,
+              totalKg: 0,
+              unitPrice: unitPrice,
+              basePrice: productsAmount,
+              subtotal: productsAmount,
+              totalCost: productsAmount,
+              unitTransportCost,
+              transportCost
+            } as any]
+          };
+
+          await syncRawMaterialOrderToSupabase(orderRecord, client);
+
           const transferRecord: Transfer = {
             id: txId,
             senderId: buyerRow.id,
@@ -21870,13 +21992,23 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
           return {
             success: true,
-            message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por ${formatCurrency(totalAmount)}. El producto ha sido depositado directamente en tu inventario de productos terminados.`,
+            message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por un total de ${formatCurrency(totalAmount)} (productos: ${formatCurrency(productsAmount)}, transporte: ${formatCurrency(transportCost)}, IVA 21%: ${formatCurrency(ivaAmount)}). La factura oficial ${invoiceNum} ha sido registrada y está disponible en Mercado -> Facturas.`,
             updatedBalance: newBalance,
             newBalance,
             remainingStock: newRemaining,
+            unitPrice,
+            unitTransportCost,
+            productsAmount,
+            transportCost,
+            taxableBase,
+            ivaRate: 21,
+            ivaAmount,
+            totalAmount,
             totalPaid: totalAmount,
             quantityBought: qty,
             isFlat: isFlatScrewdriver,
+            invoiceNumber: invoiceNum,
+            orderId: orderRecordId,
             _postCommit: {
               buyerId: buyerRow.id,
               newBalance,
@@ -21886,14 +22018,21 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
               hist,
               qty,
               isFlat: isFlatScrewdriver,
-              transferRecord
+              transferRecord,
+              orderRecord
             }
           };
         }, key);
       } else {
         // Fallback in-memory mode
         const db = readDb();
-        const buyer = db.users.find(u => u.id === callingStudentId || u.username === callingStudentId);
+        const callingHeaderUser = (req.headers['x-username'] as string) || '';
+        const buyer = db.users.find(u => 
+          u.id === callingStudentId || u.username === callingStudentId ||
+          u.id === callingHeaderUser || u.username === callingHeaderUser ||
+          u.id?.toLowerCase() === callingStudentId.toLowerCase() || u.username?.toLowerCase() === callingStudentId.toLowerCase() ||
+          u.id?.toLowerCase() === callingHeaderUser.toLowerCase() || u.username?.toLowerCase() === callingHeaderUser.toLowerCase()
+        );
         if (!buyer) {
           const err: any = new Error('Estudiante no encontrado');
           err.statusCode = 404;
@@ -21901,8 +22040,9 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
         }
 
         const buyerLevel = Number(buyer.level || 1);
-        const buyerRole = String(buyer.role || 'student');
-        if (buyerLevel !== 2 || buyerRole !== 'student') {
+        const buyerRole = String(buyer.role || 'student').toLowerCase();
+        const isStudentRole = buyerRole === 'student' || buyerRole === 'alumno' || buyerRole === 'estudiante' || (!['teacher', 'profesor', 'admin'].includes(buyerRole));
+        if (buyerLevel !== 2 || !isStudentRole) {
           const err: any = new Error(
             `Acceso denegado: Solo las cuentas de alumno de nivel 2 pueden comprar destornilladores terminados del profesor. Tu nivel actual es ${buyerLevel}.`
           );
@@ -21928,12 +22068,26 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           throw err;
         }
 
-        const totalAmount = Number((qty * listing.unitPrice).toFixed(2));
+        const unitPrice = Number(listing.unitPrice);
+        const unitTransportCost = Math.max(0, Number(listing.unitTransportCost || 0));
+        const productsAmount = Number((qty * unitPrice).toFixed(2));
+        const transportCost = Number((qty * unitTransportCost).toFixed(2));
+        const taxableBase = Number((productsAmount + transportCost).toFixed(2));
+        const ivaRate = 21;
+        const ivaAmount = Math.round((taxableBase * 0.21) * 100) / 100;
+        const totalAmount = Number((taxableBase + ivaAmount).toFixed(2));
+
         if (buyer.balance < totalAmount) {
-          const err: any = new Error(`Saldo insuficiente: necesitas ${formatCurrency(totalAmount)}`);
+          const err: any = new Error(`Saldo insuficiente: necesitas ${formatCurrency(totalAmount)} (base imponible: ${formatCurrency(taxableBase)}, IVA 21%: ${formatCurrency(ivaAmount)})`);
           err.statusCode = 400;
           throw err;
         }
+
+        const txId = generateId('tx');
+        let invHash = 0;
+        const seedStr = `${id}_${buyer.id}_${txId}_${qty}`;
+        for (let i = 0; i < seedStr.length; i++) invHash = (invHash << 5) - invHash + seedStr.charCodeAt(i);
+        const invoiceNum = `FACT-2026-${Math.abs(invHash) % 9000 + 1000}`;
 
         buyer.balance = Number((buyer.balance - totalAmount).toFixed(2));
         listing.remainingQuantity -= qty;
@@ -21945,9 +22099,14 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           id: generateId('hist'),
           timestamp: listing.updatedAt,
           action: 'venta',
-          description: `Venta de ${qty} destornilladores a ${buyer.name} por ${formatCurrency(totalAmount)}`,
+          description: `Venta de ${qty} destornilladores a ${buyer.name} por ${formatCurrency(totalAmount)} (productos: ${formatCurrency(productsAmount)}, transporte: ${formatCurrency(transportCost)}, IVA 21%: ${formatCurrency(ivaAmount)}). Factura: ${invoiceNum}.`,
           quantity: qty,
           unitPrice: listing.unitPrice,
+          unitTransportCost,
+          transportCost,
+          taxableBase,
+          ivaRate,
+          ivaAmount,
           totalAmount,
           buyerId: buyer.id,
           buyerName: buyer.name,
@@ -21990,7 +22149,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           inv.updatedAt = new Date().toISOString();
         }
 
-        const txId = generateId('tx');
+        const concept = `Compra de ${qty} destornilladores terminados al Profesor (Base: ${taxableBase.toFixed(2)} € + IVA 21%: ${ivaAmount.toFixed(2)} €) - Factura ${invoiceNum}`;
         const transferRecord: Transfer = {
           id: txId,
           senderId: buyer.id,
@@ -22000,21 +22159,93 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           receiverName: 'Profesor / BricoMaster Distribuciones S.A.',
           receiverAccount: 'ES000000000000000000',
           amount: totalAmount,
-          concept: `Compra comercial de ${qty} destornilladores terminados al Profesor (${listing.unitPrice.toFixed(2)} €/u)`,
+          concept,
           timestamp: new Date().toISOString()
         };
         if (!db.transfers) db.transfers = [];
         db.transfers.unshift(transferRecord);
+
+        // Official commercial invoice in memory
+        const orderRecordId = `rmord_dest_${txId}`;
+        const orderRecord: RawMaterialOrder = {
+          id: orderRecordId,
+          studentId: buyer.id,
+          studentName: buyer.name,
+          buyerLevel: 2,
+          sellerId: 'profesor-1',
+          sellerName: 'Profesor / BricoMaster Distribuciones S.A.',
+          sellerLevel: 'official',
+          announcementId: `screwdriver-ann-${id}`,
+          materialType: 'producto_final',
+          materialTitle: `${listing.title} (${qty} uds)`,
+          quantity: qty,
+          unitWeightKg: 0,
+          totalKg: 0,
+          unitPrice: listing.unitPrice,
+          basePrice: productsAmount,
+          subtotalAmount: productsAmount,
+          discountPercentage: 0,
+          discountAmount: 0,
+          insuranceFee: 0,
+          hasInsurance: false,
+          taxableBase: taxableBase,
+          transportCost: transportCost,
+          transportMethod: 'vendedor_envio',
+          needsTransport: transportCost > 0,
+          ivaRate: 21,
+          vatRate: 21,
+          ivaAmount: ivaAmount,
+          vatAmount: ivaAmount,
+          totalAmount: totalAmount,
+          status: 'facturado',
+          invoiceNumber: invoiceNum,
+          requestedAt: new Date().toISOString(),
+          approvedAt: new Date().toISOString(),
+          deliveredAt: new Date().toISOString(),
+          invoicedAt: new Date().toISOString(),
+          inventoryCredited: true,
+          deliveryAddress: 'Almacén Central / Inmueble del alumno',
+          destinationNaveId: 'default_nave',
+          items: [{
+            announcementId: `screwdriver-ann-${id}`,
+            materialType: 'producto_final',
+            materialTitle: listing.title,
+            title: listing.title,
+            quantity: qty,
+            unitWeightKg: 0,
+            totalKg: 0,
+            unitPrice: listing.unitPrice,
+            basePrice: productsAmount,
+            subtotal: productsAmount,
+            totalCost: productsAmount,
+            unitTransportCost,
+            transportCost
+          } as any]
+        };
+
+        if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+        db.rawMaterialOrders.unshift(orderRecord);
+
         writeDb(db);
 
         return {
           success: true,
-          message: `Compra realizada con éxito. Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por ${formatCurrency(totalAmount)}.`,
+          message: `¡Compra realizada con éxito! Se han adquirido ${qty} destornilladores terminados (${isFlatScrewdriver ? 'punta plana' : 'punta estrella'}) por un total de ${formatCurrency(totalAmount)} (base imponible: ${formatCurrency(taxableBase)}, IVA 21%: ${formatCurrency(ivaAmount)}). La factura oficial ${invoiceNum} ha sido registrada y está disponible en Mercado -> Facturas.`,
           updatedBalance: buyer.balance,
           newBalance: buyer.balance,
           remainingStock: listing.remainingQuantity,
+          unitPrice: listing.unitPrice,
+          unitTransportCost,
+          productsAmount,
+          transportCost,
+          taxableBase,
+          ivaRate: 21,
+          ivaAmount,
+          totalAmount,
           totalPaid: totalAmount,
-          quantityBought: qty
+          quantityBought: qty,
+          invoiceNumber: invoiceNum,
+          orderId: orderRecordId
         };
       }
     });
@@ -22037,6 +22268,16 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
 
       if (!db.transfers) db.transfers = [];
       db.transfers.unshift(pc.transferRecord);
+
+      if (pc.orderRecord) {
+        if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+        const ordIdx = db.rawMaterialOrders.findIndex(o => o.id === pc.orderRecord.id);
+        if (ordIdx !== -1) {
+          db.rawMaterialOrders[ordIdx] = pc.orderRecord;
+        } else {
+          db.rawMaterialOrders.unshift(pc.orderRecord);
+        }
+      }
 
       if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
       let inv = db.rawMaterialInventories.find(i => i.studentId === pc.buyerId);

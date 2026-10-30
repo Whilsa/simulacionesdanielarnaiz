@@ -25,7 +25,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [activeModule, setActiveModule] = useState<'hub' | 'bank' | 'real_estate' | 'machinery' | 'jobs' | 'company' | 'electricity' | 'telecom' | 'office_store' | 'vehicles' | 'raw_materials' | 'court'>('hub');
-  const [rawMaterialsTab, setRawMaterialsTab] = useState<'catalogo' | 'mensajeria' | 'facturacion'>('catalogo');
+  const [rawMaterialsTab, setRawMaterialsTab] = useState<'catalogo' | 'mensajeria' | 'facturacion' | 'destornilladores_terminados'>('catalogo');
   const [availablePropertiesCount, setAvailablePropertiesCount] = useState<number>(5);
 
   // Price Alert Popup State for Student
@@ -34,6 +34,11 @@ export default function App() {
 
   const handleOpenDirectMessaging = () => {
     setRawMaterialsTab('mensajeria');
+    setActiveModule('raw_materials');
+  };
+
+  const handleOpenFinishedScrewdrivers = () => {
+    setRawMaterialsTab('destornilladores_terminados');
     setActiveModule('raw_materials');
   };
 
@@ -214,6 +219,7 @@ export default function App() {
           currentUser={currentUser}
           onLogout={handleLogout}
           onBackToHub={() => setActiveModule('hub')}
+          onOpenFinishedScrewdrivers={handleOpenFinishedScrewdrivers}
         />
       );
     }
@@ -383,6 +389,7 @@ export default function App() {
           setActiveModule(module);
         }}
         onOpenDirectMessaging={handleOpenDirectMessaging}
+        onOpenFinishedScrewdrivers={handleOpenFinishedScrewdrivers}
         onLogout={handleLogout}
         availablePropertiesCount={availablePropertiesCount}
       />
