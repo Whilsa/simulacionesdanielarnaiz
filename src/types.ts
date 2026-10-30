@@ -756,7 +756,7 @@ export interface TeacherScrewdriverListing {
   unitPrice: number;
   unitTransportCost?: number;
   active: boolean;
-  status?: 'activo' | 'inactivo';
+  status?: 'activo' | 'pausado' | 'retirado' | 'inactivo';
   history: TeacherScrewdriverHistoryEntry[];
   createdAt: string;
   updatedAt: string;

@@ -39,7 +39,7 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
     const headers: Record<string, string> = {
       'x-user-id': currentUser?.id || 'profesor-1',
       'x-username': currentUser?.username || 'pupdaniel',
-      'x-user-role': 'teacher'
+      'x-user-role': currentUser?.role || 'teacher'
     };
     if (includeJson) {
       headers['Content-Type'] = 'application/json';
@@ -63,7 +63,8 @@ export default function TeacherScrewdriverListingsManagement({ currentUser }: Te
           setListings(data.listings);
         }
       } else {
-        setError('Error al consultar los anuncios de destornilladores.');
+        const data = await res.json().catch(() => null);
+        setError(data?.error || 'Error al consultar los anuncios de destornilladores.');
       }
     } catch (err: any) {
       setError(err.message || 'Error de conexión con el servidor.');

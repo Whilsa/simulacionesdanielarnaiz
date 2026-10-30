@@ -4302,6 +4302,21 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
     pN.flatScrewdriversUnits = (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0;
   }
 
+  // Ensure finished screwdrivers (from purchases or prior state) are mapped to primary warehouse if warehouse breakdown lacks them
+  let totalNaveScrewdrivers = 0;
+  for (const nI of Object.values(inv.naveInventories) as any[]) {
+    totalNaveScrewdrivers += (nI.producedScrewdriversUnits || 0) + (nI.starScrewdriversUnits || nI.ironScrewdriversUnits || 0) + (nI.flatScrewdriversUnits || nI.metalScrewdriversUnits || 0);
+  }
+  const totalInvScrewdrivers = (inv.producedScrewdriversUnits || 0) || (((inv as any).starScrewdriversUnits || 0) + ((inv as any).flatScrewdriversUnits || 0));
+  if (totalNaveScrewdrivers < totalInvScrewdrivers) {
+    const pN = getNaveInv(primaryNaveId);
+    const starScrewdrivers = (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0;
+    const flatScrewdrivers = (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0;
+    pN.starScrewdriversUnits = Math.max(pN.starScrewdriversUnits || 0, starScrewdrivers);
+    pN.flatScrewdriversUnits = Math.max(pN.flatScrewdriversUnits || 0, flatScrewdrivers);
+    pN.producedScrewdriversUnits = Math.max(pN.producedScrewdriversUnits || 0, totalInvScrewdrivers, (pN.starScrewdriversUnits || 0) + (pN.flatScrewdriversUnits || 0));
+  }
+
   // 1. First, calculate production for elapsed time using EXISTING inventory prior to crediting new orders
   const lastTime = new Date(inv.lastCalculatedAt || now);
   const elapsedMs = now.getTime() - lastTime.getTime();
@@ -21191,6 +21206,7 @@ app.delete(['/api/raw-materials/announcements/:id', '/api/teacher/raw-materials/
 async function isAuthorizedTeacher(req: express.Request, client?: pg.PoolClient): Promise<boolean> {
   const callingUserId = (req.headers['x-user-id'] as string) || req.body?.userId || req.body?.requesterId || (req.query?.userId as string);
   const callingUsername = (req.headers['x-username'] as string) || req.body?.username || (req.query?.username as string);
+  const callingRole = (req.headers['x-user-role'] as string) || req.body?.role || (req.query?.role as string);
 
   // 1. Direct recognized teacher identifiers
   if (
@@ -21214,7 +21230,8 @@ async function isAuthorizedTeacher(req: express.Request, client?: pg.PoolClient)
         );
         if (q && q.rows.length > 0) {
           const row = q.rows[0];
-          if (row.role === 'teacher' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
+          const roleLower = String(row.role || '').toLowerCase();
+          if (roleLower === 'teacher' || roleLower === 'profesor' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
             return true;
           }
         }
@@ -21226,7 +21243,8 @@ async function isAuthorizedTeacher(req: express.Request, client?: pg.PoolClient)
         );
         if (q2 && q2.rows.length > 0) {
           const row = q2.rows[0];
-          if (row.role === 'teacher' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
+          const roleLower = String(row.role || '').toLowerCase();
+          if (roleLower === 'teacher' || roleLower === 'profesor' || row.usuario === 'pupdaniel' || row.id === 'profesor-1') {
             return true;
           }
         }
@@ -21242,8 +21260,21 @@ async function isAuthorizedTeacher(req: express.Request, client?: pg.PoolClient)
     (callingUserId && (u.id === callingUserId || u.username === callingUserId || u.id?.toLowerCase() === callingUserId.toLowerCase() || u.username?.toLowerCase() === callingUserId.toLowerCase())) ||
     (callingUsername && (u.username === callingUsername || u.username?.toLowerCase() === callingUsername.toLowerCase()))
   );
-  if (memUser && (memUser.role === 'teacher' || memUser.id === 'profesor-1' || memUser.username === 'pupdaniel')) {
-    return true;
+  if (memUser) {
+    const roleLower = String(memUser.role || '').toLowerCase();
+    if (roleLower === 'teacher' || roleLower === 'profesor' || memUser.id === 'profesor-1' || memUser.username === 'pupdaniel') {
+      return true;
+    }
+  }
+
+  // 4. Role header check with safety check
+  if (callingRole) {
+    const r = String(callingRole).toLowerCase();
+    if (r === 'teacher' || r === 'profesor') {
+      if (!memUser || ['teacher', 'profesor'].includes(String(memUser.role || '').toLowerCase())) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -21255,30 +21286,45 @@ app.get('/api/teacher/screwdriver-listings', async (req, res) => {
     if (dbPool) {
       const q = await safeDbQuery('SELECT * FROM profesor_anuncios_destornilladores ORDER BY fecha_creacion DESC');
       if (q && q.rows) {
-        listings = q.rows.map((row: any) => ({
-          id: String(row.id),
-          title: String(row.titulo),
-          description: String(row.descripcion || ''),
-          commercialConditions: String(row.condiciones_comerciales || ''),
-          initialQuantity: Number(row.cantidad_inicial || 0),
-          soldQuantity: Number(row.cantidad_vendida || 0),
-          remainingQuantity: Number(row.cantidad_restante || 0),
-          unitPrice: Number(row.precio_unitario || 0),
-          unitTransportCost: Number(row.coste_transporte_unitario || 0),
-          active: Boolean(row.activo),
-          status: row.activo ? 'activo' : 'inactivo',
-          history: row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [],
-          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
-          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
-        }));
+        listings = q.rows.map((row: any) => {
+          const hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+          const isRetirado = hist.some((h: any) => h.action === 'retirada') || row.status === 'retirado';
+          const isActivo = !isRetirado && Boolean(row.activo);
+          const status: 'activo' | 'pausado' | 'retirado' = isRetirado ? 'retirado' : (isActivo ? 'activo' : 'pausado');
+
+          return {
+            id: String(row.id),
+            title: String(row.titulo),
+            description: String(row.descripcion || ''),
+            commercialConditions: String(row.condiciones_comerciales || ''),
+            initialQuantity: Number(row.cantidad_inicial || 0),
+            soldQuantity: Number(row.cantidad_vendida || 0),
+            remainingQuantity: Number(row.cantidad_restante || 0),
+            unitPrice: Number(row.precio_unitario || 0),
+            unitTransportCost: Number(row.coste_transporte_unitario || 0),
+            active: isActivo,
+            status,
+            history: hist,
+            createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+            updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+          };
+        });
       }
     } else {
       const db = readDb();
-      listings = (db.teacherScrewdriverListings || []).map(l => ({
-        ...l,
-        unitTransportCost: Number(l.unitTransportCost || 0),
-        status: (l.active !== false ? 'activo' : 'inactivo') as 'activo' | 'inactivo'
-      }));
+      listings = (db.teacherScrewdriverListings || []).map(l => {
+        const hist = l.history || [];
+        const isRetirado = hist.some((h: any) => h.action === 'retirada') || (l.status as string) === 'retirado';
+        const isActivo = !isRetirado && (l.active !== false);
+        const status: 'activo' | 'pausado' | 'retirado' = isRetirado ? 'retirado' : (isActivo ? 'activo' : 'pausado');
+
+        return {
+          ...l,
+          active: isActivo,
+          unitTransportCost: Number(l.unitTransportCost || 0),
+          status
+        };
+      });
     }
     return res.json({ success: true, listings });
   } catch (err: any) {
@@ -21384,6 +21430,11 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
         }
         const row = lockRes.rows[0];
         let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+        if (hist.some(h => h.action === 'retirada') || row.status === 'retirado') {
+          const err: any = new Error('No se puede modificar un anuncio que ha sido retirado definitivamente del mercado.');
+          err.statusCode = 400;
+          throw err;
+        }
 
         const newTitle = title !== undefined ? String(title).trim() : row.titulo;
         const newDesc = description !== undefined ? String(description).trim() : row.descripcion;
@@ -21425,6 +21476,7 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
           unitPrice: newPrice,
           unitTransportCost: newTransport,
           active: Boolean(row.activo),
+          status: (row.activo ? 'activo' : 'pausado') as 'activo' | 'pausado',
           history: hist,
           createdAt: row.fecha_creacion,
           updatedAt: nowIso
@@ -21447,6 +21499,9 @@ app.put('/api/teacher/screwdriver-listings/:id', async (req, res) => {
       if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
       const listing = db.teacherScrewdriverListings.find(l => l.id === id);
       if (!listing) return res.status(404).json({ error: 'Anuncio no encontrado' });
+      if ((listing.history || []).some(h => h.action === 'retirada') || (listing.status as string) === 'retirado') {
+        return res.status(400).json({ error: 'No se puede modificar un anuncio que ha sido retirado definitivamente del mercado.' });
+      }
 
       if (title !== undefined) listing.title = String(title).trim();
       if (description !== undefined) listing.description = String(description).trim();
@@ -21494,9 +21549,15 @@ app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
           throw err;
         }
         const row = lockRes.rows[0];
+        let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
+        if (hist.some(h => h.action === 'retirada') || row.status === 'retirado') {
+          const err: any = new Error('No se puede reactivar ni pausar un anuncio que ha sido retirado definitivamente.');
+          err.statusCode = 400;
+          throw err;
+        }
+
         const nextActive = !row.activo;
         const nowIso = new Date().toISOString();
-        let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
         hist.unshift({
           id: generateId('hist'),
           timestamp: nowIso,
@@ -21518,19 +21579,24 @@ app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
       const listing = db.teacherScrewdriverListings.find(l => l.id === id);
       if (listing) {
         listing.active = result.active;
+        listing.status = result.active ? 'activo' : 'pausado';
         listing.history = result.history;
         listing.updatedAt = new Date().toISOString();
         writeDb(db);
       }
 
-      return res.json({ success: true, message: result.active ? 'Anuncio activado con éxito.' : 'Anuncio desactivado.', active: result.active });
+      return res.json({ success: true, message: result.active ? 'Anuncio activado con éxito.' : 'Anuncio pausado correctamente.', active: result.active });
     } else {
       const db = readDb();
       if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
       const listing = db.teacherScrewdriverListings.find(l => l.id === id);
       if (!listing) return res.status(404).json({ error: 'Anuncio no encontrado' });
+      if ((listing.history || []).some(h => h.action === 'retirada') || (listing.status as string) === 'retirado') {
+        return res.status(400).json({ error: 'No se puede reactivar ni pausar un anuncio que ha sido retirado definitivamente.' });
+      }
 
       listing.active = !listing.active;
+      listing.status = listing.active ? 'activo' : 'pausado';
       listing.updatedAt = new Date().toISOString();
       if (!listing.history) listing.history = [];
       listing.history.unshift({
@@ -21541,7 +21607,7 @@ app.patch('/api/teacher/screwdriver-listings/:id/toggle', async (req, res) => {
         newStock: listing.remainingQuantity
       });
       writeDb(db);
-      return res.json({ success: true, message: listing.active ? 'Anuncio activado con éxito.' : 'Anuncio desactivado.', active: listing.active });
+      return res.json({ success: true, message: listing.active ? 'Anuncio activado con éxito.' : 'Anuncio pausado correctamente.', active: listing.active });
     }
   } catch (err: any) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Error al cambiar estado del anuncio' });
@@ -21560,7 +21626,9 @@ app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
       await withPostgresTransaction(async (client) => {
         const lockRes = await client.query('SELECT * FROM profesor_anuncios_destornilladores WHERE id = $1 FOR UPDATE', [id]);
         if (!lockRes || lockRes.rows.length === 0) {
-          return;
+          const err: any = new Error('Anuncio no encontrado');
+          err.statusCode = 404;
+          throw err;
         }
         const row = lockRes.rows[0];
         let hist: TeacherScrewdriverHistoryEntry[] = row.historial ? (typeof row.historial === 'string' ? JSON.parse(row.historial) : row.historial) : [];
@@ -21580,9 +21648,13 @@ app.delete('/api/teacher/screwdriver-listings/:id', async (req, res) => {
     const db = readDb();
     if (!db.teacherScrewdriverListings) db.teacherScrewdriverListings = [];
     const listing = db.teacherScrewdriverListings.find(l => l.id === id);
+    if (!dbPool && !listing) {
+      return res.status(404).json({ error: 'Anuncio no encontrado' });
+    }
     if (listing) {
       listing.active = false;
       listing.remainingQuantity = 0;
+      listing.status = 'retirado';
       if (!listing.history) listing.history = [];
       listing.history.unshift({
         id: generateId('hist'),
@@ -21872,24 +21944,54 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             [buyerRow.id]
           );
 
+          let naveMap: Record<string, any> = {};
+          if (invRes && invRes.rows.length > 0 && invRes.rows[0].desglose_almacenes) {
+            try {
+              naveMap = typeof invRes.rows[0].desglose_almacenes === 'string'
+                ? JSON.parse(invRes.rows[0].desglose_almacenes)
+                : { ...invRes.rows[0].desglose_almacenes };
+            } catch (e) {
+              naveMap = {};
+            }
+          }
+          const primaryNaveKey = Object.keys(naveMap).length > 0 ? Object.keys(naveMap)[0] : 'default_nave';
+          if (!naveMap[primaryNaveKey]) {
+            naveMap[primaryNaveKey] = {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+            };
+          }
+          naveMap[primaryNaveKey].producedScrewdriversUnits = (naveMap[primaryNaveKey].producedScrewdriversUnits || 0) + qty;
+          if (isFlatScrewdriver) {
+            naveMap[primaryNaveKey].flatScrewdriversUnits = (naveMap[primaryNaveKey].flatScrewdriversUnits || 0) + qty;
+            naveMap[primaryNaveKey].metalScrewdriversUnits = (naveMap[primaryNaveKey].metalScrewdriversUnits || 0) + qty;
+          } else {
+            naveMap[primaryNaveKey].starScrewdriversUnits = (naveMap[primaryNaveKey].starScrewdriversUnits || 0) + qty;
+            naveMap[primaryNaveKey].ironScrewdriversUnits = (naveMap[primaryNaveKey].ironScrewdriversUnits || 0) + qty;
+          }
+          const updatedDesgloseJson = JSON.stringify(naveMap);
+
           if (!invRes || invRes.rows.length === 0) {
             if (isFlatScrewdriver) {
               await client.query(
                 `INSERT INTO materias_primas_inventario (
                   alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
                   pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
-                  productos_ensamblados, destornilladores_punta_plana, destornilladores_metal, fecha_actualizacion
-                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, NOW())`,
-                [buyerRow.id, buyerRow.alumno, qty]
+                  productos_ensamblados, destornilladores_punta_plana, destornilladores_metal,
+                  desglose_almacenes, fecha_actualizacion
+                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, $4, NOW())`,
+                [buyerRow.id, buyerRow.alumno, qty, updatedDesgloseJson]
               );
             } else {
               await client.query(
                 `INSERT INTO materias_primas_inventario (
                   alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
                   pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta,
-                  productos_ensamblados, destornilladores_punta_estrella, destornilladores_hierro, fecha_actualizacion
-                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, NOW())`,
-                [buyerRow.id, buyerRow.alumno, qty]
+                  productos_ensamblados, destornilladores_punta_estrella, destornilladores_hierro,
+                  desglose_almacenes, fecha_actualizacion
+                ) VALUES ($1, $2, 0, 0, 0, 0, 0, $3, $3, $3, $4, NOW())`,
+                [buyerRow.id, buyerRow.alumno, qty, updatedDesgloseJson]
               );
             }
           } else {
@@ -21899,9 +22001,10 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
                  SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
                      destornilladores_punta_plana = COALESCE(destornilladores_punta_plana, 0) + $1,
                      destornilladores_metal = COALESCE(destornilladores_metal, 0) + $1,
+                     desglose_almacenes = $3,
                      fecha_actualizacion = NOW()
                  WHERE alumno_id = $2`,
-                [qty, buyerRow.id]
+                [qty, buyerRow.id, updatedDesgloseJson]
               );
             } else {
               await client.query(
@@ -21909,9 +22012,10 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
                  SET productos_ensamblados = COALESCE(productos_ensamblados, 0) + $1,
                      destornilladores_punta_estrella = COALESCE(destornilladores_punta_estrella, 0) + $1,
                      destornilladores_hierro = COALESCE(destornilladores_hierro, 0) + $1,
+                     desglose_almacenes = $3,
                      fecha_actualizacion = NOW()
                  WHERE alumno_id = $2`,
-                [qty, buyerRow.id]
+                [qty, buyerRow.id, updatedDesgloseJson]
               );
             }
           }
@@ -22133,6 +22237,15 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             flatScrewdriversUnits: isFlatScrewdriver ? qty : 0,
             ironScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
             metalScrewdriversUnits: isFlatScrewdriver ? qty : 0,
+            naveInventories: {
+              default_nave: {
+                ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+                producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+                producedScrewdriversUnits: qty,
+                starScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
+                flatScrewdriversUnits: isFlatScrewdriver ? qty : 0
+              }
+            },
             lastCalculatedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
@@ -22145,6 +22258,23 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           } else {
             (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + qty;
             (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + qty;
+          }
+          if (!inv.naveInventories) inv.naveInventories = {};
+          const pKey = Object.keys(inv.naveInventories).length > 0 ? Object.keys(inv.naveInventories)[0] : 'default_nave';
+          if (!inv.naveInventories[pKey]) {
+            inv.naveInventories[pKey] = {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+            };
+          }
+          inv.naveInventories[pKey].producedScrewdriversUnits = (inv.naveInventories[pKey].producedScrewdriversUnits || 0) + qty;
+          if (isFlatScrewdriver) {
+            inv.naveInventories[pKey].flatScrewdriversUnits = (inv.naveInventories[pKey].flatScrewdriversUnits || 0) + qty;
+            inv.naveInventories[pKey].metalScrewdriversUnits = (inv.naveInventories[pKey].metalScrewdriversUnits || 0) + qty;
+          } else {
+            inv.naveInventories[pKey].starScrewdriversUnits = (inv.naveInventories[pKey].starScrewdriversUnits || 0) + qty;
+            inv.naveInventories[pKey].ironScrewdriversUnits = (inv.naveInventories[pKey].ironScrewdriversUnits || 0) + qty;
           }
           inv.updatedAt = new Date().toISOString();
         }
@@ -22294,6 +22424,15 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           flatScrewdriversUnits: pc.isFlat ? pc.qty : 0,
           ironScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
           metalScrewdriversUnits: pc.isFlat ? pc.qty : 0,
+          naveInventories: {
+            default_nave: {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: pc.qty,
+              starScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
+              flatScrewdriversUnits: pc.isFlat ? pc.qty : 0
+            }
+          },
           lastCalculatedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -22306,6 +22445,23 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
         } else {
           (inv as any).starScrewdriversUnits = ((inv as any).starScrewdriversUnits || 0) + pc.qty;
           (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + pc.qty;
+        }
+        if (!inv.naveInventories) inv.naveInventories = {};
+        const pKey = Object.keys(inv.naveInventories).length > 0 ? Object.keys(inv.naveInventories)[0] : 'default_nave';
+        if (!inv.naveInventories[pKey]) {
+          inv.naveInventories[pKey] = {
+            ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+            producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+            producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+          };
+        }
+        inv.naveInventories[pKey].producedScrewdriversUnits = (inv.naveInventories[pKey].producedScrewdriversUnits || 0) + pc.qty;
+        if (pc.isFlat) {
+          inv.naveInventories[pKey].flatScrewdriversUnits = (inv.naveInventories[pKey].flatScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[pKey].metalScrewdriversUnits = (inv.naveInventories[pKey].metalScrewdriversUnits || 0) + pc.qty;
+        } else {
+          inv.naveInventories[pKey].starScrewdriversUnits = (inv.naveInventories[pKey].starScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[pKey].ironScrewdriversUnits = (inv.naveInventories[pKey].ironScrewdriversUnits || 0) + pc.qty;
         }
         inv.updatedAt = new Date().toISOString();
       }
@@ -30364,16 +30520,54 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
   }
 });
 
-app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], (req, res) => {
+app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentId'], async (req, res) => {
   const studentId = req.params.studentId || (req.query.studentId as string);
   if (!studentId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
   const db = readDb();
+  if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
 
-  const inv = checkAndCalculateProduction(db, studentId);
-  const student = db.users.find(u => u.id === studentId);
-  syncInventoryToSupabase(inv, student?.name).catch(e => console.error(e));
+  let canonicalStudentId = studentId;
+  const memUser = (db.users || []).find(u => u.id === studentId || u.username?.toLowerCase() === studentId.toLowerCase());
+  let studentName = memUser ? memUser.name : 'Estudiante';
+  if (memUser) {
+    canonicalStudentId = memUser.id;
+  }
+
+  // When dbPool is configured, PostgreSQL materias_primas_inventario is the source of truth
+  if (dbPool) {
+    try {
+      const uRes = await safeDbQuery(
+        `SELECT id, alumno, usuario FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
+        [studentId]
+      );
+      if (uRes && uRes.rows.length > 0) {
+        canonicalStudentId = uRes.rows[0].id;
+        studentName = uRes.rows[0].alumno;
+      }
+
+      const invRowRes = await safeDbQuery(
+        `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1`,
+        [canonicalStudentId]
+      );
+
+      if (invRowRes && invRowRes.rows.length > 0) {
+        const parsedInv = parseInventoryRow(invRowRes.rows[0]);
+        const idx = db.rawMaterialInventories.findIndex(i => i.studentId === canonicalStudentId);
+        if (idx !== -1) {
+          db.rawMaterialInventories[idx] = parsedInv;
+        } else {
+          db.rawMaterialInventories.push(parsedInv);
+        }
+      }
+    } catch (e) {
+      console.error('[Inventory Route] Error reading PostgreSQL inventory:', e);
+    }
+  }
+
+  const inv = checkAndCalculateProduction(db, canonicalStudentId);
+  syncInventoryToSupabase(inv, studentName).catch(e => console.error(e));
 
   const rawMaterials = {
     fragmentos_hierro_kg: inv.ironKg || 0,
