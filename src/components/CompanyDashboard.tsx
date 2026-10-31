@@ -325,7 +325,15 @@ export default function CompanyDashboard({
     if (currentUser.level === 1) {
       setTransferItemKey("ironKg");
     } else {
-      setTransferItemKey("destornilladores_punta_estrella");
+      const selectedFrom = userNaves.length > 0 ? ((initialFromNaveId && userNaves.some(n => n.id === initialFromNaveId)) ? initialFromNaveId : userNaves[0].id) : '';
+      const fromInv = selectedFrom ? (inventoryData?.inventory?.naveInventories?.[selectedFrom] || inventoryData?.inventory?.naveInventories?.['default_nave']) : null;
+      const starStock = (fromInv as any)?.starScrewdriversUnits ?? (fromInv as any)?.ironScrewdriversUnits ?? (inventoryData?.producedGoods?.destornilladores_punta_estrella || 0);
+      const flatStock = (fromInv as any)?.flatScrewdriversUnits ?? (fromInv as any)?.metalScrewdriversUnits ?? (inventoryData?.producedGoods?.destornilladores_punta_plana || 0);
+      if (starStock === 0 && flatStock > 0) {
+        setTransferItemKey("destornilladores_punta_plana");
+      } else {
+        setTransferItemKey("destornilladores_punta_estrella");
+      }
     }
     setIsTransferModalOpen(true);
     setTransferError(null);
@@ -7513,6 +7521,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 font-medium text-slate-900 focus:outline-none focus:border-indigo-600"
                 >
                   {(() => {
+                    const currentUserNaves = (data?.acquisitions || []).filter(a =>
+                      ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+                      (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+                      (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+                      (a.propertyTitle || a.title || '').toLowerCase().includes('almacen')
+                    );
+
                     const fromNaveInv = fromNaveId
                       ? (inventoryData?.inventory?.naveInventories?.[fromNaveId] || null)
                       : null;
@@ -7535,6 +7550,32 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       varillasPlanaStock = (fromNaveInv as any).producedFlatRodsUnits ?? (fromNaveInv as any).producedMetalRodsUnits ?? 0;
                       destEstrellaStock = (fromNaveInv as any).starScrewdriversUnits ?? (fromNaveInv as any).ironScrewdriversUnits ?? 0;
                       destPlanaStock = (fromNaveInv as any).flatScrewdriversUnits ?? (fromNaveInv as any).metalScrewdriversUnits ?? 0;
+
+                      // Fallback if individual nave breakdown shows 0 but stock exists in default_nave or producedGoods
+                      if (destEstrellaStock === 0 && destPlanaStock === 0) {
+                        const defInv = inventoryData?.inventory?.naveInventories?.['default_nave'];
+                        if (defInv) {
+                          destEstrellaStock = (defInv as any).starScrewdriversUnits ?? (defInv as any).ironScrewdriversUnits ?? 0;
+                          destPlanaStock = (defInv as any).flatScrewdriversUnits ?? (defInv as any).metalScrewdriversUnits ?? 0;
+                        }
+                      }
+                      if (destEstrellaStock === 0 && destPlanaStock === 0 && (fromNaveInv as any).producedScrewdriversUnits) {
+                        destEstrellaStock = (fromNaveInv as any).producedScrewdriversUnits;
+                      }
+                      if (destEstrellaStock === 0 && destPlanaStock === 0 && (!currentUserNaves || currentUserNaves.length <= 1)) {
+                        destEstrellaStock =
+                          inventoryData?.producedGoods?.destornilladores_punta_estrella ??
+                          inventoryData?.producedGoods?.destornilladores_hierro ??
+                          (inventoryData?.inventory as any)?.starScrewdriversUnits ??
+                          (inventoryData?.inventory as any)?.ironScrewdriversUnits ??
+                          0;
+                        destPlanaStock =
+                          inventoryData?.producedGoods?.destornilladores_punta_plana ??
+                          inventoryData?.producedGoods?.destornilladores_metal ??
+                          (inventoryData?.inventory as any)?.flatScrewdriversUnits ??
+                          (inventoryData?.inventory as any)?.metalScrewdriversUnits ??
+                          0;
+                      }
                     } else {
                       varillasEstrellaStock =
                         inventoryData?.producedGoods?.varillas_punta_estrella ??

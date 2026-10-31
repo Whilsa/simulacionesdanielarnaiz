@@ -31,14 +31,14 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
   const [copied, setCopied] = useState(false);
   const [selectedExtractTx, setSelectedExtractTx] = useState<Transfer | null>(null);
 
-  // Listado de movimientos ordenados cronológicamente con saldo acumulado resultante
+  // Listado de movimientos ordenados del más reciente al más antiguo con saldo acumulado resultante
   const movementsWithBalance = useMemo(() => {
     if (!transfers || transfers.length === 0) return [];
 
-    // 1. Orden cronológico determinista y estable:
-    // Criterio 1: Del movimiento más antiguo al más reciente (fecha/hora ascendente).
-    // Criterio 2: Si dos movimientos tienen exactamente la misma fecha/hora, desempate determinista por ID.
-    const sorted = [...transfers].sort((a, b) => {
+    // 1. Orden cronológico ascendente previo para calcular con exactitud los saldos acumulados progresivos:
+    // Criterio 1: Fecha y hora real ascendente.
+    // Criterio 2: Si dos movimientos tienen la misma fecha y hora, desempate determinista por ID.
+    const sortedAsc = [...transfers].sort((a, b) => {
       const timeA = new Date(a.timestamp || (a as any).fecha || (a as any).date || 0).getTime();
       const timeB = new Date(b.timestamp || (b as any).fecha || (b as any).date || 0).getTime();
       if (timeA !== timeB) {
@@ -73,18 +73,16 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
     const currentBalance = typeof balance === 'number' ? balance : Number(currentUser.balance || 0);
 
     let totalDelta = 0;
-    for (const tx of sorted) {
+    for (const tx of sortedAsc) {
       const { delta } = getMovementDelta(tx);
       totalDelta += delta;
     }
 
     const initialBalance = Math.round((currentBalance - totalDelta) * 100) / 100;
 
-    // 4. Aplicar cada movimiento sucesivamente:
-    // saldo después = saldo anterior + efecto económico del movimiento
-    // Cada fila muestra el saldo resultante real acumulado SIN forzar artificialmente el último movimiento.
+    // 4. Aplicar cada movimiento sucesivamente en su secuencia histórica:
     let runningBalance = initialBalance;
-    return sorted.map((tx) => {
+    const computed = sortedAsc.map((tx) => {
       const { isOutbound, delta } = getMovementDelta(tx);
       runningBalance = Math.round((runningBalance + delta) * 100) / 100;
 
@@ -93,6 +91,18 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
         isOutbound,
         resultingBalance: runningBalance
       };
+    });
+
+    // 5. Invertir el orden para mostrar del más reciente al más antiguo:
+    // Criterio principal: Fecha y hora real descendente (el más reciente primero).
+    // Criterio secundario: Desempate determinista estable por ID descendente.
+    return computed.sort((a, b) => {
+      const timeA = new Date(a.timestamp || (a as any).fecha || (a as any).date || 0).getTime();
+      const timeB = new Date(b.timestamp || (b as any).fecha || (b as any).date || 0).getTime();
+      if (timeA !== timeB) {
+        return timeB - timeA;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
   }, [transfers, balance, currentUser.id, currentUser.accountNumber, currentUser.balance]);
 

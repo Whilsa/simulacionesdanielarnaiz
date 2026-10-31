@@ -677,6 +677,8 @@ export interface RawMaterialNaveInventory {
   producedRodsUnits?: number;
   producedStarRodsUnits?: number;
   producedFlatRodsUnits?: number;
+  producedIronRodsUnits?: number;
+  producedMetalRodsUnits?: number;
   producedScrewdriversUnits?: number;
   starScrewdriversUnits?: number;
   flatScrewdriversUnits?: number;

@@ -241,7 +241,14 @@ export default function TeacherDashboard({ currentUser, onLogout, onBackToHub }:
       }
       if (transfersRes.ok && transfersRes.headers.get('content-type')?.includes('application/json')) {
         const transfersData = await transfersRes.json();
-        transfersList = transfersData.transfers || [];
+        transfersList = (transfersData.transfers || []).sort((a: Transfer, b: Transfer) => {
+          const timeA = new Date(a.timestamp || (a as any).fecha || (a as any).date || 0).getTime();
+          const timeB = new Date(b.timestamp || (b as any).fecha || (b as any).date || 0).getTime();
+          if (timeA !== timeB) {
+            return timeB - timeA;
+          }
+          return String(b.id || '').localeCompare(String(a.id || ''));
+        });
       }
       if (logsRes.ok && logsRes.headers.get('content-type')?.includes('application/json')) {
         const logsData = await logsRes.json();

@@ -2941,6 +2941,14 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           uniqueTransfers.push(tr);
         }
       }
+      uniqueTransfers.sort((a, b) => {
+        const timeA = new Date(a.timestamp || (a as any).fecha || (a as any).date || 0).getTime();
+        const timeB = new Date(b.timestamp || (b as any).fecha || (b as any).date || 0).getTime();
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
+        return String(b.id || '').localeCompare(String(a.id || ''));
+      });
       db.transfers = uniqueTransfers;
 
       // Reconstruct db.properties from Supabase "inmuebles"
@@ -3348,9 +3356,82 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
           let naveInventories: any = undefined;
           if (row.desglose_almacenes) {
             try {
-              naveInventories = typeof row.desglose_almacenes === 'string' ? JSON.parse(row.desglose_almacenes) : row.desglose_almacenes;
+              naveInventories = typeof row.desglose_almacenes === 'string' ? JSON.parse(row.desglose_almacenes) : { ...row.desglose_almacenes };
             } catch (e) {
               console.error('[Supabase DB] Error parsing desglose_almacenes:', e);
+            }
+          }
+
+          if (naveInventories) {
+            const sid = String(row.alumno_id);
+            const studentNaves = (db.acquisitions || []).filter(a =>
+              String(a.studentId) === sid &&
+              (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+               (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+               (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+               (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+            );
+            const primaryNId = studentNaves.length > 0 ? String(studentNaves[0].id) : 'default_nave';
+
+            if (primaryNId !== 'default_nave' && naveInventories['default_nave']) {
+              const defN = naveInventories['default_nave'];
+              if (!naveInventories[primaryNId]) {
+                naveInventories[primaryNId] = {
+                  ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+                  producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+                  producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+                  ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+                };
+              }
+              const pN = naveInventories[primaryNId];
+              pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+              pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+              pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+              pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+              pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+              pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+              pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+              pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+              pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+              pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+              pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+              pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+              pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+              pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+              delete naveInventories['default_nave'];
+            }
+
+            if (!naveInventories[primaryNId]) {
+              naveInventories[primaryNId] = {
+                ironKg: Number(row.fragmentos_hierro_kg || 0),
+                metalKg: Number(row.fragmentos_metal_kg || 0),
+                plasticKg: Number(row.pellets_plastico_kg || 0),
+                epoxiKg: Number(row.pegamento_epoxi_kg || 0),
+                producedRodsUnits: totalRods,
+                producedStarRodsUnits: starRods,
+                producedFlatRodsUnits: flatRods,
+                producedIronRodsUnits: starRods,
+                producedMetalRodsUnits: flatRods,
+                producedScrewdriversUnits: totalScrewdrivers,
+                starScrewdriversUnits: starScrewdrivers,
+                flatScrewdriversUnits: flatScrewdrivers,
+                ironScrewdriversUnits: starScrewdrivers,
+                metalScrewdriversUnits: flatScrewdrivers
+              };
+            } else if (totalScrewdrivers > 0) {
+              let sumNaveScrewdrivers = 0;
+              for (const nI of Object.values(naveInventories) as any[]) {
+                sumNaveScrewdrivers += (nI.producedScrewdriversUnits || 0);
+              }
+              if (sumNaveScrewdrivers < totalScrewdrivers) {
+                const diff = totalScrewdrivers - sumNaveScrewdrivers;
+                const pN = naveInventories[primaryNId];
+                pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (starScrewdrivers > 0 ? Math.min(diff, starScrewdrivers) : diff);
+                pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + Math.max(0, diff - (pN.starScrewdriversUnits || 0));
+                pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+                pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+                pN.producedScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (pN.flatScrewdriversUnits || 0);
+              }
             }
           }
 
@@ -4275,6 +4356,26 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
     return inv!.naveInventories![nId];
   };
 
+  if (primaryNaveId !== 'default_nave' && inv.naveInventories['default_nave']) {
+    const defN = inv.naveInventories['default_nave'];
+    const pN = getNaveInv(primaryNaveId);
+    pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+    pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+    pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+    pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+    pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+    pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+    pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+    pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+    pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+    pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+    pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+    pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+    pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+    pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+    delete inv.naveInventories['default_nave'];
+  }
+
   if (studentNaves.length > 0) {
     for (const nave of studentNaves) {
       getNaveInv(nave.id);
@@ -4305,16 +4406,23 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
   // Ensure finished screwdrivers (from purchases or prior state) are mapped to primary warehouse if warehouse breakdown lacks them
   let totalNaveScrewdrivers = 0;
   for (const nI of Object.values(inv.naveInventories) as any[]) {
-    totalNaveScrewdrivers += (nI.producedScrewdriversUnits || 0) + (nI.starScrewdriversUnits || nI.ironScrewdriversUnits || 0) + (nI.flatScrewdriversUnits || nI.metalScrewdriversUnits || 0);
+    totalNaveScrewdrivers += (nI.producedScrewdriversUnits || 0);
   }
   const totalInvScrewdrivers = (inv.producedScrewdriversUnits || 0) || (((inv as any).starScrewdriversUnits || 0) + ((inv as any).flatScrewdriversUnits || 0));
   if (totalNaveScrewdrivers < totalInvScrewdrivers) {
+    const diff = totalInvScrewdrivers - totalNaveScrewdrivers;
     const pN = getNaveInv(primaryNaveId);
     const starScrewdrivers = (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0;
     const flatScrewdrivers = (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0;
-    pN.starScrewdriversUnits = Math.max(pN.starScrewdriversUnits || 0, starScrewdrivers);
-    pN.flatScrewdriversUnits = Math.max(pN.flatScrewdriversUnits || 0, flatScrewdrivers);
-    pN.producedScrewdriversUnits = Math.max(pN.producedScrewdriversUnits || 0, totalInvScrewdrivers, (pN.starScrewdriversUnits || 0) + (pN.flatScrewdriversUnits || 0));
+    if (starScrewdrivers > 0 || flatScrewdrivers > 0) {
+      pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + Math.min(diff, Math.max(0, starScrewdrivers - (pN.starScrewdriversUnits || 0)));
+      pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + Math.min(Math.max(0, diff - (pN.starScrewdriversUnits || 0)), Math.max(0, flatScrewdrivers - (pN.flatScrewdriversUnits || 0)));
+    } else {
+      pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + diff;
+    }
+    pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+    pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+    pN.producedScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (pN.flatScrewdriversUnits || 0);
   }
 
   // 1. First, calculate production for elapsed time using EXISTING inventory prior to crediting new orders
@@ -7961,6 +8069,17 @@ const handleTransferRoute = async (req: express.Request, res: express.Response) 
 app.post('/api/transfers', handleTransferRoute);
 app.post('/transfers', handleTransferRoute);
 
+function sortTransfersDesc(list: any[]): any[] {
+  return [...list].sort((a, b) => {
+    const timeA = new Date(a.timestamp || a.fecha || a.date || 0).getTime();
+    const timeB = new Date(b.timestamp || b.fecha || b.date || 0).getTime();
+    if (timeA !== timeB) {
+      return timeB - timeA;
+    }
+    return String(b.id || '').localeCompare(String(a.id || ''));
+  });
+}
+
 // Get transfers (PostgreSQL Source of Truth with In-Memory fallback)
 const handleGetTransfersRoute = async (req: express.Request, res: express.Response) => {
   const { userId, role } = req.query;
@@ -7972,7 +8091,7 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
         const movsRes = await safeDbQuery(
           `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
            FROM movimientos
-           ORDER BY fecha DESC`
+           ORDER BY fecha DESC, id DESC`
         );
         if (movsRes && movsRes.rows && movsRes.rows.length > 0) {
           const mapped = movsRes.rows.map(r => ({
@@ -7989,11 +8108,11 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
             receiverName: String(r.receiver_name || ''),
             receiverAccount: String(r.receiver_account || '')
           }));
-          return res.json({ transfers: mapped });
+          return res.json({ transfers: sortTransfersDesc(mapped) });
         }
       } catch (e) {}
     }
-    return res.json({ transfers: db.transfers });
+    return res.json({ transfers: sortTransfersDesc(db.transfers || []) });
   } else if (userId) {
     if (dbPool) {
       try {
@@ -8001,7 +8120,7 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
           `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
            FROM movimientos
            WHERE cuenta_id = $1 OR (cuenta_id IS NULL AND (sender_id = $1 OR receiver_id = $1))
-           ORDER BY fecha DESC`,
+           ORDER BY fecha DESC, id DESC`,
           [String(userId)]
         );
         if (movsRes && movsRes.rows && movsRes.rows.length > 0) {
@@ -8021,12 +8140,12 @@ const handleGetTransfersRoute = async (req: express.Request, res: express.Respon
             receiverName: String(r.receiver_name || ''),
             receiverAccount: String(r.receiver_account || '')
           }));
-          return res.json({ transfers: mapped });
+          return res.json({ transfers: sortTransfersDesc(mapped) });
         }
       } catch (e) {}
     }
     const filtered = (db.transfers || []).filter(tx => tx.senderId === userId || tx.receiverId === userId);
-    return res.json({ transfers: filtered });
+    return res.json({ transfers: sortTransfersDesc(filtered) });
   } else {
     return res.status(400).json({ error: 'Se requiere userId o rol para ver el historial' });
   }
@@ -8061,11 +8180,11 @@ app.get('/api/accounts/:id', async (req, res) => {
         `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
          FROM movimientos
          WHERE cuenta_id = $1 OR (cuenta_id IS NULL AND (sender_id = $1 OR receiver_id = $1))
-         ORDER BY fecha DESC`,
+         ORDER BY fecha DESC, id DESC`,
         [id]
       );
       if (movsRes && movsRes.rows) {
-        movements = movsRes.rows.map(r => ({
+        movements = sortTransfersDesc(movsRes.rows.map(r => ({
           id: String(r.id),
           amount: Number(r.importe),
           concept: String(r.concepto || ''),
@@ -8080,7 +8199,7 @@ app.get('/api/accounts/:id', async (req, res) => {
           receiverId: String(r.receiver_id || ''),
           receiverName: String(r.receiver_name || ''),
           receiverAccount: String(r.receiver_account || '')
-        }));
+        })));
       }
     } catch (e) {}
   }
@@ -8090,11 +8209,11 @@ app.get('/api/accounts/:id', async (req, res) => {
   }
 
   if (movements.length === 0) {
-    movements = (db.transfers || []).filter(tx => tx.senderId === id || tx.receiverId === id).map(tx => ({
+    movements = sortTransfersDesc((db.transfers || []).filter(tx => tx.senderId === id || tx.receiverId === id).map(tx => ({
       ...tx,
       fecha: (tx as any).date || tx.timestamp,
       timestamp: (tx as any).date || tx.timestamp
-    }));
+    })));
   }
 
   return res.json({
@@ -21939,6 +22058,41 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           const annText = `${annRow.titulo} ${annRow.descripcion || ''}`.toLowerCase();
           const isFlatScrewdriver = /plana|plano|pala|metal|slotted/i.test(annText);
 
+          // Find buyer real primary warehouse
+          let buyerNaves = (readDb().acquisitions || []).filter(a =>
+            String(a.studentId) === String(buyerRow.id) &&
+            (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+             (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+             (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+             (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+          );
+
+          let dbNavesRes: any = null;
+          try {
+            dbNavesRes = await client.query(
+              `SELECT id, tipo, titulo, direccion, localizacion FROM adquisiciones
+               WHERE alumno_id = $1 AND (
+                 LOWER(COALESCE(tipo, '')) IN ('nave_industrial', 'almacen', 'almacen_logistico', 'industrial') OR
+                 LOWER(COALESCE(titulo, '')) LIKE '%nave%' OR
+                 LOWER(COALESCE(titulo, '')) LIKE '%almacén%' OR
+                 LOWER(COALESCE(titulo, '')) LIKE '%almacen%'
+               ) ORDER BY fecha_adquisicion ASC, id ASC`,
+              [buyerRow.id]
+            );
+          } catch (e) {
+            // fallback
+          }
+
+          let realPrimaryNaveId = 'default_nave';
+          let realPrimaryNaveTitle = 'Almacén Central / Inmueble del alumno';
+          if (dbNavesRes && dbNavesRes.rows && dbNavesRes.rows.length > 0) {
+            realPrimaryNaveId = String(dbNavesRes.rows[0].id);
+            realPrimaryNaveTitle = dbNavesRes.rows[0].titulo || dbNavesRes.rows[0].direccion || 'Almacén Principal';
+          } else if (buyerNaves.length > 0) {
+            realPrimaryNaveId = String(buyerNaves[0].id);
+            realPrimaryNaveTitle = buyerNaves[0].propertyTitle || buyerNaves[0].title || 'Almacén Principal';
+          }
+
           let invRes = await client.query(
             `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
             [buyerRow.id]
@@ -21954,21 +22108,55 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
               naveMap = {};
             }
           }
-          const primaryNaveKey = Object.keys(naveMap).length > 0 ? Object.keys(naveMap)[0] : 'default_nave';
-          if (!naveMap[primaryNaveKey]) {
-            naveMap[primaryNaveKey] = {
+
+          // Migrate any existing 'default_nave' into realPrimaryNaveId if the student has a real warehouse
+          if (realPrimaryNaveId !== 'default_nave' && naveMap['default_nave']) {
+            const defN = naveMap['default_nave'];
+            if (!naveMap[realPrimaryNaveId]) {
+              naveMap[realPrimaryNaveId] = {
+                ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+                producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+                producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+                ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+              };
+            }
+            const pN = naveMap[realPrimaryNaveId];
+            pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+            pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+            pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+            pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+            pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+            pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+            pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+            pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+            pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+            pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+            pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+            pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+            pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+            pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+            delete naveMap['default_nave'];
+          }
+
+          const targetNaveKey = realPrimaryNaveId !== 'default_nave'
+            ? realPrimaryNaveId
+            : (Object.keys(naveMap).length > 0 ? Object.keys(naveMap)[0] : 'default_nave');
+
+          if (!naveMap[targetNaveKey]) {
+            naveMap[targetNaveKey] = {
               ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
               producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
-              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+              ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
             };
           }
-          naveMap[primaryNaveKey].producedScrewdriversUnits = (naveMap[primaryNaveKey].producedScrewdriversUnits || 0) + qty;
+          naveMap[targetNaveKey].producedScrewdriversUnits = (naveMap[targetNaveKey].producedScrewdriversUnits || 0) + qty;
           if (isFlatScrewdriver) {
-            naveMap[primaryNaveKey].flatScrewdriversUnits = (naveMap[primaryNaveKey].flatScrewdriversUnits || 0) + qty;
-            naveMap[primaryNaveKey].metalScrewdriversUnits = (naveMap[primaryNaveKey].metalScrewdriversUnits || 0) + qty;
+            naveMap[targetNaveKey].flatScrewdriversUnits = (naveMap[targetNaveKey].flatScrewdriversUnits || 0) + qty;
+            naveMap[targetNaveKey].metalScrewdriversUnits = (naveMap[targetNaveKey].metalScrewdriversUnits || 0) + qty;
           } else {
-            naveMap[primaryNaveKey].starScrewdriversUnits = (naveMap[primaryNaveKey].starScrewdriversUnits || 0) + qty;
-            naveMap[primaryNaveKey].ironScrewdriversUnits = (naveMap[primaryNaveKey].ironScrewdriversUnits || 0) + qty;
+            naveMap[targetNaveKey].starScrewdriversUnits = (naveMap[targetNaveKey].starScrewdriversUnits || 0) + qty;
+            naveMap[targetNaveKey].ironScrewdriversUnits = (naveMap[targetNaveKey].ironScrewdriversUnits || 0) + qty;
           }
           const updatedDesgloseJson = JSON.stringify(naveMap);
 
@@ -22060,8 +22248,8 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             deliveredAt: nowIso,
             invoicedAt: nowIso,
             inventoryCredited: true,
-            deliveryAddress: 'Almacén Central / Inmueble del alumno',
-            destinationNaveId: 'default_nave',
+            deliveryAddress: realPrimaryNaveTitle,
+            destinationNaveId: targetNaveKey,
             items: [{
               announcementId: `screwdriver-ann-${id}`,
               materialType: 'producto_final',
@@ -22122,6 +22310,7 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
               hist,
               qty,
               isFlat: isFlatScrewdriver,
+              targetNaveKey,
               transferRecord,
               orderRecord
             }
@@ -22222,6 +22411,16 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
         const isFlatScrewdriver = /plana|plano|pala|metal|slotted/i.test(annText);
 
         // Add to finished goods in memory without treating as raw materials or own production
+        const buyerNaves = (db.acquisitions || []).filter(a =>
+          String(a.studentId) === String(buyer.id) &&
+          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        );
+        const targetNaveKey = buyerNaves.length > 0 ? String(buyerNaves[0].id) : 'default_nave';
+        const realPrimaryNaveTitle = buyerNaves.length > 0 ? (buyerNaves[0].propertyTitle || buyerNaves[0].title || 'Almacén Principal') : 'Almacén Central / Inmueble del alumno';
+
         if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
         let inv = db.rawMaterialInventories.find(i => i.studentId === buyer.id);
         if (!inv) {
@@ -22238,12 +22437,14 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             ironScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
             metalScrewdriversUnits: isFlatScrewdriver ? qty : 0,
             naveInventories: {
-              default_nave: {
+              [targetNaveKey]: {
                 ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
                 producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
                 producedScrewdriversUnits: qty,
                 starScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
-                flatScrewdriversUnits: isFlatScrewdriver ? qty : 0
+                flatScrewdriversUnits: isFlatScrewdriver ? qty : 0,
+                ironScrewdriversUnits: isFlatScrewdriver ? 0 : qty,
+                metalScrewdriversUnits: isFlatScrewdriver ? qty : 0
               }
             },
             lastCalculatedAt: new Date().toISOString(),
@@ -22260,21 +22461,50 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
             (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + qty;
           }
           if (!inv.naveInventories) inv.naveInventories = {};
-          const pKey = Object.keys(inv.naveInventories).length > 0 ? Object.keys(inv.naveInventories)[0] : 'default_nave';
-          if (!inv.naveInventories[pKey]) {
-            inv.naveInventories[pKey] = {
+
+          if (targetNaveKey !== 'default_nave' && inv.naveInventories['default_nave']) {
+            const defN = inv.naveInventories['default_nave'];
+            if (!inv.naveInventories[targetNaveKey]) {
+              inv.naveInventories[targetNaveKey] = {
+                ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+                producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+                producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+                ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+              };
+            }
+            const pN = inv.naveInventories[targetNaveKey];
+            pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+            pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+            pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+            pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+            pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+            pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+            pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+            pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+            pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+            pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+            pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+            pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+            pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+            pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+            delete inv.naveInventories['default_nave'];
+          }
+
+          if (!inv.naveInventories[targetNaveKey]) {
+            inv.naveInventories[targetNaveKey] = {
               ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
               producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
-              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+              ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
             };
           }
-          inv.naveInventories[pKey].producedScrewdriversUnits = (inv.naveInventories[pKey].producedScrewdriversUnits || 0) + qty;
+          inv.naveInventories[targetNaveKey].producedScrewdriversUnits = (inv.naveInventories[targetNaveKey].producedScrewdriversUnits || 0) + qty;
           if (isFlatScrewdriver) {
-            inv.naveInventories[pKey].flatScrewdriversUnits = (inv.naveInventories[pKey].flatScrewdriversUnits || 0) + qty;
-            inv.naveInventories[pKey].metalScrewdriversUnits = (inv.naveInventories[pKey].metalScrewdriversUnits || 0) + qty;
+            inv.naveInventories[targetNaveKey].flatScrewdriversUnits = (inv.naveInventories[targetNaveKey].flatScrewdriversUnits || 0) + qty;
+            inv.naveInventories[targetNaveKey].metalScrewdriversUnits = (inv.naveInventories[targetNaveKey].metalScrewdriversUnits || 0) + qty;
           } else {
-            inv.naveInventories[pKey].starScrewdriversUnits = (inv.naveInventories[pKey].starScrewdriversUnits || 0) + qty;
-            inv.naveInventories[pKey].ironScrewdriversUnits = (inv.naveInventories[pKey].ironScrewdriversUnits || 0) + qty;
+            inv.naveInventories[targetNaveKey].starScrewdriversUnits = (inv.naveInventories[targetNaveKey].starScrewdriversUnits || 0) + qty;
+            inv.naveInventories[targetNaveKey].ironScrewdriversUnits = (inv.naveInventories[targetNaveKey].ironScrewdriversUnits || 0) + qty;
           }
           inv.updatedAt = new Date().toISOString();
         }
@@ -22334,8 +22564,8 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           deliveredAt: new Date().toISOString(),
           invoicedAt: new Date().toISOString(),
           inventoryCredited: true,
-          deliveryAddress: 'Almacén Central / Inmueble del alumno',
-          destinationNaveId: 'default_nave',
+          deliveryAddress: realPrimaryNaveTitle,
+          destinationNaveId: targetNaveKey,
           items: [{
             announcementId: `screwdriver-ann-${id}`,
             materialType: 'producto_final',
@@ -22409,6 +22639,15 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
         }
       }
 
+      const buyerNaves = (db.acquisitions || []).filter(a =>
+        String(a.studentId) === String(pc.buyerId) &&
+        (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+         (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+      );
+      const targetNaveKey = pc.targetNaveKey || (buyerNaves.length > 0 ? String(buyerNaves[0].id) : 'default_nave');
+
       if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
       let inv = db.rawMaterialInventories.find(i => i.studentId === pc.buyerId);
       if (!inv) {
@@ -22425,12 +22664,14 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           ironScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
           metalScrewdriversUnits: pc.isFlat ? pc.qty : 0,
           naveInventories: {
-            default_nave: {
+            [targetNaveKey]: {
               ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
               producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
               producedScrewdriversUnits: pc.qty,
               starScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
-              flatScrewdriversUnits: pc.isFlat ? pc.qty : 0
+              flatScrewdriversUnits: pc.isFlat ? pc.qty : 0,
+              ironScrewdriversUnits: pc.isFlat ? 0 : pc.qty,
+              metalScrewdriversUnits: pc.isFlat ? pc.qty : 0
             }
           },
           lastCalculatedAt: new Date().toISOString(),
@@ -22447,21 +22688,50 @@ app.post('/api/teacher/screwdriver-listings/:id/buy', async (req, res) => {
           (inv as any).ironScrewdriversUnits = ((inv as any).ironScrewdriversUnits || 0) + pc.qty;
         }
         if (!inv.naveInventories) inv.naveInventories = {};
-        const pKey = Object.keys(inv.naveInventories).length > 0 ? Object.keys(inv.naveInventories)[0] : 'default_nave';
-        if (!inv.naveInventories[pKey]) {
-          inv.naveInventories[pKey] = {
+
+        if (targetNaveKey !== 'default_nave' && inv.naveInventories['default_nave']) {
+          const defN = inv.naveInventories['default_nave'];
+          if (!inv.naveInventories[targetNaveKey]) {
+            inv.naveInventories[targetNaveKey] = {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+              ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+            };
+          }
+          const pN = inv.naveInventories[targetNaveKey];
+          pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+          pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+          pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+          pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+          pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+          pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+          pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+          pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+          pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+          pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+          pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+          pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+          pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+          pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+          delete inv.naveInventories['default_nave'];
+        }
+
+        if (!inv.naveInventories[targetNaveKey]) {
+          inv.naveInventories[targetNaveKey] = {
             ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
             producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
-            producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0
+            producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+            ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
           };
         }
-        inv.naveInventories[pKey].producedScrewdriversUnits = (inv.naveInventories[pKey].producedScrewdriversUnits || 0) + pc.qty;
+        inv.naveInventories[targetNaveKey].producedScrewdriversUnits = (inv.naveInventories[targetNaveKey].producedScrewdriversUnits || 0) + pc.qty;
         if (pc.isFlat) {
-          inv.naveInventories[pKey].flatScrewdriversUnits = (inv.naveInventories[pKey].flatScrewdriversUnits || 0) + pc.qty;
-          inv.naveInventories[pKey].metalScrewdriversUnits = (inv.naveInventories[pKey].metalScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[targetNaveKey].flatScrewdriversUnits = (inv.naveInventories[targetNaveKey].flatScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[targetNaveKey].metalScrewdriversUnits = (inv.naveInventories[targetNaveKey].metalScrewdriversUnits || 0) + pc.qty;
         } else {
-          inv.naveInventories[pKey].starScrewdriversUnits = (inv.naveInventories[pKey].starScrewdriversUnits || 0) + pc.qty;
-          inv.naveInventories[pKey].ironScrewdriversUnits = (inv.naveInventories[pKey].ironScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[targetNaveKey].starScrewdriversUnits = (inv.naveInventories[targetNaveKey].starScrewdriversUnits || 0) + pc.qty;
+          inv.naveInventories[targetNaveKey].ironScrewdriversUnits = (inv.naveInventories[targetNaveKey].ironScrewdriversUnits || 0) + pc.qty;
         }
         inv.updatedAt = new Date().toISOString();
       }
@@ -26485,6 +26755,78 @@ function parseInventoryRow(row: any): RawMaterialInventory {
     }
   }
 
+  const sid = String(row.alumno_id);
+  const db = readDb();
+  const studentNaves = (db.acquisitions || []).filter(a =>
+    String(a.studentId) === sid &&
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+     (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+  );
+  const primaryNaveId = studentNaves.length > 0 ? String(studentNaves[0].id) : 'default_nave';
+
+  if (primaryNaveId !== 'default_nave' && naveInventories['default_nave']) {
+    const defN = naveInventories['default_nave'];
+    if (!naveInventories[primaryNaveId]) {
+      naveInventories[primaryNaveId] = {
+        ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+        producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+        producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+        ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+      };
+    }
+    const pN = naveInventories[primaryNaveId];
+    pN.ironKg = (pN.ironKg || 0) + (defN.ironKg || 0);
+    pN.metalKg = (pN.metalKg || 0) + (defN.metalKg || 0);
+    pN.plasticKg = (pN.plasticKg || 0) + (defN.plasticKg || 0);
+    pN.epoxiKg = (pN.epoxiKg || 0) + (defN.epoxiKg || 0);
+    pN.producedRodsUnits = (pN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+    pN.producedStarRodsUnits = (pN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+    pN.producedFlatRodsUnits = (pN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+    pN.producedIronRodsUnits = pN.producedStarRodsUnits;
+    pN.producedMetalRodsUnits = pN.producedFlatRodsUnits;
+    pN.producedScrewdriversUnits = (pN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+    pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+    pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+    pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+    pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+    delete naveInventories['default_nave'];
+  }
+
+  if (!naveInventories[primaryNaveId]) {
+    naveInventories[primaryNaveId] = {
+      ironKg: Number(row.fragmentos_hierro_kg || 0),
+      metalKg: Number(row.fragmentos_metal_kg || 0),
+      plasticKg: Number(row.pellets_plastico_kg || 0),
+      epoxiKg: Number(row.pegamento_epoxi_kg || 0),
+      producedRodsUnits: totalRods,
+      producedStarRodsUnits: starRods,
+      producedFlatRodsUnits: flatRods,
+      producedIronRodsUnits: starRods,
+      producedMetalRodsUnits: flatRods,
+      producedScrewdriversUnits: totalScrewdrivers,
+      starScrewdriversUnits: starScrewdrivers,
+      flatScrewdriversUnits: flatScrewdrivers,
+      ironScrewdriversUnits: starScrewdrivers,
+      metalScrewdriversUnits: flatScrewdrivers
+    };
+  } else if (totalScrewdrivers > 0) {
+    let sumNaveScrewdrivers = 0;
+    for (const nI of Object.values(naveInventories) as any[]) {
+      sumNaveScrewdrivers += (nI.producedScrewdriversUnits || 0);
+    }
+    if (sumNaveScrewdrivers < totalScrewdrivers) {
+      const diff = totalScrewdrivers - sumNaveScrewdrivers;
+      const pN = naveInventories[primaryNaveId];
+      pN.starScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (starScrewdrivers > 0 ? Math.min(diff, starScrewdrivers) : diff);
+      pN.flatScrewdriversUnits = (pN.flatScrewdriversUnits || 0) + Math.max(0, diff - (pN.starScrewdriversUnits || 0));
+      pN.ironScrewdriversUnits = pN.starScrewdriversUnits;
+      pN.metalScrewdriversUnits = pN.flatScrewdriversUnits;
+      pN.producedScrewdriversUnits = (pN.starScrewdriversUnits || 0) + (pN.flatScrewdriversUnits || 0);
+    }
+  }
+
   return {
     studentId: String(row.alumno_id),
     ironKg: Number(row.fragmentos_hierro_kg || 0),
@@ -26832,6 +27174,64 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         if (!senderInv.naveInventories) senderInv.naveInventories = {};
         if (!recipientInv.naveInventories) recipientInv.naveInventories = {};
 
+        // If sender has 'default_nave' and targetSenderNaveId is a real warehouse, merge it
+        if (targetSenderNaveId !== 'default_nave' && senderInv.naveInventories['default_nave']) {
+          const defN = senderInv.naveInventories['default_nave'];
+          if (!senderInv.naveInventories[targetSenderNaveId]) {
+            senderInv.naveInventories[targetSenderNaveId] = {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+              ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+            };
+          }
+          const sN = senderInv.naveInventories[targetSenderNaveId];
+          sN.ironKg = (sN.ironKg || 0) + (defN.ironKg || 0);
+          sN.metalKg = (sN.metalKg || 0) + (defN.metalKg || 0);
+          sN.plasticKg = (sN.plasticKg || 0) + (defN.plasticKg || 0);
+          sN.epoxiKg = (sN.epoxiKg || 0) + (defN.epoxiKg || 0);
+          sN.producedRodsUnits = (sN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+          sN.producedStarRodsUnits = (sN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+          sN.producedFlatRodsUnits = (sN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+          sN.producedIronRodsUnits = sN.producedStarRodsUnits;
+          sN.producedMetalRodsUnits = sN.producedFlatRodsUnits;
+          sN.producedScrewdriversUnits = (sN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+          sN.starScrewdriversUnits = (sN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+          sN.flatScrewdriversUnits = (sN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+          sN.ironScrewdriversUnits = sN.starScrewdriversUnits;
+          sN.metalScrewdriversUnits = sN.flatScrewdriversUnits;
+          delete senderInv.naveInventories['default_nave'];
+        }
+
+        // If recipient has 'default_nave' and targetRecipientNaveId is a real warehouse, merge it
+        if (targetRecipientNaveId !== 'default_nave' && recipientInv.naveInventories['default_nave']) {
+          const defN = recipientInv.naveInventories['default_nave'];
+          if (!recipientInv.naveInventories[targetRecipientNaveId]) {
+            recipientInv.naveInventories[targetRecipientNaveId] = {
+              ironKg: 0, metalKg: 0, plasticKg: 0, epoxiKg: 0,
+              producedRodsUnits: 0, producedStarRodsUnits: 0, producedFlatRodsUnits: 0,
+              producedScrewdriversUnits: 0, starScrewdriversUnits: 0, flatScrewdriversUnits: 0,
+              ironScrewdriversUnits: 0, metalScrewdriversUnits: 0
+            };
+          }
+          const rN = recipientInv.naveInventories[targetRecipientNaveId];
+          rN.ironKg = (rN.ironKg || 0) + (defN.ironKg || 0);
+          rN.metalKg = (rN.metalKg || 0) + (defN.metalKg || 0);
+          rN.plasticKg = (rN.plasticKg || 0) + (defN.plasticKg || 0);
+          rN.epoxiKg = (rN.epoxiKg || 0) + (defN.epoxiKg || 0);
+          rN.producedRodsUnits = (rN.producedRodsUnits || 0) + (defN.producedRodsUnits || 0);
+          rN.producedStarRodsUnits = (rN.producedStarRodsUnits || 0) + (defN.producedStarRodsUnits || defN.producedIronRodsUnits || 0);
+          rN.producedFlatRodsUnits = (rN.producedFlatRodsUnits || 0) + (defN.producedFlatRodsUnits || defN.producedMetalRodsUnits || 0);
+          rN.producedIronRodsUnits = rN.producedStarRodsUnits;
+          rN.producedMetalRodsUnits = rN.producedFlatRodsUnits;
+          rN.producedScrewdriversUnits = (rN.producedScrewdriversUnits || 0) + (defN.producedScrewdriversUnits || 0);
+          rN.starScrewdriversUnits = (rN.starScrewdriversUnits || 0) + (defN.starScrewdriversUnits || defN.ironScrewdriversUnits || 0);
+          rN.flatScrewdriversUnits = (rN.flatScrewdriversUnits || 0) + (defN.flatScrewdriversUnits || defN.metalScrewdriversUnits || 0);
+          rN.ironScrewdriversUnits = rN.starScrewdriversUnits;
+          rN.metalScrewdriversUnits = rN.flatScrewdriversUnits;
+          delete recipientInv.naveInventories['default_nave'];
+        }
+
         if (!senderInv.naveInventories[targetSenderNaveId]) {
           senderInv.naveInventories[targetSenderNaveId] = {
             ironKg: senderNaves.length <= 1 ? (senderInv.ironKg || 0) : 0,
@@ -26850,6 +27250,19 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         }
 
         const senderNaveInv = senderInv.naveInventories[targetSenderNaveId];
+
+        // If sender has only 1 warehouse (or warehouse breakdown has 0 screwdrivers but senderInv has them), ensure availability
+        if (senderNaves.length <= 1 || Object.keys(senderInv.naveInventories).length === 1) {
+          if ((senderNaveInv.producedScrewdriversUnits || 0) === 0 && (senderInv.producedScrewdriversUnits || 0) > 0) {
+            const sU = (senderInv as any).starScrewdriversUnits || (senderInv as any).ironScrewdriversUnits || 0;
+            const fU = (senderInv as any).flatScrewdriversUnits || (senderInv as any).metalScrewdriversUnits || 0;
+            senderNaveInv.starScrewdriversUnits = sU;
+            senderNaveInv.flatScrewdriversUnits = fU;
+            senderNaveInv.ironScrewdriversUnits = sU;
+            senderNaveInv.metalScrewdriversUnits = fU;
+            senderNaveInv.producedScrewdriversUnits = senderInv.producedScrewdriversUnits || (sU + fU);
+          }
+        }
 
         if (!recipientInv.naveInventories[targetRecipientNaveId]) {
           recipientInv.naveInventories[targetRecipientNaveId] = {
