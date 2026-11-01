@@ -291,6 +291,52 @@ export default function CompanyDashboard({
     }
   };
 
+  const getNaveId = (nave: any): string => {
+    if (!nave) return '';
+    return String(nave.id ?? nave.propertyId ?? '').trim();
+  };
+
+  const handleFromNaveChange = (newFromId: string, naves: any[]) => {
+    const normFrom = String(newFromId).trim();
+    setFromNaveId(normFrom);
+    const normTo = String(toNaveId).trim();
+    if (normTo === normFrom || !naves.some(n => getNaveId(n) === normTo)) {
+      const alternativeNave = naves.find(n => getNaveId(n) !== normFrom);
+      setToNaveId(alternativeNave ? getNaveId(alternativeNave) : '');
+    }
+  };
+
+  useEffect(() => {
+    const userNaves = (data?.acquisitions || []).filter(a =>
+      ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+      (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+      (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+      (a.propertyTitle || a.title || '').toLowerCase().includes('almacen')
+    );
+
+    if (userNaves.length === 0) {
+      if (fromNaveId !== '') setFromNaveId('');
+      if (toNaveId !== '') setToNaveId('');
+      return;
+    }
+
+    const validNaveIds = new Set(userNaves.map(n => getNaveId(n)));
+    let currentFrom = String(fromNaveId).trim();
+
+    if (!validNaveIds.has(currentFrom)) {
+      currentFrom = getNaveId(userNaves[0]);
+      setFromNaveId(currentFrom);
+      const nextTo = userNaves.find(n => getNaveId(n) !== currentFrom);
+      setToNaveId(nextTo ? getNaveId(nextTo) : '');
+    } else {
+      const currentTo = String(toNaveId).trim();
+      if (currentTo === currentFrom || !validNaveIds.has(currentTo)) {
+        const nextTo = userNaves.find(n => getNaveId(n) !== currentFrom);
+        setToNaveId(nextTo ? getNaveId(nextTo) : '');
+      }
+    }
+  }, [data?.acquisitions]);
+
   const handleOpenTransferModal = (initialFromNaveId?: string, mode?: "alumno" | "nave") => {
     fetchStudentsList();
     setRecipientSearch("");
@@ -307,13 +353,14 @@ export default function CompanyDashboard({
     );
 
     if (userNaves.length > 0) {
-      const selectedFrom = (initialFromNaveId && userNaves.some(n => n.id === initialFromNaveId))
-        ? initialFromNaveId
-        : userNaves[0].id;
+      const normInitialFrom = initialFromNaveId ? String(initialFromNaveId).trim() : '';
+      const selectedFrom = (normInitialFrom && userNaves.some(n => getNaveId(n) === normInitialFrom))
+        ? normInitialFrom
+        : getNaveId(userNaves[0]);
       setFromNaveId(selectedFrom);
-      const availableToNaves = userNaves.filter(n => n.id !== selectedFrom);
+      const availableToNaves = userNaves.filter(n => getNaveId(n) !== selectedFrom);
       if (availableToNaves.length > 0) {
-        setToNaveId(availableToNaves[0].id);
+        setToNaveId(getNaveId(availableToNaves[0]));
       } else {
         setToNaveId('');
       }
@@ -325,7 +372,8 @@ export default function CompanyDashboard({
     if (currentUser.level === 1) {
       setTransferItemKey("ironKg");
     } else {
-      const selectedFrom = userNaves.length > 0 ? ((initialFromNaveId && userNaves.some(n => n.id === initialFromNaveId)) ? initialFromNaveId : userNaves[0].id) : '';
+      const normInitialFrom = initialFromNaveId ? String(initialFromNaveId).trim() : '';
+      const selectedFrom = userNaves.length > 0 ? ((normInitialFrom && userNaves.some(n => getNaveId(n) === normInitialFrom)) ? normInitialFrom : getNaveId(userNaves[0])) : '';
       const fromInv = selectedFrom ? (inventoryData?.inventory?.naveInventories?.[selectedFrom] || inventoryData?.inventory?.naveInventories?.['default_nave']) : null;
       const starStock = (fromInv as any)?.starScrewdriversUnits ?? (fromInv as any)?.ironScrewdriversUnits ?? (inventoryData?.producedGoods?.destornilladores_punta_estrella || 0);
       const flatStock = (fromInv as any)?.flatScrewdriversUnits ?? (fromInv as any)?.metalScrewdriversUnits ?? (inventoryData?.producedGoods?.destornilladores_punta_plana || 0);
@@ -354,12 +402,15 @@ export default function CompanyDashboard({
     try {
       let res;
       if (transferMode === 'nave') {
-        if (!fromNaveId || !toNaveId) {
+        const normFrom = String(fromNaveId).trim();
+        const normTo = String(toNaveId).trim();
+
+        if (!normFrom || !normTo) {
           setTransferError("Por favor selecciona la nave de origen y la nave de destino.");
           setIsTransferring(false);
           return;
         }
-        if (fromNaveId === toNaveId) {
+        if (normFrom === normTo) {
           setTransferError("La nave de origen y la nave de destino deben ser diferentes.");
           setIsTransferring(false);
           return;
@@ -370,8 +421,8 @@ export default function CompanyDashboard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             studentId: currentUser.id,
-            fromNaveId,
-            toNaveId,
+            fromNaveId: normFrom,
+            toNaveId: normTo,
             itemKey: transferItemKey,
             quantity: qty,
             transportMethod: transferTransportMethod,
@@ -390,7 +441,7 @@ export default function CompanyDashboard({
           body: JSON.stringify({
             senderId: currentUser.id,
             recipientId: transferRecipientId,
-            fromNaveId: fromNaveId || undefined,
+            fromNaveId: String(fromNaveId).trim() || undefined,
             destinationNaveId: transferDestinationNaveId || undefined,
             itemKey: transferItemKey,
             quantity: qty,
@@ -7373,7 +7424,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       );
                     };
 
-                    const selectedOriginNave = userNaves.find((n) => n.id === fromNaveId) || userNaves[0];
+                    const selectedOriginNave = userNaves.find((n) => getNaveId(n) === String(fromNaveId).trim()) || userNaves[0];
                     const originHasForklift = selectedOriginNave ? checkNaveHasForklift(selectedOriginNave) : true;
 
                     return (
@@ -7389,15 +7440,16 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                           )}
                         </div>
                         <select
-                          value={fromNaveId}
-                          onChange={(e) => setFromNaveId(e.target.value)}
+                          value={String(fromNaveId).trim()}
+                          onChange={(e) => handleFromNaveChange(e.target.value, userNaves)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:border-indigo-600"
                         >
                           {userNaves.map((n) => {
+                            const naveKey = getNaveId(n);
                             const hasF = checkNaveHasForklift(n);
                             return (
-                              <option key={n.id} value={n.id}>
-                                {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
+                              <option key={naveKey} value={naveKey}>
+                                {n.propertyTitle || n.title || `Nave ${naveKey}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                               </option>
                             );
                           })}
@@ -7448,7 +7500,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     );
                   };
 
-                  const selectedTargetNave = userNaves.find((n) => n.id === toNaveId) || userNaves.filter((n) => n.id !== fromNaveId)[0];
+                  const selectedTargetNave = userNaves.find((n) => getNaveId(n) === String(toNaveId).trim()) || userNaves.filter((n) => getNaveId(n) !== String(fromNaveId).trim())[0];
                   const targetHasForklift = selectedTargetNave ? checkNaveHasForklift(selectedTargetNave) : true;
 
                   return (
@@ -7459,15 +7511,16 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             Nave / almacén de origen
                           </label>
                           <select
-                            value={fromNaveId}
-                            onChange={(e) => setFromNaveId(e.target.value)}
+                            value={String(fromNaveId).trim()}
+                            onChange={(e) => handleFromNaveChange(e.target.value, userNaves)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:border-indigo-600"
                           >
                             {userNaves.map((n) => {
+                              const naveKey = getNaveId(n);
                               const hasF = checkNaveHasForklift(n);
                               return (
-                                <option key={n.id} value={n.id}>
-                                  {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
+                                <option key={naveKey} value={naveKey}>
+                                  {n.propertyTitle || n.title || `Nave ${naveKey}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                                 </option>
                               );
                             })}
@@ -7479,17 +7532,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             Nave / almacén de destino
                           </label>
                           <select
-                            value={toNaveId}
-                            onChange={(e) => setToNaveId(e.target.value)}
+                            value={String(toNaveId).trim()}
+                            onChange={(e) => setToNaveId(String(e.target.value).trim())}
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:border-indigo-600"
                           >
                             {userNaves
-                              .filter((n) => n.id !== fromNaveId)
+                              .filter((n) => getNaveId(n) !== String(fromNaveId).trim())
                               .map((n) => {
+                                const naveKey = getNaveId(n);
                                 const hasF = checkNaveHasForklift(n);
                                 return (
-                                  <option key={n.id} value={n.id}>
-                                    {n.propertyTitle || n.title || `Nave ${n.id}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
+                                  <option key={naveKey} value={naveKey}>
+                                    {n.propertyTitle || n.title || `Nave ${naveKey}`} ({n.location || 'Polígono'}) {hasF ? '— 🚜 [Carretilla OK]' : '— ⚠️ [Falta carretilla]'}
                                   </option>
                                 );
                               })}
@@ -7886,12 +7940,12 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 
                 let sourceLoc: any = null;
                 let targetLoc: any = null;
-                if (transferMode === 'between_naves') {
-                  sourceLoc = (data?.acquisitions || []).find(a => a.id === fromNaveId) || (data?.acquisitions || [])[0];
-                  targetLoc = (data?.acquisitions || []).find(a => a.id === toNaveId) || (data?.acquisitions || [])[1];
+                if (transferMode === 'nave') {
+                  sourceLoc = (data?.acquisitions || []).find(a => getNaveId(a) === String(fromNaveId).trim()) || (data?.acquisitions || [])[0];
+                  targetLoc = (data?.acquisitions || []).find(a => getNaveId(a) === String(toNaveId).trim()) || (data?.acquisitions || [])[1];
                 } else {
-                  sourceLoc = (data?.acquisitions || []).find(a => a.id === fromNaveId) || (data?.acquisitions || [])[0] || currentUser;
-                  const recWh = selectedRecipient?.warehouses?.find((w: any) => String(w.id) === String(transferDestinationNaveId)) || selectedRecipient?.warehouses?.[0];
+                  sourceLoc = (data?.acquisitions || []).find(a => getNaveId(a) === String(fromNaveId).trim()) || (data?.acquisitions || [])[0] || currentUser;
+                  const recWh = selectedRecipient?.warehouses?.find((w: any) => String(w.id).trim() === String(transferDestinationNaveId).trim()) || selectedRecipient?.warehouses?.[0];
                   targetLoc = recWh || selectedRecipient || 'Destinatario';
                 }
                 const distKm = calculateSpanishDistanceKm(sourceLoc, targetLoc);

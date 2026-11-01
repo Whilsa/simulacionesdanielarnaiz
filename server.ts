@@ -27688,16 +27688,19 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
   const { studentId, fromNaveId, toNaveId, itemKey, quantity, transportMethod } = req.body;
   const qty = Number(quantity);
 
-  if (!studentId || !fromNaveId || !toNaveId || !itemKey || isNaN(qty) || qty <= 0) {
+  const fromNaveIdStr = String(fromNaveId ?? '').trim();
+  const toNaveIdStr = String(toNaveId ?? '').trim();
+
+  if (!studentId || !fromNaveIdStr || !toNaveIdStr || !itemKey || isNaN(qty) || qty <= 0) {
     return res.status(400).json({ error: 'Datos de traslado incompletos o cantidad inválida.' });
   }
 
-  if (fromNaveId === toNaveId) {
+  if (fromNaveIdStr === toNaveIdStr) {
     return res.status(400).json({ error: 'La nave de origen y la nave de destino deben ser diferentes.' });
   }
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
-  const idemKey = rawIdemKey || `transfer_nave_${studentId}_${fromNaveId}_${toNaveId}_${itemKey}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const idemKey = rawIdemKey || `transfer_nave_${studentId}_${fromNaveIdStr}_${toNaveIdStr}_${itemKey}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
   try {
     const result = await executeWithIdempotency(idemKey, async (key) => {
@@ -27721,15 +27724,66 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
            (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
            (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
         );
-        const toNave = studentNaves.find(a => String(a.id) === String(toNaveId)) || (db.acquisitions || []).find(a => String(a.id) === String(toNaveId));
-        const toNaveTargetIdStr = String(toNaveId);
+
+        let dbStudentAcqs: any[] = [];
+        try {
+          const acqRes = await client.query(
+            `SELECT id, inmueble_id, inmueble_titulo, inmueble_tipo, alumno_id, superficie_m2, ubicacion
+             FROM adquisiciones
+             WHERE alumno_id = $1`,
+            [studentId]
+          );
+          dbStudentAcqs = (acqRes.rows || []).map(r => ({
+            id: r.id,
+            propertyId: r.inmueble_id,
+            propertyTitle: r.inmueble_titulo,
+            propertyType: r.inmueble_tipo,
+            studentId: r.alumno_id,
+            surfaceM2: Number(r.superficie_m2),
+            location: r.ubicacion
+          }));
+        } catch (e) {}
+
+        const allStudentNaves = [...studentNaves, ...dbStudentAcqs].filter(a =>
+          ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('almacen')
+        );
+
+        const matchNave = (targetId: string) => {
+          const tid = String(targetId).trim();
+          return allStudentNaves.find(a => String(a.id).trim() === tid || (a.propertyId && String(a.propertyId).trim() === tid));
+        };
+
+        const fromNave = matchNave(fromNaveIdStr);
+        const toNave = matchNave(toNaveIdStr);
+
+        if (!fromNave || !toNave) {
+          const err: any = new Error('Los almacenes de origen y destino deben existir y pertenecer al alumno que realiza la operación.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        const canonicalFromId = String(fromNave.id).trim();
+        const canonicalToId = String(toNave.id).trim();
+
+        if (canonicalFromId === canonicalToId || (fromNave.propertyId && toNave.propertyId && String(fromNave.propertyId).trim() === String(toNave.propertyId).trim())) {
+          const err: any = new Error('La nave de origen y la nave de destino deben ser diferentes.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const toNaveTargetIdStr = String(toNave.id || toNaveIdStr);
+        const toNavePropertyIdStr = String(toNave.propertyId || '');
 
         const hasForkliftLocal = (db.purchasedVehicles || []).some(v =>
           String(v.studentId) === String(studentId) &&
           v.vehicleType === 'carretilla_elevadora' &&
           (
             String(v.assignedPropertyId) === toNaveTargetIdStr ||
-            (studentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
+            (toNavePropertyIdStr && String(v.assignedPropertyId) === toNavePropertyIdStr) ||
+            (allStudentNaves.length === 1 && (v.assignedWarehouseIndex !== undefined && v.assignedWarehouseIndex !== null))
           )
         );
 
@@ -27738,9 +27792,9 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           const fRes = await client.query(
             `SELECT id FROM vehiculos_comprados 
              WHERE alumno_id = $1 AND vehiculo_tipo = 'carretilla_elevadora' AND (
-               propiedad_asignada_id = $2 OR ($3 = 1 AND almacen_asignado_index IS NOT NULL)
+               propiedad_asignada_id = $2 OR ($3 != '' AND propiedad_asignada_id = $3) OR ($4 = 1 AND almacen_asignado_index IS NOT NULL)
              ) LIMIT 1`,
-            [studentId, toNaveTargetIdStr, studentNaves.length]
+            [studentId, toNaveTargetIdStr, toNavePropertyIdStr, allStudentNaves.length]
           );
           hasForkliftDb = fRes.rows.length > 0;
         } catch (e) {
@@ -27760,7 +27814,6 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
         let distanceKm = 0;
         let fuelTripsCount = 1;
         let fuelVehicleLabel = 'Camión';
-        const fromNave = (db.acquisitions || []).find(a => a.id === fromNaveId);
         distanceKm = calculateSpanishDistanceKm(fromNave, toNave);
 
         // Calculate weight / pallets
@@ -27915,14 +27968,26 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
         // 3. INVENTORY STOCK TRANSFER VALIDATION & UPDATE
         if (!inv.naveInventories) inv.naveInventories = {};
 
-        if (!inv.naveInventories[fromNaveId]) {
+        const fromNaveKey = inv.naveInventories[fromNaveIdStr]
+          ? fromNaveIdStr
+          : (fromNave.id && inv.naveInventories[String(fromNave.id)])
+            ? String(fromNave.id)
+            : fromNaveIdStr;
+
+        const toNaveKey = inv.naveInventories[toNaveIdStr]
+          ? toNaveIdStr
+          : (toNave.id && inv.naveInventories[String(toNave.id)])
+            ? String(toNave.id)
+            : toNaveIdStr;
+
+        if (!inv.naveInventories[fromNaveKey]) {
           const err: any = new Error('No se encontraron los datos de inventario para la nave de origen.');
           err.statusCode = 404;
           throw err;
         }
 
-        if (!inv.naveInventories[toNaveId]) {
-          inv.naveInventories[toNaveId] = {
+        if (!inv.naveInventories[toNaveKey]) {
+          inv.naveInventories[toNaveKey] = {
             ironKg: 0,
             metalKg: 0,
             plasticKg: 0,
@@ -27938,8 +28003,8 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           };
         }
 
-        const fromNaveInv = inv.naveInventories[fromNaveId];
-        const toNaveInv = inv.naveInventories[toNaveId];
+        const fromNaveInv = inv.naveInventories[fromNaveKey];
+        const toNaveInv = inv.naveInventories[toNaveKey];
 
         let itemLabel = itemKey;
 
