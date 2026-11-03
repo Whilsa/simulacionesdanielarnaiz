@@ -256,6 +256,8 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
         numero_cuota INT,
         total_cuotas INT
       );
+      ALTER TABLE obligaciones_pago ADD COLUMN IF NOT EXISTS intereses_demora NUMERIC(12, 2) DEFAULT 0;
+      ALTER TABLE obligaciones_pago ADD COLUMN IF NOT EXISTS intereses_demora_pagados BOOLEAN DEFAULT FALSE;
 
       CREATE TABLE IF NOT EXISTS prestamos (
         id VARCHAR(255) PRIMARY KEY,
@@ -1303,11 +1305,13 @@ async function syncObligationToSupabase(ob: PaymentObligation, client?: pg.PoolC
   try {
     const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
     await runner(
-      `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO obligaciones_pago (id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas, intereses_demora, intereses_demora_pagados)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (id) DO UPDATE SET 
          estado = EXCLUDED.estado, 
-         fecha_pago = EXCLUDED.fecha_pago`,
+         fecha_pago = EXCLUDED.fecha_pago,
+         intereses_demora = EXCLUDED.intereses_demora,
+         intereses_demora_pagados = EXCLUDED.intereses_demora_pagados`,
       [
         ob.id,
         ob.acquisitionId,
@@ -1320,7 +1324,9 @@ async function syncObligationToSupabase(ob: PaymentObligation, client?: pg.PoolC
         ob.status,
         parseNullableSafeDate(ob.paidDate),
         ob.installmentNumber || 1,
-        ob.totalInstallments || 1
+        ob.totalInstallments || 1,
+        ob.penaltyInterest || 0,
+        Boolean(ob.penaltyPaid)
       ]
     );
   } catch (e) {
@@ -3013,7 +3019,9 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         status: String(row.estado) as ('pendiente' | 'pagado'),
         paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
         installmentNumber: Number(row.numero_cuota || 1),
-        totalInstallments: Number(row.total_cuotas || 1)
+        totalInstallments: Number(row.total_cuotas || 1),
+        penaltyInterest: row.intereses_demora !== null && row.intereses_demora !== undefined ? Number(row.intereses_demora) : undefined,
+        penaltyPaid: Boolean(row.intereses_demora_pagados)
       })) : [];
 
       // Reconstruct db.loans from Supabase "prestamos"
@@ -12813,8 +12821,8 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
   if (dbPool) {
     try {
       const q = canonicalTargetId
-        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado = 'active'`
-        : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE estado = 'active'`;
+        ? `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE (alumno_id = $1 OR alumno_id = $2) AND estado IN ('active', 'paid_off')`
+        : `SELECT id, alumno_id, plazo_meses, garantia_inmueble_titulo, tabla_amortizacion, modalidad, cuota_periodica, cuota_mensual FROM prestamos WHERE estado IN ('active', 'paid_off')`;
       const p = canonicalTargetId ? [canonicalTargetId, targetStudentId || canonicalTargetId] : [];
       const pgLoansRes = await dbPool.query(q, p);
       for (const r of pgLoansRes.rows) {
@@ -12900,6 +12908,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
       loanRef?: BankLoan;
       loanRowIndex?: number;
       periodNum?: number;
+      isPrincipalPaid?: boolean;
     }
 
     const pendingItems: PendingItem[] = [];
@@ -12910,7 +12919,13 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
         if (ob.acquisitionId && ob.acquisitionId.startsWith('promissory_')) {
           continue; // Peer-to-peer marketplace promissory notes are transferred manually
         }
-        if ((ob.studentId === student.id || ob.studentId === student.username) && (ob.status === 'pendiente' || ob.status === 'vencido')) {
+        const isStudentMatch = (ob.studentId === student.id || ob.studentId === student.username);
+        if (!isStudentMatch) continue;
+
+        const isPendingOrOverdue = (ob.status === 'pendiente' || ob.status === 'vencido');
+        const hasPendingPenaltyOnly = (ob.status === 'pagado' && (ob.penaltyInterest || 0) > 0 && !ob.penaltyPaid);
+
+        if (isPendingOrOverdue) {
           const dDate = new Date(ob.dueDate);
           if (dDate <= now) {
             const principal = ob.amount;
@@ -12949,9 +12964,43 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               penaltyInterest: penalty,
               concept,
               instrumentName,
-              obligationRef: ob
+              obligationRef: ob,
+              isPrincipalPaid: false
             });
           }
+        } else if (hasPendingPenaltyOnly) {
+          const dDate = new Date(ob.dueDate);
+          const penalty = Number((ob.penaltyInterest || 0).toFixed(2));
+          const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
+                              ob.propertyTitle?.toLowerCase().includes('línea') ||
+                              ob.propertyTitle?.toLowerCase().includes('linea') ||
+                              ob.propertyTitle?.toLowerCase().includes('torno') ||
+                              ob.propertyTitle?.toLowerCase().includes('prensa') ||
+                              ob.propertyTitle?.toLowerCase().includes('inyectora') ||
+                              ob.propertyTitle?.toLowerCase().includes('máquina') ||
+                              ob.propertyTitle?.toLowerCase().includes('maquina');
+
+          const instrumentName = isMachinery
+            ? 'Pagaré de maquinaria'
+            : ob.type === 'pagare'
+              ? 'Pagaré comercial'
+              : ob.type === 'letra_cambio'
+                ? 'Letra de cambio'
+                : 'Cuota / Alquiler';
+
+          const penaltyConcept = `Intereses de demora pendientes por retraso en pago (${instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`;
+
+          pendingItems.push({
+            id: `${ob.id}-penalty`,
+            sourceType: 'obligation',
+            dueDate: dDate,
+            principal: 0,
+            penaltyInterest: penalty,
+            concept: penaltyConcept,
+            instrumentName,
+            obligationRef: ob,
+            isPrincipalPaid: true
+          });
         }
       }
     }
@@ -12963,7 +13012,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
     }
 
     if (candidateLoans.length === 0 && db.loans) {
-      candidateLoans = (db.loans || []).filter(l => (l.studentId === student.id || l.studentId === student.username) && (!l.status || l.status === 'active')).map(l => ({
+      candidateLoans = (db.loans || []).filter(l => (l.studentId === student.id || l.studentId === student.username) && (!l.status || l.status === 'active' || l.status === 'paid_off')).map(l => ({
         id: l.id,
         studentId: l.studentId,
         termMonths: l.termMonths,
@@ -12975,15 +13024,15 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
     for (const loan of candidateLoans) {
       (loan.schedule || []).forEach((row, idx) => {
+        const dDate = new Date(row.dueDate);
+        const periodNum = row.period || (row as any).installmentNumber || (idx + 1);
+        const isAnnual = (loan.modalidad || loan.loanRef?.amortizationFrequency) === 'annual';
+        const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loan.termMonths / 12)) : loan.termMonths;
+
         if (!row.paid) {
-          const dDate = new Date(row.dueDate);
           if (dDate <= now) {
             const principal = row.payment;
             const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-            const periodNum = row.period || (row as any).installmentNumber || (idx + 1);
-
-            const isAnnual = (loan.modalidad || loan.loanRef?.amortizationFrequency) === 'annual';
-            const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loan.termMonths / 12)) : loan.termMonths;
 
             pendingItems.push({
               id: `${loan.id}-row-${periodNum}`,
@@ -12995,9 +13044,26 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               loanId: loan.id,
               loanRef: loan.loanRef,
               loanRowIndex: idx,
-              periodNum
+              periodNum,
+              isPrincipalPaid: false
             });
           }
+        } else if (row.paid && (row.penaltyInterest || 0) > 0 && !row.penaltyPaid) {
+          // Principal already paid, default interest pending (frozen per Rule D)
+          const penalty = Number((row.penaltyInterest || 0).toFixed(2));
+          pendingItems.push({
+            id: `${loan.id}-row-${periodNum}-penalty`,
+            sourceType: 'loan',
+            dueDate: dDate,
+            principal: 0,
+            penaltyInterest: penalty,
+            concept: `Intereses de demora pendientes por retraso en cuota ${periodNum}/${totalPeriods} de préstamo hipotecario (${loan.propertyTitle || 'Garantía inmobiliaria'})`,
+            loanId: loan.id,
+            loanRef: loan.loanRef,
+            loanRowIndex: idx,
+            periodNum,
+            isPrincipalPaid: true
+          });
         }
       });
     }
@@ -13028,7 +13094,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               const loanRow = loanLockRes.rows[0];
 
               // Verify loan status
-              if (loanRow.estado !== 'active') {
+              if (loanRow.estado !== 'active' && loanRow.estado !== 'paid_off') {
                 return { success: false, reason: 'loan_not_active' };
               }
 
@@ -13051,19 +13117,12 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 return { success: false, reason: 'row_not_found' };
               }
 
-              // IDEMPOTENCY BARRIER: If already paid, abort immediately without any debit or movement
-              if (targetRow.paid) {
+              // IDEMPOTENCY BARRIER: If already paid and no pending penalty, abort immediately without any debit or movement
+              if (targetRow.paid && ((targetRow.penaltyInterest || 0) <= 0 || targetRow.penaltyPaid)) {
                 return { success: false, reason: 'already_paid', currentSchedule };
               }
 
-              // Verify due date
-              const dDate = new Date(targetRow.dueDate);
-              if (dDate > now) {
-                return { success: false, reason: 'not_due_yet' };
-              }
-
-              // Re-calculate penalty under lock
-              const penalty = calculateMonthlyPenaltyInterest(targetRow.payment, dDate, now);
+              const isPrincipalAlreadyPaid = Boolean(targetRow.paid);
 
               // 2. LOCK 2: Exclusive lock on student account in cuentas (Order: prestamos -> cuentas)
               const accountLockRes = await client.query(
@@ -13081,6 +13140,99 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               const studentRow = accountLockRes.rows[0];
               const currentBalance = Number(studentRow.saldo);
+              const isAnnual = loanRow.modalidad === 'annual';
+              const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loanRow.plazo_meses / 12)) : loanRow.plazo_meses;
+              const senderAccount = studentRow.account_number || student.accountNumber || '';
+              const senderName = studentRow.alumno || student.name || '';
+              const nowIso = new Date().toISOString();
+
+              if (isPrincipalAlreadyPaid) {
+                // Paying ONLY the accrued default interest which was previously left pending (Rule D: frozen)
+                const pendingPenalty = Number((targetRow.penaltyInterest || item.penaltyInterest || 0).toFixed(2));
+                if (currentBalance < pendingPenalty) {
+                  return { success: false, reason: 'insufficient_balance' };
+                }
+
+                const newBalance = Number((currentBalance - pendingPenalty).toFixed(2));
+                await client.query(
+                  `UPDATE cuentas SET saldo = $1 WHERE id = $2`,
+                  [newBalance, studentRow.id]
+                );
+
+                const penaltyTxId = generateId('tx');
+                const penaltyConcept = item.concept || `Intereses de demora pendientes por retraso en cuota ${targetRow.period}/${totalPeriods} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [
+                    penaltyTxId + '-out',
+                    studentRow.id,
+                    pendingPenalty,
+                    nowIso,
+                    penaltyConcept,
+                    studentRow.id,
+                    senderName,
+                    senderAccount,
+                    'corp-banco-central',
+                    'Banco Central Hipotecario S.A.',
+                    'ES210001000299887700'
+                  ]
+                );
+
+                const penaltyTx: Transfer = {
+                  id: penaltyTxId,
+                  senderId: studentRow.id,
+                  senderName,
+                  senderAccount,
+                  receiverId: 'corp-banco-central',
+                  receiverName: 'Banco Central Hipotecario S.A.',
+                  receiverAccount: 'ES210001000299887700',
+                  amount: pendingPenalty,
+                  concept: penaltyConcept,
+                  timestamp: nowIso
+                };
+
+                targetRow.penaltyInterest = 0;
+                targetRow.penaltyPaid = true;
+                targetRow.penaltyPaidDate = nowIso;
+
+                const allPaid = currentSchedule.every(r => r.paid && ((r.penaltyInterest || 0) <= 0 || r.penaltyPaid));
+                const nextStatus = allPaid ? 'paid_off' : loanRow.estado;
+
+                await client.query(
+                  `UPDATE prestamos
+                   SET tabla_amortizacion = $1, estado = $2
+                   WHERE id = $3`,
+                  [JSON.stringify(currentSchedule), nextStatus, loanRow.id]
+                );
+
+                postCommitLoanUpdate = () => {
+                  const memLoan = (db.loans || []).find(l => l.id === loanRow.id);
+                  if (memLoan) {
+                    memLoan.schedule = currentSchedule;
+                    memLoan.status = nextStatus as any;
+                  }
+                  const memStudent = (db.users || []).find(u => u.id === studentRow.id || u.username === studentRow.usuario);
+                  if (memStudent) {
+                    memStudent.balance = newBalance;
+                  }
+                  student.balance = newBalance;
+                  if (!db.transfers) db.transfers = [];
+                  db.transfers.unshift(penaltyTx);
+                  modified = true;
+                };
+
+                return { success: true, newBalance };
+              }
+
+              // Principal not yet paid
+              const dDate = new Date(targetRow.dueDate);
+              if (dDate > now) {
+                return { success: false, reason: 'not_due_yet' };
+              }
+
+              const penalty = calculateMonthlyPenaltyInterest(targetRow.payment, dDate, now);
               const principal = Number(targetRow.payment);
               const totalRequired = penalty > 0 ? Number((principal + penalty).toFixed(2)) : principal;
 
@@ -13089,6 +13241,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 // Really insufficient: cannot even pay principal
                 targetRow.isOverdue = true;
                 targetRow.penaltyInterest = penalty;
+                targetRow.penaltyPaid = false;
 
                 await client.query(
                   `UPDATE prestamos
@@ -13104,6 +13257,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                     if (memRow) {
                       memRow.isOverdue = true;
                       memRow.penaltyInterest = penalty;
+                      memRow.penaltyPaid = false;
                     }
                   }
                   modified = true;
@@ -13113,7 +13267,6 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               }
 
               // Balance is sufficient: process atomic debit + movements + schedule update
-              const nowIso = new Date().toISOString();
               const txId = generateId('tx');
 
               const canPayPenalty = penalty > 0 && currentBalance >= totalRequired;
@@ -13129,11 +13282,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 [newBalance, studentRow.id]
               );
 
-              const isAnnual = loanRow.modalidad === 'annual';
-              const totalPeriods = isAnnual ? Math.max(1, Math.ceil(loanRow.plazo_meses / 12)) : loanRow.plazo_meses;
               const concept = item.concept || `Cuota ${isAnnual ? 'anual ' : ''}${targetRow.period}/${totalPeriods} de préstamo hipotecario (${loanRow.garantia_inmueble_titulo || 'Garantía inmobiliaria'})`;
-              const senderAccount = studentRow.account_number || student.accountNumber || '';
-              const senderName = studentRow.alumno || student.name || '';
 
               await client.query(
                 `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
@@ -13195,9 +13344,17 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               targetRow.paid = true;
               targetRow.paidDate = nowIso;
               targetRow.isOverdue = false;
-              targetRow.penaltyInterest = 0;
+              if (canPayPenalty) {
+                targetRow.penaltyInterest = 0;
+                targetRow.penaltyPaid = true;
+                targetRow.penaltyPaidDate = nowIso;
+              } else {
+                // PRESERVED! FROZEN per Rule D: principal is satisfied, penalty stays pending
+                targetRow.penaltyInterest = penalty;
+                targetRow.penaltyPaid = false;
+              }
 
-              const allPaid = currentSchedule.every(r => r.paid);
+              const allPaid = currentSchedule.every(r => r.paid && ((r.penaltyInterest || 0) <= 0 || r.penaltyPaid));
               const nextStatus = allPaid ? 'paid_off' : 'active';
 
               // D. Update prestamos in PostgreSQL within the same transaction
@@ -13265,41 +13422,15 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             break;
           }
         } else {
-          // Fallback in-memory
-          if (student.balance >= item.principal) {
-            student.balance = Number((student.balance - item.principal).toFixed(2));
-            modified = true;
-
-            const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
-            if (memLoan && memLoan.schedule) {
-              const row = memLoan.schedule.find(r => r.period === item.periodNum) ||
-                          (item.loanRowIndex !== undefined ? memLoan.schedule[item.loanRowIndex] : undefined);
-              if (row) {
-                row.paid = true;
-                row.paidDate = new Date().toISOString();
-                row.isOverdue = false;
-                row.penaltyInterest = 0;
-
-                const newTransfer: Transfer = {
-                  id: generateId('tx'),
-                  senderId: student.id,
-                  senderName: student.name,
-                  senderAccount: student.accountNumber,
-                  receiverId: 'corp-banco-central',
-                  receiverName: 'Banco Central Hipotecario S.A.',
-                  receiverAccount: 'ES210001000299887700',
-                  amount: item.principal,
-                  concept: item.concept,
-                  timestamp: new Date().toISOString()
-                };
-                if (!db.transfers) db.transfers = [];
-                db.transfers.unshift(newTransfer);
-
-                if (memLoan.schedule.every(r => r.paid)) {
-                  memLoan.status = 'paid_off';
-                }
-
-                if (item.penaltyInterest > 0 && student.balance >= item.penaltyInterest) {
+          // Fallback in-memory for loans
+          const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
+          if (memLoan && memLoan.schedule) {
+            const row = memLoan.schedule.find(r => r.period === item.periodNum) ||
+                        (item.loanRowIndex !== undefined ? memLoan.schedule[item.loanRowIndex] : undefined);
+            if (row) {
+              if (item.isPrincipalPaid) {
+                // Paying pending penalty only
+                if (student.balance >= item.penaltyInterest) {
                   student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
                   const penaltyTx: Transfer = {
                     id: generateId('tx'),
@@ -13310,25 +13441,82 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                     receiverName: 'Banco Central Hipotecario S.A.',
                     receiverAccount: 'ES210001000299887700',
                     amount: item.penaltyInterest,
-                    concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${memLoan.termMonths} de préstamo hipotecario`,
-                    timestamp: new Date(Date.now() + 100).toISOString()
+                    concept: item.concept,
+                    timestamp: new Date().toISOString()
                   };
+                  if (!db.transfers) db.transfers = [];
                   db.transfers.unshift(penaltyTx);
+                  row.penaltyInterest = 0;
+                  row.penaltyPaid = true;
+                  row.penaltyPaidDate = new Date().toISOString();
+                  if (memLoan.schedule.every(r => r.paid && ((r.penaltyInterest || 0) <= 0 || r.penaltyPaid))) {
+                    memLoan.status = 'paid_off';
+                  }
+                  modified = true;
+                } else {
+                  break;
+                }
+              } else {
+                // Paying principal
+                if (student.balance >= item.principal) {
+                  const canPayPenalty = item.penaltyInterest > 0 && student.balance >= Number((item.principal + item.penaltyInterest).toFixed(2));
+                  const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
+                  student.balance = Number((student.balance - (item.principal + penaltyPaid)).toFixed(2));
+                  modified = true;
+
+                  const newTransfer: Transfer = {
+                    id: generateId('tx'),
+                    senderId: student.id,
+                    senderName: student.name,
+                    senderAccount: student.accountNumber,
+                    receiverId: 'corp-banco-central',
+                    receiverName: 'Banco Central Hipotecario S.A.',
+                    receiverAccount: 'ES210001000299887700',
+                    amount: item.principal,
+                    concept: item.concept,
+                    timestamp: new Date().toISOString()
+                  };
+                  if (!db.transfers) db.transfers = [];
+                  db.transfers.unshift(newTransfer);
+
+                  row.paid = true;
+                  row.paidDate = new Date().toISOString();
+                  row.isOverdue = false;
+
+                  if (canPayPenalty) {
+                    const penaltyTx: Transfer = {
+                      id: generateId('tx'),
+                      senderId: student.id,
+                      senderName: student.name,
+                      senderAccount: student.accountNumber,
+                      receiverId: 'corp-banco-central',
+                      receiverName: 'Banco Central Hipotecario S.A.',
+                      receiverAccount: 'ES210001000299887700',
+                      amount: penaltyPaid,
+                      concept: `Intereses de demora por retraso en cuota ${item.periodNum || 1}/${memLoan.termMonths} de préstamo hipotecario`,
+                      timestamp: new Date(Date.now() + 100).toISOString()
+                    };
+                    db.transfers.unshift(penaltyTx);
+                    row.penaltyInterest = 0;
+                    row.penaltyPaid = true;
+                    row.penaltyPaidDate = new Date().toISOString();
+                  } else {
+                    row.penaltyInterest = item.penaltyInterest;
+                    row.penaltyPaid = false;
+                  }
+
+                  if (memLoan.schedule.every(r => r.paid && ((r.penaltyInterest || 0) <= 0 || r.penaltyPaid))) {
+                    memLoan.status = 'paid_off';
+                  }
+                } else {
+                  row.isOverdue = true;
+                  row.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+                  row.penaltyPaid = false;
+                  modified = true;
+                  break;
                 }
               }
             }
-          } else {
-            const memLoan = item.loanRef || (db.loans || []).find(l => l.id === item.loanId);
-            if (memLoan && memLoan.schedule) {
-              const row = memLoan.schedule.find(r => r.period === item.periodNum) ||
-                          (item.loanRowIndex !== undefined ? memLoan.schedule[item.loanRowIndex] : undefined);
-              if (row) {
-                row.isOverdue = true;
-                row.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-                modified = true;
-              }
-            }
-            break;
           }
         }
       } else if (item.sourceType === 'obligation' && item.obligationRef) {
@@ -13348,15 +13536,75 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               const studentRow = lockRes.rows[0];
               const currentBalance = Number(studentRow.saldo);
-              const totalRequired = item.penaltyInterest > 0 ? Number((item.principal + item.penaltyInterest).toFixed(2)) : item.principal;
+              const ob = item.obligationRef!;
+              const isPenaltyOnly = item.isPrincipalPaid || ob.status === 'pagado';
+              const nowIso = new Date().toISOString();
+
+              if (isPenaltyOnly) {
+                if (ob.penaltyPaid || (ob.penaltyInterest || 0) <= 0) {
+                  return true; // Already paid
+                }
+
+                const pendingPenalty = Number((ob.penaltyInterest || item.penaltyInterest || 0).toFixed(2));
+                if (currentBalance < pendingPenalty) {
+                  return false; // Insufficient balance, penalty stays pending
+                }
+
+                const newBalance = Number((currentBalance - pendingPenalty).toFixed(2));
+                await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
+
+                await client.query(
+                  `UPDATE obligaciones_pago
+                   SET intereses_demora = 0, intereses_demora_pagados = TRUE
+                   WHERE id = $1`,
+                  [ob.id]
+                ).catch(() => {});
+
+                const penaltyTxId = generateId('tx');
+                const penaltyConcept = item.concept || `Intereses de demora pendientes por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`;
+
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [penaltyTxId + '-out', studentRow.id, pendingPenalty, nowIso, penaltyConcept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
+                );
+
+                const penaltyTx: Transfer = {
+                  id: penaltyTxId,
+                  senderId: studentRow.id,
+                  senderName: studentRow.alumno,
+                  senderAccount: studentRow.account_number,
+                  receiverId: 'corp-tenedor-efectos',
+                  receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                  receiverAccount: 'ES210001000299887755',
+                  amount: pendingPenalty,
+                  concept: penaltyConcept,
+                  timestamp: nowIso
+                };
+
+                ob.penaltyInterest = 0;
+                ob.totalOverdueAmount = 0;
+                ob.penaltyPaid = true;
+                ob.penaltyPaidDate = nowIso;
+
+                if (!db.transfers) db.transfers = [];
+                db.transfers.unshift(penaltyTx);
+
+                syncObligationToSupabase(ob).catch(e => console.error(e));
+
+                student.balance = newBalance;
+                const memStudent = (db.users || []).find(u => u.id === studentRow.id || u.username === studentRow.usuario);
+                if (memStudent) memStudent.balance = newBalance;
+
+                modified = true;
+                return true;
+              }
 
               if (currentBalance < item.principal) {
                 return false;
               }
 
-              const nowIso = new Date().toISOString();
-              const txId = generateId('tx');
-
+              const totalRequired = item.penaltyInterest > 0 ? Number((item.principal + item.penaltyInterest).toFixed(2)) : item.principal;
               const canPayPenalty = item.penaltyInterest > 0 && currentBalance >= totalRequired;
               const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
               const totalDeduction = Number((item.principal + penaltyPaid).toFixed(2));
@@ -13364,15 +13612,21 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
 
               await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBalance, studentRow.id]);
 
-              const ob = item.obligationRef!;
-
-              // Update obligation in PostgreSQL within the same transaction
-              await client.query(
-                `UPDATE obligaciones_pago
-                 SET estado = 'pagado', fecha_pago = $1
-                 WHERE id = $2`,
-                [nowIso, ob.id]
-              ).catch(() => {});
+              if (canPayPenalty) {
+                await client.query(
+                  `UPDATE obligaciones_pago
+                   SET estado = 'pagado', fecha_pago = $1, intereses_demora = 0, intereses_demora_pagados = TRUE
+                   WHERE id = $2`,
+                  [nowIso, ob.id]
+                ).catch(() => {});
+              } else {
+                await client.query(
+                  `UPDATE obligaciones_pago
+                   SET estado = 'pagado', fecha_pago = $1, intereses_demora = $2, intereses_demora_pagados = FALSE
+                   WHERE id = $3`,
+                  [nowIso, item.penaltyInterest, ob.id]
+                ).catch(() => {});
+              }
 
               const acqId = (ob as any).adquisicion_id || (ob as any).acquisitionId;
               if (acqId) {
@@ -13382,6 +13636,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 ).catch(() => {});
               }
 
+              const txId = generateId('tx');
               const newTransfer: Transfer = {
                 id: txId,
                 senderId: studentRow.id,
@@ -13428,8 +13683,17 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               // Update in-memory
               ob.status = 'pagado';
               ob.paidDate = nowIso;
-              ob.penaltyInterest = 0;
-              ob.totalOverdueAmount = 0;
+              if (canPayPenalty) {
+                ob.penaltyInterest = 0;
+                ob.totalOverdueAmount = 0;
+                ob.penaltyPaid = true;
+                ob.penaltyPaidDate = nowIso;
+              } else {
+                // PRESERVED! FROZEN per Rule D: principal is satisfied, penalty stays pending
+                ob.penaltyInterest = item.penaltyInterest;
+                ob.totalOverdueAmount = item.penaltyInterest;
+                ob.penaltyPaid = false;
+              }
 
               const acq = db.acquisitions?.find(a => a.id === ob.acquisitionId);
               if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
@@ -13459,9 +13723,13 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
             });
 
             if (!itemProcessed) {
-              item.obligationRef.status = 'vencido';
-              item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-              item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
+              if (!item.isPrincipalPaid) {
+                item.obligationRef.status = 'vencido';
+                item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+                item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
+                item.obligationRef.penaltyPaid = false;
+                syncObligationToSupabase(item.obligationRef).catch(() => {});
+              }
               modified = true;
               break;
             }
@@ -13471,44 +13739,60 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
           }
         } else {
           // Fallback in-memory for obligations
-          if (student.balance >= item.principal) {
-            student.balance = Number((student.balance - item.principal).toFixed(2));
-            modified = true;
-
-            const ob = item.obligationRef;
-            ob.status = 'pagado';
-            ob.paidDate = new Date().toISOString();
-            ob.penaltyInterest = 0;
-            ob.totalOverdueAmount = 0;
-
-            const acq = db.acquisitions.find(a => a.id === ob.acquisitionId);
-            if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
-              acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+          const ob = item.obligationRef;
+          if (item.isPrincipalPaid) {
+            // Paying pending penalty only
+            if (student.balance >= item.penaltyInterest) {
+              student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+              const penaltyTx: Transfer = {
+                id: generateId('tx'),
+                senderId: student.id,
+                senderName: student.name,
+                senderAccount: student.accountNumber,
+                receiverId: 'corp-tenedor-efectos',
+                receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                receiverAccount: 'ES210001000299887755',
+                amount: item.penaltyInterest,
+                concept: item.concept,
+                timestamp: new Date().toISOString()
+              };
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift(penaltyTx);
+              ob.penaltyInterest = 0;
+              ob.totalOverdueAmount = 0;
+              ob.penaltyPaid = true;
+              ob.penaltyPaidDate = new Date().toISOString();
+              modified = true;
+            } else {
+              break;
             }
+          } else {
+            // Paying principal
+            if (student.balance >= item.principal) {
+              const canPayPenalty = item.penaltyInterest > 0 && student.balance >= Number((item.principal + item.penaltyInterest).toFixed(2));
+              const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
+              student.balance = Number((student.balance - (item.principal + penaltyPaid)).toFixed(2));
+              modified = true;
 
-            const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
-            if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
-              machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
-            }
+              const newTransfer: Transfer = {
+                id: generateId('tx'),
+                senderId: student.id,
+                senderName: student.name,
+                senderAccount: student.accountNumber,
+                receiverId: 'corp-tenedor-efectos',
+                receiverName: 'Tenedor de Efectos Comerciales S.A.',
+                receiverAccount: 'ES210001000299887755',
+                amount: item.principal,
+                concept: item.concept,
+                timestamp: new Date().toISOString()
+              };
+              if (!db.transfers) db.transfers = [];
+              db.transfers.unshift(newTransfer);
 
-            const newTransfer: Transfer = {
-              id: generateId('tx'),
-              senderId: student.id,
-              senderName: student.name,
-              senderAccount: student.accountNumber,
-              receiverId: 'corp-tenedor-efectos',
-              receiverName: 'Tenedor de Efectos Comerciales S.A.',
-              receiverAccount: 'ES210001000299887755',
-              amount: item.principal,
-              concept: item.concept,
-              timestamp: new Date().toISOString()
-            };
-            if (!db.transfers) db.transfers = [];
-            db.transfers.unshift(newTransfer);
+              ob.status = 'pagado';
+              ob.paidDate = new Date().toISOString();
 
-            if (item.penaltyInterest > 0) {
-              if (student.balance >= item.penaltyInterest) {
-                student.balance = Number((student.balance - item.penaltyInterest).toFixed(2));
+              if (canPayPenalty) {
                 const penaltyTx: Transfer = {
                   id: generateId('tx'),
                   senderId: student.id,
@@ -13517,19 +13801,38 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                   receiverId: 'corp-tenedor-efectos',
                   receiverName: 'Tenedor de Efectos Comerciales S.A.',
                   receiverAccount: 'ES210001000299887755',
-                  amount: item.penaltyInterest,
+                  amount: penaltyPaid,
                   concept: `Intereses de demora por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`,
                   timestamp: new Date(Date.now() + 100).toISOString()
                 };
                 db.transfers.unshift(penaltyTx);
+                ob.penaltyInterest = 0;
+                ob.totalOverdueAmount = 0;
+                ob.penaltyPaid = true;
+                ob.penaltyPaidDate = new Date().toISOString();
+              } else {
+                ob.penaltyInterest = item.penaltyInterest;
+                ob.totalOverdueAmount = item.penaltyInterest;
+                ob.penaltyPaid = false;
               }
+
+              const acq = db.acquisitions?.find(a => a.id === ob.acquisitionId);
+              if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
+                acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+              }
+
+              const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
+              if (machAcq && machAcq.pendingBalance && machAcq.pendingBalance > 0) {
+                machAcq.pendingBalance = Math.max(0, Number((machAcq.pendingBalance - ob.amount).toFixed(2)));
+              }
+            } else {
+              item.obligationRef.status = 'vencido';
+              item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
+              item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
+              item.obligationRef.penaltyPaid = false;
+              modified = true;
+              break;
             }
-          } else {
-            item.obligationRef.status = 'vencido';
-            item.obligationRef.penaltyInterest = calculateMonthlyPenaltyInterest(item.principal, item.dueDate, now);
-            item.obligationRef.totalOverdueAmount = Number((item.principal + (item.obligationRef.penaltyInterest || 0)).toFixed(2));
-            modified = true;
-            break;
           }
         }
       }
@@ -13562,54 +13865,73 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
         continue; // Excluded from upcoming payments (P2P market notes)
       }
       const isObMatch = ob.studentId === studentId || (student && (ob.studentId === student.id || ob.studentId === student.username));
-      if (isObMatch && ob.status !== 'pagado') {
-        const dDate = new Date(ob.dueDate);
-        const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
-                            ob.propertyTitle?.toLowerCase().includes('línea') ||
-                            ob.propertyTitle?.toLowerCase().includes('linea') ||
-                            ob.propertyTitle?.toLowerCase().includes('torno') ||
-                            ob.propertyTitle?.toLowerCase().includes('prensa') ||
-                            ob.propertyTitle?.toLowerCase().includes('inyectora') ||
-                            ob.propertyTitle?.toLowerCase().includes('máquina') ||
-                            ob.propertyTitle?.toLowerCase().includes('maquina');
+      if (isObMatch) {
+        if (ob.status !== 'pagado') {
+          const dDate = new Date(ob.dueDate);
+          const isMachinery = ob.acquisitionId?.startsWith('mac-acq') ||
+                              ob.propertyTitle?.toLowerCase().includes('línea') ||
+                              ob.propertyTitle?.toLowerCase().includes('linea') ||
+                              ob.propertyTitle?.toLowerCase().includes('torno') ||
+                              ob.propertyTitle?.toLowerCase().includes('prensa') ||
+                              ob.propertyTitle?.toLowerCase().includes('inyectora') ||
+                              ob.propertyTitle?.toLowerCase().includes('máquina') ||
+                              ob.propertyTitle?.toLowerCase().includes('maquina');
 
-        const instrumentName = isMachinery 
-          ? 'Pagaré de maquinaria' 
-          : ob.type === 'pagare' 
-            ? 'Pagaré comercial' 
-            : ob.type === 'letra_cambio' 
-              ? 'Letra de cambio' 
-              : 'Cuota / Alquiler';
+          const instrumentName = isMachinery 
+            ? 'Pagaré de maquinaria' 
+            : ob.type === 'pagare' 
+              ? 'Pagaré comercial' 
+              : ob.type === 'letra_cambio' 
+                ? 'Letra de cambio' 
+                : 'Cuota / Alquiler';
 
-        const concept = isMachinery
-          ? `Pago aplazado de maquinaria: ${ob.propertyTitle} (Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`
-          : `Domiciliación ${instrumentName}`;
+          const concept = isMachinery
+            ? `Pago aplazado de maquinaria: ${ob.propertyTitle} (Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24})`
+            : `Domiciliación ${instrumentName}`;
 
-        const principal = ob.amount;
-        const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
-        const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+          const principal = ob.amount;
+          const penalty = calculateMonthlyPenaltyInterest(principal, dDate, now);
+          const daysRem = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
-        const item: UpcomingPaymentItem = {
-          id: ob.id,
-          sourceType: 'obligation',
-          type: ob.type,
-          title: ob.propertyTitle,
-          concept,
-          dueDate: ob.dueDate,
-          principalAmount: principal,
-          penaltyInterest: penalty,
-          totalAmount: Number((principal + penalty).toFixed(2)),
-          isOverdue: dDate <= now,
-          daysRemaining: daysRem,
-          installmentInfo: isMachinery
-            ? `Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24}`
-            : ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : undefined
-        };
+          const item: UpcomingPaymentItem = {
+            id: ob.id,
+            sourceType: 'obligation',
+            type: ob.type,
+            title: ob.propertyTitle,
+            concept,
+            dueDate: ob.dueDate,
+            principalAmount: principal,
+            penaltyInterest: penalty,
+            totalAmount: Number((principal + penalty).toFixed(2)),
+            isOverdue: dDate <= now,
+            daysRemaining: daysRem,
+            installmentInfo: isMachinery
+              ? `Pagaré ${ob.installmentNumber || 1}/${ob.totalInstallments || 24}`
+              : ob.installmentNumber ? `Cuota ${ob.installmentNumber}/${ob.totalInstallments || 12}` : undefined
+          };
 
-        if (dDate <= now) {
+          if (dDate <= now) {
+            overdueItems.push(item);
+          } else if (dDate <= thirtyFiveDaysLater) {
+            upcoming30DaysItems.push(item);
+          }
+        } else if (ob.status === 'pagado' && (ob.penaltyInterest || 0) > 0 && !ob.penaltyPaid) {
+          const penalty = Number((ob.penaltyInterest || 0).toFixed(2));
+          const item: UpcomingPaymentItem = {
+            id: `${ob.id}-penalty`,
+            sourceType: 'obligation',
+            type: ob.type,
+            title: `Intereses de demora: ${ob.propertyTitle}`,
+            concept: `Intereses de demora pendientes (${ob.propertyTitle})`,
+            dueDate: ob.dueDate,
+            principalAmount: 0,
+            penaltyInterest: penalty,
+            totalAmount: penalty,
+            isOverdue: true,
+            daysRemaining: 0,
+            installmentInfo: 'Intereses de demora pendientes'
+          };
           overdueItems.push(item);
-        } else if (dDate <= thirtyFiveDaysLater) {
-          upcoming30DaysItems.push(item);
         }
       }
     }
@@ -13619,7 +13941,7 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
   if (db.loans) {
     for (const loan of db.loans) {
       const isLoanMatch = loan.studentId === studentId || (student && (loan.studentId === student.id || loan.studentId === student.username));
-      if (isLoanMatch && (!loan.status || loan.status === 'active')) {
+      if (isLoanMatch && (!loan.status || loan.status === 'active' || loan.status === 'paid_off')) {
         for (const row of loan.schedule) {
           if (!row.paid) {
             const dDate = new Date(row.dueDate);
@@ -13652,6 +13974,24 @@ function getStudentPaymentStatus(db: DatabaseSchema, studentId: string) {
             } else if (dDate <= thirtyFiveDaysLater) {
               upcoming30DaysItems.push(item);
             }
+          } else if (row.paid && (row.penaltyInterest || 0) > 0 && !row.penaltyPaid) {
+            const penalty = Number((row.penaltyInterest || 0).toFixed(2));
+            const item: UpcomingPaymentItem = {
+              id: `${loan.id}-row-${row.period}-penalty`,
+              sourceType: 'loan',
+              type: 'cuota_prestamo',
+              title: `Intereses de demora: Préstamo hipotecario (Ref: ${loan.id})`,
+              concept: `Intereses de demora pendientes cuota ${row.period}/${loan.termMonths}`,
+              dueDate: row.dueDate,
+              principalAmount: 0,
+              penaltyInterest: penalty,
+              totalAmount: penalty,
+              isOverdue: true,
+              daysRemaining: 0,
+              installmentInfo: 'Intereses de demora pendientes',
+              loanId: loan.id
+            };
+            overdueItems.push(item);
           }
         }
       }
@@ -23066,7 +23406,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     pickupVehicleId,
     destinationNaveId: rawDestinationNaveId,
     destinationWarehouseIndex,
-    note
+    note,
+    paymentMethod: rawPaymentMethod,
+    promissoryDaysTerm: rawPromissoryDaysTerm
   } = req.body;
   const db = readDb();
   const pendingSyncPromises: Promise<any>[] = [];
@@ -23443,6 +23785,19 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         ? getRandomSpanishCommercialBuyerName()
         : buyerName;
 
+      const isPagareOrder = Boolean(isTeacherBuyingFromStudent && rawPaymentMethod === 'pagare');
+      const validDaysTerm: 30 | 60 | 90 = [30, 60, 90].includes(Number(rawPromissoryDaysTerm))
+        ? (Number(rawPromissoryDaysTerm) as 30 | 60 | 90)
+        : 30;
+
+      const dueDate = isPagareOrder
+        ? new Date(now.getTime() + validDaysTerm * 24 * 3600 * 1000).toISOString()
+        : undefined;
+
+      const candidatePromissoryNum = isPagareOrder
+        ? `PAG-${now.getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`
+        : undefined;
+
       const candidateInvoiceNum = (isAutoApproved || buyerLevel === 1 || isTeacherBuyingFromStudent)
         ? `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
         : undefined;
@@ -23489,7 +23844,14 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         invoicedAt: (isAutoApproved || buyerLevel === 1 || isTeacherBuyingFromStudent) ? now.toISOString() : undefined,
         items: orderItems,
         lastTurnUserId: buyer.id,
-        negotiationHistory: [initialNegotiation]
+        negotiationHistory: [initialNegotiation],
+        paymentMethod: isPagareOrder ? 'pagare' : 'contado',
+        promissoryNoteNumber: candidatePromissoryNum,
+        promissoryDueDate: dueDate,
+        promissoryDaysTerm: isPagareOrder ? validDaysTerm : undefined,
+        note: isPagareOrder
+          ? `Compraventa formalizada mediante pagaré a ${validDaysTerm} días (${candidatePromissoryNum}, Vto: ${new Date(dueDate!).toLocaleDateString('es-ES')})`
+          : (note || 'Solicitud de compra en Mercado')
       };
 
       if (isAutoApproved) {
@@ -23949,47 +24311,184 @@ app.post('/api/raw-materials/orders', async (req, res) => {
 
             if (isTeacherBuyer && isStudentSeller && sellerRow) {
               const currentSellerBal = Number(sellerRow.saldo);
-              const newSellerBal = Math.round((currentSellerBal + totalAmount - transportExpense) * 100) / 100;
-              await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSellerBal, sellerId]);
 
-              // Movement for sale credit
-              await client.query(
-                `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-                 VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-                [
-                  txPaymentId + '-in',
-                  sellerId,
-                  totalAmount,
-                  now.toISOString(),
-                  `Venta El Des-Tornillo: ${summaryTitle}`,
-                  buyer.id,
-                  buyerName,
-                  buyer.accountNumber || 'ES990001000988776655',
-                  sellerId,
-                  sellerRow.alumno,
-                  sellerRow.account_number
-                ]
-              );
+              if (isPagareOrder) {
+                // MODALIDAD COMPRA MEDIANTE PAGARÉ
+                // El alumno NO recibe abono inmediato de totalAmount en cuenta bancaria.
+                // Si existe gasto de transporte logístico/gasolina por el envío, se deduce de su saldo:
+                if (transportExpense > 0) {
+                  const newSellerBal = Math.round((currentSellerBal - transportExpense) * 100) / 100;
+                  await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSellerBal, sellerId]);
 
-              // Movement for transport debit if applicable
-              if (transportExpense > 0) {
+                  await client.query(
+                    `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                     VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                    [
+                      txTransportId + '-out',
+                      sellerId,
+                      transportExpense,
+                      now.toISOString(),
+                      transportConcept,
+                      sellerId,
+                      sellerRow.alumno,
+                      sellerRow.account_number,
+                      'LOGISTICA_EXTERIOR',
+                      'Agencia de Logística y Transportes',
+                      'ES990001000988771122'
+                    ]
+                  );
+                }
+
+                // Generar pagaré cambiario oficial firmado por el Profesor en favor del alumno
+                const promissoryId = generateId('pn');
+                const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+                const amountWords = numberToSpanishWords(totalAmount);
+                const teacherIssuerName = 'BricoMaster Distribuciones, S.A.';
+                const teacherIssuerIban = buyer.accountNumber || 'ES21 0049 1500 05 1234567890';
+                const teacherIssuerNif = 'A-28000100';
+                const sellerNif = (sellerRow as any)?.nif || `user-${sellerId}`;
+
+                const promissoryData: PromissoryNoteData = {
+                  id: promissoryId,
+                  promissoryNoteNumber: candidatePromissoryNum!,
+                  concept: `Compraventa en Mercado: ${summaryTitle} (${order.invoiceNumber || candidateInvoiceNum})`,
+                  amount: totalAmount,
+                  amountInWords: amountWords,
+                  issueDate: now.toISOString(),
+                  issuePlace: 'Madrid',
+                  dueDate: dueDate!,
+                  daysTerm: validDaysTerm,
+                  orderType: 'no_a_la_orden',
+                  beneficiaryId: sellerId,
+                  beneficiaryName: sellerRow.alumno || sellerName,
+                  beneficiaryNifCif: sellerNif,
+                  beneficiaryLevel: 3,
+                  issuerId: buyer.id || 'profesor-1',
+                  issuerName: teacherIssuerName,
+                  issuerNifCif: teacherIssuerNif,
+                  issuerAddress: 'Polígono Industrial San Fernando, Nave 1, Madrid',
+                  issuerLevel: 'Profesor' as any,
+                  bankName: 'Banco Central Mercantil S.A.',
+                  bankIban: teacherIssuerIban,
+                  signatureTimestamp: now.toISOString(),
+                  signatureHash,
+                  status: 'pendiente'
+                };
+
+                const chatId = [buyer.id, sellerId].sort().join('_');
+                const promissoryMsgId = generateId('msg');
+                const promissoryMsgContent = `📑 PAGARÉ FIRMADO: ${candidatePromissoryNum} por ${formatNumber(totalAmount)} € con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')} (${validDaysTerm} días) en favor de ${sellerRow.alumno || sellerName} (Librador: ${teacherIssuerName}). Pago aplazado por compra en Mercado.`;
+
+                await client.query('SAVEPOINT sp_market_message');
+                try {
+                  await client.query(
+                    `INSERT INTO market_messages (id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'promissory_note', $9)`,
+                    [
+                      promissoryMsgId,
+                      chatId,
+                      buyer.id,
+                      teacherIssuerName,
+                      sellerId,
+                      sellerRow.alumno || sellerName,
+                      promissoryMsgContent,
+                      now.toISOString(),
+                      JSON.stringify(promissoryData)
+                    ]
+                  );
+                  await client.query('RELEASE SAVEPOINT sp_market_message');
+                } catch (msgErr) {
+                  await client.query('ROLLBACK TO SAVEPOINT sp_market_message');
+                  console.error('[Order Error] Error inserting market_message for promissory note:', msgErr);
+                  throw msgErr;
+                }
+
+                await client.query('SAVEPOINT sp_market_contacts');
+                try {
+                  const contactId1 = generateId('contact');
+                  const contactId2 = generateId('contact');
+                  await client.query(
+                    `INSERT INTO contactos_mercado (id, user_id, contact_id, created_at)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (user_id, contact_id) DO NOTHING`,
+                    [contactId1, buyer.id, sellerId, now.toISOString()]
+                  );
+                  await client.query(
+                    `INSERT INTO contactos_mercado (id, user_id, contact_id, created_at)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (user_id, contact_id) DO NOTHING`,
+                    [contactId2, sellerId, buyer.id, now.toISOString()]
+                  );
+                  await client.query('RELEASE SAVEPOINT sp_market_contacts');
+                } catch (cErr) {
+                  await client.query('ROLLBACK TO SAVEPOINT sp_market_contacts');
+                  console.warn('[Order Warning] Non-critical error updating contactos_mercado:', cErr);
+                }
+
+                await client.query('SAVEPOINT sp_notificaciones');
+                try {
+                  const notifId = generateId('notif');
+                  await client.query(
+                    `INSERT INTO notificaciones (id, user_id, title, message, type, read, created_at, related_order_id)
+                     VALUES ($1, $2, $3, $4, 'transfer_received', false, $5, $6)
+                     ON CONFLICT (id) DO NOTHING`,
+                    [
+                      notifId,
+                      sellerId,
+                      `¡Venta con Pagaré a ${validDaysTerm} días!`,
+                      `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} € mediante pagaré con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')}. El pagaré oficial está disponible en tu chat de mensajería directa para su conservación, descuento o cobro.`,
+                      now.toISOString(),
+                      promissoryId
+                    ]
+                  );
+                  await client.query('RELEASE SAVEPOINT sp_notificaciones');
+                } catch (notifErr) {
+                  await client.query('ROLLBACK TO SAVEPOINT sp_notificaciones');
+                  console.warn('[Order Warning] Non-critical error inserting notification:', notifErr);
+                }
+              } else {
+                const newSellerBal = Math.round((currentSellerBal + totalAmount - transportExpense) * 100) / 100;
+                await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newSellerBal, sellerId]);
+
+                // Movement for sale credit
                 await client.query(
                   `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
-                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                   VALUES ($1, $2, 'TRANSFER_IN', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                   [
-                    txTransportId + '-out',
+                    txPaymentId + '-in',
                     sellerId,
-                    transportExpense,
+                    totalAmount,
                     now.toISOString(),
-                    transportConcept,
+                    `Venta El Des-Tornillo: ${summaryTitle}`,
+                    buyer.id,
+                    buyerName,
+                    buyer.accountNumber || 'ES990001000988776655',
                     sellerId,
                     sellerRow.alumno,
-                    sellerRow.account_number,
-                    'LOGISTICA_EXTERIOR',
-                    'Agencia de Logística y Transportes',
-                    'ES990001000988771122'
+                    sellerRow.account_number
                   ]
                 );
+
+                // Movement for transport debit if applicable
+                if (transportExpense > 0) {
+                  await client.query(
+                    `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                     VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                    [
+                      txTransportId + '-out',
+                      sellerId,
+                      transportExpense,
+                      now.toISOString(),
+                      transportConcept,
+                      sellerId,
+                      sellerRow.alumno,
+                      sellerRow.account_number,
+                      'LOGISTICA_EXTERIOR',
+                      'Agencia de Logística y Transportes',
+                      'ES990001000988771122'
+                    ]
+                  );
+                }
               }
             }
 
@@ -24033,36 +24532,101 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           if (isTeacherBuyer && isStudentSeller) {
             const sellerUser = db.users.find(u => u.id === sellerId);
             if (sellerUser) {
-              sellerUser.balance = Math.round((sellerUser.balance + totalAmount - transportExpense) * 100) / 100;
-              if (!db.transfers) db.transfers = [];
-              db.transfers.unshift({
-                id: txPaymentId,
-                senderId: buyer.id,
-                senderName: buyerName,
-                senderAccount: buyer.accountNumber || 'ES990001000988776655',
-                receiverId: sellerUser.id,
-                receiverName: sellerUser.name,
-                receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
-                amount: totalAmount,
-                concept: `Venta El Des-Tornillo: ${summaryTitle}`,
-                timestamp: now.toISOString()
-              });
+              if (isPagareOrder) {
+                // Pago aplazado con pagaré: no liquidar en saldo el importe de la compra
+                if (transportExpense > 0) {
+                  sellerUser.balance = Math.round((sellerUser.balance - transportExpense) * 100) / 100;
+                }
+                const promissoryData: PromissoryNoteData = {
+                  id: generateId('pagare'),
+                  promissoryNoteNumber: candidatePromissoryNum,
+                  concept: `Compraventa en Mercado: ${summaryTitle} (${order.invoiceNumber || candidateInvoiceNum})`,
+                  amount: totalAmount,
+                  amountInWords: numberToSpanishWords(totalAmount),
+                  issueDate: now.toISOString(),
+                  issuePlace: 'Madrid',
+                  dueDate: dueDate!,
+                  daysTerm: validDaysTerm,
+                  orderType: 'no_a_la_orden',
+                  beneficiaryId: sellerUser.id,
+                  beneficiaryName: sellerUser.name,
+                  beneficiaryNifCif: 'B-' + String(sellerUser.id).padStart(8, '0'),
+                  beneficiaryLevel: 3,
+                  issuerId: buyer.id || 'profesor-1',
+                  issuerName: buyerName,
+                  issuerNifCif: 'A-28000100',
+                  issuerAddress: 'Polígono Industrial San Fernando, Nave 1, Madrid',
+                  issuerLevel: 'Profesor' as any,
+                  bankName: 'Banco Central Mercantil S.A.',
+                  bankIban: buyer.accountNumber || 'ES21 0049 1500 05 1234567890',
+                  signatureTimestamp: now.toISOString(),
+                  signatureHash: 'SIG-' + generateId('sig').toUpperCase(),
+                  status: 'pendiente'
+                };
+                if (!db.marketMessages) db.marketMessages = [];
+                db.marketMessages.push({
+                  id: generateId('msg'),
+                  sender_id: buyer.id,
+                  sender_name: buyerName,
+                  receiver_id: sellerUser.id,
+                  receiver_name: sellerUser.name,
+                  type: 'promissory_note',
+                  text: `Te he emitido el pagaré ${candidatePromissoryNum} por importe de ${totalAmount.toFixed(2)} € con vencimiento a ${validDaysTerm} días (${dueDate}) como pago aplazado por la venta de ${summaryTitle}.`,
+                  invoice_data: JSON.stringify(promissoryData),
+                  created_at: now.toISOString(),
+                  read: false
+                } as any);
 
-              if (transportInvoiceOrder) {
-                if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
-                db.rawMaterialOrders.unshift(transportInvoiceOrder);
+                if (transportInvoiceOrder) {
+                  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+                  db.rawMaterialOrders.unshift(transportInvoiceOrder);
+                  if (!db.transfers) db.transfers = [];
+                  db.transfers.unshift({
+                    id: txTransportId,
+                    senderId: sellerUser.id,
+                    senderName: sellerUser.name,
+                    senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
+                    receiverId: 'LOGISTICA_EXTERIOR',
+                    receiverName: 'Agencia de Logística y Transportes',
+                    receiverAccount: 'ES990001000988771122',
+                    amount: transportExpense,
+                    concept: transportConcept,
+                    timestamp: now.toISOString()
+                  });
+                }
+              } else {
+                // Pago inmediato al contado (funcionamiento original intacto)
+                sellerUser.balance = Math.round((sellerUser.balance + totalAmount - transportExpense) * 100) / 100;
+                if (!db.transfers) db.transfers = [];
                 db.transfers.unshift({
-                  id: txTransportId,
-                  senderId: sellerUser.id,
-                  senderName: sellerUser.name,
-                  senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
-                  receiverId: 'LOGISTICA_EXTERIOR',
-                  receiverName: 'Agencia de Logística y Transportes',
-                  receiverAccount: 'ES990001000988771122',
-                  amount: transportExpense,
-                  concept: transportConcept,
+                  id: txPaymentId,
+                  senderId: buyer.id,
+                  senderName: buyerName,
+                  senderAccount: buyer.accountNumber || 'ES990001000988776655',
+                  receiverId: sellerUser.id,
+                  receiverName: sellerUser.name,
+                  receiverAccount: sellerUser.accountNumber || 'ES990001000988770000',
+                  amount: totalAmount,
+                  concept: `Venta El Des-Tornillo: ${summaryTitle}`,
                   timestamp: now.toISOString()
                 });
+
+                if (transportInvoiceOrder) {
+                  if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+                  db.rawMaterialOrders.unshift(transportInvoiceOrder);
+                  db.transfers.unshift({
+                    id: txTransportId,
+                    senderId: sellerUser.id,
+                    senderName: sellerUser.name,
+                    senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
+                    receiverId: 'LOGISTICA_EXTERIOR',
+                    receiverName: 'Agencia de Logística y Transportes',
+                    receiverAccount: 'ES990001000988771122',
+                    amount: transportExpense,
+                    concept: transportConcept,
+                    timestamp: now.toISOString()
+                  });
+                }
               }
             }
           }
@@ -24099,46 +24663,128 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           if (isTeacherBuyer && isStudentSeller) {
             const freshSeller = freshDb.users.find(u => u.id === sellerId);
             if (freshSeller) {
-              freshSeller.balance = Math.round((freshSeller.balance + totalAmount - transportExpense) * 100) / 100;
-            }
-            if (!freshDb.transfers) freshDb.transfers = [];
-            freshDb.transfers.unshift({
-              id: txPaymentId,
-              senderId: buyer.id,
-              senderName: buyerName,
-              senderAccount: buyer.accountNumber || 'ES990001000988776655',
-              receiverId: sellerId,
-              receiverName: sellerName,
-              receiverAccount: 'ES990001000988770000',
-              amount: totalAmount,
-              concept: `Venta El Des-Tornillo: ${summaryTitle}`,
-              timestamp: now.toISOString()
-            });
+              if (isPagareOrder) {
+                // Pago aplazado con pagaré: no liquidar en saldo el importe de la venta
+                if (transportExpense > 0) {
+                  freshSeller.balance = Math.round((freshSeller.balance - transportExpense) * 100) / 100;
+                }
+                const promissoryData: PromissoryNoteData = {
+                  id: generateId('pagare'),
+                  promissoryNoteNumber: candidatePromissoryNum,
+                  concept: `Compraventa en Mercado: ${summaryTitle} (${order.invoiceNumber || candidateInvoiceNum})`,
+                  amount: totalAmount,
+                  amountInWords: numberToSpanishWords(totalAmount),
+                  issueDate: now.toISOString(),
+                  issuePlace: 'Madrid',
+                  dueDate: dueDate!,
+                  daysTerm: validDaysTerm,
+                  orderType: 'no_a_la_orden',
+                  beneficiaryId: freshSeller.id,
+                  beneficiaryName: freshSeller.name || sellerName,
+                  beneficiaryNifCif: 'B-' + String(freshSeller.id).padStart(8, '0'),
+                  beneficiaryLevel: 3,
+                  issuerId: buyer.id || 'profesor-1',
+                  issuerName: buyerName,
+                  issuerNifCif: 'A-28000100',
+                  issuerAddress: 'Polígono Industrial San Fernando, Nave 1, Madrid',
+                  issuerLevel: 'Profesor' as any,
+                  bankName: 'Banco Central Mercantil S.A.',
+                  bankIban: buyer.accountNumber || 'ES21 0049 1500 05 1234567890',
+                  signatureTimestamp: now.toISOString(),
+                  signatureHash: 'SIG-' + generateId('sig').toUpperCase(),
+                  status: 'pendiente'
+                };
+                if (!freshDb.marketMessages) freshDb.marketMessages = [];
+                freshDb.marketMessages.push({
+                  id: generateId('msg'),
+                  sender_id: buyer.id,
+                  sender_name: buyerName,
+                  receiver_id: freshSeller.id,
+                  receiver_name: freshSeller.name,
+                  type: 'promissory_note',
+                  text: `Te he emitido el pagaré ${candidatePromissoryNum} por importe de ${totalAmount.toFixed(2)} € con vencimiento a ${validDaysTerm} días (${dueDate}) como pago aplazado por la venta de ${summaryTitle}.`,
+                  invoice_data: JSON.stringify(promissoryData),
+                  created_at: now.toISOString(),
+                  read: false
+                } as any);
 
-            if (transportInvoiceOrder) {
-              freshDb.rawMaterialOrders.unshift(transportInvoiceOrder);
-              freshDb.transfers.unshift({
-                id: txTransportId,
-                senderId: sellerId,
-                senderName: sellerName,
-                senderAccount: 'ES990001000988770000',
-                receiverId: 'LOGISTICA_EXTERIOR',
-                receiverName: 'Agencia de Logística y Transportes',
-                receiverAccount: 'ES990001000988771122',
-                amount: transportExpense,
-                concept: transportConcept,
-                timestamp: now.toISOString()
-              });
-            }
+                if (!freshDb.marketContacts) freshDb.marketContacts = [];
+                if (!freshDb.marketContacts.some(c => (c.userId === freshSeller.id && c.contactId === buyer.id) || (c.userId === buyer.id && c.contactId === freshSeller.id))) {
+                  freshDb.marketContacts.push({
+                    id: generateId('contact'),
+                    userId: freshSeller.id,
+                    contactId: buyer.id,
+                    createdAt: now.toISOString()
+                  });
+                }
 
-            addNotification(
-              freshDb,
-              sellerId,
-              '¡Venta en El Des-Tornillo!',
-              `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
-              'order_approved',
-              order.id
-            );
+                if (transportInvoiceOrder) {
+                  freshDb.rawMaterialOrders.unshift(transportInvoiceOrder);
+                  if (!freshDb.transfers) freshDb.transfers = [];
+                  freshDb.transfers.unshift({
+                    id: txTransportId,
+                    senderId: freshSeller.id,
+                    senderName: freshSeller.name,
+                    senderAccount: freshSeller.accountNumber || 'ES990001000988770000',
+                    receiverId: 'LOGISTICA_EXTERIOR',
+                    receiverName: 'Agencia de Logística y Transportes',
+                    receiverAccount: 'ES990001000988771122',
+                    amount: transportExpense,
+                    concept: transportConcept,
+                    timestamp: now.toISOString()
+                  });
+                }
+
+                addNotification(
+                  freshDb,
+                  sellerId,
+                  '¡Pagaré recibido por venta en El Des-Tornillo!',
+                  `El Profesor te ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} € mediante pagaré con vencimiento a ${validDaysTerm} días (${dueDate}). Ya está disponible en tus Mensajes Directos. ${transportNote}`,
+                  'order_approved',
+                  order.id
+                );
+              } else {
+                freshSeller.balance = Math.round((freshSeller.balance + totalAmount - transportExpense) * 100) / 100;
+                if (!freshDb.transfers) freshDb.transfers = [];
+                freshDb.transfers.unshift({
+                  id: txPaymentId,
+                  senderId: buyer.id,
+                  senderName: buyerName,
+                  senderAccount: buyer.accountNumber || 'ES990001000988776655',
+                  receiverId: sellerId,
+                  receiverName: sellerName,
+                  receiverAccount: 'ES990001000988770000',
+                  amount: totalAmount,
+                  concept: `Venta El Des-Tornillo: ${summaryTitle}`,
+                  timestamp: now.toISOString()
+                });
+
+                if (transportInvoiceOrder) {
+                  freshDb.rawMaterialOrders.unshift(transportInvoiceOrder);
+                  freshDb.transfers.unshift({
+                    id: txTransportId,
+                    senderId: sellerId,
+                    senderName: sellerName,
+                    senderAccount: 'ES990001000988770000',
+                    receiverId: 'LOGISTICA_EXTERIOR',
+                    receiverName: 'Agencia de Logística y Transportes',
+                    receiverAccount: 'ES990001000988771122',
+                    amount: transportExpense,
+                    concept: transportConcept,
+                    timestamp: now.toISOString()
+                  });
+                }
+
+                addNotification(
+                  freshDb,
+                  sellerId,
+                  '¡Venta en El Des-Tornillo!',
+                  `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} €. ${transportNote}`,
+                  'order_approved',
+                  order.id
+                );
+              }
+            }
           }
 
           if (!freshDb.rawMaterialInventories) freshDb.rawMaterialInventories = [];
@@ -24170,16 +24816,20 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           addNotification(
             freshDb,
             buyer.id,
-            'Materia prima recibida',
-            `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € ha sido aprobada y entregada de forma inmediata a tu almacén.`,
+            isPagareOrder ? 'Pagaré emitido y productos recibidos' : 'Materia prima recibida',
+            isPagareOrder
+              ? `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € mediante pagaré a ${validDaysTerm} días (${candidatePromissoryNum}) ha sido formalizada y entregada a tu almacén.`
+              : `Tu compra de "${summaryTitle}" por ${totalAmount.toFixed(2)} € ha sido aprobada y entregada de forma inmediata a tu almacén.`,
             'order_approved',
             order.id
           );
 
           freshDb.systemLogs.unshift({
             id: generateId('log'),
-            action: 'COMPRA_MERCADO_DIRECTA',
-            details: `${buyerName} ha comprado y recibido directamente "${summaryTitle}" de ${sellerName} por ${totalAmount.toFixed(2)} €.`,
+            action: isPagareOrder ? 'COMPRA_PROFESOR_PAGARE' : 'COMPRA_MERCADO_DIRECTA',
+            details: isPagareOrder
+              ? `${buyerName} ha comprado "${summaryTitle}" de ${sellerName} por ${totalAmount.toFixed(2)} € mediante pagaré a ${validDaysTerm} días (${candidatePromissoryNum}, vencimiento ${dueDate}).`
+              : `${buyerName} ha comprado y recibido directamente "${summaryTitle}" de ${sellerName} por ${totalAmount.toFixed(2)} €.`,
             timestamp: now.toISOString(),
             studentId: buyer.id,
             studentName: buyerName
@@ -24190,10 +24840,14 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           console.warn('[Cache Update Warning] Failed to update local db.json cache after commit:', cacheErr);
         }
 
+        const returnMsg = isPagareOrder
+          ? `¡Compra formalizada con éxito mediante pagaré a ${validDaysTerm} días! Se ha emitido el pagaré ${candidatePromissoryNum} con vencimiento el ${dueDate} y los productos han sido entregados de forma inmediata a tu almacén.`
+          : `¡Compra realizada con éxito! Se han descontado ${totalAmount.toFixed(2)} € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén.`;
+
         return {
           success: true,
           order,
-          message: `¡Compra realizada con éxito! Se han descontado ${totalAmount.toFixed(2)} € de tu cuenta y la materia prima ha sido entregada de forma inmediata a tu almacén.`
+          message: returnMsg
         };
       } else {
         // Not auto-approved (negotiation / review pending)
@@ -24736,7 +25390,11 @@ function parseRawMaterialOrderRow(row: any): RawMaterialOrder {
       rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
       isDirectMessageInvoice,
       isChatInvoice: isDirectMessageInvoice,
-      source: isDirectMessageInvoice ? 'chat' : undefined
+      source: isDirectMessageInvoice ? 'chat' : undefined,
+      paymentMethod: row.payment_method ? (String(row.payment_method) as any) : undefined,
+      promissoryNoteNumber: row.promissory_note_number ? String(row.promissory_note_number) : undefined,
+      promissoryDueDate: row.promissory_due_date ? String(row.promissory_due_date) : undefined,
+      promissoryDaysTerm: row.promissory_days_term ? Number(row.promissory_days_term) : undefined
     };
 }
 

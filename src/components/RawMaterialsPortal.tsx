@@ -161,6 +161,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [quantity, setQuantity] = useState<number>(1);
   const [needsTransport, setNeedsTransport] = useState<boolean>(true);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
+  const [orderPaymentMethod, setOrderPaymentMethod] = useState<'contado' | 'pagare'>('contado');
+  const [orderPromissoryDaysTerm, setOrderPromissoryDaysTerm] = useState<30 | 60 | 90>(30);
 
   // Teacher / Student Announcement Modal State
   const [isAnnModalOpen, setIsAnnModalOpen] = useState(false);
@@ -1659,6 +1661,21 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         </div>
       </div>
     </div>
+
+    ${order.paymentMethod === 'pagare' || order.promissoryNoteNumber ? `
+    <div style="margin-top: 24px; padding: 14px 18px; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; font-size: 12px; color: #92400e;">
+      <div style="font-weight: bold; font-size: 13px; margin-bottom: 4px; display: flex; justify-content: space-between;">
+        <span>FORMA DE PAGO: PAGO APLAZADO MEDIANTE PAGARÉ${order.promissoryDaysTerm ? ` A ${order.promissoryDaysTerm} DÍAS` : ''}</span>
+        <span style="font-family: monospace;">${order.promissoryNoteNumber || ''}</span>
+      </div>
+      <div>Vencimiento del pagaré: <strong>${order.promissoryDueDate ? new Date(order.promissoryDueDate).toLocaleDateString('es-ES') : '—'}</strong></div>
+      <div style="font-size: 11px; color: #b45309; margin-top: 4px;">Pagaré oficial emitido a favor del vendedor, depositado en la plataforma y liquidable a su vencimiento o mediante descuento comercial anticipado.</div>
+    </div>
+    ` : `
+    <div style="margin-top: 24px; padding: 12px 18px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #334155;">
+      <span style="font-weight: bold;">FORMA DE PAGO:</span> Pago inmediato (al contado)
+    </div>
+    `}
   </div>
   <script>
     setTimeout(function() {
@@ -2356,6 +2373,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     setSelectedAnn(ann);
     setQuantity(1);
     setNeedsTransport(true);
+    setOrderPaymentMethod('contado');
+    setOrderPromissoryDaysTerm(30);
     if (ownedTruck) setSelectedVehicleId(ownedTruck.id);
   };
 
@@ -2431,7 +2450,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           quantity,
           needsTransport,
           pickupVehicleId: !needsTransport ? selectedVehicleId : undefined,
-          destinationNaveId: selectedDestinationNaveId || (studentWarehouses[0]?.id)
+          destinationNaveId: selectedDestinationNaveId || (studentWarehouses[0]?.id),
+          paymentMethod: orderPaymentMethod,
+          promissoryDaysTerm: orderPaymentMethod === 'pagare' ? orderPromissoryDaysTerm : undefined
         })
       });
 
@@ -4421,6 +4442,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         </div>
                       </div>
                     </div>
+
+                    <div className="pt-3 border-t border-slate-200 text-xs text-slate-600 space-y-1 bg-slate-50 p-3 rounded-lg">
+                      <div className="font-bold text-slate-800 flex items-center justify-between">
+                        <span>Forma de pago:</span>
+                        <span className="font-mono text-purple-800">
+                          {selectedInvoiceOrder.paymentMethod === 'pagare' || selectedInvoiceOrder.promissoryNoteNumber
+                            ? `Pago aplazado mediante pagaré${selectedInvoiceOrder.promissoryDaysTerm ? ` a ${selectedInvoiceOrder.promissoryDaysTerm} días` : ''}`
+                            : 'Pago inmediato (al contado)'}
+                        </span>
+                      </div>
+                      {(selectedInvoiceOrder.paymentMethod === 'pagare' || selectedInvoiceOrder.promissoryNoteNumber) && (
+                        <div className="text-[11px] text-slate-600 flex justify-between pt-0.5">
+                          <span>Nº Pagaré: <strong className="font-mono text-slate-800">{selectedInvoiceOrder.promissoryNoteNumber || '—'}</strong></span>
+                          <span>Vencimiento: <strong className="font-mono text-slate-800">{selectedInvoiceOrder.promissoryDueDate ? new Date(selectedInvoiceOrder.promissoryDueDate).toLocaleDateString('es-ES') : '—'}</strong></span>
+                        </div>
+                      )}
+                    </div>
                   </>
                 );
               })()}
@@ -4958,6 +4996,114 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 </div>
               )}
 
+              {/* Teacher purchase from Level 3 student: Payment Method Selector (Immediate vs Promissory Note 30/60/90 days) */}
+              {isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) && (
+                <div className="space-y-2.5 pt-3 border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <FileSignature className="w-4 h-4 text-amber-400" />
+                      <span>Modalidad de pago del profesor:</span>
+                    </label>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                      Venta de alumno Nivel 3
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label
+                      className={`p-3 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
+                        orderPaymentMethod === 'contado'
+                          ? 'bg-amber-500/15 border-amber-500/60 text-white shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          checked={orderPaymentMethod === 'contado'}
+                          onChange={() => setOrderPaymentMethod('contado')}
+                          className="mt-0.5 text-amber-500 focus:ring-amber-500"
+                        />
+                        <div>
+                          <div className="font-bold text-xs text-white flex items-center gap-1">
+                            <CreditCard className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Pago inmediato (al contado)</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                            Liquidación inmediata en efectivo al alumno vendedor.
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+
+                    <label
+                      className={`p-3 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
+                        orderPaymentMethod === 'pagare'
+                          ? 'bg-purple-500/15 border-purple-500/60 text-white shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          checked={orderPaymentMethod === 'pagare'}
+                          onChange={() => setOrderPaymentMethod('pagare')}
+                          className="mt-0.5 text-purple-500 focus:ring-purple-500"
+                        />
+                        <div>
+                          <div className="font-bold text-xs text-white flex items-center gap-1">
+                            <FileSignature className="w-3.5 h-3.5 text-purple-400" />
+                            <span>Pago mediante pagaré</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                            Emisión de pagaré aplazado oficial depositado en chat.
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {orderPaymentMethod === 'pagare' && (
+                    <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-xl space-y-2 animate-in fade-in duration-150">
+                      <div className="text-[11px] font-semibold text-purple-300 flex items-center justify-between">
+                        <span>Selecciona el plazo de vencimiento del pagaré:</span>
+                        <span className="font-mono text-purple-400 text-[10px]">
+                          Vence: {new Date(Date.now() + orderPromissoryDaysTerm * 24 * 60 * 60 * 1000).toLocaleDateString('es-ES')}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {([30, 60, 90] as const).map(days => {
+                          const termDueDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toLocaleDateString('es-ES');
+                          const isSelected = orderPromissoryDaysTerm === days;
+                          return (
+                            <button
+                              key={days}
+                              type="button"
+                              onClick={() => setOrderPromissoryDaysTerm(days)}
+                              className={`py-2 px-2 rounded-lg border text-center transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-purple-600 border-purple-400 text-white font-bold shadow'
+                                  : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-purple-500/50 hover:bg-slate-900'
+                              }`}
+                            >
+                              <div className="text-xs font-bold">{days} días</div>
+                              <div className={`text-[10px] mt-0.5 ${isSelected ? 'text-purple-200' : 'text-slate-400'}`}>
+                                {termDueDate}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="text-[10px] text-purple-300/80 leading-relaxed pt-1">
+                        ℹ️ El alumno recibirá el pagaré en Mensajes Directos y podrá mantenerlo en cartera hasta el vencimiento, solicitar el descuento comercial anticipado (6 % anual + 0,5 % comisión) o pasarlo a gestión de cobro (0,5 %, mín. 20 €).
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="bg-slate-950 rounded-xl p-4 space-y-2 border border-slate-800/80 font-mono text-xs">
                 <div className="flex justify-between text-slate-400">
                   <span>Precio base ({quantity} u. x {formatNumber(selectedAnn.pricePerUnit)} €):</span>
@@ -4979,9 +5125,21 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <span className="text-white">{formatNumber(ivaAmount)} €</span>
                 </div>
                 <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline text-sm">
-                  <span className="font-bold text-white font-sans">Total a pagar:</span>
-                  <span className="font-bold text-emerald-400 text-lg">{formatNumber(totalAmount)} €</span>
+                  <span className="font-bold text-white font-sans">
+                    {orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1'))
+                      ? `Nominal del pagaré (${orderPromissoryDaysTerm} días):`
+                      : 'Total a pagar:'}
+                  </span>
+                  <span className={`font-bold text-lg ${orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) ? 'text-purple-400' : 'text-emerald-400'}`}>
+                    {formatNumber(totalAmount)} €
+                  </span>
                 </div>
+                {orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) && (
+                  <div className="text-[11px] text-slate-400 flex justify-between pt-1 border-t border-slate-900">
+                    <span>Cargo bancario inmediato:</span>
+                    <span className="text-emerald-400 font-bold">0,00 € (se liquidará al vencimiento)</span>
+                  </div>
+                )}
               </div>
 
               {orderExceedsWarehouse && (
@@ -5006,10 +5164,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                 type="button"
                 onClick={handleCreateOrder}
                 disabled={isSubmitting || (!needsTransport && !canPickupWithoutTransport) || orderExceedsWarehouse}
-                className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-2"
+                className={`flex-1 py-3 rounded-xl disabled:bg-slate-800 disabled:text-slate-600 font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-2 ${
+                  orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1'))
+                    ? 'bg-purple-500 hover:bg-purple-400 text-white shadow-purple-500/20'
+                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20'
+                }`}
               >
-                <ShoppingBag className="w-4 h-4" />
-                <span>Tramitar pedido</span>
+                {orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) ? (
+                  <>
+                    <FileSignature className="w-4 h-4" />
+                    <span>Formalizar compra con pagaré ({orderPromissoryDaysTerm} días)</span>
+                  </>
+                ) : (
+                  <>
+                    <ShoppingBag className="w-4 h-4" />
+                    <span>Tramitar pedido</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

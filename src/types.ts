@@ -121,6 +121,8 @@ export interface PaymentObligation {
   totalInstallments?: number;
   penaltyInterest?: number;
   totalOverdueAmount?: number;
+  penaltyPaid?: boolean;
+  penaltyPaidDate?: string;
 }
 
 export interface LoanCollateral {
@@ -254,6 +256,8 @@ export interface AmortizationRow {
   paidDate?: string;
   isOverdue?: boolean;
   penaltyInterest?: number;
+  penaltyPaid?: boolean;
+  penaltyPaidDate?: string;
 }
 
 export interface UpcomingPaymentItem {
@@ -494,6 +498,10 @@ export interface RawMaterialOrder {
   vatRate?: number;
   vatAmount?: number;
   unitPrice?: number;
+  paymentMethod?: 'contado' | 'pagare';
+  promissoryNoteNumber?: string;
+  promissoryDueDate?: string;
+  promissoryDaysTerm?: number;
 }
 
 export interface PromissoryNoteData {
