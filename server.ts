@@ -11470,9 +11470,26 @@ async function processDiscountedPromissoryNotesMaturityPG(db: DatabaseSchema, ta
           const isDiscountedNote = pn.status === 'descontado';
           const isCollectionNote = pn.status === 'gestion_cobro';
 
-          if (currentPayerBalance >= amount) {
-            // Case A: Debtor has sufficient funds
-            const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+          // Solvencia garantizada: El cliente comercial / profesor cuenta por definición con fondos ilimitados respaldados por la masa monetaria institucional
+          const isTeacherPayer = Boolean(
+            lockedPayer.id === 'profesor-1' ||
+            lockedPayer.role === 'teacher' ||
+            lockedPayer.usuario === 'pupdaniel' ||
+            pn.issuerId === 'profesor-1' ||
+            (pn.issuerLevel as any) === 'Profesor' ||
+            (pn.issuerLevel as any) === 'teacher'
+          );
+
+          let effectivePayerBalance = currentPayerBalance;
+          if (isTeacherPayer && effectivePayerBalance < amount) {
+            const guaranteedFunds = Number((amount + 50000).toFixed(2));
+            await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [guaranteedFunds, lockedPayer.id]);
+            effectivePayerBalance = guaranteedFunds;
+          }
+
+          if (isTeacherPayer || effectivePayerBalance >= amount) {
+            // Case A: Debtor has sufficient funds (o cliente institucional con solvencia garantizada)
+            const newPayerBal = Number((effectivePayerBalance - amount).toFixed(2));
             await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, lockedPayer.id]);
 
             if (isDiscountedNote) {
@@ -12040,9 +12057,29 @@ async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema, targ
                 const nowIso = new Date().toISOString();
                 const txId = generateId('tx');
 
-                if (currentPayerBalance >= amount) {
-                  // Case A: Debtor has sufficient funds
-                  const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+                const isTeacherPayer = Boolean(
+                  payer.id === 'profesor-1' ||
+                  payer.role === 'teacher' ||
+                  payer.username === 'pupdaniel' ||
+                  payerRow.id === 'profesor-1' ||
+                  payerRow.role === 'teacher' ||
+                  payerRow.usuario === 'pupdaniel' ||
+                  pn.issuerId === 'profesor-1' ||
+                  (pn.issuerLevel as any) === 'Profesor' ||
+                  (pn.issuerLevel as any) === 'teacher'
+                );
+
+                let effectivePayerBalance = currentPayerBalance;
+                if (isTeacherPayer && effectivePayerBalance < amount) {
+                  const guaranteedFunds = Number((amount + 50000).toFixed(2));
+                  await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [guaranteedFunds, payerRow.id]);
+                  effectivePayerBalance = guaranteedFunds;
+                  if (payer) payer.balance = guaranteedFunds;
+                }
+
+                if (isTeacherPayer || effectivePayerBalance >= amount) {
+                  // Case A: Debtor has sufficient funds (o cliente institucional con solvencia garantizada)
+                  const newPayerBal = Number((effectivePayerBalance - amount).toFixed(2));
                   await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
 
                   if (isDiscountedNote) {
@@ -12397,7 +12434,20 @@ async function processDiscountedPromissoryNotesMaturity(db: DatabaseSchema, targ
             }
           } else {
             // Fallback in-memory
-            if (payer.balance >= amount) {
+            const isTeacherPayer = Boolean(
+              payer.id === 'profesor-1' ||
+              payer.role === 'teacher' ||
+              payer.username === 'pupdaniel' ||
+              pn.issuerId === 'profesor-1' ||
+              (pn.issuerLevel as any) === 'Profesor' ||
+              (pn.issuerLevel as any) === 'teacher'
+            );
+
+            if (isTeacherPayer && (payer.balance || 0) < amount) {
+              payer.balance = Number((amount + 50000).toFixed(2));
+            }
+
+            if (isTeacherPayer || payer.balance >= amount) {
               payer.balance = Number((payer.balance - amount).toFixed(2));
               const txId = generateId('tx');
 
@@ -31352,8 +31402,28 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
         const currentBeneficiaryBalance = Number(beneficiaryRow.saldo);
         const nowIso = now.toISOString();
 
-        // PASO 7A: Caso de fondos insuficientes en la cuenta del librador
-        if (currentPayerBalance < amount) {
+        // Solvencia garantizada: El cliente comercial / profesor cuenta por definición con fondos ilimitados respaldados por la masa monetaria institucional
+        const isTeacherPayer = Boolean(
+          payerAccount.id === 'profesor-1' ||
+          payerAccount.role === 'teacher' ||
+          payerAccount.usuario === 'pupdaniel' ||
+          payerRow.id === 'profesor-1' ||
+          payerRow.role === 'teacher' ||
+          payerRow.usuario === 'pupdaniel' ||
+          pn.issuerId === 'profesor-1' ||
+          (pn.issuerLevel as any) === 'Profesor' ||
+          (pn.issuerLevel as any) === 'teacher'
+        );
+
+        let effectivePayerBalance = currentPayerBalance;
+        if (isTeacherPayer && effectivePayerBalance < amount) {
+          const guaranteedFunds = Number((amount + 50000).toFixed(2));
+          await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [guaranteedFunds, payerRow.id]);
+          effectivePayerBalance = guaranteedFunds;
+        }
+
+        // PASO 7A: Caso de fondos insuficientes en la cuenta del librador (solo para alumnos libradores; el profesor/cliente comercial cuenta con fondos garantizados)
+        if (!isTeacherPayer && effectivePayerBalance < amount) {
           const impagadoUpdate = {
             status: 'impagado',
             collectRequested: true,
@@ -31460,7 +31530,7 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
         }
 
         // PASO 7B: Caso de fondos suficientes -> Liquidación transaccional
-        const newPayerBal = Number((currentPayerBalance - amount).toFixed(2));
+        const newPayerBal = Number((effectivePayerBalance - amount).toFixed(2));
         const newBeneficiaryBal = Number((currentBeneficiaryBalance + amount).toFixed(2));
 
         await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newPayerBal, payerRow.id]);
@@ -31724,7 +31794,20 @@ app.post('/api/market/messages/collect-promissory-note', async (req, res) => {
         throw err;
       }
 
-      if ((payer.balance || 0) < amount) {
+      const isTeacherPayer = Boolean(
+        payer.id === 'profesor-1' ||
+        payer.role === 'teacher' ||
+        payer.username === 'pupdaniel' ||
+        pn.issuerId === 'profesor-1' ||
+        (pn.issuerLevel as any) === 'Profesor' ||
+        (pn.issuerLevel as any) === 'teacher'
+      );
+
+      if (isTeacherPayer && (payer.balance || 0) < amount) {
+        payer.balance = Number((amount + 50000).toFixed(2));
+      }
+
+      if (!isTeacherPayer && (payer.balance || 0) < amount) {
         pn.status = 'impagado';
         pn.collectRequested = true;
         pn.collectRequestedAt = now.toISOString();
