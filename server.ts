@@ -24343,7 +24343,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                 const promissoryId = generateId('pn');
                 const signatureHash = `FIRM-DIGITAL-CAMBIARIA-ART94-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
                 const amountWords = numberToSpanishWords(totalAmount);
-                const teacherIssuerName = 'BricoMaster Distribuciones, S.A.';
+                const teacherIssuerName = chosenBuyerName;
                 const teacherIssuerIban = buyer.accountNumber || 'ES21 0049 1500 05 1234567890';
                 const teacherIssuerNif = 'A-28000100';
                 const sellerNif = (sellerRow as any)?.nif || `user-${sellerId}`;
@@ -24436,7 +24436,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                       notifId,
                       sellerId,
                       `¡Venta con Pagaré a ${validDaysTerm} días!`,
-                      `El Profesor ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} € mediante pagaré con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')}. El pagaré oficial está disponible en tu chat de mensajería directa para su conservación, descuento o cobro.`,
+                      `El comprador comercial "${teacherIssuerName}" ha comprado ${totalUnits} u. de "${summaryTitle}" por ${totalAmount.toFixed(2)} € mediante pagaré con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')}. El pagaré oficial está disponible en tu chat de mensajería directa para su conservación, descuento o cobro.`,
                       now.toISOString(),
                       promissoryId
                     ]
@@ -24539,7 +24539,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                 }
                 const promissoryData: PromissoryNoteData = {
                   id: generateId('pagare'),
-                  promissoryNoteNumber: candidatePromissoryNum,
+                  promissoryNoteNumber: candidatePromissoryNum!,
                   concept: `Compraventa en Mercado: ${summaryTitle} (${order.invoiceNumber || candidateInvoiceNum})`,
                   amount: totalAmount,
                   amountInWords: numberToSpanishWords(totalAmount),
@@ -24553,7 +24553,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                   beneficiaryNifCif: 'B-' + String(sellerUser.id).padStart(8, '0'),
                   beneficiaryLevel: 3,
                   issuerId: buyer.id || 'profesor-1',
-                  issuerName: buyerName,
+                  issuerName: chosenBuyerName,
                   issuerNifCif: 'A-28000100',
                   issuerAddress: 'Polígono Industrial San Fernando, Nave 1, Madrid',
                   issuerLevel: 'Profesor' as any,
@@ -24563,19 +24563,41 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                   signatureHash: 'SIG-' + generateId('sig').toUpperCase(),
                   status: 'pendiente'
                 };
-                if (!db.marketMessages) db.marketMessages = [];
-                db.marketMessages.push({
+
+                const fallbackChatId = [buyer.id, sellerUser.id].sort().join('_');
+                const fallbackMsgContent = `📑 PAGARÉ FIRMADO: ${candidatePromissoryNum} por ${formatNumber(totalAmount)} € con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')} (${validDaysTerm} días) en favor de ${sellerUser.name || sellerName} (Librador: ${chosenBuyerName}). Pago aplazado por compra en Mercado.`;
+                const fallbackMsg: MarketMessage = {
                   id: generateId('msg'),
-                  sender_id: buyer.id,
-                  sender_name: buyerName,
-                  receiver_id: sellerUser.id,
-                  receiver_name: sellerUser.name,
+                  chatId: fallbackChatId,
+                  senderId: buyer.id,
+                  senderName: chosenBuyerName,
+                  recipientId: sellerUser.id,
+                  recipientName: sellerUser.name || sellerName,
+                  content: fallbackMsgContent,
+                  timestamp: now.toISOString(),
+                  read: false,
                   type: 'promissory_note',
-                  text: `Te he emitido el pagaré ${candidatePromissoryNum} por importe de ${totalAmount.toFixed(2)} € con vencimiento a ${validDaysTerm} días (${dueDate}) como pago aplazado por la venta de ${summaryTitle}.`,
-                  invoice_data: JSON.stringify(promissoryData),
-                  created_at: now.toISOString(),
-                  read: false
-                } as any);
+                  promissoryNoteData: promissoryData
+                };
+
+                if (!db.marketMessages) db.marketMessages = [];
+                db.marketMessages.push(fallbackMsg);
+
+                if (!db.marketContacts) db.marketContacts = [];
+                if (!db.marketContacts.some(c => (c.userId === sellerUser.id && c.contactId === buyer.id) || (c.userId === buyer.id && c.contactId === sellerUser.id))) {
+                  db.marketContacts.push({
+                    id: generateId('contact'),
+                    userId: sellerUser.id,
+                    contactId: buyer.id,
+                    createdAt: now.toISOString()
+                  });
+                  db.marketContacts.push({
+                    id: generateId('contact'),
+                    userId: buyer.id,
+                    contactId: sellerUser.id,
+                    createdAt: now.toISOString()
+                  });
+                }
 
                 if (transportInvoiceOrder) {
                   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
@@ -24670,7 +24692,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                 }
                 const promissoryData: PromissoryNoteData = {
                   id: generateId('pagare'),
-                  promissoryNoteNumber: candidatePromissoryNum,
+                  promissoryNoteNumber: candidatePromissoryNum!,
                   concept: `Compraventa en Mercado: ${summaryTitle} (${order.invoiceNumber || candidateInvoiceNum})`,
                   amount: totalAmount,
                   amountInWords: numberToSpanishWords(totalAmount),
@@ -24684,7 +24706,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                   beneficiaryNifCif: 'B-' + String(freshSeller.id).padStart(8, '0'),
                   beneficiaryLevel: 3,
                   issuerId: buyer.id || 'profesor-1',
-                  issuerName: buyerName,
+                  issuerName: chosenBuyerName,
                   issuerNifCif: 'A-28000100',
                   issuerAddress: 'Polígono Industrial San Fernando, Nave 1, Madrid',
                   issuerLevel: 'Profesor' as any,
@@ -24694,19 +24716,30 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                   signatureHash: 'SIG-' + generateId('sig').toUpperCase(),
                   status: 'pendiente'
                 };
-                if (!freshDb.marketMessages) freshDb.marketMessages = [];
-                freshDb.marketMessages.push({
+
+                const cacheChatId = [buyer.id, freshSeller.id].sort().join('_');
+                const cacheMsgContent = `📑 PAGARÉ FIRMADO: ${candidatePromissoryNum} por ${formatNumber(totalAmount)} € con vencimiento el ${new Date(dueDate!).toLocaleDateString('es-ES')} (${validDaysTerm} días) en favor de ${freshSeller.name || sellerName} (Librador: ${chosenBuyerName}). Pago aplazado por compra en Mercado.`;
+                const cacheMsg: MarketMessage = {
                   id: generateId('msg'),
-                  sender_id: buyer.id,
-                  sender_name: buyerName,
-                  receiver_id: freshSeller.id,
-                  receiver_name: freshSeller.name,
+                  chatId: cacheChatId,
+                  senderId: buyer.id,
+                  senderName: chosenBuyerName,
+                  recipientId: freshSeller.id,
+                  recipientName: freshSeller.name || sellerName,
+                  content: cacheMsgContent,
+                  timestamp: now.toISOString(),
+                  read: false,
                   type: 'promissory_note',
-                  text: `Te he emitido el pagaré ${candidatePromissoryNum} por importe de ${totalAmount.toFixed(2)} € con vencimiento a ${validDaysTerm} días (${dueDate}) como pago aplazado por la venta de ${summaryTitle}.`,
-                  invoice_data: JSON.stringify(promissoryData),
-                  created_at: now.toISOString(),
-                  read: false
-                } as any);
+                  promissoryNoteData: promissoryData
+                };
+
+                if (!freshDb.marketMessages) freshDb.marketMessages = [];
+                const existingMsgIdx = freshDb.marketMessages.findIndex(m => m.id === cacheMsg.id || (m.promissoryNoteData && m.promissoryNoteData.promissoryNoteNumber === candidatePromissoryNum));
+                if (existingMsgIdx >= 0) {
+                  freshDb.marketMessages[existingMsgIdx] = cacheMsg;
+                } else {
+                  freshDb.marketMessages.push(cacheMsg);
+                }
 
                 if (!freshDb.marketContacts) freshDb.marketContacts = [];
                 if (!freshDb.marketContacts.some(c => (c.userId === freshSeller.id && c.contactId === buyer.id) || (c.userId === buyer.id && c.contactId === freshSeller.id))) {
@@ -24714,6 +24747,12 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                     id: generateId('contact'),
                     userId: freshSeller.id,
                     contactId: buyer.id,
+                    createdAt: now.toISOString()
+                  });
+                  freshDb.marketContacts.push({
+                    id: generateId('contact'),
+                    userId: buyer.id,
+                    contactId: freshSeller.id,
                     createdAt: now.toISOString()
                   });
                 }
@@ -29025,7 +29064,7 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
 });
 
 // Trading Partners list endpoint (Filtered to contacted partners in Direct Messaging)
-app.get('/api/market/trading-partners', (req, res) => {
+app.get('/api/market/trading-partners', async (req, res) => {
   const userId = req.query.userId as string;
   const db = readDb();
   const currentUser = db.users.find(u => u.id === userId);
@@ -29034,7 +29073,6 @@ app.get('/api/market/trading-partners', (req, res) => {
 
   if (!db.marketContacts) db.marketContacts = [];
 
-  // Filter partners: for teachers, return all tradeable partners. For students, return only those where "Contactar" was clicked or messages exist.
   const contactedPartnerIds = new Set<string>();
   db.marketContacts.forEach(c => {
     if (c.userId === currentUser.id) contactedPartnerIds.add(c.contactId);
@@ -29043,9 +29081,50 @@ app.get('/api/market/trading-partners', (req, res) => {
 
   if (db.marketMessages) {
     db.marketMessages.forEach(m => {
-      if (m.senderId === currentUser.id) contactedPartnerIds.add(m.recipientId);
-      if (m.recipientId === currentUser.id) contactedPartnerIds.add(m.senderId);
+      const sId = m.senderId || (m as any).sender_id;
+      const rId = m.recipientId || (m as any).receiver_id;
+      if (sId === currentUser.id && rId) contactedPartnerIds.add(rId);
+      if (rId === currentUser.id && sId) contactedPartnerIds.add(sId);
     });
+  }
+
+  // PostgreSQL sync if dbPool is active
+  if (dbPool) {
+    try {
+      const contactsRes = await safeDbQuery(
+        'SELECT user_id, contact_id FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1',
+        [currentUser.id]
+      );
+      if (contactsRes && contactsRes.rows) {
+        for (const row of contactsRes.rows) {
+          if (row.user_id === currentUser.id) contactedPartnerIds.add(row.contact_id);
+          if (row.contact_id === currentUser.id) contactedPartnerIds.add(row.user_id);
+        }
+      }
+
+      const msgsRes = await safeDbQuery(
+        'SELECT sender_id, recipient_id FROM market_messages WHERE sender_id = $1 OR recipient_id = $1',
+        [currentUser.id]
+      );
+      if (msgsRes && msgsRes.rows) {
+        for (const row of msgsRes.rows) {
+          if (row.sender_id === currentUser.id) contactedPartnerIds.add(row.recipient_id);
+          if (row.recipient_id === currentUser.id) contactedPartnerIds.add(row.sender_id);
+        }
+      }
+    } catch (err) {
+      console.warn('[Trading Partners] Warning querying PostgreSQL contacts:', err);
+    }
+  }
+
+  // For students: if the teacher has bought from them or there is any interaction, ensure profesor-1 is accessible
+  if (currentUser.role === 'student' || currentUser.level === 3) {
+    const hasTeacherOrder = (db.rawMaterialOrders || []).some(o =>
+      (o.sellerId === currentUser.id && (o.studentId === 'profesor-1' || o.paymentMethod === 'pagare' || Boolean(o.promissoryNoteNumber)))
+    );
+    if (hasTeacherOrder) {
+      contactedPartnerIds.add('profesor-1');
+    }
   }
 
   const partners = db.users
@@ -29066,22 +29145,30 @@ app.get('/api/market/trading-partners', (req, res) => {
       const userLevelKey = (u.role === 'teacher' || u.id === 'profesor-1') ? 'teacher' : (u.level || 1);
 
       // Unread messages from this specific partner to current user
-      const unreadCount = (db.marketMessages || []).filter(
-        m => m.recipientId === currentUser.id && m.senderId === u.id && !m.read
-      ).length;
+      const unreadCount = (db.marketMessages || []).filter(m => {
+        const sId = m.senderId || (m as any).sender_id;
+        const rId = m.recipientId || (m as any).receiver_id;
+        return rId === currentUser.id && sId === u.id && !m.read;
+      }).length;
 
       // Find all messages between currentUser and this partner to determine the most recent interaction
-      const conversationMsgs = (db.marketMessages || []).filter(
-        m => (m.senderId === currentUser.id && m.recipientId === u.id) ||
-             (m.senderId === u.id && m.recipientId === currentUser.id)
-      );
+      const conversationMsgs = (db.marketMessages || []).filter(m => {
+        const sId = m.senderId || (m as any).sender_id;
+        const rId = m.recipientId || (m as any).receiver_id;
+        return (sId === currentUser.id && rId === u.id) || (sId === u.id && rId === currentUser.id);
+      });
 
       let lastMessageTimestamp: string | null = null;
       let lastMessageContent: string | null = null;
       if (conversationMsgs.length > 0) {
-        conversationMsgs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        lastMessageTimestamp = conversationMsgs[0].timestamp;
-        lastMessageContent = conversationMsgs[0].content || (conversationMsgs[0].type === 'invoice' ? 'Factura emitida' : '');
+        conversationMsgs.sort((a, b) => {
+          const tA = new Date(a.timestamp || (a as any).created_at).getTime();
+          const tB = new Date(b.timestamp || (b as any).created_at).getTime();
+          return tB - tA;
+        });
+        const top = conversationMsgs[0];
+        lastMessageTimestamp = top.timestamp || (top as any).created_at;
+        lastMessageContent = top.content || (top as any).text || (top.type === 'invoice' ? 'Factura emitida' : (top.type === 'promissory_note' ? 'Pagaré firmado' : ''));
       }
 
       const contactRecord = (db.marketContacts || []).find(
@@ -29131,9 +29218,11 @@ app.get('/api/market/messages/unread-count', (req, res) => {
   if (!userId) return res.status(400).json({ unreadCount: 0 });
   const db = readDb();
   if (!db.marketMessages) db.marketMessages = [];
-  const unreadCount = db.marketMessages.filter(
-    m => m.recipientId === userId && !m.read && m.senderId !== 'system_court'
-  ).length;
+  const unreadCount = db.marketMessages.filter(m => {
+    const sId = m.senderId || (m as any).sender_id;
+    const rId = m.recipientId || (m as any).receiver_id;
+    return rId === userId && !m.read && sId !== 'system_court';
+  }).length;
   res.json({ success: true, unreadCount });
 });
 
@@ -29211,13 +29300,68 @@ app.post('/api/court/notifications/mark-read', (req, res) => {
 
 app.get('/api/market/messages', async (req, res) => {
   const { userId, partnerId } = req.query as { userId: string; partnerId: string };
+  if (!userId || !partnerId) {
+    return res.json({ messages: [] });
+  }
+
   const db = readDb();
   if (!db.marketMessages) db.marketMessages = [];
+
+  // If PostgreSQL is configured, synchronize messages from database
+  if (dbPool) {
+    try {
+      const qRes = await safeDbQuery(
+        `SELECT id, chat_id, sender_id, sender_name, recipient_id, recipient_name, content, timestamp, read, type, invoice_data
+         FROM market_messages
+         WHERE (sender_id = $1 AND recipient_id = $2)
+            OR (sender_id = $2 AND recipient_id = $1)
+         ORDER BY timestamp ASC`,
+        [userId, partnerId]
+      );
+      if (qRes && qRes.rows) {
+        for (const row of qRes.rows) {
+          let parsedData: any = undefined;
+          if (row.invoice_data) {
+            try {
+              parsedData = typeof row.invoice_data === 'string' ? JSON.parse(row.invoice_data) : row.invoice_data;
+            } catch (e) {
+              parsedData = row.invoice_data;
+            }
+          }
+          const existingIdx = db.marketMessages.findIndex(m => m.id === row.id);
+          const mappedMsg: MarketMessage = {
+            id: String(row.id),
+            chatId: row.chat_id || [row.sender_id, row.recipient_id].sort().join('_'),
+            senderId: String(row.sender_id),
+            senderName: String(row.sender_name || 'Usuario'),
+            recipientId: String(row.recipient_id),
+            recipientName: String(row.recipient_name || 'Destinatario'),
+            content: String(row.content || ''),
+            timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+            read: Boolean(row.read),
+            type: (row.type || 'text') as any,
+            invoiceData: row.type === 'invoice' ? parsedData : undefined,
+            promissoryNoteData: row.type === 'promissory_note' ? parsedData : undefined
+          };
+
+          if (existingIdx >= 0) {
+            db.marketMessages[existingIdx] = { ...db.marketMessages[existingIdx], ...mappedMsg };
+          } else {
+            db.marketMessages.push(mappedMsg);
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.warn('[Market Messages] Warning fetching PostgreSQL messages:', dbErr);
+    }
+  }
 
   let modified = false;
   // Mark messages sent by partnerId to userId as read
   db.marketMessages.forEach(m => {
-    if (m.recipientId === userId && m.senderId === partnerId && !m.read) {
+    const sId = m.senderId || (m as any).sender_id;
+    const rId = m.recipientId || (m as any).receiver_id;
+    if (rId === userId && sId === partnerId && !m.read) {
       m.read = true;
       modified = true;
     }
@@ -29233,10 +29377,27 @@ app.get('/api/market/messages', async (req, res) => {
     }
   }
 
-  const msgs = db.marketMessages.filter(
-    m => (m.senderId === userId && m.recipientId === partnerId) ||
-         (m.senderId === partnerId && m.recipientId === userId)
-  );
+  // Filter and normalize messages between the two users
+  const msgs = db.marketMessages
+    .filter(m => {
+      const sId = m.senderId || (m as any).sender_id;
+      const rId = m.recipientId || (m as any).receiver_id;
+      return (sId === userId && rId === partnerId) || (sId === partnerId && rId === userId);
+    })
+    .map(m => {
+      if (!m.senderId && (m as any).sender_id) m.senderId = (m as any).sender_id;
+      if (!m.recipientId && (m as any).receiver_id) m.recipientId = (m as any).receiver_id;
+      if (!m.content && (m as any).text) m.content = (m as any).text;
+      if (!m.timestamp && (m as any).created_at) m.timestamp = (m as any).created_at;
+      if (!m.promissoryNoteData && m.type === 'promissory_note' && (m as any).invoice_data) {
+        try {
+          m.promissoryNoteData = typeof (m as any).invoice_data === 'string'
+            ? JSON.parse((m as any).invoice_data)
+            : (m as any).invoice_data;
+        } catch (e) {}
+      }
+      return m;
+    });
 
   msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
