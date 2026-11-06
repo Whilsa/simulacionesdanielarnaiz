@@ -1136,6 +1136,18 @@ async function syncCompanyProfileToSupabase(profile: CompanyProfile) {
   }
 }
 
+async function deleteCompanyProfileFromSupabase(studentId: string) {
+  if (!dbPool) return;
+  try {
+    await safeDbQuery(
+      `DELETE FROM perfiles_empresa WHERE student_id = $1 OR id = $1 OR id = $2`,
+      [studentId, `profile-${studentId}`]
+    );
+  } catch (e) {
+    console.error('[Supabase DB] Error deleting company profile from Supabase:', e);
+  }
+}
+
 async function syncMarketContactToSupabase(contact: MarketContact) {
   if (!dbPool) return;
   try {
@@ -27409,6 +27421,46 @@ app.post('/api/market/company-profile', async (req, res) => {
   writeDb(db);
 
   res.json({ success: true, profile, message: 'Perfil de empresa guardado correctamente.' });
+});
+
+app.delete('/api/market/company-profile/:studentId', async (req, res) => {
+  const { studentId } = req.params;
+  if (!studentId) return res.status(400).json({ error: 'studentId es requerido' });
+
+  const db = readDb();
+  if (!db.companyProfiles) db.companyProfiles = [];
+
+  const initialCount = db.companyProfiles.length;
+  db.companyProfiles = db.companyProfiles.filter(p => p.studentId !== studentId && p.id !== studentId && p.id !== `profile-${studentId}`);
+
+  await deleteCompanyProfileFromSupabase(studentId);
+  writeDb(db);
+
+  res.json({
+    success: true,
+    message: 'Perfil de empresa eliminado del mercado correctamente.',
+    deleted: initialCount !== db.companyProfiles.length
+  });
+});
+
+app.delete('/api/market/company-profile', async (req, res) => {
+  const studentId = (req.body && req.body.studentId) || (req.query && req.query.studentId);
+  if (!studentId) return res.status(400).json({ error: 'studentId es requerido' });
+
+  const db = readDb();
+  if (!db.companyProfiles) db.companyProfiles = [];
+
+  const initialCount = db.companyProfiles.length;
+  db.companyProfiles = db.companyProfiles.filter(p => p.studentId !== studentId && p.id !== studentId && p.id !== `profile-${studentId}`);
+
+  await deleteCompanyProfileFromSupabase(String(studentId));
+  writeDb(db);
+
+  res.json({
+    success: true,
+    message: 'Perfil de empresa eliminado del mercado correctamente.',
+    deleted: initialCount !== db.companyProfiles.length
+  });
 });
 
 // Contact Partner Endpoint (When clicking "Contactar" in Company Profile)

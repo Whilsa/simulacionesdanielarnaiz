@@ -286,6 +286,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileDescription, setProfileDescription] = useState('');
   const [profileLogoUrl, setProfileLogoUrl] = useState('');
+  const [isDeletingProfile, setIsDeletingProfile] = useState(false);
+  const [showDeleteProfileConfirm, setShowDeleteProfileConfirm] = useState(false);
+  const [selectedProfileToDelete, setSelectedProfileToDelete] = useState<CompanyProfile | null>(null);
 
   // Price Alert Modal State (Teacher -> Student Level 3)
   const [isPriceAlertModalOpen, setIsPriceAlertModalOpen] = useState(false);
@@ -392,6 +395,35 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       setMsg({ type: 'error', text: 'Error de red al guardar el perfil de empresa.' });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCompanyProfile = async () => {
+    const targetStudentId = selectedProfileToDelete?.studentId || currentUser.id;
+    setIsDeletingProfile(true);
+    try {
+      const res = await fetch(`/api/market/company-profile/${targetStudentId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: targetStudentId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg({ type: 'success', text: 'Perfil de empresa eliminado del mercado correctamente.' });
+        setIsProfileModalOpen(false);
+        setShowDeleteProfileConfirm(false);
+        setSelectedProfileToDelete(null);
+        setProfileDescription('');
+        setProfileLogoUrl('');
+        fetchCompanyProfiles();
+      } else {
+        setMsg({ type: 'error', text: data.error || 'Error al eliminar el perfil de empresa.' });
+      }
+    } catch (e) {
+      console.error('Error al eliminar perfil de empresa:', e);
+      setMsg({ type: 'error', text: 'Error de red al eliminar el perfil de empresa.' });
+    } finally {
+      setIsDeletingProfile(false);
     }
   };
 
@@ -2995,13 +3027,29 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           </div>
           <div className="flex items-center gap-2">
             {!isTeacher && (
-              <button
-                onClick={handleOpenMyProfileModal}
-                className="inline-flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl shadow transition-all"
-              >
-                <Building2 className="w-4 h-4" />
-                <span>{companyProfiles.some(p => p.studentId === currentUser.id) ? 'Editar mi perfil de empresa' : 'Publicar perfil de empresa'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleOpenMyProfileModal}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl shadow transition-all"
+                >
+                  <Building2 className="w-4 h-4" />
+                  <span>{companyProfiles.some(p => p.studentId === currentUser.id) ? 'Editar mi perfil de empresa' : 'Publicar perfil de empresa'}</span>
+                </button>
+                {companyProfiles.some(p => p.studentId === currentUser.id) && (
+                  <button
+                    onClick={() => {
+                      const myProf = companyProfiles.find(p => p.studentId === currentUser.id);
+                      setSelectedProfileToDelete(myProf || null);
+                      setShowDeleteProfileConfirm(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-3 py-2 rounded-xl transition-all"
+                    title="Eliminar mi perfil de empresa del mercado"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Eliminar perfil</span>
+                  </button>
+                )}
+              </div>
             )}
             {isTeacher && (
               <button
@@ -3105,13 +3153,46 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     {/* Action Button */}
                     <div className="pt-2 border-t border-slate-800">
                       {isMe ? (
-                        <button
-                          onClick={handleOpenMyProfileModal}
-                          className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
-                        >
-                          <Edit className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>Editar perfil de empresa</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleOpenMyProfileModal}
+                            className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                          >
+                            <Edit className="w-3.5 h-3.5 text-indigo-400" />
+                            <span>Editar perfil</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSelectedProfileToDelete(p);
+                              setShowDeleteProfileConfirm(true);
+                            }}
+                            className="py-2 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                            title="Eliminar perfil de empresa del mercado"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Eliminar</span>
+                          </button>
+                        </div>
+                      ) : isTeacher ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleContactCompany(p.studentId)}
+                            className="flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md flex items-center justify-center gap-2"
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                            <span>Contactar</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSelectedProfileToDelete(p);
+                              setShowDeleteProfileConfirm(true);
+                            }}
+                            className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition flex items-center justify-center"
+                            title="Eliminar perfil de empresa como profesor"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       ) : (
                         <button
                           onClick={() => handleContactCompany(p.studentId)}
@@ -5595,22 +5676,89 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               </div>
             </div>
 
-            <div className="flex gap-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-800">
+              {companyProfiles.some(p => p.studentId === currentUser.id) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const myProf = companyProfiles.find(p => p.studentId === currentUser.id);
+                    setSelectedProfileToDelete(myProf || null);
+                    setShowDeleteProfileConfirm(true);
+                  }}
+                  disabled={isSubmitting || isDeletingProfile}
+                  className="py-2.5 px-3.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Eliminar perfil</span>
+                </button>
+              )}
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsProfileModalOpen(false)}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs hover:bg-slate-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCompanyProfile}
+                  disabled={isSubmitting || isDeletingProfile}
+                  className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
+                >
+                  {isSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Guardar y publicar perfil</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Company Profile Confirmation Modal */}
+      {showDeleteProfileConfirm && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">¿Eliminar perfil de empresa?</h3>
+                <p className="text-xs text-slate-400">
+                  {selectedProfileToDelete && selectedProfileToDelete.studentId !== currentUser.id
+                    ? `Eliminar perfil de ${selectedProfileToDelete.companyName}`
+                    : 'Retirar ficha del directorio comercial'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 leading-relaxed">
+              {selectedProfileToDelete && selectedProfileToDelete.studentId !== currentUser.id
+                ? `Como profesor, vas a retirar el perfil comercial de la empresa "${selectedProfileToDelete.companyName}". Dejará de ser visible en el mercado comercial.`
+                : 'Tu perfil de empresa dejará de aparecer en el directorio comercial del mercado y otros participantes no podrán visualizar tus datos comerciales ni contactarte directamente a través de tu ficha. Podrás volver a publicarlo en cualquier momento.'}
+            </p>
+
+            <div className="flex gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setIsProfileModalOpen(false)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs hover:bg-slate-700 transition-colors"
+                disabled={isDeletingProfile}
+                onClick={() => {
+                  setShowDeleteProfileConfirm(false);
+                  setSelectedProfileToDelete(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs hover:bg-slate-700 transition"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                onClick={handleSaveCompanyProfile}
-                disabled={isSubmitting}
-                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-1.5"
+                disabled={isDeletingProfile}
+                onClick={handleDeleteCompanyProfile}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition flex items-center justify-center gap-1.5"
               >
-                {isSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                <span>Guardar y publicar perfil</span>
+                {isDeletingProfile && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Sí, eliminar perfil</span>
               </button>
             </div>
           </div>
