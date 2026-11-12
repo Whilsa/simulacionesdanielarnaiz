@@ -11,6 +11,7 @@ import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import StudentFinishedScrewdriversSection from './StudentFinishedScrewdriversSection.js';
 import TeacherScrewdriverListingsManagement from './TeacherScrewdriverListingsManagement.js';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 import {
   Package,
   Layers,
@@ -135,6 +136,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const studentLevel = currentUser.level || 1;
   const isLevel1 = studentLevel === 1;
 
+  const { sessionData, refreshSession } = useStudentSession();
+
   const [announcements, setAnnouncements] = useState<RawMaterialAnnouncement[]>([]);
   const [orders, setOrders] = useState<RawMaterialOrder[]>([]);
   const [vehicles, setVehicles] = useState<PurchasedVehicle[]>([]);
@@ -149,6 +152,48 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [producedGoods, setProducedGoods] = useState<any>(null);
   const [rawMaterialsState, setRawMaterialsState] = useState<any>(null);
   const [inventoryData, setInventoryData] = useState<any>(null);
+
+  // Sincronización reactiva con StudentSessionContext
+  useEffect(() => {
+    if (sessionData) {
+      if (sessionData.user?.balance !== undefined && onUserBalanceUpdated) {
+        onUserBalanceUpdated(sessionData.user.balance);
+      }
+      if (sessionData.rawMaterialOrders) {
+        setOrders(sessionData.rawMaterialOrders);
+      }
+      if (sessionData.company) {
+        if (sessionData.company.vehicles) setVehicles(sessionData.company.vehicles);
+        if (sessionData.company.employees) setEmployees(sessionData.company.employees);
+        if (sessionData.company.floorPlans) setFloorPlans(sessionData.company.floorPlans);
+        if (sessionData.company.acquisitions) setAcquisitions(sessionData.company.acquisitions);
+      }
+      if (sessionData.inventory) {
+        setInventoryData(sessionData.inventory);
+        const inv = sessionData.inventory;
+        setRawMaterialsState({
+          fragmentos_hierro_kg: inv.ironKg || 0,
+          fragmentos_metal_kg: inv.metalKg || 0,
+          pellets_plastico_kg: inv.plasticKg || 0,
+          pegamento_epoxi_kg: inv.epoxiKg || 0
+        });
+        setProducedGoods({
+          rodProductionMode: (inv as any).rodProductionMode || null,
+          varillas_punta: inv.producedRodsUnits || 0,
+          varillas_punta_estrella: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+          varillas_punta_plana: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+          varillas_hierro_punta: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+          varillas_metal_punta: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+          productos_ensamblados: inv.producedScrewdriversUnits || 0,
+          destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+          destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+          destornilladores_hierro: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+          destornilladores_metal: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+          producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
+        });
+      }
+    }
+  }, [sessionData, onUserBalanceUpdated]);
 
   // Cart State
   const [cart, setCart] = useState<RawMaterialCartItem[]>([]);
@@ -205,11 +250,20 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [chatMessages, setChatMessages] = useState<MarketMessage[]>([]);
   const [chatInputText, setChatInputText] = useState('');
   const [loadingChat, setLoadingChat] = useState(false);
+  const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLastMessageIdRef = useRef<string | null>(null);
   const activePartnerIdRef = useRef<string>('');
+  const isMountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const scrollToBottom = (smooth = true) => {
     if (messagesEndRef.current) {
@@ -452,8 +506,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const fetchTradingPartners = async () => {
     try {
       const res = await fetch(`/api/market/trading-partners?userId=${currentUser.id}`);
+      if (!res.ok) throw new Error('Error al cargar socios comerciales');
       const data = await res.json();
-      if (data.partners) {
+      if (isMountedRef.current && data.partners) {
         // Guarantee sorted by most recent first
         const sorted = [...data.partners].sort((a: TradingPartner, b: TradingPartner) => {
           const timeA = a.lastMessageTimestamp
@@ -473,25 +528,26 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
     } catch (e) {
       console.error('Error cargando socios comerciales:', e);
+      throw e;
     }
   };
 
   const fetchChatMessages = async (partnerId: string, isInitialOrPartnerChange = false) => {
     if (!partnerId) return;
+    activePartnerIdRef.current = partnerId;
     if (isInitialOrPartnerChange) setLoadingChat(true);
     try {
       const res = await fetch(`/api/market/messages?userId=${currentUser.id}&partnerId=${partnerId}`);
+      if (!res.ok) throw new Error('Error al cargar mensajes');
       const data = await res.json();
-      if (data.messages) {
+      if (isMountedRef.current && data.messages && activePartnerIdRef.current === partnerId) {
         const newMessages: MarketMessage[] = data.messages;
         const lastMsg = newMessages[newMessages.length - 1];
         const newLastId = lastMsg ? lastMsg.id : null;
-        const partnerChanged = activePartnerIdRef.current !== partnerId;
         const hasNewMessage = Boolean(newLastId && newLastId !== prevLastMessageIdRef.current);
 
         setChatMessages(newMessages);
         prevLastMessageIdRef.current = newLastId;
-        activePartnerIdRef.current = partnerId;
 
         // Immediately update partner unread count in local state if it had unread messages
         setTradingPartners(prev => {
@@ -503,30 +559,58 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         });
 
         // Only auto-scroll on initial open, partner change, or when a new message is received
-        if (partnerChanged || isInitialOrPartnerChange || hasNewMessage) {
+        if (isInitialOrPartnerChange || hasNewMessage) {
           setTimeout(() => scrollToBottom(isInitialOrPartnerChange ? false : true), 60);
         }
       }
     } catch (e) {
       console.error('Error cargando mensajes:', e);
+      throw e;
     } finally {
-      if (isInitialOrPartnerChange) setLoadingChat(false);
+      if (isMountedRef.current && isInitialOrPartnerChange && activePartnerIdRef.current === partnerId) {
+        setLoadingChat(false);
+      }
     }
   };
 
+  const handleManualRefreshMessages = async () => {
+    if (isRefreshingMessages || loadingChat) return;
+    setIsRefreshingMessages(true);
+    try {
+      const promises: Promise<any>[] = [fetchTradingPartners()];
+      if (selectedPartnerId) {
+        promises.push(fetchChatMessages(selectedPartnerId, false));
+      }
+      await Promise.all(promises);
+      if (isMountedRef.current) {
+        setMsg({ type: 'success', text: 'Mensajes y socios comerciales actualizados correctamente.' });
+      }
+    } catch (e) {
+      console.error('Error al actualizar mensajes manualmente:', e);
+      if (isMountedRef.current) {
+        setMsg({
+          type: 'error',
+          text: 'No se pudieron actualizar los mensajes. Se mantienen los datos cargados previamente.'
+        });
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsRefreshingMessages(false);
+      }
+    }
+  };
+
+  // Carga inicial de socios comerciales al entrar a mensajería (sin polling periódico)
   useEffect(() => {
     if (activeMainTab === 'mensajeria') {
-      fetchTradingPartners();
-      if (selectedPartnerId) {
-        fetchChatMessages(selectedPartnerId, true);
-      }
-      const interval = setInterval(() => {
-        fetchTradingPartners();
-        if (selectedPartnerId) {
-          fetchChatMessages(selectedPartnerId, false);
-        }
-      }, 4000);
-      return () => clearInterval(interval);
+      fetchTradingPartners().catch(() => {});
+    }
+  }, [activeMainTab]);
+
+  // Carga de la conversación al seleccionar o cambiar de interlocutor (sin polling periódico)
+  useEffect(() => {
+    if (activeMainTab === 'mensajeria' && selectedPartnerId) {
+      fetchChatMessages(selectedPartnerId, true).catch(() => {});
     }
   }, [activeMainTab, selectedPartnerId]);
 
@@ -620,7 +704,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       fetchChatMessages(selectedPartnerId, false);
       fetchTradingPartners();
       setTimeout(() => scrollToBottom(true), 50);
-      fetchData();
+      fetchData(true);
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message || 'Error al enviar la factura.' });
     } finally {
@@ -703,7 +787,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       fetchChatMessages(selectedPartnerId, false);
       fetchTradingPartners();
       setTimeout(() => scrollToBottom(true), 50);
-      fetchData();
+      fetchData(true);
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message || 'Error al firmar el pagaré.' });
     } finally {
@@ -742,16 +826,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         if (typeof data.newBalance === 'number' && onUserBalanceUpdated) {
           onUserBalanceUpdated(data.newBalance);
         }
-        if (onRefreshUser) {
-          onRefreshUser();
-        }
       }
 
       if (selectedPartnerId) {
         fetchChatMessages(selectedPartnerId, false);
       }
       fetchTradingPartners();
-      fetchData();
+      fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
         setSelectedPromissoryNoteForView({
@@ -796,15 +877,12 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       if (typeof data.newBalance === 'number' && onUserBalanceUpdated) {
         onUserBalanceUpdated(data.newBalance);
       }
-      if (onRefreshUser) {
-        onRefreshUser();
-      }
 
       if (selectedPartnerId) {
         fetchChatMessages(selectedPartnerId, false);
       }
       fetchTradingPartners();
-      fetchData();
+      fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
         setSelectedPromissoryNoteForView({
@@ -856,15 +934,12 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       if (typeof data.newBalance === 'number' && onUserBalanceUpdated) {
         onUserBalanceUpdated(data.newBalance);
       }
-      if (onRefreshUser) {
-        onRefreshUser();
-      }
 
       if (selectedPartnerId) {
         fetchChatMessages(selectedPartnerId, false);
       }
       fetchTradingPartners();
-      fetchData();
+      fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
         setSelectedPromissoryNoteForView({
@@ -1740,36 +1815,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
     }
   };
 
-  const fetchData = async () => {
+  const fetchData = async (syncSession = false) => {
     setLoading(true);
     try {
-      const ordUrl = isTeacher ? '/api/raw-materials/orders' : `/api/raw-materials/orders?studentId=${currentUser.id}`;
-      const [annRes, ordRes, compRes, invRes] = await Promise.all([
-        fetch('/api/raw-materials/announcements'),
-        fetch(ordUrl),
-        fetch(`/api/company/${currentUser.id}`),
-        fetch(`/api/raw-materials/inventory/${currentUser.id}`)
-      ]);
-
-      const annData = await annRes.json();
-      const ordData = await ordRes.json();
-      const compData = await compRes.json();
-      const invData = await invRes.json();
-
-      if (annData.announcements) setAnnouncements(annData.announcements);
-      if (ordData.orders) setOrders(ordData.orders);
-
-      if (compData) {
-        if (compData.purchasedVehicles) setVehicles(compData.purchasedVehicles);
-        if (compData.hiredEmployees) setEmployees(compData.hiredEmployees);
-        if (compData.naveFloorPlans) setFloorPlans(compData.naveFloorPlans);
-        if (compData.acquisitions) setAcquisitions(compData.acquisitions);
+      const annRes = await fetch('/api/raw-materials/announcements');
+      if (annRes.ok) {
+        const annData = await annRes.json();
+        if (annData.announcements) setAnnouncements(annData.announcements);
       }
 
-      if (invData) {
-        if (invData.inventory) setInventoryData(invData.inventory);
-        if (invData.producedGoods) setProducedGoods(invData.producedGoods);
-        if (invData.rawMaterials) setRawMaterialsState(invData.rawMaterials);
+      if (isTeacher) {
+        const ordRes = await fetch('/api/raw-materials/orders');
+        if (ordRes.ok) {
+          const ordData = await ordRes.json();
+          if (ordData.orders) setOrders(ordData.orders);
+        }
+      } else if (syncSession) {
+        await refreshSession();
       }
     } catch (e) {
       console.error('Error cargando datos de materias primas:', e);
@@ -2384,8 +2446,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         setMsg({ type: 'success', text: `¡Solicitud de compra conjunta (${cart.length} productos) remitida exitosamente!` });
         setCart([]);
         setIsCartOpen(false);
-        fetchData();
-        if (onRefreshUser) onRefreshUser();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'No se pudo procesar la solicitud de compra.' });
       }
@@ -2442,7 +2503,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: data.message });
         setNegotiatingOrder(null);
-        fetchData();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al enviar contraoferta.' });
       }
@@ -2492,8 +2553,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: data.message });
         setSelectedAnn(null);
-        fetchData();
-        if (onRefreshUser) onRefreshUser();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al procesar la solicitud' });
       }
@@ -2510,7 +2570,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const data = await res.json();
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: data.message });
-        fetchData();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al confirmar la recepción' });
       }
@@ -2531,8 +2591,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const data = await res.json();
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: data.message });
-        fetchData();
-        if (onRefreshUser) onRefreshUser();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al expedir la mercancía.' });
       }
@@ -2555,7 +2614,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const data = await res.json();
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: `Factura ${data.invoiceNumber} emitida y notificada al comprador.` });
-        fetchData();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al emitir la factura.' });
       }
@@ -2579,8 +2638,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       const data = await res.json();
       if (res.ok && data.success) {
         setMsg({ type: 'success', text: data.message });
-        fetchData();
-        if (onRefreshUser) onRefreshUser();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al aceptar la solicitud.' });
       }
@@ -2606,7 +2664,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         setMsg({ type: 'success', text: 'Solicitud rechazada con éxito.' });
         setRejectingOrderId(null);
         setRejectionReason('');
-        fetchData();
+        fetchData(true);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error al rechazar la solicitud.' });
       }
@@ -3061,7 +3119,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               </button>
             )}
             <button
-              onClick={() => { fetchData(); fetchCompanyProfiles(); }}
+              onClick={() => { fetchData(true); fetchCompanyProfiles(); }}
               className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800 px-3 py-2 rounded-xl border border-slate-700 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -3712,84 +3770,136 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 min-h-[480px]">
-            {/* Left: Trading Partners List */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col space-y-3">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                <Users className="w-4 h-4 text-amber-400" />
-                <span>Empresas & Socios Disponibles ({tradingPartners.length})</span>
-              </h3>
+          {(() => {
+            const selectedPartner = tradingPartners.find(p => p.id === selectedPartnerId);
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 min-h-[480px]">
+                {/* Left: Trading Partners List */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-amber-400" />
+                      <span>Empresas & Socios ({tradingPartners.length})</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={handleManualRefreshMessages}
+                      disabled={isRefreshingMessages}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-white transition disabled:opacity-50 cursor-pointer"
+                      title="Actualizar lista de socios"
+                    >
+                      <RefreshCw className={`w-3 h-3 text-indigo-400 ${isRefreshingMessages ? 'animate-spin' : ''}`} />
+                      <span className="hidden sm:inline">Actualizar</span>
+                    </button>
+                  </div>
 
-              {tradingPartners.length === 0 ? (
-                <div className="text-center py-8 text-xs text-slate-500">
-                  No hay otros usuarios habilitados según las reglas del mercado.
-                </div>
-              ) : (
-                <div className="space-y-2 overflow-y-auto max-h-[400px] pr-1">
-                  {tradingPartners.map((p) => {
-                    const isSelected = selectedPartnerId === p.id;
-                    const unread = Number(p.unreadCount) || 0;
-                    return (
-                      <button
-                        key={p.id}
-                        id={`partner-btn-${p.id}`}
-                        onClick={() => {
-                          setSelectedPartnerId(p.id);
-                          if (p.unreadCount && p.unreadCount > 0) {
-                            setTradingPartners(prev =>
-                              prev.map(partner => partner.id === p.id ? { ...partner, unreadCount: 0 } : partner)
-                            );
-                          }
-                          fetchChatMessages(p.id, true);
-                        }}
-                        className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1.5 relative ${
-                          isSelected
-                            ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg'
-                            : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-bold text-xs truncate">{p.name}</span>
-                            {unread > 0 && (
-                              <span
-                                id={`unread-badge-${p.id}`}
-                                className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-bold text-white bg-red-600 rounded-full shadow-sm flex-shrink-0 animate-pulse"
-                              >
-                                {unread > 99 ? '99+' : unread}
+                  {tradingPartners.length === 0 ? (
+                    <div className="text-center py-8 text-xs text-slate-500">
+                      No hay otros usuarios habilitados según las reglas del mercado.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 overflow-y-auto max-h-[400px] pr-1">
+                      {tradingPartners.map((p) => {
+                        const isSelected = selectedPartnerId === p.id;
+                        const unread = Number(p.unreadCount) || 0;
+                        return (
+                          <button
+                            key={p.id}
+                            id={`partner-btn-${p.id}`}
+                            onClick={() => {
+                              if (p.unreadCount && p.unreadCount > 0) {
+                                setTradingPartners(prev =>
+                                  prev.map(partner => partner.id === p.id ? { ...partner, unreadCount: 0 } : partner)
+                                );
+                              }
+                              if (selectedPartnerId === p.id) {
+                                fetchChatMessages(p.id, true).catch(() => {});
+                              } else {
+                                setSelectedPartnerId(p.id);
+                              }
+                            }}
+                            className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1.5 relative ${
+                              isSelected
+                                ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg'
+                                : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-bold text-xs truncate">{p.name}</span>
+                                {unread > 0 && (
+                                  <span
+                                    id={`unread-badge-${p.id}`}
+                                    className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-bold text-white bg-red-600 rounded-full shadow-sm flex-shrink-0 animate-pulse"
+                                  >
+                                    {unread > 99 ? '99+' : unread}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700 whitespace-nowrap flex-shrink-0">
+                                {p.levelName}
                               </span>
-                            )}
-                          </div>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700 whitespace-nowrap flex-shrink-0">
-                            {p.levelName}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400">
-                          <div className="flex items-center gap-2">
-                            {p.canSellToMe && <span className="text-emerald-400">✓ Vendedor</span>}
-                            {p.canBuyFromMe && <span className="text-indigo-400">✓ Comprador</span>}
-                          </div>
-                          {p.lastMessageTimestamp && (
-                            <span className="text-[9px] text-slate-500 font-mono">
-                              {new Date(p.lastMessageTimestamp).toLocaleDateString([], { day: '2-digit', month: '2-digit' }) === new Date().toLocaleDateString([], { day: '2-digit', month: '2-digit' })
-                                ? new Date(p.lastMessageTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                : new Date(p.lastMessageTimestamp).toLocaleDateString([], { day: '2-digit', month: '2-digit' })}
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400">
+                              <div className="flex items-center gap-2">
+                                {p.canSellToMe && <span className="text-emerald-400">✓ Vendedor</span>}
+                                {p.canBuyFromMe && <span className="text-indigo-400">✓ Comprador</span>}
+                              </div>
+                              {p.lastMessageTimestamp && (
+                                <span className="text-[9px] text-slate-500 font-mono">
+                                  {new Date(p.lastMessageTimestamp).toLocaleDateString([], { day: '2-digit', month: '2-digit' }) === new Date().toLocaleDateString([], { day: '2-digit', month: '2-digit' })
+                                    ? new Date(p.lastMessageTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                    : new Date(p.lastMessageTimestamp).toLocaleDateString([], { day: '2-digit', month: '2-digit' })}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* Right: Chat Window */}
-            <div className="md:col-span-2 bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-4">
-              {selectedPartnerId ? (
-                <>
-                  {/* Chat Messages */}
-                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto max-h-[380px] space-y-3 pr-1">
+                {/* Right: Chat Window */}
+                <div className="md:col-span-2 bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-4">
+                  {selectedPartnerId ? (
+                    <>
+                      {/* Chat Header with Partner Info and Manual Refresh Button */}
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3 gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-xs shrink-0">
+                            {selectedPartner?.name ? selectedPartner.name.charAt(0).toUpperCase() : 'C'}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-bold text-xs text-white truncate">
+                                {selectedPartner?.name || 'Conversación activa'}
+                              </h4>
+                              {selectedPartner?.levelName && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700 whitespace-nowrap hidden sm:inline">
+                                  {selectedPartner.levelName}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-slate-400">Canal de negociación comercial</p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          id="btn-actualizar-mensajes-chat"
+                          onClick={handleManualRefreshMessages}
+                          disabled={isRefreshingMessages || loadingChat}
+                          className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-xl border border-slate-700 shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                          title="Actualizar mensajes de la conversación y lista de socios"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isRefreshingMessages ? 'animate-spin' : ''}`} />
+                          <span>{isRefreshingMessages ? 'Actualizando...' : 'Actualizar mensajes'}</span>
+                        </button>
+                      </div>
+
+                      {/* Chat Messages */}
+                      <div ref={chatContainerRef} className="flex-1 overflow-y-auto max-h-[380px] space-y-3 pr-1">
                     {loadingChat ? (
                       <div className="text-center py-12 text-xs text-slate-500 animate-pulse">
                         Cargando conversación...
@@ -4240,12 +4350,26 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   </div>
                 </>
               ) : (
-                <div className="text-center py-20 text-xs text-slate-500">
-                  Selecciona una empresa de la lista para iniciar la conversación.
+                <div className="text-center py-20 text-xs text-slate-500 space-y-3">
+                  <p>Selecciona una empresa de la lista para iniciar la conversación.</p>
+                  <div>
+                    <button
+                      type="button"
+                      id="btn-actualizar-contactos-chat"
+                      onClick={handleManualRefreshMessages}
+                      disabled={isRefreshingMessages}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-xl border border-slate-700 shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isRefreshingMessages ? 'animate-spin' : ''}`} />
+                      <span>{isRefreshingMessages ? 'Actualizando...' : 'Actualizar mensajes'}</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
+            );
+          })()}
         </div>
       )}
 

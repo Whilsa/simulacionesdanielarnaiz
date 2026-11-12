@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useStudentSession } from "../context/StudentSessionContext.js";
 import {
   User,
   PropertyAcquisition,
@@ -24,6 +25,7 @@ import {
   RawMaterialInventory,
   RawMaterialNaveInventory,
   FiniquitoData,
+  StudentSessionData,
 } from "../types.js";
 import {
   Briefcase,
@@ -132,6 +134,158 @@ interface CompanyDataResponse {
   hiredEmployees?: HiredEmployee[];
   payrollRecords?: PayrollRecord[];
   taxObligations?: TaxObligation[];
+  naveFloorPlans?: NaveFloorPlan[];
+}
+
+function buildInventoryDataFromSession(inv: RawMaterialInventory | null) {
+  if (!inv) return null;
+  const rawMaterials = {
+    fragmentos_hierro_kg: inv.ironKg || 0,
+    fragmentos_metal_kg: inv.metalKg || 0,
+    pellets_plastico_kg: inv.plasticKg || 0,
+    pegamento_epoxi_kg: inv.epoxiKg || 0,
+  };
+  const producedGoods = {
+    rodProductionMode: (inv as any).rodProductionMode || null,
+    varillas_punta: inv.producedRodsUnits || 0,
+    varillas_punta_estrella: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+    varillas_punta_plana: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+    varillas_hierro_punta: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
+    varillas_metal_punta: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
+    productos_ensamblados: inv.producedScrewdriversUnits || 0,
+    destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+    destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+    destornilladores_hierro: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
+    destornilladores_metal: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
+    producedScrewdriversUnits: inv.producedScrewdriversUnits || 0,
+  };
+  return {
+    inventory: inv,
+    rawMaterials,
+    producedGoods,
+  };
+}
+
+function buildCompanyDataFromSession(
+  session: StudentSessionData,
+  currentUser: User,
+): CompanyDataResponse {
+  const acquisitions = session.company?.acquisitions || [];
+  const machineryAcquisitions = session.company?.machinery || [];
+  const hiredEmployees = session.company?.employees || [];
+  const purchasedVehicles = session.company?.vehicles || [];
+  const obligations = session.paymentObligations || [];
+  const loans = session.loans || [];
+  const user = session.user || currentUser;
+
+  const ownedProperties = acquisitions.filter(
+    (a) => a.operation === "compra",
+  );
+  const rentedProperties = acquisitions.filter(
+    (a) => a.operation === "alquiler",
+  );
+
+  let totalRealEstateAssetsValue = 0;
+  let totalLandValue = 0;
+  let totalBuildingValue = 0;
+  for (const prop of ownedProperties) {
+    const base = prop.basePrice || 0;
+    const landPart = (base * (prop.landPercentage || 0)) / 100;
+    const buildingPart = base - landPart;
+    totalRealEstateAssetsValue += base;
+    totalLandValue += landPart;
+    totalBuildingValue += buildingPart;
+  }
+
+  let totalMachineryAssetsValue = 0;
+  for (const m of machineryAcquisitions) {
+    totalMachineryAssetsValue += m.basePrice || 0;
+  }
+
+  const annualBuildingDepreciation = Number(
+    (totalBuildingValue * 0.02).toFixed(2),
+  );
+
+  const pendingDebtObligations = obligations.filter(
+    (o) => o.status === "pendiente" && o.type !== "cuota_alquiler",
+  );
+  const totalObligationsPendingAmount = Number(
+    pendingDebtObligations
+      .reduce((acc, o) => acc + (o.amount || 0), 0)
+      .toFixed(2),
+  );
+
+  let totalLoansPendingAmount = 0;
+  let totalLoansPendingPrincipal = 0;
+  for (const loan of loans) {
+    const unpaidRows = (loan.schedule || []).filter((r) => !r.paid);
+    const pendingPaymentsSum = unpaidRows.reduce(
+      (acc, r) => acc + (r.payment || 0),
+      0,
+    );
+    const pendingPrincipalSum = unpaidRows.reduce(
+      (acc, r) => acc + (r.principal || 0),
+      0,
+    );
+    totalLoansPendingAmount += pendingPaymentsSum;
+    totalLoansPendingPrincipal += pendingPrincipalSum;
+  }
+  totalLoansPendingAmount = Number(totalLoansPendingAmount.toFixed(2));
+  totalLoansPendingPrincipal = Number(totalLoansPendingPrincipal.toFixed(2));
+
+  const totalMonthlyRentCommitments = Number(
+    rentedProperties
+      .reduce((acc, r) => acc + (r.monthlyRent || 0), 0)
+      .toFixed(2),
+  );
+  const totalPendingObligations = Number(
+    (totalObligationsPendingAmount + totalLoansPendingAmount).toFixed(2),
+  );
+
+  return {
+    company: {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      accountNumber: user.accountNumber,
+      balance: user.balance,
+      role: user.role,
+    },
+    summary: {
+      bankBalance: user.balance,
+      ownedPropertiesCount: ownedProperties.length,
+      rentedPropertiesCount: rentedProperties.length,
+      totalRealEstateAssetsValue: Number(
+        totalRealEstateAssetsValue.toFixed(2),
+      ),
+      totalLandValue: Number(totalLandValue.toFixed(2)),
+      totalBuildingValue: Number(totalBuildingValue.toFixed(2)),
+      totalMachineryAssetsValue: Number(
+        totalMachineryAssetsValue.toFixed(2),
+      ),
+      annualBuildingDepreciation,
+      totalObligationsPendingAmount,
+      totalLoansPendingAmount,
+      totalLoansPendingPrincipal,
+      totalPendingTaxAmount: 0,
+      totalPendingObligations,
+      totalMonthlyRentCommitments,
+      activeLoansCount: loans.length,
+      machineryCount: machineryAcquisitions.length,
+      hiredEmployeesCount: hiredEmployees.filter(
+        (e: any) => e.status !== "despedido",
+      ).length,
+    },
+    acquisitions,
+    obligations,
+    loans,
+    machineryAcquisitions,
+    purchasedVehicles,
+    hiredEmployees,
+    naveFloorPlans: session.company?.floorPlans || [],
+    payrollRecords: [],
+    taxObligations: [],
+  };
 }
 
 export default function CompanyDashboard({
@@ -141,8 +295,15 @@ export default function CompanyDashboard({
   onGoToBank,
   onUserBalanceUpdated,
 }: CompanyDashboardProps) {
-  const [data, setData] = useState<CompanyDataResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { sessionData, isLoading: isSessionLoading, refreshSession } = useStudentSession();
+  const [data, setData] = useState<CompanyDataResponse | null>(() => {
+    if (sessionData) {
+      return buildCompanyDataFromSession(sessionData, currentUser);
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(!sessionData && isSessionLoading);
+  const fallbackAttemptedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [payingObligationId, setPayingObligationId] = useState<string | null>(
@@ -187,7 +348,11 @@ export default function CompanyDashboard({
       );
       const result = await res.json();
       if (result.success) {
-        fetchCompanyData(true);
+        if (sessionData && refreshSession) {
+          await refreshSession();
+        } else {
+          fetchCompanyData(true);
+        }
       }
     } catch (err) {
       console.error("Error assigning vehicle warehouse:", err);
@@ -283,6 +448,9 @@ export default function CompanyDashboard({
           rawMaterials: data.rawMaterials || prev?.rawMaterials,
           producedGoods: data.producedGoods || prev?.producedGoods,
         }));
+        if (sessionData && refreshSession) {
+          refreshSession();
+        }
       }
     } catch (e) {
       console.error('Error al cambiar modo de producción de varillas:', e);
@@ -453,8 +621,12 @@ export default function CompanyDashboard({
       const result = await res.json();
       if (res.ok && result.success) {
         setTransferSuccess(result.message);
-        fetchInventoryData();
-        fetchCompanyData(true);
+        if (sessionData && refreshSession) {
+          await refreshSession();
+        } else {
+          fetchInventoryData();
+          fetchCompanyData(true);
+        }
         if (typeof result.newBalance === "number") {
           onUserBalanceUpdated?.(result.newBalance);
         }
@@ -553,7 +725,11 @@ export default function CompanyDashboard({
         );
       } else {
         setRelocateSuccess(result.message);
-        await fetchCompanyData();
+        if (sessionData && refreshSession) {
+          await refreshSession();
+        } else {
+          await fetchCompanyData();
+        }
         setTimeout(() => {
           setRelocateModalMachinery(null);
           setRelocateSuccess(null);
@@ -675,12 +851,71 @@ export default function CompanyDashboard({
     }
   };
 
+  // Reset fallback attempt ref when user changes
   useEffect(() => {
+    fallbackAttemptedRef.current = false;
+  }, [currentUser.id]);
+
+  // Sincronización de datos patrimoniales, suministros y existencias desde StudentSessionContext
+  useEffect(() => {
+    if (sessionData) {
+      setData((prev) => {
+        const computed = buildCompanyDataFromSession(sessionData, currentUser);
+        return {
+          ...computed,
+          payrollRecords:
+            prev?.payrollRecords && prev.payrollRecords.length > 0
+              ? prev.payrollRecords
+              : (computed.payrollRecords || []),
+          taxObligations:
+            prev?.taxObligations && prev.taxObligations.length > 0
+              ? prev.taxObligations
+              : (computed.taxObligations || []),
+        };
+      });
+
+      const contracts = sessionData.electricity?.contracts || [];
+      setElectricityContracts(contracts);
+      if (contracts.length > 0) {
+        setElectricityContract((prev) => prev || contracts[0]);
+      }
+      setElectricityBills(sessionData.electricity?.bills || []);
+      setNaveFloorPlans(sessionData.company?.floorPlans || []);
+
+      setTelecomContracts(sessionData.telecom?.contracts || []);
+      setTelecomInvoices(sessionData.telecom?.invoices || []);
+
+      setOfficeOrders(sessionData.officeOrders || []);
+
+      if (sessionData.inventory) {
+        setInventoryData(buildInventoryDataFromSession(sessionData.inventory));
+      }
+      setUserOrders(sessionData.rawMaterialOrders || []);
+
+      if (sessionData.user?.balance !== undefined && onUserBalanceUpdated) {
+        onUserBalanceUpdated(sessionData.user.balance);
+      }
+
+      setLoading(false);
+      setError(null);
+    }
+  }, [sessionData, currentUser, onUserBalanceUpdated]);
+
+  // Mecanismo de respaldo: únicamente si sessionData no está disponible tras finalizar la carga del contexto
+  useEffect(() => {
+    if (sessionData) return;
+    if (isSessionLoading) return;
+    if (fallbackAttemptedRef.current) return;
+
+    fallbackAttemptedRef.current = true;
+    console.warn(
+      "[CompanyDashboard] sessionData no disponible en StudentSessionContext. Ejecutando mecanismo de respaldo individual.",
+    );
     fetchCompanyData();
     fetchElectricityData();
     fetchTelecomAndOfficeData();
     fetchInventoryData();
-  }, [currentUser.id]);
+  }, [sessionData, isSessionLoading, currentUser.id]);
 
   const handleOpenDismissModal = async (emp: HiredEmployee) => {
     setDismissModalEmployee(emp);
@@ -722,7 +957,11 @@ export default function CompanyDashboard({
         throw new Error(json.error || "Error al tramitar el despido");
       }
 
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
       if (json.newBalance !== undefined && onUserBalanceUpdated) {
         onUserBalanceUpdated(json.newBalance);
       }
@@ -746,7 +985,11 @@ export default function CompanyDashboard({
       body: JSON.stringify({ ...plan, studentId: currentUser.id }),
     });
     if (res.ok) {
-      await fetchElectricityData();
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchElectricityData();
+      }
     }
   };
 
@@ -774,8 +1017,12 @@ export default function CompanyDashboard({
           return [data.contract, ...filtered];
         });
       }
-      await fetchElectricityData();
-      await fetchCompanyData();
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchElectricityData();
+        await fetchCompanyData();
+      }
     }
   };
 
@@ -1225,7 +1472,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
       if (!res.ok) throw new Error(json.error || "Error al procesar el pago");
 
       setSuccessMsg(json.message);
-      fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1253,7 +1504,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
         throw new Error(json.error || "Error al liquidar el impuesto/SS");
 
       setSuccessMsg(json.message);
-      fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1325,10 +1580,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           };
         });
       }
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } finally {
       setUpdatingEmpId(null);
     }
@@ -1393,10 +1656,18 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
           };
         });
       }
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } finally {
       setUpdatingEmpId(null);
     }
@@ -1436,7 +1707,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al auto-asignar operarios");
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1456,7 +1731,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al desvincular operarios");
-      await fetchCompanyData(true);
+      if (sessionData && refreshSession) {
+        await refreshSession();
+      } else {
+        await fetchCompanyData(true);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -2711,7 +2990,13 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         </p>
                       </div>
                       <button
-                        onClick={() => fetchInventoryData()}
+                        onClick={() => {
+                          if (sessionData && refreshSession) {
+                            refreshSession();
+                          } else {
+                            fetchInventoryData();
+                          }
+                        }}
                         className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
                       >
                         <RefreshCw className="w-4 h-4" />

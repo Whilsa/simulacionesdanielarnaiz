@@ -12,6 +12,7 @@ import { User, MachineryItem, MachineryLineOption, PropertyAcquisition, Machiner
 import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface MachineryPortalProps {
   currentUser: User;
@@ -20,6 +21,8 @@ interface MachineryPortalProps {
 }
 
 export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanceUpdated }: MachineryPortalProps) {
+  const { sessionData, refreshSession } = useStudentSession();
+
   const [catalog, setCatalog] = useState<MachineryItem[]>([]);
   const [studentAcquisitions, setStudentAcquisitions] = useState<PropertyAcquisition[]>([]);
   const [myMachinery, setMyMachinery] = useState<MachineryAcquisition[]>([]);
@@ -39,34 +42,39 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  // Sincronización reactiva con StudentSessionContext
   useEffect(() => {
-    fetchData();
+    if (sessionData) {
+      if (sessionData.user?.balance !== undefined) {
+        setBalance(sessionData.user.balance);
+        onUserBalanceUpdated(sessionData.user.balance);
+      }
+      if (sessionData.company?.acquisitions) {
+        setStudentAcquisitions(sessionData.company.acquisitions);
+      }
+      if (sessionData.company?.machinery) {
+        setMyMachinery(sessionData.company.machinery);
+      }
+      if (sessionData.company?.floorPlans) {
+        setFloorPlans(sessionData.company.floorPlans);
+      }
+    }
+  }, [sessionData, onUserBalanceUpdated]);
+
+  useEffect(() => {
+    fetchCatalog();
   }, []);
 
-  const fetchData = async () => {
+  const fetchCatalog = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Catalog
       const catRes = await fetch('/api/machinery/catalog');
       if (catRes.ok) {
         const catData = await catRes.json();
         if (catData.catalog) setCatalog(catData.catalog);
       }
-
-      // 2. Fetch Student Company info (properties + current machinery + floor plans)
-      const compRes = await fetch(`/api/company/${currentUser.id}`);
-      if (compRes.ok) {
-        const compData = await compRes.json();
-        if (compData.company) {
-          setBalance(compData.company.balance);
-          onUserBalanceUpdated(compData.company.balance);
-        }
-        if (compData.acquisitions) setStudentAcquisitions(compData.acquisitions);
-        if (compData.machineryAcquisitions) setMyMachinery(compData.machineryAcquisitions);
-        if (compData.naveFloorPlans) setFloorPlans(compData.naveFloorPlans);
-      }
     } catch (err) {
-      console.error('Error fetching machinery portal data:', err);
+      console.error('Error fetching machinery catalog:', err);
     } finally {
       setLoading(false);
     }
@@ -232,7 +240,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
         onUserBalanceUpdated(data.updatedBalance);
       }
       setShowConfirmModal(false);
-      fetchData();
+      await refreshSession();
     } catch (err: any) {
       setErrorMsg(err.message || 'Error de conexión');
     } finally {
