@@ -14,7 +14,6 @@ export interface User {
   initialBalance?: number;
   nifCif?: string;
   level?: 1 | 2 | 3;
-  sessionToken?: string;
 }
 
 export interface Transfer {
@@ -1276,58 +1275,4 @@ export interface CourtLawsuit {
   costsTransferId?: string;
 }
 
-export interface PublicClassmate {
-  id: string;
-  name: string;
-  username: string;
-  level: 1 | 2 | 3;
-}
 
-export interface StudentPaymentStatusData {
-  isBlocked: boolean;
-  totalOverdueAmount: number;
-  totalUpcoming30DaysAmount: number;
-  upcomingCount: number;
-  overdueCount: number;
-  insufficientProjectedBalance: boolean;
-  projected30DaysTotal: number;
-}
-
-export interface StudentCompanyData {
-  acquisitions: PropertyAcquisition[];
-  machinery: MachineryAcquisition[];
-  employees: HiredEmployee[];
-  vehicles: PurchasedVehicle[];
-  floorPlans: NaveFloorPlan[];
-}
-
-export interface StudentCatalogsData {
-  properties: PropertyListing[];
-  jobListings: JobListing[];
-  rawMaterialAnnouncements: RawMaterialAnnouncement[];
-  companyProfiles: CompanyProfile[];
-  screwdriverListings?: TeacherScrewdriverListing[];
-}
-
-export interface StudentSessionData {
-  user: User;
-  transfers: Transfer[];
-  company: StudentCompanyData;
-  inventory: RawMaterialInventory | null;
-  rawMaterialOrders: RawMaterialOrder[];
-  loans: BankLoan[];
-  paymentObligations: PaymentObligation[];
-  paymentStatus: StudentPaymentStatusData;
-  electricity: {
-    contracts: ElectricityContract[];
-    bills: ElectricityBill[];
-  };
-  telecom: {
-    contracts: TelecomContract[];
-    invoices: TelecomInvoice[];
-  };
-  officeOrders: OfficePurchaseOrder[];
-  courtLawsuits: CourtLawsuit[];
-  classmates: PublicClassmate[];
-  catalogs: StudentCatalogsData;
-}

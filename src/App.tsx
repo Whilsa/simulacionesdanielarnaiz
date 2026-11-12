@@ -20,7 +20,6 @@ import RawMaterialsPortal from './components/RawMaterialsPortal.js';
 import CourtPortal from './components/CourtPortal.js';
 import PriceAlertModal from './components/PriceAlertModal.js';
 import { ArrowLeft, Landmark } from 'lucide-react';
-import { StudentSessionProvider } from './context/StudentSessionContext.js';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -49,16 +48,6 @@ export default function App() {
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-
-        // Security requirement: Students MUST possess a valid cryptographically issued sessionToken
-        if (parsed.role === 'student' && !parsed.sessionToken) {
-          console.warn('[Session Security] Sesión previa de alumno sin token HMAC detectada. Se requiere iniciar sesión con usuario y contraseña.');
-          localStorage.removeItem('bes_sim_user');
-          setCurrentUser(null);
-          setIsInitializing(false);
-          return;
-        }
-
         fetch('/api/users')
           .then(res => (res.ok && res.headers.get('content-type')?.includes('application/json')) ? res.json() : null)
           .then(data => {
@@ -66,8 +55,7 @@ export default function App() {
               const exists = data.users.some((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
               if (exists) {
                 const freshUser = data.users.find((u: User) => u.id === parsed.id || u.username?.toLowerCase() === parsed.username?.toLowerCase());
-                const mergedUser = freshUser ? { ...freshUser, sessionToken: parsed.sessionToken } : parsed;
-                setCurrentUser(mergedUser);
+                setCurrentUser(freshUser || parsed);
               } else {
                 console.warn('Session user no longer exists on server, clearing session');
                 localStorage.removeItem('bes_sim_user');
@@ -86,17 +74,6 @@ export default function App() {
       }
     }
     setIsInitializing(false);
-  }, []);
-
-  // Listen for unauthorized session expiration / invalidation events
-  useEffect(() => {
-    const handleUnauthorized = () => {
-      console.warn('[Session Auth] Sesión no autorizada o token inválido. Redirigiendo al formulario de inicio de sesión.');
-      localStorage.removeItem('bes_sim_user');
-      setCurrentUser(null);
-    };
-    window.addEventListener('auth:unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
   }, []);
 
   // Check for active price alerts when student enters
@@ -374,10 +351,9 @@ export default function App() {
                     if (d && d.users) {
                       const u = d.users.find((x: User) => x.id === currentUser.id);
                       if (u) {
-                        const merged = { ...u, sessionToken: currentUser.sessionToken };
-                        setCurrentUser(merged);
+                        setCurrentUser(u);
                         try {
-                          localStorage.setItem('bes_sim_user', JSON.stringify(merged));
+                          localStorage.setItem('bes_sim_user', JSON.stringify(u));
                         } catch (e) {
                           console.warn('Storage unavailable', e);
                         }
@@ -421,7 +397,7 @@ export default function App() {
   };
 
   return (
-    <StudentSessionProvider currentUser={currentUser}>
+    <>
       {renderActiveModule()}
 
       {/* Student Entry Modal for Market Demand / Price Warnings */}
@@ -433,6 +409,6 @@ export default function App() {
           onGoToMarket={handleGoToMarketPriceAlert}
         />
       )}
-    </StudentSessionProvider>
+    </>
   );
 }

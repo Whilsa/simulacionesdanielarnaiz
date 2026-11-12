@@ -15,18 +15,6 @@ import DeferredPaymentsVerificationModal from './DeferredPaymentsVerificationMod
 interface UpcomingPaymentsSectionProps {
   currentUser: User;
   onRefreshTrigger?: () => void;
-  onPaymentStatusLoaded?: (status: {
-    isBlocked: boolean;
-    totalOverdueAmount: number;
-    totalUpcoming30DaysAmount: number;
-    upcomingCount: number;
-    overdueCount: number;
-    insufficientProjectedBalance: boolean;
-    projected30DaysTotal: number;
-  }) => void;
-  refreshSignal?: number;
-  onLoadingChange?: (loading: boolean) => void;
-  onErrorChange?: (error: string) => void;
 }
 
 interface PaymentStatusResponse {
@@ -40,14 +28,7 @@ interface PaymentStatusResponse {
   insufficientProjectedBalance: boolean;
 }
 
-export default function UpcomingPaymentsSection({ 
-  currentUser, 
-  onRefreshTrigger,
-  onPaymentStatusLoaded,
-  refreshSignal,
-  onLoadingChange,
-  onErrorChange
-}: UpcomingPaymentsSectionProps) {
+export default function UpcomingPaymentsSection({ currentUser, onRefreshTrigger }: UpcomingPaymentsSectionProps) {
   const [data, setData] = useState<PaymentStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -55,45 +36,25 @@ export default function UpcomingPaymentsSection({
 
   const fetchUpcomingPayments = async () => {
     setLoading(true);
-    onLoadingChange?.(true);
     setError('');
-    onErrorChange?.('');
     try {
       const res = await fetch(`/api/student/upcoming-payments?studentId=${currentUser.id}`);
       if (!res.ok) throw new Error('Error al consultar los pagos previstos');
       const json = await res.json();
       if (json.success) {
         setData(json);
-        onPaymentStatusLoaded?.({
-          isBlocked: Boolean(json.isBlocked),
-          totalOverdueAmount: Number(json.totalOverdueAmount || 0),
-          totalUpcoming30DaysAmount: Number(json.totalUpcoming30DaysAmount || 0),
-          upcomingCount: json.upcoming30DaysItems ? json.upcoming30DaysItems.length : 0,
-          overdueCount: json.overdueItems ? json.overdueItems.length : 0,
-          insufficientProjectedBalance: Boolean(json.insufficientProjectedBalance),
-          projected30DaysTotal: Number(json.projected30DaysTotal || 0)
-        });
       }
     } catch (err: any) {
       console.error(err);
-      const msg = err.message || 'Error de conexión';
-      setError(msg);
-      onErrorChange?.(msg);
+      setError(err.message || 'Error de conexión');
     } finally {
       setLoading(false);
-      onLoadingChange?.(false);
     }
   };
 
   useEffect(() => {
     fetchUpcomingPayments();
-  }, [currentUser.id]);
-
-  useEffect(() => {
-    if (refreshSignal && refreshSignal > 0) {
-      fetchUpcomingPayments();
-    }
-  }, [refreshSignal]);
+  }, [currentUser.id, currentUser.balance]);
 
   const getPaymentIcon = (type: string) => {
     switch (type) {
@@ -197,6 +158,7 @@ export default function UpcomingPaymentsSection({
           <button
             onClick={() => {
               fetchUpcomingPayments();
+              if (onRefreshTrigger) onRefreshTrigger();
             }}
             className="p-2 hover:bg-slate-100 rounded-xl text-slate-500 hover:text-slate-800 transition cursor-pointer flex items-center space-x-1 text-xs"
             title="Actualizar estado de pagos"
@@ -365,6 +327,7 @@ export default function UpcomingPaymentsSection({
           onClose={() => setShowVerificationModal(false)}
           onRefreshParent={() => {
             fetchUpcomingPayments();
+            if (onRefreshTrigger) onRefreshTrigger();
           }}
         />
       )}

@@ -12,7 +12,6 @@ import {
   Paperclip, UploadCloud, Download, Trash2, FileCheck, Receipt
 } from 'lucide-react';
 import { formatNumber } from '../lib/formatters.js';
-import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface CourtPortalProps {
   currentUser: User;
@@ -21,8 +20,6 @@ interface CourtPortalProps {
 }
 
 export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpdated }: CourtPortalProps) {
-  const { sessionData, refreshSession } = useStudentSession();
-
   const isJudge = currentUser.role === 'teacher' || 
                   currentUser.username?.toLowerCase() === 'pupdaniel' || 
                   currentUser.id === 'pupdaniel' || 
@@ -30,23 +27,11 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
   const isTeacher = isJudge;
   const [activeTab, setActiveTab] = useState<'demandas' | 'nueva_demanda' | 'guia'>('demandas');
   const [lawsuits, setLawsuits] = useState<CourtLawsuit[]>([]);
-  const [usersList, setUsersList] = useState<Array<{ id: string; name: string; username: string }>>([]);
+  const [usersList, setUsersList] = useState<User[]>([]);
   const [unpaidNotes, setUnpaidNotes] = useState<PromissoryNoteData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-
-  // Sincronización reactiva desde StudentSessionContext para alumnos
-  useEffect(() => {
-    if (!isJudge && sessionData) {
-      if (sessionData.courtLawsuits) {
-        setLawsuits(sessionData.courtLawsuits);
-      }
-      if (sessionData.classmates) {
-        setUsersList(sessionData.classmates);
-      }
-    }
-  }, [isJudge, sessionData]);
 
   // Selected lawsuit for document modal
   const [selectedLawsuitForView, setSelectedLawsuitForView] = useState<CourtLawsuit | null>(null);
@@ -86,7 +71,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
   const [isDraggingAnswerPdf, setIsDraggingAnswerPdf] = useState(false);
   const [answerPdfError, setAnswerPdfError] = useState<string | null>(null);
 
-  const fetchCourtData = async (syncSession = false) => {
+  const fetchCourtData = async () => {
     setIsLoading(true);
     try {
       // Mark court notifications as read
@@ -96,38 +81,23 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
         body: JSON.stringify({ userId: currentUser.id, role: currentUser.role })
       }).catch(() => {});
 
-      if (isJudge) {
-        const [lawsuitsRes, usersRes, notesRes] = await Promise.all([
-          fetch(`/api/court/lawsuits?userId=${currentUser.id}`),
-          fetch('/api/users'),
-          fetch(`/api/court/unpaid-notes?userId=${currentUser.id}`)
-        ]);
+      const [lawsuitsRes, usersRes, notesRes] = await Promise.all([
+        fetch(`/api/court/lawsuits?userId=${currentUser.id}`),
+        fetch('/api/users'),
+        fetch(`/api/court/unpaid-notes?userId=${currentUser.id}`)
+      ]);
 
-        if (lawsuitsRes.ok) {
-          const lData = await lawsuitsRes.json();
-          setLawsuits(lData.lawsuits || []);
-        }
-        if (usersRes.ok) {
-          const uData = await usersRes.json();
-          setUsersList((uData.users || []).filter((u: User) => u.id !== currentUser.id && u.role === 'student'));
-        }
-        if (notesRes.ok) {
-          const nData = await notesRes.json();
-          setUnpaidNotes(nData.notes || []);
-        }
-      } else {
-        // Alumnos: demandas y compañeros provienen de sessionData; los pagarés impagados se consultan bajo demanda
-        const promises: Promise<any>[] = [
-          fetch(`/api/court/unpaid-notes?userId=${currentUser.id}`)
-        ];
-        if (syncSession) {
-          promises.push(refreshSession());
-        }
-        const [notesRes] = await Promise.all(promises);
-        if (notesRes && notesRes.ok) {
-          const nData = await notesRes.json();
-          setUnpaidNotes(nData.notes || []);
-        }
+      if (lawsuitsRes.ok) {
+        const lData = await lawsuitsRes.json();
+        setLawsuits(lData.lawsuits || []);
+      }
+      if (usersRes.ok) {
+        const uData = await usersRes.json();
+        setUsersList((uData.users || []).filter((u: User) => u.id !== currentUser.id && u.role === 'student'));
+      }
+      if (notesRes.ok) {
+        const nData = await notesRes.json();
+        setUnpaidNotes(nData.notes || []);
       }
     } catch (err) {
       console.error('Error fetching court data:', err);
@@ -137,7 +107,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
   };
 
   useEffect(() => {
-    fetchCourtData(false);
+    fetchCourtData();
   }, [currentUser.id]);
 
   // Auto-generate template text when switching type/subtype
@@ -353,7 +323,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
       }
 
       setAnsweringLawsuit(null);
-      fetchCourtData(true);
+      fetchCourtData();
       if (selectedLawsuitForView && selectedLawsuitForView.id === answeringLawsuit.id) {
         setSelectedLawsuitForView(data.lawsuit);
       }
@@ -432,7 +402,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
       setPdfUploadError(null);
       setSelectedPromissoryNote(null);
       setActiveTab('demandas');
-      fetchCourtData(true);
+      fetchCourtData();
     } catch (err: any) {
       setFeedbackMsg({ type: 'error', text: err.message || 'Error al registrar la demanda judicial.' });
     } finally {
@@ -534,7 +504,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
         onUserBalanceUpdated(data.newBalance);
       }
 
-      fetchCourtData(true);
+      fetchCourtData();
       if (selectedLawsuitForView && selectedLawsuitForView.id === lawsuit.id) {
         setSelectedLawsuitForView(data.lawsuit);
       }
@@ -813,7 +783,7 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
               </div>
             </div>
             <button
-              onClick={() => fetchCourtData(true)}
+              onClick={fetchCourtData}
               className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
               title="Actualizar datos judiciales"
             >

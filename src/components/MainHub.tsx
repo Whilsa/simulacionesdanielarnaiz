@@ -3,16 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, PropertyAcquisition, MachineryAcquisition, HiredEmployee, ElectricityContract, NaveFloorPlan, PurchasedVehicle } from '../types.js';
 import { 
   Landmark, Building2, Briefcase, ArrowRight, LogOut, ShieldCheck, Sparkles, 
-  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck, Package, Lock, MessageSquare, Scale, Store, RefreshCw
+  Wrench, Users, KeyRound, GripVertical, RotateCcw, Zap, PhoneCall, ShoppingBag, Truck, Package, Lock, MessageSquare, Scale, Store
 } from 'lucide-react';
 import Footer from './Footer.js';
 import { ChangePasswordModal } from './ChangePasswordModal.js';
 import { formatNumber } from '../lib/formatters.js';
-import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface MainHubProps {
   currentUser: User;
@@ -30,109 +29,46 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [unreadCourtCount, setUnreadCourtCount] = useState<number>(0);
-  const [isRefreshingNotifications, setIsRefreshingNotifications] = useState<boolean>(false);
-  const [refreshFeedback, setRefreshFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const isMountedRef = useRef<boolean>(true);
-
-  const fetchUnreadCounts = async (isManual = false) => {
-    if (isManual) {
-      setIsRefreshingNotifications(true);
-      setRefreshFeedback(null);
-    }
-
-    try {
-      const [marketRes, courtRes] = await Promise.all([
-        fetch(`/api/market/messages/unread-count?userId=${currentUser.id}`),
-        fetch(`/api/court/unread-count?userId=${currentUser.id}&role=${currentUser.role || ''}`)
-      ]);
-
-      if (!marketRes.ok || !courtRes.ok) {
-        throw new Error('Error al consultar contadores de notificaciones');
-      }
-
-      const [marketData, courtData] = await Promise.all([
-        marketRes.json(),
-        courtRes.json()
-      ]);
-
-      if (isMountedRef.current) {
-        if (marketData && typeof marketData.unreadCount === 'number') {
-          setUnreadMessagesCount(marketData.unreadCount);
-        }
-        if (courtData && typeof courtData.unreadCount === 'number') {
-          setUnreadCourtCount(courtData.unreadCount);
-        }
-        if (isManual) {
-          setRefreshFeedback({
-            type: 'success',
-            text: 'Notificaciones actualizadas correctamente.'
-          });
-        }
-      }
-    } catch (e) {
-      console.error('Error al actualizar notificaciones en MainHub:', e);
-      if (isManual && isMountedRef.current) {
-        // Se preservan los contadores anteriores y se notifica al usuario
-        setRefreshFeedback({
-          type: 'error',
-          text: 'No se pudieron actualizar las notificaciones. Se mantienen los contadores actuales.'
-        });
-      }
-    } finally {
-      if (isMountedRef.current && isManual) {
-        setIsRefreshingNotifications(false);
-      }
-    }
-  };
-
-  const handleManualRefresh = async () => {
-    if (isRefreshingNotifications) return;
-    await fetchUnreadCounts(true);
-  };
 
   useEffect(() => {
-    isMountedRef.current = true;
-    fetchUnreadCounts(false);
+    const fetchUnread = () => {
+      fetch(`/api/market/messages/unread-count?userId=${currentUser.id}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (d && typeof d.unreadCount === 'number') {
+            setUnreadMessagesCount(d.unreadCount);
+          }
+        })
+        .catch(() => {});
 
-    return () => {
-      isMountedRef.current = false;
+      fetch(`/api/court/unread-count?userId=${currentUser.id}&role=${currentUser.role || ''}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (d && typeof d.unreadCount === 'number') {
+            setUnreadCourtCount(d.unreadCount);
+          }
+        })
+        .catch(() => {});
     };
+
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 5000);
+    return () => clearInterval(interval);
   }, [currentUser.id, currentUser.role]);
 
-  const { sessionData, isLoaded, isLoading: isSessionLoading } = useStudentSession();
-
-  // Electricity & Asset State (synchronized with StudentSessionContext in memory)
-  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>(() => sessionData?.company?.acquisitions || []);
-  const [machinery, setMachinery] = useState<MachineryAcquisition[]>(() => sessionData?.company?.machinery || []);
-  const [employees, setEmployees] = useState<HiredEmployee[]>(() => sessionData?.company?.employees || []);
-  const [purchasedVehicles, setPurchasedVehicles] = useState<PurchasedVehicle[]>(() => sessionData?.company?.vehicles || []);
-  const [electricityContracts, setElectricityContracts] = useState<ElectricityContract[]>(() => sessionData?.electricity?.contracts || []);
-  const [floorPlans, setFloorPlans] = useState<NaveFloorPlan[]>(() => sessionData?.company?.floorPlans || []);
-  const [telecomContracts, setTelecomContracts] = useState<any[]>(() => sessionData?.telecom?.contracts || []);
-  const [officeOrders, setOfficeOrders] = useState<any[]>(() => sessionData?.officeOrders || []);
+  // Electricity & Asset State
+  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
+  const [machinery, setMachinery] = useState<MachineryAcquisition[]>([]);
+  const [employees, setEmployees] = useState<HiredEmployee[]>([]);
+  const [purchasedVehicles, setPurchasedVehicles] = useState<PurchasedVehicle[]>([]);
+  const [electricityContracts, setElectricityContracts] = useState<ElectricityContract[]>([]);
+  const [floorPlans, setFloorPlans] = useState<NaveFloorPlan[]>([]);
+  const [telecomContracts, setTelecomContracts] = useState<any[]>([]);
+  const [officeOrders, setOfficeOrders] = useState<any[]>([]);
   const [showMarketLockModal, setShowMarketLockModal] = useState(false);
 
-  // Synchronize assets and company state directly from StudentSessionContext when sessionData updates
-  useEffect(() => {
-    if (isTeacher) return;
 
-    if (sessionData) {
-      setAcquisitions(sessionData.company?.acquisitions || []);
-      setMachinery(sessionData.company?.machinery || []);
-      setEmployees(sessionData.company?.employees || []);
-      setPurchasedVehicles(sessionData.company?.vehicles || []);
-      setElectricityContracts(sessionData.electricity?.contracts || []);
-      setFloorPlans(sessionData.company?.floorPlans || []);
-      setTelecomContracts(sessionData.telecom?.contracts || []);
-      setOfficeOrders(sessionData.officeOrders || []);
-    } else if (!isSessionLoading) {
-      // Safe fallback only if sessionData is unavailable after loading completes
-      fetchFallbackHubData();
-    }
-  }, [sessionData, isSessionLoading, isTeacher]);
-
-  // Fallback data fetch only executed if sessionData is completely unavailable
-  const fetchFallbackHubData = async () => {
+  const fetchHubData = async () => {
     try {
       const [compRes, cRes, fpRes, telRes, offRes] = await Promise.all([
         fetch(`/api/company/${currentUser.id}`),
@@ -165,9 +101,15 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
         setOfficeOrders(offJson.orders || []);
       }
     } catch (e) {
-      console.error('Error cargando datos de respaldo del Hub:', e);
+      console.error(e);
     }
   };
+
+  useEffect(() => {
+    if (!isTeacher) {
+      fetchHubData();
+    }
+  }, [currentUser.id, isTeacher]);
 
   
   const hasTelecomContract = telecomContracts.some((c: any) => c.status === "active");
@@ -538,18 +480,6 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
               )}
             </button>
 
-            {/* Botón Actualizar notificaciones */}
-            <button
-              type="button"
-              onClick={handleManualRefresh}
-              disabled={isRefreshingNotifications}
-              className="flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white px-3 py-1.5 rounded-xl border border-slate-700/60 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed text-xs font-semibold shadow-xs"
-              title="Actualizar notificaciones de mensajería y juzgado"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isRefreshingNotifications ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{isRefreshingNotifications ? 'Actualizando...' : 'Actualizar notificaciones'}</span>
-            </button>
-
             <button
               onClick={() => setIsPasswordModalOpen(true)}
               className="hidden sm:flex items-center gap-2 bg-slate-800/80 hover:bg-slate-700/80 px-3 py-1.5 rounded-xl border border-slate-700/60 transition cursor-pointer group"
@@ -571,26 +501,6 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
           </div>
         </div>
       </header>
-
-      {/* Informative feedback banner for notification refresh */}
-      {refreshFeedback && (
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div className={`p-3 rounded-2xl flex items-center justify-between text-xs font-semibold border ${
-            refreshFeedback.type === 'success' 
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-              : 'bg-rose-50 text-rose-800 border-rose-200'
-          }`}>
-            <span>{refreshFeedback.text}</span>
-            <button 
-              type="button" 
-              onClick={() => setRefreshFeedback(null)} 
-              className="ml-3 underline hover:opacity-80 cursor-pointer"
-            >
-              Cerrar
-            </button>
-          </div>
-        </div>
-      )}
 
       <ChangePasswordModal
         isOpen={isPasswordModalOpen}
@@ -616,27 +526,14 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
             </p>
           </div>
 
-          <div className="flex items-center gap-2 self-start sm:self-auto">
-            <button
-              type="button"
-              onClick={handleManualRefresh}
-              disabled={isRefreshingNotifications}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Actualizar notificaciones de mensajería y juzgado"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-amber-600 ${isRefreshingNotifications ? 'animate-spin' : ''}`} />
-              <span>{isRefreshingNotifications ? 'Actualizando...' : 'Actualizar notificaciones'}</span>
-            </button>
-
-            <button
-              onClick={handleResetOrder}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold shadow-xs transition cursor-pointer"
-              title="Restablecer el orden predeterminado de las tarjetas"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              <span>Orden inicial</span>
-            </button>
-          </div>
+          <button
+            onClick={handleResetOrder}
+            className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold shadow-xs transition cursor-pointer"
+            title="Restablecer el orden predeterminado de las tarjetas"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+            <span>Orden inicial</span>
+          </button>
         </div>
 
         {/* 2-Column Square Cards Grid with Drag & Drop */}
@@ -894,6 +791,26 @@ export default function MainHub({ currentUser, onSelectModule, onLogout, onOpenD
               )}
             </div>
 
+            {userLevel === 2 && onOpenFinishedScrewdrivers && (
+              <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-emerald-950 block">¿Deseas comprar destornilladores terminados al profesor?</span>
+                  <p className="text-[11px] text-emerald-700 leading-relaxed">
+                    La compra de lotes terminados ofertados por el docente no requiere carretilla ni mozo de almacén. Puedes acceder directamente.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMarketLockModal(false);
+                    onOpenFinishedScrewdrivers();
+                  }}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shrink-0 cursor-pointer shadow-xs whitespace-nowrap"
+                >
+                  Ir a destornilladores terminados
+                </button>
+              </div>
+            )}
 
             <div className="flex justify-end pt-2">
               <button
