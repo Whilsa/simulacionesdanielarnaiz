@@ -251,15 +251,23 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [chatInputText, setChatInputText] = useState('');
   const [loadingChat, setLoadingChat] = useState(false);
   const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [partnersError, setPartnersError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLastMessageIdRef = useRef<string | null>(null);
   const activePartnerIdRef = useRef<string>('');
+  const prevFetchedPartnerRef = useRef<string>('');
   const isMountedRef = useRef<boolean>(true);
   const isFetchingPartnersRef = useRef<boolean>(false);
   const partnersLoadedRef = useRef<boolean>(false);
+  const inFlightPartnersPromiseRef = useRef<Promise<void> | null>(null);
+  const queuedPartnersForceRef = useRef<{ skipAutoSelect: boolean } | null>(null);
   const isFetchingChatRef = useRef<string | null>(null);
+  const inFlightChatPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const queuedChatPartnerRef = useRef<{ partnerId: string; isInitial: boolean } | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -494,106 +502,197 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
           partnerId: targetStudentId
         })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        await fetchTradingPartners();
-        if (activeMainTab === 'mensajeria' && selectedPartnerId === targetStudentId) {
-          fetchChatMessages(targetStudentId, true).catch(() => {});
-        } else {
-          setSelectedPartnerId(targetStudentId);
-          setActiveMainTab('mensajeria');
-        }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setMsg({
+          type: 'error',
+          text: data.error || 'No se pudo iniciar el contacto comercial con esta empresa.'
+        });
+        return;
+      }
+
+      await fetchTradingPartners({ force: true, skipAutoSelect: true });
+      if (activeMainTab === 'mensajeria' && selectedPartnerId === targetStudentId) {
+        fetchChatMessages(targetStudentId, true, true).catch(() => {});
+      } else {
+        setSelectedPartnerId(targetStudentId);
+        setActiveMainTab('mensajeria');
       }
     } catch (e) {
       console.error('Error contactando empresa:', e);
+      setMsg({
+        type: 'error',
+        text: 'Error de conexión al contactar con la empresa.'
+      });
     }
   };
 
-  const fetchTradingPartners = async () => {
-    if (isFetchingPartnersRef.current) return;
-    isFetchingPartnersRef.current = true;
-    try {
-      const res = await fetch(`/api/market/trading-partners?userId=${currentUser.id}`);
-      if (!res.ok) throw new Error('Error al cargar socios comerciales');
-      const data = await res.json();
-      if (isMountedRef.current && data.partners) {
-        partnersLoadedRef.current = true;
-        // Guarantee sorted by most recent first
-        const sorted = [...data.partners].sort((a: TradingPartner, b: TradingPartner) => {
-          const timeA = a.lastMessageTimestamp
-            ? new Date(a.lastMessageTimestamp).getTime()
-            : (a.contactTimestamp ? new Date(a.contactTimestamp).getTime() : 0);
-          const timeB = b.lastMessageTimestamp
-            ? new Date(b.lastMessageTimestamp).getTime()
-            : (b.contactTimestamp ? new Date(b.contactTimestamp).getTime() : 0);
-          if (timeB !== timeA) return timeB - timeA;
-          return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
-        });
+  const fetchTradingPartners = async (options?: { force?: boolean; skipAutoSelect?: boolean }): Promise<void> => {
+    const force = Boolean(options?.force);
+    const skipAutoSelect = Boolean(options?.skipAutoSelect);
 
-        setTradingPartners(sorted);
-        if (sorted.length > 0 && !selectedPartnerId) {
-          setSelectedPartnerId(sorted[0].id);
+    if (inFlightPartnersPromiseRef.current) {
+      if (force) {
+        queuedPartnersForceRef.current = { skipAutoSelect };
+        try {
+          await inFlightPartnersPromiseRef.current;
+        } catch {
+          // Proceed with queued forced refresh even if previous attempt failed
+        }
+        if (queuedPartnersForceRef.current) {
+          const nextOpts = queuedPartnersForceRef.current;
+          queuedPartnersForceRef.current = null;
+          return fetchTradingPartners({ force: true, skipAutoSelect: nextOpts.skipAutoSelect });
         }
       }
-    } catch (e) {
-      console.error('Error cargando socios comerciales:', e);
-      throw e;
-    } finally {
-      isFetchingPartnersRef.current = false;
+      return inFlightPartnersPromiseRef.current || undefined;
     }
-  };
 
-  const fetchChatMessages = async (partnerId: string, isInitialOrPartnerChange = false) => {
-    if (!partnerId) return;
-    if (isFetchingChatRef.current === partnerId) return;
-    isFetchingChatRef.current = partnerId;
-    activePartnerIdRef.current = partnerId;
-    if (isInitialOrPartnerChange) setLoadingChat(true);
-    try {
-      const res = await fetch(`/api/market/messages?userId=${currentUser.id}&partnerId=${partnerId}`);
-      if (!res.ok) throw new Error('Error al cargar mensajes');
-      const data = await res.json();
-      if (isMountedRef.current && data.messages && activePartnerIdRef.current === partnerId) {
-        const newMessages: MarketMessage[] = data.messages;
-        const lastMsg = newMessages[newMessages.length - 1];
-        const newLastId = lastMsg ? lastMsg.id : null;
-        const hasNewMessage = Boolean(newLastId && newLastId !== prevLastMessageIdRef.current);
+    const runFetch = (async () => {
+      isFetchingPartnersRef.current = true;
+      if (isMountedRef.current) setPartnersError(null);
+      try {
+        const res = await fetch(`/api/market/trading-partners?userId=${currentUser.id}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(data.partners)) {
+          throw new Error(data.error || 'No se pudieron cargar las empresas y socios comerciales.');
+        }
 
-        setChatMessages(newMessages);
-        prevLastMessageIdRef.current = newLastId;
+        if (isMountedRef.current) {
+          partnersLoadedRef.current = true;
+          // Guarantee sorted by most recent first
+          const sorted = [...data.partners].sort((a: TradingPartner, b: TradingPartner) => {
+            const timeA = a.lastMessageTimestamp
+              ? new Date(a.lastMessageTimestamp).getTime()
+              : (a.contactTimestamp ? new Date(a.contactTimestamp).getTime() : 0);
+            const timeB = b.lastMessageTimestamp
+              ? new Date(b.lastMessageTimestamp).getTime()
+              : (b.contactTimestamp ? new Date(b.contactTimestamp).getTime() : 0);
+            if (timeB !== timeA) return timeB - timeA;
+            return (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' });
+          });
 
-        // Immediately update partner unread count in local state if it had unread messages
-        setTradingPartners(prev => {
-          const hasUnread = prev.some(p => p.id === partnerId && (p.unreadCount || 0) > 0);
-          if (hasUnread) {
-            return prev.map(p => p.id === partnerId ? { ...p, unreadCount: 0 } : p);
+          setTradingPartners(sorted);
+          if (!skipAutoSelect && sorted.length > 0) {
+            setSelectedPartnerId(prev => prev || sorted[0].id);
           }
-          return prev;
-        });
-
-        // Only auto-scroll on initial open, partner change, or when a new message is received
-        if (isInitialOrPartnerChange || hasNewMessage) {
-          setTimeout(() => scrollToBottom(isInitialOrPartnerChange ? false : true), 60);
         }
+      } catch (e: any) {
+        console.error('Error cargando socios comerciales:', e);
+        if (isMountedRef.current) {
+          setPartnersError(e?.message || 'Error al cargar la lista de empresas y socios comerciales.');
+        }
+        throw e;
+      } finally {
+        isFetchingPartnersRef.current = false;
+        inFlightPartnersPromiseRef.current = null;
       }
-    } catch (e) {
-      console.error('Error cargando mensajes:', e);
-      throw e;
-    } finally {
-      isFetchingChatRef.current = null;
-      if (isMountedRef.current && isInitialOrPartnerChange && activePartnerIdRef.current === partnerId) {
-        setLoadingChat(false);
+    })();
+
+    inFlightPartnersPromiseRef.current = runFetch;
+    return runFetch;
+  };
+
+  const fetchChatMessages = async (partnerId: string, isInitialOrPartnerChange = false, force = false): Promise<void> => {
+    if (!partnerId) return;
+
+    activePartnerIdRef.current = partnerId;
+    if (prevFetchedPartnerRef.current !== partnerId) {
+      prevFetchedPartnerRef.current = partnerId;
+      prevLastMessageIdRef.current = null;
+      if (isMountedRef.current) {
+        setChatMessages([]);
+        setChatError(null);
       }
     }
+
+    const existingPromise = inFlightChatPromisesRef.current.get(partnerId);
+    if (existingPromise) {
+      if (force) {
+        queuedChatPartnerRef.current = { partnerId, isInitial: isInitialOrPartnerChange };
+        try {
+          await existingPromise;
+        } catch {
+          // Proceed with queued forced refresh
+        }
+        const queued = queuedChatPartnerRef.current;
+        if (queued && queued.partnerId === partnerId && activePartnerIdRef.current === partnerId) {
+          queuedChatPartnerRef.current = null;
+          return fetchChatMessages(partnerId, queued.isInitial, true);
+        }
+      }
+      return existingPromise;
+    }
+
+    const runFetch = (async () => {
+      isFetchingChatRef.current = partnerId;
+      if (isInitialOrPartnerChange && isMountedRef.current) {
+        setLoadingChat(true);
+      }
+      if (isMountedRef.current) {
+        setChatError(null);
+      }
+
+      try {
+        const res = await fetch(`/api/market/messages?userId=${currentUser.id}&partnerId=${partnerId}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(data.messages)) {
+          throw new Error(data.error || 'No se pudieron cargar los mensajes de la conversación.');
+        }
+
+        if (isMountedRef.current && activePartnerIdRef.current === partnerId) {
+          const newMessages: MarketMessage[] = data.messages;
+          const lastMsg = newMessages[newMessages.length - 1];
+          const newLastId = lastMsg ? lastMsg.id : null;
+          const hasNewMessage = Boolean(newLastId && newLastId !== prevLastMessageIdRef.current);
+
+          setChatMessages(newMessages);
+          prevLastMessageIdRef.current = newLastId;
+
+          // Immediately update partner unread count in local state if it had unread messages
+          setTradingPartners(prev => {
+            const hasUnread = prev.some(p => p.id === partnerId && (p.unreadCount || 0) > 0);
+            if (hasUnread) {
+              return prev.map(p => p.id === partnerId ? { ...p, unreadCount: 0 } : p);
+            }
+            return prev;
+          });
+
+          // Only auto-scroll on initial open, partner change, or when a new message is received
+          if (isInitialOrPartnerChange || hasNewMessage) {
+            setTimeout(() => scrollToBottom(isInitialOrPartnerChange ? false : true), 60);
+          }
+        }
+      } catch (e: any) {
+        console.error('Error cargando mensajes:', e);
+        if (isMountedRef.current && activePartnerIdRef.current === partnerId) {
+          setChatError(e?.message || 'No se pudo cargar el historial de mensajes.');
+        }
+        throw e;
+      } finally {
+        if (inFlightChatPromisesRef.current.get(partnerId) === runFetch) {
+          inFlightChatPromisesRef.current.delete(partnerId);
+        }
+        if (isFetchingChatRef.current === partnerId) {
+          isFetchingChatRef.current = null;
+        }
+        if (isMountedRef.current && isInitialOrPartnerChange && activePartnerIdRef.current === partnerId) {
+          setLoadingChat(false);
+        }
+      }
+    })();
+
+    inFlightChatPromisesRef.current.set(partnerId, runFetch);
+    return runFetch;
   };
 
   const handleManualRefreshMessages = async () => {
     if (isRefreshingMessages || loadingChat) return;
     setIsRefreshingMessages(true);
     try {
-      const promises: Promise<any>[] = [fetchTradingPartners()];
+      const promises: Promise<any>[] = [fetchTradingPartners({ force: true })];
       if (selectedPartnerId) {
-        promises.push(fetchChatMessages(selectedPartnerId, false));
+        promises.push(fetchChatMessages(selectedPartnerId, false, true));
       }
       await Promise.all(promises);
       if (isMountedRef.current) {
@@ -631,28 +730,45 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   }, [activeMainTab, selectedPartnerId]);
 
   const handleSendMessage = async () => {
-    if (!selectedPartnerId || !chatInputText.trim()) return;
+    const trimmed = chatInputText.trim();
+    if (isSendingMessage || !selectedPartnerId || !trimmed) return;
+
+    const targetPartnerId = selectedPartnerId;
+    setIsSendingMessage(true);
     try {
       const res = await fetch('/api/market/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           senderId: currentUser.id,
-          recipientId: selectedPartnerId,
-          content: chatInputText.trim()
+          recipientId: targetPartnerId,
+          content: trimmed
         })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         setChatInputText('');
-        await fetchChatMessages(selectedPartnerId, false);
-        await fetchTradingPartners();
+        setChatError(null);
+        if (data.message && activePartnerIdRef.current === targetPartnerId) {
+          setChatMessages(prev =>
+            prev.some(m => m.id === data.message.id) ? prev : [...prev, data.message]
+          );
+          prevLastMessageIdRef.current = data.message.id;
+        }
+        await Promise.all([
+          fetchChatMessages(targetPartnerId, false, true).catch(() => {}),
+          fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {})
+        ]);
         setTimeout(() => scrollToBottom(true), 50);
       } else {
         setMsg({ type: 'error', text: data.error || 'Error enviando mensaje' });
       }
     } catch (e) {
       setMsg({ type: 'error', text: 'Error de conexión enviando mensaje' });
+    } finally {
+      if (isMountedRef.current) {
+        setIsSendingMessage(false);
+      }
     }
   };
 
@@ -717,8 +833,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
       setMsg({ type: 'success', text: `Factura ${data.invoiceNumber} emitida y enviada con éxito por chat.` });
       setIsManualInvoiceModalOpen(false);
-      fetchChatMessages(selectedPartnerId, false);
-      fetchTradingPartners();
+      fetchChatMessages(selectedPartnerId, false, true).catch(() => {});
+      fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {});
       setTimeout(() => scrollToBottom(true), 50);
       fetchData(true);
     } catch (err: any) {
@@ -800,8 +916,8 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         text: `Pagaré oficial ${data.promissoryNoteNumber} firmado y emitido con éxito por ${formatNumber(numAmt)} €.`
       });
       setIsPromissoryNoteModalOpen(false);
-      fetchChatMessages(selectedPartnerId, false);
-      fetchTradingPartners();
+      fetchChatMessages(selectedPartnerId, false, true).catch(() => {});
+      fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {});
       setTimeout(() => scrollToBottom(true), 50);
       fetchData(true);
     } catch (err: any) {
@@ -845,9 +961,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
 
       if (selectedPartnerId) {
-        fetchChatMessages(selectedPartnerId, false);
+        fetchChatMessages(selectedPartnerId, false, true).catch(() => {});
       }
-      fetchTradingPartners();
+      fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {});
       fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
@@ -895,9 +1011,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
 
       if (selectedPartnerId) {
-        fetchChatMessages(selectedPartnerId, false);
+        fetchChatMessages(selectedPartnerId, false, true).catch(() => {});
       }
-      fetchTradingPartners();
+      fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {});
       fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
@@ -952,9 +1068,9 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       }
 
       if (selectedPartnerId) {
-        fetchChatMessages(selectedPartnerId, false);
+        fetchChatMessages(selectedPartnerId, false, true).catch(() => {});
       }
-      fetchTradingPartners();
+      fetchTradingPartners({ force: true, skipAutoSelect: true }).catch(() => {});
       fetchData(true);
 
       if (selectedPromissoryNoteForView && selectedPromissoryNoteForView.promissoryNoteNumber === note.promissoryNoteNumber) {
@@ -3809,7 +3925,18 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     </button>
                   </div>
 
-                  {tradingPartners.length === 0 ? (
+                  {partnersError ? (
+                    <div className="p-3 bg-rose-950/60 border border-rose-500/40 rounded-xl text-xs text-rose-200 space-y-2 text-center">
+                      <p>{partnersError}</p>
+                      <button
+                        type="button"
+                        onClick={() => fetchTradingPartners({ force: true }).catch(() => {})}
+                        className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 rounded-lg text-[11px] font-bold text-rose-100 transition cursor-pointer"
+                      >
+                        Reintentar
+                      </button>
+                    </div>
+                  ) : tradingPartners.length === 0 ? (
                     <div className="text-center py-8 text-xs text-slate-500">
                       No hay otros usuarios habilitados según las reglas del mercado.
                     </div>
@@ -3829,7 +3956,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                                 );
                               }
                               if (selectedPartnerId === p.id) {
-                                fetchChatMessages(p.id, true).catch(() => {});
+                                fetchChatMessages(p.id, true, true).catch(() => {});
                               } else {
                                 setSelectedPartnerId(p.id);
                               }
@@ -3919,6 +4046,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                     {loadingChat ? (
                       <div className="text-center py-12 text-xs text-slate-500 animate-pulse">
                         Cargando conversación...
+                      </div>
+                    ) : chatError ? (
+                      <div className="text-center py-10 px-4 bg-rose-950/50 border border-rose-500/30 rounded-xl text-xs text-rose-200 space-y-2.5">
+                        <p>{chatError}</p>
+                        <button
+                          type="button"
+                          onClick={() => selectedPartnerId && fetchChatMessages(selectedPartnerId, true, true).catch(() => {})}
+                          className="px-3.5 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 rounded-lg text-[11px] font-bold text-rose-100 transition cursor-pointer"
+                        >
+                          Reintentar carga de mensajes
+                        </button>
                       </div>
                     ) : chatMessages.length === 0 ? (
                       <div className="text-center py-12 text-xs text-slate-500 space-y-2">
@@ -4355,12 +4493,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       </button>
 
                       <button
+                        type="button"
                         onClick={handleSendMessage}
-                        disabled={!chatInputText.trim()}
+                        disabled={!chatInputText.trim() || isSendingMessage}
                         className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
                       >
                         <Send className="w-3.5 h-3.5" />
-                        <span>Enviar</span>
+                        <span>{isSendingMessage ? 'Enviando...' : 'Enviar'}</span>
                       </button>
                     </div>
                   </div>

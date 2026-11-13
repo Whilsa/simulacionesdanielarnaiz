@@ -407,6 +407,10 @@ export default function CompanyDashboard({
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState<string | null>(null);
+  const [isLoadingStudentsList, setIsLoadingStudentsList] = useState(false);
+  const [studentsListError, setStudentsListError] = useState<string | null>(null);
+  const studentsListLoadedRef = useRef(false);
+  const studentsListPromiseRef = useRef<Promise<void> | null>(null);
 
   // Employee Dismissal & Finiquito State
   const [dismissModalEmployee, setDismissModalEmployee] = useState<HiredEmployee | null>(null);
@@ -416,18 +420,55 @@ export default function CompanyDashboard({
   const [dismissFiniquitoPreview, setDismissFiniquitoPreview] = useState<FiniquitoData | null>(null);
   const [dismissSuccessMessage, setDismissSuccessMessage] = useState<string | null>(null);
 
-  const fetchStudentsList = async () => {
-    try {
-      const res = await fetch("/api/students-list");
-      const data = await res.json();
-      if (data.students) {
-        setStudentsList(
-          data.students.filter((s: any) => s.id !== currentUser.id),
-        );
-      }
-    } catch (e) {
-      console.error("Error cargando lista de alumnos:", e);
+  const fetchStudentsList = async (force = false): Promise<void> => {
+    if (!force && studentsListLoadedRef.current) {
+      return;
     }
+    if (studentsListPromiseRef.current) {
+      if (force) {
+        try {
+          await studentsListPromiseRef.current;
+        } catch {
+          // Proceed with forced retry
+        }
+        return fetchStudentsList(true);
+      }
+      return studentsListPromiseRef.current;
+    }
+
+    const runFetch = (async () => {
+      setIsLoadingStudentsList(true);
+      setStudentsListError(null);
+      try {
+        const res = await fetch("/api/students-list");
+        const contentType = res.headers.get("content-type") || "";
+        const data = contentType.includes("application/json")
+          ? await res.json().catch(() => ({}))
+          : {};
+        if (!res.ok || !Array.isArray(data.students)) {
+          throw new Error(
+            data?.error || "No se pudo cargar la lista de alumnos destinatarios.",
+          );
+        }
+        studentsListLoadedRef.current = true;
+        setStudentsList(
+          data.students.filter(
+            (s: any) => String(s.id) !== String(currentUser.id),
+          ),
+        );
+      } catch (e: any) {
+        console.error("Error cargando lista de alumnos:", e);
+        setStudentsListError(
+          e?.message || "Error al cargar la lista de alumnos destinatarios.",
+        );
+      } finally {
+        setIsLoadingStudentsList(false);
+        studentsListPromiseRef.current = null;
+      }
+    })();
+
+    studentsListPromiseRef.current = runFetch;
+    return runFetch;
   };
 
   const [isUpdatingRodMode, setIsUpdatingRodMode] = useState(false);
@@ -506,12 +547,15 @@ export default function CompanyDashboard({
   }, [data?.acquisitions]);
 
   const handleOpenTransferModal = (initialFromNaveId?: string, mode?: "alumno" | "nave") => {
-    fetchStudentsList();
+    const targetMode = mode || "alumno";
+    if (targetMode === "alumno") {
+      fetchStudentsList();
+    }
     setRecipientSearch("");
     setSelectedRecipient(null);
     setShowRecipientDropdown(false);
     setTransferRecipientId("");
-    setTransferMode(mode || "alumno");
+    setTransferMode(targetMode);
 
     const userNaves = (data?.acquisitions || []).filter(a =>
       ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
@@ -3086,7 +3130,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         </h4>
 
                         <button
-                          onClick={handleOpenTransferModal}
+                          onClick={() => handleOpenTransferModal()}
                           className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow transition-all self-start sm:self-auto"
                         >
                           <Truck className="w-4 h-4" />
@@ -7512,7 +7556,10 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
                 <button
                   type="button"
-                  onClick={() => setTransferMode('alumno')}
+                  onClick={() => {
+                    setTransferMode('alumno');
+                    fetchStudentsList();
+                  }}
                   className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition ${
                     transferMode === 'alumno'
                       ? 'bg-white text-indigo-900 shadow-sm'
@@ -7551,9 +7598,21 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               {transferMode === 'alumno' ? (
                 /* Select Recipient via Search Input & Autocomplete */
                 <div className="relative">
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Alumno / empresa destinatario
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-slate-700">
+                      Alumno / empresa destinatario
+                    </label>
+                    {!selectedRecipient && (
+                      <button
+                        type="button"
+                        onClick={() => fetchStudentsList(true)}
+                        disabled={isLoadingStudentsList}
+                        className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isLoadingStudentsList ? "Actualizando..." : "Actualizar lista"}
+                      </button>
+                    )}
+                  </div>
                   {selectedRecipient ? (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
@@ -7631,15 +7690,46 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-900 focus:outline-none focus:border-indigo-600"
                       />
                       {showRecipientDropdown &&
-                        recipientSearch.trim().length > 0 && (
+                        (recipientSearch.trim().length > 0 || isLoadingStudentsList || studentsListError) && (
                           <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100 text-xs">
                             {(() => {
+                              if (isLoadingStudentsList) {
+                                return (
+                                  <div className="p-3 text-slate-500 text-center animate-pulse">
+                                    Cargando alumnos disponibles...
+                                  </div>
+                                );
+                              }
+
+                              if (studentsListError) {
+                                return (
+                                  <div className="p-3 text-center space-y-2">
+                                    <p className="text-rose-600 font-medium">{studentsListError}</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => fetchStudentsList(true)}
+                                      className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold transition cursor-pointer"
+                                    >
+                                      Reintentar
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              if (studentsList.length === 0) {
+                                return (
+                                  <div className="p-3 text-slate-400 italic text-center">
+                                    No hay otros alumnos disponibles para recibir existencias.
+                                  </div>
+                                );
+                              }
+
                               const query = recipientSearch.toLowerCase().trim();
-                              const matches = studentsList.filter(
-                                (st) =>
-                                  st.name.toLowerCase().includes(query) ||
-                                  st.username.toLowerCase().includes(query),
-                              );
+                              const matches = studentsList.filter((st) => {
+                                const name = (st.name || "").toLowerCase();
+                                const username = (st.username || "").toLowerCase();
+                                return name.includes(query) || username.includes(query);
+                              });
 
                               if (matches.length === 0) {
                                 return (

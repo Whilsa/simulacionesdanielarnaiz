@@ -1215,6 +1215,7 @@ async function syncMarketContactToSupabase(contact: MarketContact) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing market contact to Supabase:', e);
+    throw e;
   }
 }
 
@@ -2477,6 +2478,7 @@ async function syncMarketMessageToSupabase(msg: MarketMessage) {
     );
   } catch (e) {
     console.error('[Supabase DB] Error syncing market message to Supabase:', e);
+    throw e;
   }
 }
 
@@ -28161,41 +28163,127 @@ app.delete('/api/market/company-profile', async (req, res) => {
 });
 
 // Contact Partner Endpoint (When clicking "Contactar" in Company Profile)
-app.post('/api/market/contact-partner', (req, res) => {
+app.post('/api/market/contact-partner', async (req, res) => {
   const { userId, partnerId } = req.body;
   if (!userId || !partnerId) return res.status(400).json({ error: 'userId y partnerId son requeridos' });
 
   const db = readDb();
   if (!db.marketContacts) db.marketContacts = [];
 
-  let contact = db.marketContacts.find(c => c.userId === userId && c.contactId === partnerId);
-  if (!contact) {
-    contact = {
-      id: generateId('contact'),
-      userId,
-      contactId: partnerId,
-      createdAt: new Date().toISOString()
-    };
-    db.marketContacts.push(contact);
-    syncMarketContactToSupabase(contact).catch(e => console.error(e));
+  const existing = db.marketContacts.find(c => c.userId === userId && c.contactId === partnerId);
+  const contact = existing || {
+    id: generateId('contact'),
+    userId,
+    contactId: partnerId,
+    createdAt: new Date().toISOString()
+  };
+
+  if (dbPool) {
+    try {
+      await syncMarketContactToSupabase(contact);
+    } catch (dbErr) {
+      return res.status(500).json({ error: 'No se pudo registrar el contacto comercial en la base de datos.' });
+    }
   }
 
-  writeDb(db);
+  if (!existing) {
+    db.marketContacts.push(contact);
+    writeDb(db);
+  }
+
   res.json({ success: true, contact, message: 'Empresa añadida a tus contactos de mensajería.' });
 });
 
 // Students List Endpoint (For selecting recipient when transferring inventory)
-app.get('/api/students-list', (req, res) => {
+app.get('/api/students-list', async (req, res) => {
+  const isWarehouseAcquisition = (title: string, type: string) => {
+    const t = (type || '').toLowerCase();
+    const ttl = (title || '').toLowerCase();
+    return (
+      ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes(t) ||
+      ttl.includes('nave') ||
+      ttl.includes('almacén') ||
+      ttl.includes('almacen')
+    );
+  };
+
+  if (dbPool) {
+    try {
+      const [cuentasRes, acqRes, vehRes] = await Promise.all([
+        safeDbQuery('SELECT id, alumno, usuario, role, level FROM cuentas'),
+        safeDbQuery('SELECT id, inmueble_id, inmueble_titulo, inmueble_tipo, alumno_id, ubicacion FROM adquisiciones'),
+        safeDbQuery(
+          `SELECT id, alumno_id, vehiculo_tipo, propiedad_asignada_id, almacen_asignado_index
+           FROM vehiculos_comprados
+           WHERE vehiculo_tipo = 'carretilla_elevadora'`
+        )
+      ]);
+
+      const acqRows = acqRes?.rows || [];
+      const forkliftRows = vehRes?.rows || [];
+
+      const students = (cuentasRes?.rows || [])
+        .filter((row: any) => {
+          const rowId = String(row.id);
+          const rowRole = row.role ? String(row.role) : 'student';
+          const rowUsuario = row.usuario ? String(row.usuario) : '';
+          const isTeacher = rowRole === 'teacher' || rowId === 'profesor-1' || rowUsuario === 'pupdaniel';
+          return !isTeacher && rowRole === 'student';
+        })
+        .map((row: any) => {
+          const studentIdStr = String(row.id);
+          const acquisitions = acqRows.filter(
+            (a: any) =>
+              String(a.alumno_id) === studentIdStr &&
+              isWarehouseAcquisition(String(a.inmueble_titulo || ''), String(a.inmueble_tipo || ''))
+          );
+          const studentForklifts = forkliftRows.filter((v: any) => String(v.alumno_id) === studentIdStr);
+
+          const warehouses = acquisitions.map((a: any) => {
+            const wIdStr = String(a.id);
+            const propIdStr = a.inmueble_id ? String(a.inmueble_id) : '';
+            const hasForklift = studentForklifts.some((v: any) =>
+              String(v.propiedad_asignada_id) === wIdStr ||
+              (propIdStr && String(v.propiedad_asignada_id) === propIdStr) ||
+              (acquisitions.length === 1 && v.almacen_asignado_index !== undefined && v.almacen_asignado_index !== null)
+            );
+            return {
+              id: wIdStr,
+              title: a.inmueble_titulo || 'Inmueble con almacén',
+              type: a.inmueble_tipo || 'almacen',
+              address: a.ubicacion || 'Polígono Industrial',
+              hasForklift
+            };
+          });
+
+          const name = String(row.alumno || 'Estudiante');
+          const username = row.usuario
+            ? String(row.usuario)
+            : name.toLowerCase().replace(/[^a-z0-9]/gi, '');
+
+          return {
+            id: studentIdStr,
+            name,
+            username,
+            level: Number(row.level) || 1,
+            warehouses
+          };
+        });
+
+      return res.json({ success: true, students });
+    } catch (err) {
+      console.error('[Students List] Error querying PostgreSQL:', err);
+      return res.status(500).json({ success: false, error: 'Error consultando la lista de alumnos en la base de datos.' });
+    }
+  }
+
   const db = readDb();
-  const students = db.users
+  const students = (db.users || [])
     .filter(u => u.role === 'student')
     .map(u => {
       const acquisitions = (db.acquisitions || []).filter(a =>
         String(a.studentId) === String(u.id) &&
-        (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-         (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        isWarehouseAcquisition(a.propertyTitle || a.title || '', a.propertyType || a.type || '')
       );
       const warehouses = acquisitions.map(a => {
         const wIdStr = String(a.id);
@@ -28371,8 +28459,31 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
 
       return await withPostgresTransaction(async (client) => {
         const db = readDb();
-        const sender = db.users.find(u => u.id === senderId);
-        const recipient = db.users.find(u => u.id === recipientId);
+        let sender = db.users.find(u => u.id === senderId);
+        let recipient = db.users.find(u => u.id === recipientId);
+
+        if (!sender || !recipient) {
+          const accUsersRes = await client.query(
+            `SELECT id, alumno, saldo, usuario, password, account_number, role, level
+             FROM cuentas
+             WHERE id = ANY($1)`,
+            [[senderId, recipientId]]
+          );
+          for (const row of accUsersRes.rows) {
+            const mappedUser: any = {
+              id: String(row.id),
+              username: row.usuario ? String(row.usuario) : String(row.alumno || '').toLowerCase().replace(/[^a-z0-9]/gi, ''),
+              password: row.password ? String(row.password) : '123',
+              role: row.role ? String(row.role) : 'student',
+              name: String(row.alumno || 'Estudiante'),
+              accountNumber: row.account_number ? String(row.account_number) : generateIBAN(),
+              balance: Number(row.saldo || 0),
+              level: Number(row.level || 1)
+            };
+            if (mappedUser.id === senderId && !sender) sender = mappedUser;
+            if (mappedUser.id === recipientId && !recipient) recipient = mappedUser;
+          }
+        }
 
         if (!sender || !recipient) {
           const err: any = new Error('Remitente o destinatario no encontrado.');
@@ -28380,14 +28491,46 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           throw err;
         }
 
-        // Find sender warehouses
-        const senderNaves = (db.acquisitions || []).filter(a =>
-          String(a.studentId) === String(senderId) &&
-          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
+        const isWarehouseAcq = (a: any) =>
+          ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
+          (a.propertyTitle || a.title || '').toLowerCase().includes('almacen');
+
+        const mapPgAcq = (row: any) => ({
+          id: String(row.id),
+          propertyId: String(row.inmueble_id || ''),
+          propertyTitle: String(row.inmueble_titulo || ''),
+          propertyType: String(row.inmueble_tipo || ''),
+          studentId: String(row.alumno_id),
+          location: String(row.ubicacion || '')
+        });
+
+        // Find sender warehouses (local + PG fallback)
+        const senderNavesLocal = (db.acquisitions || []).filter(a => String(a.studentId) === String(senderId) && isWarehouseAcq(a));
+        const recipientNavesLocal = (db.acquisitions || []).filter(a => String(a.studentId) === String(recipientId) && isWarehouseAcq(a));
+
+        let senderNaves: any[] = [...senderNavesLocal];
+        let recipientNaves: any[] = [...recipientNavesLocal];
+
+        const pgAcqRes = await client.query(
+          `SELECT id, inmueble_id, inmueble_titulo, inmueble_tipo, alumno_id, ubicacion
+           FROM adquisiciones
+           WHERE alumno_id = ANY($1)`,
+          [[senderId, recipientId]]
         );
+        if (pgAcqRes && pgAcqRes.rows) {
+          for (const row of pgAcqRes.rows) {
+            const mapped = mapPgAcq(row);
+            if (!isWarehouseAcq(mapped)) continue;
+            if (mapped.studentId === String(senderId) && !senderNaves.some(n => String(n.id) === mapped.id)) {
+              senderNaves.push(mapped);
+            }
+            if (mapped.studentId === String(recipientId) && !recipientNaves.some(n => String(n.id) === mapped.id)) {
+              recipientNaves.push(mapped);
+            }
+          }
+        }
 
         if (senderNaves.length > 1 && !fromNaveId) {
           const err: any = new Error('Dispones de más de un inmueble con almacén. Debes seleccionar el almacén desde el que envías las existencias.');
@@ -28432,15 +28575,6 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           }
         }
 
-        // Recipient warehouses
-        const recipientNaves = (db.acquisitions || []).filter(a =>
-          String(a.studentId) === String(recipientId) &&
-          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
-           (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-        );
-
         if (recipientNaves.length > 1 && !destinationNaveId) {
           const err: any = new Error('El alumno destinatario dispone de más de un inmueble con almacén. Debes especificar a qué inmueble deben enviarse las existencias.');
           err.statusCode = 400;
@@ -28477,8 +28611,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
 
           if (!hasForkliftLocal && !hasForkliftDb) {
             const naveName = selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén';
-            const recipientUser = (db.users || []).find((u: any) => String(u.id) === String(recipientId));
-            const err: any = new Error(`Operación rechazada: El alumno destinatario (${recipientUser?.name || 'Destinatario'}) no tiene asignada ninguna carretilla elevadora contrapesada al inmueble de destino "${naveName}". Para poder recibir existencias en esa ubicación, debe disponer de una carretilla elevadora asignada a ese inmueble.`);
+            const err: any = new Error(`Operación rechazada: El alumno destinatario (${recipient.name || 'Destinatario'}) no tiene asignada ninguna carretilla elevadora contrapesada al inmueble de destino "${naveName}". Para poder recibir existencias en esa ubicación, debe disponer de una carretilla elevadora asignada a ese inmueble.`);
             err.statusCode = 400;
             throw err;
           }
@@ -29865,12 +29998,183 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
 // Trading Partners list endpoint (Filtered to contacted partners in Direct Messaging)
 app.get('/api/market/trading-partners', async (req, res) => {
   const userId = req.query.userId as string;
+  if (!userId) return res.status(400).json({ error: 'userId requerido' });
+
+  const levelNames: Record<number | string, string> = {
+    1: 'Nivel 1 (Fabricante)',
+    2: 'Nivel 2 (Distribuidor Mayorista)',
+    3: 'Nivel 3 (Distribuidor Minorista)',
+    teacher: 'Profesor (Evaluador/Suministrador)'
+  };
+
   const db = readDb();
-  const currentUser = db.users.find(u => u.id === userId);
-
-  if (!currentUser) return res.status(404).json({ error: 'Usuario no encontrado' });
-
   if (!db.marketContacts) db.marketContacts = [];
+
+  if (dbPool) {
+    try {
+      const [cuentasRes, contactsRes, msgsRes, teacherOrdersRes] = await Promise.all([
+        safeDbQuery('SELECT id, alumno, usuario, role, level FROM cuentas'),
+        safeDbQuery(
+          'SELECT id, user_id, contact_id, created_at FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1',
+          [userId]
+        ),
+        safeDbQuery(
+          `SELECT id, sender_id, recipient_id, content, timestamp, read, type
+           FROM market_messages
+           WHERE sender_id = $1 OR recipient_id = $1
+           ORDER BY timestamp DESC`,
+          [userId]
+        ),
+        safeDbQuery(
+          `SELECT id FROM materias_primas_pedidos
+           WHERE seller_id = $1 AND alumno_id = 'profesor-1'
+           LIMIT 1`,
+          [userId]
+        )
+      ]);
+
+      const usersList: Array<{ id: string; name: string; username: string; role: string; level: number }> = [];
+      const seenIds = new Set<string>();
+
+      for (const row of (cuentasRes?.rows || [])) {
+        const rowId = String(row.id);
+        const rowName = String(row.alumno || 'Estudiante');
+        const rowUsername = row.usuario ? String(row.usuario) : rowName.toLowerCase().replace(/[^a-z0-9]/gi, '');
+        const isTeacher = String(row.role || '') === 'teacher' || rowId === 'profesor-1' || rowUsername === 'pupdaniel';
+        usersList.push({
+          id: rowId,
+          name: rowName,
+          username: rowUsername,
+          role: isTeacher ? 'teacher' : 'student',
+          level: Number(row.level) || 1
+        });
+        seenIds.add(rowId);
+      }
+
+      if (!seenIds.has('profesor-1')) {
+        const fallbackTeacher = (db.users || []).find(u => u.id === 'profesor-1' || u.role === 'teacher');
+        usersList.push({
+          id: fallbackTeacher?.id || 'profesor-1',
+          name: fallbackTeacher?.name || 'Profesor de Contabilidad',
+          username: fallbackTeacher?.username || 'pupdaniel',
+          role: 'teacher',
+          level: fallbackTeacher?.level || 1
+        });
+      }
+
+      const currentUser = usersList.find(u => u.id === userId);
+      if (!currentUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+      const contactedPartnerIds = new Set<string>();
+      const contactTimestampByPartner = new Map<string, string>();
+
+      for (const row of (contactsRes?.rows || [])) {
+        const uId = String(row.user_id);
+        const cId = String(row.contact_id);
+        const partnerId = uId === currentUser.id ? cId : (cId === currentUser.id ? uId : '');
+        if (partnerId) {
+          contactedPartnerIds.add(partnerId);
+          if (row.created_at && !contactTimestampByPartner.has(partnerId)) {
+            contactTimestampByPartner.set(partnerId, new Date(row.created_at).toISOString());
+          }
+        }
+      }
+
+      const msgsByPartner = new Map<string, any[]>();
+      const unreadByPartner = new Map<string, number>();
+
+      for (const row of (msgsRes?.rows || [])) {
+        const sId = String(row.sender_id);
+        const rId = String(row.recipient_id);
+        const partnerId = sId === currentUser.id ? rId : (rId === currentUser.id ? sId : '');
+        if (!partnerId) continue;
+
+        contactedPartnerIds.add(partnerId);
+        if (!msgsByPartner.has(partnerId)) {
+          msgsByPartner.set(partnerId, []);
+        }
+        msgsByPartner.get(partnerId)!.push(row);
+
+        if (rId === currentUser.id && sId === partnerId && !row.read) {
+          unreadByPartner.set(partnerId, (unreadByPartner.get(partnerId) || 0) + 1);
+        }
+      }
+
+      // For students: if the teacher has bought from them or there is any interaction, ensure profesor-1 is accessible
+      if (currentUser.role === 'student' || currentUser.level === 3) {
+        const hasTeacherOrderPg = Boolean(teacherOrdersRes && teacherOrdersRes.rows && teacherOrdersRes.rows.length > 0);
+        const hasTeacherOrderLocal = (db.rawMaterialOrders || []).some(o =>
+          o.sellerId === currentUser.id && (o.studentId === 'profesor-1' || o.paymentMethod === 'pagare' || Boolean(o.promissoryNoteNumber))
+        );
+        if (hasTeacherOrderPg || hasTeacherOrderLocal) {
+          contactedPartnerIds.add('profesor-1');
+        }
+      }
+
+      const partners = usersList
+        .filter(u => u.id !== currentUser.id)
+        .filter(u => {
+          if (currentUser.role === 'teacher') return true;
+          return contactedPartnerIds.has(u.id);
+        })
+        .map(u => {
+          const buyCheck = canTradeUsers(currentUser, u);
+          const sellCheck = canTradeUsers(u, currentUser);
+          const userLevelKey = (u.role === 'teacher' || u.id === 'profesor-1') ? 'teacher' : (u.level || 1);
+
+          const unreadCount = unreadByPartner.get(u.id) || 0;
+          const conversationMsgs = msgsByPartner.get(u.id) || [];
+
+          let lastMessageTimestamp: string | null = null;
+          let lastMessageContent: string | null = null;
+          if (conversationMsgs.length > 0) {
+            const top = conversationMsgs[0]; // Already ordered by timestamp DESC
+            lastMessageTimestamp = top.timestamp ? new Date(top.timestamp).toISOString() : null;
+            lastMessageContent = top.content || (top.type === 'invoice' ? 'Factura emitida' : (top.type === 'promissory_note' ? 'Pagaré firmado' : ''));
+          }
+
+          const contactTimestamp = contactTimestampByPartner.get(u.id) || null;
+
+          return {
+            id: u.id,
+            name: u.name,
+            username: u.username,
+            role: u.role,
+            level: u.level || 1,
+            levelName: levelNames[userLevelKey] || `Nivel ${u.level}`,
+            canBuyFromMe: sellCheck.allowed,
+            canSellToMe: buyCheck.allowed,
+            canTrade: buyCheck.allowed || sellCheck.allowed,
+            unreadCount,
+            lastMessageTimestamp,
+            lastMessageContent,
+            contactTimestamp
+          };
+        });
+
+      partners.sort((a, b) => {
+        const timeA = a.lastMessageTimestamp
+          ? new Date(a.lastMessageTimestamp).getTime()
+          : (a.contactTimestamp ? new Date(a.contactTimestamp).getTime() : 0);
+        const timeB = b.lastMessageTimestamp
+          ? new Date(b.lastMessageTimestamp).getTime()
+          : (b.contactTimestamp ? new Date(b.contactTimestamp).getTime() : 0);
+
+        if (timeB !== timeA) {
+          return timeB - timeA;
+        }
+        return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+      });
+
+      return res.json({ partners });
+    } catch (err) {
+      console.error('[Trading Partners] Error querying PostgreSQL:', err);
+      return res.status(500).json({ error: 'Error consultando socios comerciales en la base de datos.' });
+    }
+  }
+
+  const currentUser = db.users.find(u => u.id === userId);
+  if (!currentUser) return res.status(404).json({ error: 'Usuario no encontrado' });
 
   const contactedPartnerIds = new Set<string>();
   db.marketContacts.forEach(c => {
@@ -29885,35 +30189,6 @@ app.get('/api/market/trading-partners', async (req, res) => {
       if (sId === currentUser.id && rId) contactedPartnerIds.add(rId);
       if (rId === currentUser.id && sId) contactedPartnerIds.add(sId);
     });
-  }
-
-  // PostgreSQL sync if dbPool is active
-  if (dbPool) {
-    try {
-      const contactsRes = await safeDbQuery(
-        'SELECT user_id, contact_id FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1',
-        [currentUser.id]
-      );
-      if (contactsRes && contactsRes.rows) {
-        for (const row of contactsRes.rows) {
-          if (row.user_id === currentUser.id) contactedPartnerIds.add(row.contact_id);
-          if (row.contact_id === currentUser.id) contactedPartnerIds.add(row.user_id);
-        }
-      }
-
-      const msgsRes = await safeDbQuery(
-        'SELECT sender_id, recipient_id FROM market_messages WHERE sender_id = $1 OR recipient_id = $1',
-        [currentUser.id]
-      );
-      if (msgsRes && msgsRes.rows) {
-        for (const row of msgsRes.rows) {
-          if (row.sender_id === currentUser.id) contactedPartnerIds.add(row.recipient_id);
-          if (row.recipient_id === currentUser.id) contactedPartnerIds.add(row.sender_id);
-        }
-      }
-    } catch (err) {
-      console.warn('[Trading Partners] Warning querying PostgreSQL contacts:', err);
-    }
   }
 
   // For students: if the teacher has bought from them or there is any interaction, ensure profesor-1 is accessible
@@ -29935,22 +30210,14 @@ app.get('/api/market/trading-partners', async (req, res) => {
     .map(u => {
       const buyCheck = canTradeUsers(currentUser, u);
       const sellCheck = canTradeUsers(u, currentUser);
-      const levelNames: Record<number | string, string> = {
-        1: 'Nivel 1 (Fabricante)',
-        2: 'Nivel 2 (Distribuidor Mayorista)',
-        3: 'Nivel 3 (Distribuidor Minorista)',
-        teacher: 'Profesor (Evaluador/Suministrador)'
-      };
       const userLevelKey = (u.role === 'teacher' || u.id === 'profesor-1') ? 'teacher' : (u.level || 1);
 
-      // Unread messages from this specific partner to current user
       const unreadCount = (db.marketMessages || []).filter(m => {
         const sId = m.senderId || (m as any).sender_id;
         const rId = m.recipientId || (m as any).receiver_id;
         return rId === currentUser.id && sId === u.id && !m.read;
       }).length;
 
-      // Find all messages between currentUser and this partner to determine the most recent interaction
       const conversationMsgs = (db.marketMessages || []).filter(m => {
         const sId = m.senderId || (m as any).sender_id;
         const rId = m.recipientId || (m as any).receiver_id;
@@ -30106,7 +30373,6 @@ app.get('/api/market/messages', async (req, res) => {
   const db = readDb();
   if (!db.marketMessages) db.marketMessages = [];
 
-  // If PostgreSQL is configured, synchronize messages from database
   if (dbPool) {
     try {
       const qRes = await safeDbQuery(
@@ -30117,41 +30383,71 @@ app.get('/api/market/messages', async (req, res) => {
          ORDER BY timestamp ASC`,
         [userId, partnerId]
       );
-      if (qRes && qRes.rows) {
-        for (const row of qRes.rows) {
-          let parsedData: any = undefined;
-          if (row.invoice_data) {
-            try {
-              parsedData = typeof row.invoice_data === 'string' ? JSON.parse(row.invoice_data) : row.invoice_data;
-            } catch (e) {
-              parsedData = row.invoice_data;
-            }
-          }
-          const existingIdx = db.marketMessages.findIndex(m => m.id === row.id);
-          const mappedMsg: MarketMessage = {
-            id: String(row.id),
-            chatId: row.chat_id || [row.sender_id, row.recipient_id].sort().join('_'),
-            senderId: String(row.sender_id),
-            senderName: String(row.sender_name || 'Usuario'),
-            recipientId: String(row.recipient_id),
-            recipientName: String(row.recipient_name || 'Destinatario'),
-            content: String(row.content || ''),
-            timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
-            read: Boolean(row.read),
-            type: (row.type || 'text') as any,
-            invoiceData: row.type === 'invoice' ? parsedData : undefined,
-            promissoryNoteData: row.type === 'promissory_note' ? parsedData : undefined
-          };
 
-          if (existingIdx >= 0) {
-            db.marketMessages[existingIdx] = { ...db.marketMessages[existingIdx], ...mappedMsg };
-          } else {
-            db.marketMessages.push(mappedMsg);
+      let hasUnreadIncoming = false;
+      const msgs: MarketMessage[] = (qRes?.rows || []).map((row: any) => {
+        let parsedData: any = undefined;
+        if (row.invoice_data) {
+          try {
+            parsedData = typeof row.invoice_data === 'string' ? JSON.parse(row.invoice_data) : row.invoice_data;
+          } catch (e) {
+            parsedData = row.invoice_data;
           }
         }
+        const sId = String(row.sender_id);
+        const rId = String(row.recipient_id);
+        let isRead = Boolean(row.read);
+        if (rId === userId && sId === partnerId && !isRead) {
+          isRead = true;
+          hasUnreadIncoming = true;
+        }
+
+        return {
+          id: String(row.id),
+          chatId: row.chat_id || [sId, rId].sort().join('_'),
+          senderId: sId,
+          senderName: String(row.sender_name || 'Usuario'),
+          recipientId: rId,
+          recipientName: String(row.recipient_name || 'Destinatario'),
+          content: String(row.content || ''),
+          timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+          read: isRead,
+          type: (row.type || 'text') as any,
+          invoiceData: row.type === 'invoice' ? parsedData : undefined,
+          promissoryNoteData: row.type === 'promissory_note' ? parsedData : undefined
+        };
+      });
+
+      if (hasUnreadIncoming) {
+        await safeDbQuery(
+          'UPDATE market_messages SET read = TRUE WHERE recipient_id = $1 AND sender_id = $2 AND read = FALSE',
+          [userId, partnerId]
+        );
       }
+
+      // Sync local cache with authoritative PG rows
+      let cacheModified = hasUnreadIncoming;
+      for (const mappedMsg of msgs) {
+        const existingIdx = db.marketMessages.findIndex(m => m.id === mappedMsg.id);
+        if (existingIdx >= 0) {
+          if (db.marketMessages[existingIdx].read !== mappedMsg.read) {
+            cacheModified = true;
+          }
+          db.marketMessages[existingIdx] = { ...db.marketMessages[existingIdx], ...mappedMsg };
+        } else {
+          db.marketMessages.push(mappedMsg);
+          cacheModified = true;
+        }
+      }
+      if (cacheModified) {
+        writeDb(db);
+      }
+
+      msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      return res.json({ messages: msgs });
     } catch (dbErr) {
-      console.warn('[Market Messages] Warning fetching PostgreSQL messages:', dbErr);
+      console.error('[Market Messages] Error fetching PostgreSQL messages:', dbErr);
+      return res.status(500).json({ error: 'No se pudieron recuperar los mensajes desde la base de datos.' });
     }
   }
 
@@ -30168,12 +30464,6 @@ app.get('/api/market/messages', async (req, res) => {
 
   if (modified) {
     writeDb(db);
-    if (dbPool) {
-      await safeDbQuery(
-        'UPDATE market_messages SET read = TRUE WHERE recipient_id = $1 AND sender_id = $2 AND read = FALSE',
-        [userId, partnerId]
-      ).catch(e => console.error('[Supabase DB] Error marking market messages as read in PostgreSQL:', e));
-    }
   }
 
   // Filter and normalize messages between the two users
@@ -30203,15 +30493,56 @@ app.get('/api/market/messages', async (req, res) => {
   res.json({ messages: msgs });
 });
 
-app.post('/api/market/messages', (req, res) => {
+app.post('/api/market/messages', async (req, res) => {
   const { senderId, recipientId, content } = req.body;
   if (!senderId || !recipientId || !content || !content.trim()) {
     return res.status(400).json({ error: 'Remitente, destinatario y contenido requeridos.' });
   }
 
   const db = readDb();
-  const sender = db.users.find(u => u.id === senderId);
-  const recipient = db.users.find(u => u.id === recipientId);
+  let sender: any = undefined;
+  let recipient: any = undefined;
+
+  if (dbPool) {
+    try {
+      const usersRes = await safeDbQuery(
+        'SELECT id, alumno, usuario, role, level FROM cuentas WHERE id = ANY($1)',
+        [[senderId, recipientId]]
+      );
+      for (const row of (usersRes?.rows || [])) {
+        const rowId = String(row.id);
+        const rowName = String(row.alumno || 'Estudiante');
+        const rowUsername = row.usuario ? String(row.usuario) : rowName.toLowerCase().replace(/[^a-z0-9]/gi, '');
+        const isTeacher = String(row.role || '') === 'teacher' || rowId === 'profesor-1' || rowUsername === 'pupdaniel';
+        const userObj = {
+          id: rowId,
+          name: rowName,
+          username: rowUsername,
+          role: isTeacher ? 'teacher' : 'student',
+          level: Number(row.level) || 1
+        };
+        if (rowId === senderId) sender = userObj;
+        if (rowId === recipientId) recipient = userObj;
+      }
+    } catch (e) {
+      console.error('[POST /api/market/messages] Error querying cuentas:', e);
+      return res.status(500).json({ error: 'Error consultando los usuarios en la base de datos.' });
+    }
+
+    if (!sender && senderId === 'profesor-1') {
+      sender = (db.users || []).find(u => u.id === 'profesor-1' || u.role === 'teacher') || {
+        id: 'profesor-1', name: 'Profesor de Contabilidad', username: 'pupdaniel', role: 'teacher', level: 1
+      };
+    }
+    if (!recipient && recipientId === 'profesor-1') {
+      recipient = (db.users || []).find(u => u.id === 'profesor-1' || u.role === 'teacher') || {
+        id: 'profesor-1', name: 'Profesor de Contabilidad', username: 'pupdaniel', role: 'teacher', level: 1
+      };
+    }
+  } else {
+    sender = (db.users || []).find(u => u.id === senderId);
+    recipient = (db.users || []).find(u => u.id === recipientId);
+  }
 
   if (!sender || !recipient) return res.status(404).json({ error: 'Usuario no encontrado.' });
 
@@ -30236,10 +30567,16 @@ app.post('/api/market/messages', (req, res) => {
     type: 'text'
   };
 
+  if (dbPool) {
+    try {
+      await syncMarketMessageToSupabase(msg);
+    } catch (dbErr) {
+      return res.status(500).json({ error: 'No se pudo guardar el mensaje en la base de datos. Inténtalo de nuevo.' });
+    }
+  }
+
   if (!db.marketMessages) db.marketMessages = [];
   db.marketMessages.push(msg);
-
-  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
 
   writeDb(db);
 
@@ -30504,8 +30841,15 @@ app.post('/api/market/messages/send-manual-invoice', async (req, res) => {
     }
   };
 
+  if (dbPool) {
+    try {
+      await syncMarketMessageToSupabase(msg);
+    } catch (dbErr) {
+      return res.status(500).json({ error: 'No se pudo guardar el mensaje de factura en la base de datos.' });
+    }
+  }
+
   db.marketMessages.push(msg);
-  syncMarketMessageToSupabase(msg).catch(e => console.error(e));
 
   addNotification(
     db,
