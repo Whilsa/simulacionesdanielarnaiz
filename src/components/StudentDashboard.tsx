@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Landmark, ArrowUpRight, ArrowDownLeft, Send, Copy, Check, 
-  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText, Sparkles, Store
+  Search, LogOut, Clock, Coins, Wallet, Info, CheckCircle2, AlertCircle, FileText, Sparkles, Store, RefreshCw
 } from 'lucide-react';
-import { User, Transfer, BankLoan } from '../types.js';
+import { useStudentSession } from '../context/StudentSessionContext.js';
+import { User, Transfer, BankLoan, PublicClassmate } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import StudentLoanSection from './StudentLoanSection.js';
 import UpcomingPaymentsSection from './UpcomingPaymentsSection.js';
@@ -24,12 +25,22 @@ interface StudentDashboardProps {
 }
 
 export default function StudentDashboard({ currentUser, onLogout, onBackToHub, onOpenFinishedScrewdrivers }: StudentDashboardProps) {
-  const [balance, setBalance] = useState(currentUser.balance);
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+
+  const [balance, setBalance] = useState(sessionData?.user?.balance ?? currentUser.balance);
   const [bankTab, setBankTab] = useState<'operaciones' | 'vencimientos' | 'hipotecaria'>('operaciones');
-  const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [studentsList, setStudentsList] = useState<User[]>([]);
+  const [transfers, setTransfers] = useState<Transfer[]>(() => sessionData?.transfers || []);
+  const [studentsList, setStudentsList] = useState<Array<User | PublicClassmate>>(() => sessionData?.classmates || []);
   const [copied, setCopied] = useState(false);
   const [selectedExtractTx, setSelectedExtractTx] = useState<Transfer | null>(null);
+  const [paymentsRefreshSignal, setPaymentsRefreshSignal] = useState(0);
+  const classmatesFallbackAttemptedRef = useRef(false);
+
+  // Manual loading and error states for transfers and payment status
+  const [isLoadingTransfers, setIsLoadingTransfers] = useState(false);
+  const [transfersError, setTransfersError] = useState('');
+  const [isLoadingPayments, setIsLoadingPayments] = useState(false);
+  const [paymentStatusError, setPaymentStatusError] = useState('');
 
   // Listado de movimientos ordenados del más reciente al más antiguo con saldo acumulado resultante
   const movementsWithBalance = useMemo(() => {
@@ -114,7 +125,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
   const [transferSuccess, setTransferSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Payment Status Summary State
+  // Payment Status Summary State (synced from sessionData or on-demand fetch)
   const [paymentStatus, setPaymentStatus] = useState<{
     isBlocked: boolean;
     totalOverdueAmount: number;
@@ -123,10 +134,41 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
     overdueCount: number;
     insufficientProjectedBalance: boolean;
     projected30DaysTotal: number;
-  } | null>(null);
+  } | null>(() => sessionData?.paymentStatus || null);
 
-  // Pending Loan Offer State
-  const [pendingLoanOffer, setPendingLoanOffer] = useState<BankLoan | null>(null);
+  // Synchronize paymentStatus when sessionData updates
+  useEffect(() => {
+    if (sessionData?.paymentStatus) {
+      setPaymentStatus(sessionData.paymentStatus);
+    }
+  }, [sessionData?.paymentStatus]);
+
+  // Synchronize balance when sessionData or currentUser updates
+  useEffect(() => {
+    if (sessionData?.user?.balance !== undefined) {
+      setBalance(sessionData.user.balance);
+    }
+  }, [sessionData?.user?.balance]);
+
+  useEffect(() => {
+    if (currentUser?.balance !== undefined) {
+      setBalance(currentUser.balance);
+    }
+  }, [currentUser?.balance]);
+
+  // Synchronize transfers when sessionData updates
+  useEffect(() => {
+    if (sessionData?.transfers) {
+      setTransfers(sessionData.transfers);
+    }
+  }, [sessionData?.transfers]);
+
+  // Pending Loan Offer reactively derived from sessionData.loans (no polling)
+  const pendingLoanOffer = useMemo(() => {
+    if (!sessionData?.loans || !Array.isArray(sessionData.loans)) return null;
+    return sessionData.loans.find((l: BankLoan) => l.status === 'offered' || l.status === 'teacher_offered') || null;
+  }, [sessionData?.loans]);
+
   const [loanOfferActionError, setLoanOfferActionError] = useState('');
   const [loanOfferActionSuccess, setLoanOfferActionSuccess] = useState('');
   const [isProcessingLoanOffer, setIsProcessingLoanOffer] = useState(false);
@@ -178,79 +220,73 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
     }
   };
 
+  // Synchronize classmates from StudentSessionContext (NO POLLING, NO HTTP REQUEST ON MOUNT)
   useEffect(() => {
-    fetchStudentData();
-    // Poll balance and transactions every 4 seconds to allow interactive double-entry real-time feedback in the classroom!
-    const interval = setInterval(fetchStudentData, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const fetchStudentData = async () => {
-    try {
-      // 1. Get student's updated user details (for real-time balance)
-      const usersRes = await fetch('/api/users?role=student');
-      if (!usersRes.ok) throw new Error(`HTTP error ${usersRes.status}`);
-      
-      const usersContentType = usersRes.headers.get('content-type');
-      if (usersContentType && usersContentType.includes('application/json')) {
-        const usersData = await usersRes.json();
-        if (usersData && usersData.users) {
-          const me = usersData.users.find((u: User) => u.id === currentUser.id);
-          if (me) {
-            setBalance(me.balance);
-          } else {
-            // Account was deleted by teacher, log out immediately
-            onLogout();
-            return;
-          }
-
-          // Filter out self from classmates list
-          const classmates = usersData.users.filter((u: User) => u.id !== currentUser.id);
-          setStudentsList(classmates);
-        }
-      }
-
-      // 2. Get student's transfers
-      const transfersRes = await fetch(`/api/transfers?userId=${currentUser.id}`);
-      if (transfersRes.ok) {
-        const transfersContentType = transfersRes.headers.get('content-type');
-        if (transfersContentType && transfersContentType.includes('application/json')) {
-          const transfersData = await transfersRes.json();
-          if (transfersData && transfersData.transfers) {
-            setTransfers(transfersData.transfers);
-          }
-        }
-      }
-
-      // 3. Get student's upcoming automatic payments status
-      const paymentsRes = await fetch(`/api/student/upcoming-payments?studentId=${currentUser.id}`);
-      if (paymentsRes.ok) {
-        const pData = await paymentsRes.json();
-        if (pData.success) {
-          setPaymentStatus({
-            isBlocked: pData.isBlocked,
-            totalOverdueAmount: pData.totalOverdueAmount,
-            totalUpcoming30DaysAmount: pData.totalUpcoming30DaysAmount,
-            upcomingCount: pData.upcoming30DaysItems ? pData.upcoming30DaysItems.length : 0,
-            overdueCount: pData.overdueItems ? pData.overdueItems.length : 0,
-            insufficientProjectedBalance: pData.insufficientProjectedBalance,
-            projected30DaysTotal: pData.projected30DaysTotal
-          });
-        }
-      }
-      // 4. Get student's loans to detect any pending offers directly from PostgreSQL canonical state
-      const targetStudentId = currentUser.id || currentUser.username;
-      const loansRes = await fetch(`/api/loans?studentId=${encodeURIComponent(targetStudentId)}`);
-      if (loansRes.ok) {
-        const loansData = await loansRes.json();
-        if (loansData && loansData.success && Array.isArray(loansData.loans)) {
-          const offer = loansData.loans.find((l: BankLoan) => l.status === 'offered' || l.status === 'teacher_offered');
-          setPendingLoanOffer(offer || null);
-        }
-      }
-    } catch (err) {
-      console.error('Error polling student data:', err);
+    if (sessionData?.classmates !== undefined) {
+      setStudentsList(sessionData.classmates);
     }
+  }, [sessionData?.classmates]);
+
+  // Reset fallback attempt ref when user changes
+  useEffect(() => {
+    classmatesFallbackAttemptedRef.current = false;
+  }, [currentUser.id]);
+
+  // Fallback: only if sessionData is not available and loading genuinely failed with error
+  useEffect(() => {
+    if (sessionData?.classmates !== undefined) return;
+    if (isSessionLoading || (!isLoaded && !sessionError)) return;
+    if (classmatesFallbackAttemptedRef.current) return;
+
+    classmatesFallbackAttemptedRef.current = true;
+    let isMounted = true;
+    const fetchClassmatesFallback = async () => {
+      try {
+        const usersRes = await fetch('/api/users?role=student');
+        if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
+          const usersData = await usersRes.json();
+          if (isMounted && usersData && usersData.users) {
+            const me = usersData.users.find((u: User) => u.id === currentUser.id);
+            if (!me) {
+              onLogout();
+              return;
+            }
+            const classmates = usersData.users.filter((u: User) => u.id !== currentUser.id);
+            setStudentsList(classmates);
+          }
+        }
+      } catch (err) {
+        console.warn('Error en fallback de lista de compañeros:', err);
+      }
+    };
+
+    fetchClassmatesFallback();
+    return () => {
+      isMounted = false;
+    };
+  }, [sessionData?.classmates, isSessionLoading, isLoaded, sessionError, currentUser.id, onLogout]);
+
+  // On-demand manual update for transfers (single GET with debounce/loading guards)
+  const fetchTransfers = async () => {
+    if (isLoadingTransfers) return;
+    setIsLoadingTransfers(true);
+    setTransfersError('');
+    try {
+      const res = await fetch(`/api/transfers?userId=${currentUser.id}`);
+      if (!res.ok) throw new Error('Error al actualizar el historial de movimientos.');
+      const data = await res.json();
+      if (data && data.transfers) {
+        setTransfers(data.transfers);
+      }
+    } catch (err: any) {
+      setTransfersError(err.message || 'Error de conexión al obtener movimientos.');
+    } finally {
+      setIsLoadingTransfers(false);
+    }
+  };
+
+  const handleSelectBankTab = (tab: 'operaciones' | 'vencimientos' | 'hipotecaria') => {
+    setBankTab(tab);
   };
 
   const handleAcceptTopOffer = async (loanId: string) => {
@@ -271,8 +307,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
       if (data.updatedBalance !== undefined) {
         setBalance(data.updatedBalance);
       }
-      setPendingLoanOffer(null);
-      await fetchStudentData();
+      await refreshSession();
     } catch (err: any) {
       setLoanOfferActionError(err.message || 'Error al aceptar la oferta de préstamo.');
     } finally {
@@ -295,8 +330,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
       if (!res.ok) throw new Error(data.error || 'Error al rechazar el préstamo.');
 
       setLoanOfferActionSuccess(data.message);
-      setPendingLoanOffer(null);
-      await fetchStudentData();
+      await refreshSession();
     } catch (err: any) {
       setLoanOfferActionError(err.message || 'Error al rechazar la oferta.');
     } finally {
@@ -321,7 +355,27 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
     }
 
     // Find classmate with entered IBAN
-    const match = studentsList.find(s => s.accountNumber.replace(/\s+/g, '').toLowerCase() === customIBAN.replace(/\s+/g, '').toLowerCase());
+    let match: any = studentsList.find(s => (s as any).accountNumber && (s as any).accountNumber.replace(/\s+/g, '').toLowerCase() === customIBAN.replace(/\s+/g, '').toLowerCase());
+    if (!match) {
+      match = studentsList.find(s => s.username?.toLowerCase() === customIBAN.trim().toLowerCase() || s.id === customIBAN.trim());
+    }
+
+    if (!match) {
+      // On-demand lookup specifically for IBAN resolution if not in memory
+      try {
+        const usersRes = await fetch('/api/users?role=student');
+        if (usersRes.ok && usersRes.headers.get('content-type')?.includes('application/json')) {
+          const usersData = await usersRes.json();
+          if (usersData && usersData.users) {
+            setStudentsList(usersData.users.filter((u: User) => u.id !== currentUser.id));
+            match = usersData.users.find((s: User) => s.id !== currentUser.id && s.accountNumber && s.accountNumber.replace(/\s+/g, '').toLowerCase() === customIBAN.replace(/\s+/g, '').toLowerCase());
+          }
+        }
+      } catch (err) {
+        console.warn('Error resolviendo IBAN:', err);
+      }
+    }
+
     if (!match) {
       setTransferError('No se encontró ningún alumno con el número de cuenta / IBAN introducido. Asegúrate de pedirle el IBAN correcto a tu compañero.');
       return;
@@ -374,7 +428,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
       setTransferConcept('');
       setCustomIBAN('');
       
-      fetchStudentData();
+      await refreshSession();
       setTimeout(() => setTransferSuccess(''), 4000);
     } catch (err: any) {
       setTransferError(err.message || 'Error de red al realizar la operación.');
@@ -581,7 +635,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
         {/* Navigation Tabs for Bank Modules */}
         <div className="flex items-center space-x-2 border-b border-slate-200 mb-6 overflow-x-auto pb-1">
           <button
-            onClick={() => setBankTab('operaciones')}
+            onClick={() => handleSelectBankTab('operaciones')}
             className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               bankTab === 'operaciones'
                 ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
@@ -593,7 +647,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
           </button>
 
           <button
-            onClick={() => setBankTab('vencimientos')}
+            onClick={() => handleSelectBankTab('vencimientos')}
             className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               bankTab === 'vencimientos'
                 ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
@@ -610,7 +664,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
           </button>
 
           <button
-            onClick={() => setBankTab('hipotecaria')}
+            onClick={() => handleSelectBankTab('hipotecaria')}
             className={`pb-3 px-4 text-xs font-extrabold border-b-2 transition cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               bankTab === 'hipotecaria'
                 ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl'
@@ -629,9 +683,33 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
 
         {/* TAB 1: PRÓXIMOS VENCIMIENTOS PROGRAMADOS */}
         {bankTab === 'vencimientos' && (
-          <UpcomingPaymentsSection 
-            currentUser={currentUser} 
-          />
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPaymentsRefreshSignal(prev => prev + 1)}
+                disabled={isLoadingPayments}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                title="Actualizar información de vencimientos"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPayments ? 'animate-spin text-amber-600' : 'text-slate-500'}`} />
+                <span>{isLoadingPayments ? 'Actualizando pagos...' : 'Actualizar próximos pagos'}</span>
+              </button>
+            </div>
+            {paymentStatusError && (
+              <div className="bg-rose-50 border-l-4 border-rose-500 p-2.5 rounded-r-lg text-xs font-semibold text-rose-700 flex items-center justify-between">
+                <span>{paymentStatusError}</span>
+                <button onClick={() => setPaymentStatusError('')} className="text-rose-500 hover:text-rose-700 p-1">×</button>
+              </div>
+            )}
+            <UpcomingPaymentsSection 
+              currentUser={currentUser} 
+              refreshSignal={paymentsRefreshSignal}
+              onLoadingChange={setIsLoadingPayments}
+              onErrorChange={setPaymentStatusError}
+              onPaymentStatusLoaded={(status) => setPaymentStatus(status)}
+            />
+          </div>
         )}
 
         {/* TAB 2: FINANCIACIÓN HIPOTECARIA */}
@@ -639,7 +717,7 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
           <StudentLoanSection 
             currentUser={currentUser} 
             onBalanceUpdated={(newBal) => setBalance(newBal)} 
-            onLoansUpdated={fetchStudentData}
+            onLoansUpdated={refreshSession}
           />
         )}
 
@@ -743,19 +821,41 @@ export default function StudentDashboard({ currentUser, onLogout, onBackToHub, o
 
             {/* HISTORIAL DE TRANSFERENCIAS PANEL */}
             <div className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-              <div className="flex justify-between items-center mb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                 <div className="flex items-center space-x-2.5">
                   <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
                     <Clock className="w-4 h-4" />
                   </div>
-                  <h3 className="font-display font-bold text-slate-900 text-base">Historial de movimientos</h3>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-900 text-base">Historial de movimientos</h3>
+                    <p className="text-[11px] text-slate-400">Extracto de cargos y abonos bancarios</p>
+                  </div>
                 </div>
-                {movementsWithBalance.length > 0 && (
-                  <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
-                    {movementsWithBalance.length} {movementsWithBalance.length === 1 ? 'movimiento' : 'movimientos'}
-                  </span>
-                )}
+                <div className="flex items-center space-x-2">
+                  {movementsWithBalance.length > 0 && (
+                    <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
+                      {movementsWithBalance.length} {movementsWithBalance.length === 1 ? 'movimiento' : 'movimientos'}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={fetchTransfers}
+                    disabled={isLoadingTransfers}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                    title="Actualizar movimientos manualmente"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTransfers ? 'animate-spin text-amber-600' : 'text-slate-500'}`} />
+                    <span>{isLoadingTransfers ? 'Actualizando...' : 'Actualizar movimientos'}</span>
+                  </button>
+                </div>
               </div>
+
+              {transfersError && (
+                <div className="mb-4 bg-rose-50 border-l-4 border-rose-500 p-2.5 rounded-r-lg text-xs font-semibold text-rose-700 flex items-center justify-between">
+                  <span>{transfersError}</span>
+                  <button onClick={() => setTransfersError('')} className="text-rose-500 hover:text-rose-700 p-1">×</button>
+                </div>
+              )}
 
               {movementsWithBalance.length === 0 ? (
                 <div className="py-16 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">

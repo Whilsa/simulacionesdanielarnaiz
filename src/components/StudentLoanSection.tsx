@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Building2, Landmark, Calculator, AlertCircle, CheckCircle2, Clock, Calendar,
   ChevronRight, Shield, FileText, ArrowUpRight, HelpCircle, Sparkles, Check, X, Receipt, XCircle
 } from 'lucide-react';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 import { User, BankLoan, PropertyAcquisition } from '../types.js';
 import LoanAmortizationTable from './LoanAmortizationTable.js';
 import DocumentViewerModal, { DocumentViewerData } from './DocumentViewerModal.js';
@@ -20,9 +21,21 @@ interface StudentLoanSectionProps {
 }
 
 export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLoansUpdated }: StudentLoanSectionProps) {
-  const [loans, setLoans] = useState<BankLoan[]>([]);
-  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+
+  // Fallback states for exceptional cases when sessionData is not available
+  const [fallbackLoans, setFallbackLoans] = useState<BankLoan[]>([]);
+  const [fallbackAcquisitions, setFallbackAcquisitions] = useState<PropertyAcquisition[]>([]);
+  const [isFallbackLoading, setIsFallbackLoading] = useState(false);
+
+  // Loans and property acquisitions derived directly from StudentSessionContext
+  const loans: BankLoan[] = sessionData?.loans ?? fallbackLoans;
+  const rawAcquisitions: PropertyAcquisition[] = sessionData?.company?.acquisitions ?? fallbackAcquisitions;
+  const acquisitions: PropertyAcquisition[] = React.useMemo(() => {
+    return rawAcquisitions.filter(a => a.operation === 'compra');
+  }, [rawAcquisitions]);
+
+  const loading = (!sessionData && isSessionLoading) || isFallbackLoading;
   const [selectedLoanForTable, setSelectedLoanForTable] = useState<BankLoan | null>(null);
   const [activeDocumentModal, setActiveDocumentModal] = useState<DocumentViewerData | null>(null);
 
@@ -42,40 +55,58 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
 
+  const fallbackAttemptedRef = useRef(false);
+
+  // Reset fallback attempt ref and selection if currentUser changes
   useEffect(() => {
-    fetchLoansAndAcquisitions();
+    fallbackAttemptedRef.current = false;
+    setSelectedPropertyId('');
   }, [currentUser?.id, currentUser?.username]);
 
-  const fetchLoansAndAcquisitions = async () => {
-    setLoading(true);
+  // Safe fallback mechanism: runs strictly when sessionData failed with error, loading is complete, user is valid, and hasn't run yet
+  useEffect(() => {
+    if (sessionData) return;
+
+    const targetStudentId = currentUser?.id || currentUser?.username;
+    if (!sessionData && !isSessionLoading && !isLoaded && sessionError && targetStudentId && !fallbackAttemptedRef.current) {
+      fallbackAttemptedRef.current = true;
+      fetchFallbackData(targetStudentId);
+    }
+  }, [sessionData, isSessionLoading, isLoaded, sessionError, currentUser?.id, currentUser?.username]);
+
+  // Auto-select first purchased property when available and none selected yet
+  useEffect(() => {
+    if (acquisitions.length > 0 && !selectedPropertyId) {
+      setSelectedPropertyId(acquisitions[0].id);
+      setAppraisalValue(String(acquisitions[0].totalPrice));
+    }
+  }, [acquisitions, selectedPropertyId]);
+
+  const fetchFallbackData = async (targetStudentId: string) => {
+    setIsFallbackLoading(true);
     try {
-      // 1. Fetch Student Loans directly from PostgreSQL backed endpoint
-      const targetStudentId = currentUser.id || currentUser.username;
-      const loansRes = await fetch(`/api/loans?studentId=${encodeURIComponent(targetStudentId)}`);
+      const [loansRes, acqRes] = await Promise.all([
+        fetch(`/api/loans?studentId=${encodeURIComponent(targetStudentId)}`),
+        fetch(`/api/acquisitions?studentId=${encodeURIComponent(targetStudentId)}`)
+      ]);
+
       if (loansRes.ok) {
         const loansData = await loansRes.json();
         if (loansData.success && loansData.loans) {
-          setLoans(loansData.loans);
+          setFallbackLoans(loansData.loans);
         }
       }
 
-      // 2. Fetch Student Property Acquisitions (for collateral dropdown)
-      const acqRes = await fetch(`/api/acquisitions?studentId=${encodeURIComponent(targetStudentId)}`);
       if (acqRes.ok) {
         const acqData = await acqRes.json();
         if (acqData.success && acqData.acquisitions) {
-          const bought = acqData.acquisitions.filter((a: PropertyAcquisition) => a.operation === 'compra');
-          setAcquisitions(bought);
-          if (bought.length > 0 && !selectedPropertyId) {
-            setSelectedPropertyId(bought[0].id);
-            setAppraisalValue(String(bought[0].totalPrice));
-          }
+          setFallbackAcquisitions(acqData.acquisitions);
         }
       }
     } catch (err) {
-      console.error('Error loading loan data:', err);
+      console.error('Error loading fallback loan data:', err);
     } finally {
-      setLoading(false);
+      setIsFallbackLoading(false);
     }
   };
 
@@ -219,20 +250,20 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al procesar la solicitud de préstamo.');
+      if (!res.ok || !data.success) throw new Error(data.error || 'Error al procesar la solicitud de préstamo.');
 
       setActionSuccess(data.message);
       setShowRequestModal(false);
 
-      // Immediately integrate the returned loan into state so the offer is visible instantly!
-      if (data.loan) {
-        setLoans(prev => {
+      // In fallback mode, update local fallbackLoans immediately
+      if (!sessionData && data.loan) {
+        setFallbackLoans(prev => {
           const withoutNew = prev.filter(l => l.id !== data.loan.id);
           return [data.loan, ...withoutNew];
         });
       }
 
-      await fetchLoansAndAcquisitions();
+      await refreshSession();
       if (onLoansUpdated) {
         onLoansUpdated();
       }
@@ -254,16 +285,16 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
         body: JSON.stringify({ studentId: targetStudentId })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al formalizar el préstamo.');
+      if (!res.ok || !data.success) throw new Error(data.error || 'Error al formalizar el préstamo.');
 
       setActionSuccess(data.message);
       if (data.updatedBalance !== undefined && onBalanceUpdated) {
         onBalanceUpdated(data.updatedBalance);
       }
-      if (data.loan) {
-        setLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
+      if (!sessionData && data.loan) {
+        setFallbackLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
       }
-      await fetchLoansAndAcquisitions();
+      await refreshSession();
       if (onLoansUpdated) {
         onLoansUpdated();
       }
@@ -283,13 +314,13 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
         body: JSON.stringify({ studentId: targetStudentId })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al rechazar el préstamo.');
+      if (!res.ok || !data.success) throw new Error(data.error || 'Error al rechazar el préstamo.');
 
       setActionSuccess(data.message);
-      if (data.loan) {
-        setLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
+      if (!sessionData && data.loan) {
+        setFallbackLoans(prev => prev.map(l => l.id === loanId ? data.loan : l));
       }
-      await fetchLoansAndAcquisitions();
+      await refreshSession();
       if (onLoansUpdated) {
         onLoansUpdated();
       }
@@ -502,7 +533,7 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
                       <span>Solicitud de préstamo rechazada</span>
                     </p>
                     <p className="text-red-700 mt-0.5">
-                      {loan.rejectionReason || (loan.status === 'denied_teacher' 
+                      {(loan as any).rejectionReason || loan.teacherNotes || (loan.status === 'denied_teacher' 
                         ? 'Operación denegada por el docente tras la evaluación de riesgos del alumno.' 
                         : 'La oferta de préstamo fue denegada o rechazada.')}
                     </p>

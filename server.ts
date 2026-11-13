@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry } from './src/types.js';
+import crypto from 'crypto';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry, PublicClassmate, StudentPaymentStatusData, StudentCompanyData, StudentCatalogsData, StudentSessionData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
@@ -16,6 +20,58 @@ import { numberToSpanishWords } from './src/lib/formatters.js';
 
 const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
+
+const rawSessionSecret = process.env.SESSION_SECRET;
+if (!rawSessionSecret || !rawSessionSecret.trim()) {
+  console.error('========================================================================');
+  console.error('[FATAL CONFIGURATION ERROR] La variable de entorno SESSION_SECRET no está configurada o está vacía.');
+  console.error('Por motivos de seguridad, el servidor no puede iniciarse sin una clave secreta configurada para tokens HMAC.');
+  console.error('Por favor, configure SESSION_SECRET en el panel de variables de entorno de Render antes de iniciar la aplicación.');
+  console.error('========================================================================');
+  process.exit(1);
+}
+const SESSION_AUTH_SECRET = rawSessionSecret.trim();
+
+interface SessionTokenPayload {
+  sub: string;
+  role: string;
+  u: string;
+  iat: number;
+}
+
+function generateSessionToken(userId: string, role: string, username: string): string {
+  const payload: SessionTokenPayload = {
+    sub: String(userId),
+    role: String(role),
+    u: String(username),
+    iat: Date.now()
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const hmac = crypto.createHmac('sha256', SESSION_AUTH_SECRET).update(payloadB64).digest('base64url');
+  return `${payloadB64}.${hmac}`;
+}
+
+function verifySessionToken(token: string): SessionTokenPayload | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.trim().split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, providedHmac] = parts;
+  try {
+    const expectedHmac = crypto.createHmac('sha256', SESSION_AUTH_SECRET).update(payloadB64).digest('base64url');
+    const providedBuf = Buffer.from(providedHmac);
+    const expectedBuf = Buffer.from(expectedHmac);
+    if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+      return null;
+    }
+    const payload: SessionTokenPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    if (!payload.sub || !payload.role || !payload.iat) return null;
+    const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+    if (Date.now() - payload.iat > MAX_AGE_MS) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
 
 const app = express();
 const PORT = 3000;
@@ -7091,9 +7147,11 @@ const loginHandler = async (req: express.Request, res: express.Response) => {
 
   console.log('[LOGIN] Success! Matched user:', user.name, 'Role:', user.role);
 
-  // Exclude password from response
+  // Exclude password from response and generate cryptographically verified session token
   const { password: _, ...userWithoutPassword } = user;
-  res.json({ user: userWithoutPassword });
+  const sessionToken = generateSessionToken(user.id, user.role, user.username || '');
+  const userWithToken = { ...userWithoutPassword, sessionToken };
+  res.json({ user: userWithToken, sessionToken });
 };
 
 app.post('/api/login', loginHandler);
@@ -15224,7 +15282,648 @@ app.get('/api/teacher/deferred-payments-audit', (req, res) => {
   });
 });
 
-// GET upcoming payments for student
+// ============================================================================
+// FASE 2: CONSOLIDATED STUDENT SESSION INITIAL LOAD ENDPOINT (STRICTLY READ-ONLY)
+// ============================================================================
+app.get('/api/student/session-init', async (req, res) => {
+  // 1. Mandatory authentication verification: extract and validate sessionToken
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const headerToken = (req.headers['x-session-token'] as string) || (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '');
+  const queryToken = (req.query.token as string) || '';
+  const rawToken = (headerToken || queryToken || '').trim();
+
+  // If no token is provided, reject immediately with 401 Unauthorized
+  if (!rawToken) {
+    return res.status(401).json({ error: 'No autorizado: Se requiere un token de sesión válido para acceder a los datos privados del alumno.' });
+  }
+
+  // Validate token signature, integrity and expiration
+  const tokenPayload = verifySessionToken(rawToken);
+  if (!tokenPayload) {
+    return res.status(401).json({ error: 'Sesión no válida o expirada. Por favor, vuelva a iniciar sesión con sus credenciales.' });
+  }
+
+  // Ensure role is student
+  if (tokenPayload.role !== 'student') {
+    return res.status(403).json({ error: 'Acceso denegado: este panel de sesión está reservado exclusivamente para alumnos.' });
+  }
+
+  // The student identity is determined EXCLUSIVELY by the verified token
+  const authenticatedStudentId = String(tokenPayload.sub).trim();
+
+  // 2. Check if client additionally sent x-student-id or studentId; if so, verify exact match
+  const rawId = ((req.headers['x-student-id'] as string) || (req.query.studentId as string) || '').trim();
+  if (rawId && rawId !== authenticatedStudentId) {
+    console.warn(`[Security Alert] Alumno autenticado ${authenticatedStudentId} intentó acceder a los datos privados de ${rawId}`);
+    return res.status(403).json({ error: 'Acceso denegado: No tienes permiso para consultar los datos de otro alumno.' });
+  }
+
+  const cleanId = authenticatedStudentId;
+
+  const db = readDb();
+  let canonicalUser: User | null = null;
+
+  // 3. Obtain fresh student account details from PostgreSQL/Supabase as source of truth
+  if (dbPool) {
+    try {
+      const userRes = await safeDbQuery(
+        `SELECT id, alumno, saldo, usuario, account_number, role, level
+         FROM cuentas
+         WHERE (id = $1 OR LOWER(usuario) = LOWER($1)) AND role = 'student'
+         LIMIT 1`,
+        [cleanId]
+      );
+      if (userRes && userRes.rows && userRes.rows.length > 0) {
+        const row = userRes.rows[0];
+        canonicalUser = {
+          id: String(row.id),
+          name: String(row.alumno),
+          username: row.usuario ? String(row.usuario) : cleanId,
+          accountNumber: String(row.account_number || ''),
+          balance: Number(row.saldo || 0),
+          role: 'student',
+          level: (Number(row.level || 1) as 1 | 2 | 3),
+          sessionToken: rawToken
+        };
+      }
+    } catch (dbErr) {
+      console.warn('[Session Init] Error validando alumno en PostgreSQL:', dbErr);
+    }
+  }
+
+  // Fallback to in-memory if dbPool not available or transient query issue
+  if (!canonicalUser) {
+    const memUser = (db.users || []).find(u => 
+      (u.id === cleanId || u.username?.toLowerCase() === cleanId.toLowerCase()) && u.role === 'student'
+    );
+    if (!memUser) {
+      return res.status(404).json({ error: 'Alumno no encontrado en el sistema. Inicie sesión nuevamente.' });
+    }
+    canonicalUser = {
+      id: memUser.id,
+      name: memUser.name,
+      username: memUser.username,
+      accountNumber: memUser.accountNumber,
+      balance: memUser.balance,
+      role: 'student',
+      level: memUser.level,
+      sessionToken: rawToken
+    };
+  }
+
+  const sId = canonicalUser.id;
+
+  try {
+    // 3. Obtain updated private domain records for the authenticated student from PostgreSQL / memory
+    let studentTransfers: Transfer[] = [];
+    let studentAcquisitions: PropertyAcquisition[] = [];
+    let studentMachinery: MachineryAcquisition[] = [];
+    let studentEmployees: HiredEmployee[] = [];
+    let studentVehicles: PurchasedVehicle[] = [];
+    let studentFloorPlans: NaveFloorPlan[] = [];
+    let studentInventory: RawMaterialInventory | null = null;
+    let studentRawOrders: RawMaterialOrder[] = [];
+    let studentLoans: BankLoan[] = [];
+    let studentObligations: PaymentObligation[] = [];
+    let studentElecContracts: ElectricityContract[] = [];
+    let studentElecBills: ElectricityBill[] = [];
+    let studentTelContracts: TelecomContract[] = [];
+    let studentTelInvoices: TelecomInvoice[] = [];
+    let studentOfficeOrders: OfficePurchaseOrder[] = [];
+    let studentCourtLawsuits: CourtLawsuit[] = [];
+    let classmates: PublicClassmate[] = [];
+
+    if (dbPool) {
+      // Parallel reads for student domain data
+      const [
+        movsRes,
+        acqRes,
+        machRes,
+        empRes,
+        vehRes,
+        fpRes,
+        invRes,
+        ordRes,
+        loansRes,
+        oblRes,
+        elecConRes,
+        elecBillRes,
+        telConRes,
+        telInvRes,
+        offOrdRes,
+        lawsuitsRes,
+        classmatesRes
+      ] = await Promise.all([
+        safeDbQuery(
+          `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
+           FROM movimientos
+           WHERE cuenta_id = $1 OR (cuenta_id IS NULL AND (sender_id = $1 OR receiver_id = $1))
+           ORDER BY fecha DESC, id DESC
+           LIMIT 150`,
+          [sId]
+        ),
+        safeDbQuery(`SELECT * FROM adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM maquinaria_adquisiciones WHERE alumno_id = $1 ORDER BY fecha_compra DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM empleados_contratados WHERE alumno_id = $1 ORDER BY fecha_contratacion DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM vehiculos_comprados WHERE alumno_id = $1 ORDER BY fecha_compra DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM planos_distribucion_naves WHERE alumno_id = $1 ORDER BY fecha_actualizacion DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 LIMIT 1`, [sId]),
+        safeDbQuery(`SELECT * FROM materias_primas_pedidos WHERE alumno_id = $1 OR seller_id = $1 ORDER BY fecha_pedido DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM prestamos WHERE alumno_id = $1 ORDER BY fecha_creacion DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM obligaciones_pago WHERE alumno_id = $1 ORDER BY fecha_vencimiento ASC`, [sId]),
+        safeDbQuery(`SELECT * FROM contratos_electricos WHERE alumno_id = $1 ORDER BY fecha_contrato DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM facturas_electricidad WHERE alumno_id = $1 ORDER BY fecha_vencimiento ASC`, [sId]),
+        safeDbQuery(`SELECT * FROM contratos_telecom WHERE alumno_id = $1 ORDER BY fecha_contrato DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM facturas_telecom WHERE alumno_id = $1 ORDER BY fecha_emision DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM pedidos_oficina WHERE alumno_id = $1 ORDER BY fecha_compra DESC`, [sId]),
+        safeDbQuery(`SELECT * FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1 ORDER BY fecha_creacion DESC`, [sId]),
+        safeDbQuery(`SELECT id, alumno AS name, usuario AS username, level FROM cuentas WHERE role = 'student' AND id != $1 ORDER BY alumno ASC`, [sId])
+      ]);
+
+      if (movsRes && movsRes.rows) {
+        studentTransfers = movsRes.rows.map(r => ({
+          id: String(r.id),
+          amount: Number(r.importe),
+          concept: String(r.concepto || ''),
+          tipo: String(r.tipo || ''),
+          type: String(r.tipo || ''),
+          date: new Date(r.fecha).toISOString(),
+          fecha: new Date(r.fecha).toISOString(),
+          timestamp: new Date(r.fecha).toISOString(),
+          senderId: String(r.sender_id || r.cuenta_id),
+          senderName: String(r.sender_name || ''),
+          senderAccount: String(r.sender_account || ''),
+          receiverId: String(r.receiver_id || ''),
+          receiverName: String(r.receiver_name || ''),
+          receiverAccount: String(r.receiver_account || '')
+        }));
+      }
+
+      if (acqRes && acqRes.rows) {
+        studentAcquisitions = acqRes.rows.map(r => ({
+          id: String(r.id),
+          propertyId: String(r.inmueble_id),
+          propertyTitle: String(r.inmueble_titulo),
+          title: String(r.inmueble_titulo),
+          propertyType: String(r.inmueble_tipo) as any,
+          type: String(r.inmueble_tipo) as any,
+          operation: String(r.operacion) as any,
+          studentId: String(r.alumno_id),
+          studentName: String(r.alumno_nombre),
+          surfaceM2: Number(r.superficie_m2),
+          location: String(r.ubicacion || ''),
+          imageUrl: String(r.imagen_url || ''),
+          landPercentage: Number(r.porcentaje_suelo),
+          basePrice: Number(r.precio_base),
+          ivaAmount: Number(r.importe_iva),
+          totalPrice: Number(r.precio_total),
+          purchaseDate: new Date(r.fecha_compra).toISOString(),
+          paymentMethod: String(r.metodo_pago) as any,
+          monthlyRent: r.alquiler_mensual ? Number(r.alquiler_mensual) : undefined,
+          downPaymentPaid: r.entrada_pagada ? Number(r.entrada_pagada) : undefined,
+          pendingBalance: r.saldo_pendiente ? Number(r.saldo_pendiente) : undefined
+        }));
+      }
+
+      if (machRes && machRes.rows) {
+        studentMachinery = machRes.rows.map(row => {
+          const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            machineryId: String(row.maquinaria_id),
+            category: String(row.categoria) as any,
+            lineTitle: String(row.linea_titulo),
+            title: String(row.linea_titulo),
+            optionTitle: String(row.linea_titulo),
+            lathesCount: 1,
+            productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+            imageUrl: '/images/machinery/maquinaria_cnc.jpg',
+            basePrice: Number(row.precio_base),
+            financedPrice: Number(row.precio_financiado || row.precio_base),
+            deferredPrice: Number(row.precio_financiado || row.precio_base),
+            ivaAmount: Number(row.importe_iva),
+            totalPrice: Number(row.precio_total),
+            downPaymentPaid: Number(row.entrada_pagada),
+            pendingBalance: Number(row.saldo_pendiente),
+            paymentMethod: String(row.metodo_pago) as any,
+            installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+            purchaseDate: new Date(row.fecha_compra).toISOString(),
+            assemblyDays: Number(row.dias_montaje || 5),
+            assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+            status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
+            installedAtNaveId: String(row.nave_instalada_id),
+            installedAtNaveTitle: String(row.nave_instalada_titulo),
+            installedNaveId: String(row.nave_instalada_id),
+            installedNaveTitle: String(row.nave_instalada_titulo),
+            requiredStaff: Number(row.personal_requerido || 2),
+            requiredPowerKW: Number(row.potencia_kw || 35),
+            powerKw: Number(row.potencia_kw || 35),
+            equipmentList: equip,
+            equipment: equip,
+            relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
+            relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
+            relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined
+          };
+        });
+      }
+
+      if (empRes && empRes.rows) {
+        studentEmployees = empRes.rows.map(mapHiredEmployeeRow);
+      }
+
+      if (vehRes && vehRes.rows) {
+        studentVehicles = vehRes.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          vehicleType: String(row.vehiculo_tipo) as any,
+          title: String(row.titulo || ''),
+          basePrice: Number(row.precio_base || 0),
+          ivaAmount: Number(row.importe_iva || 0),
+          totalPrice: Number(row.precio_total || row.precio_compra || 0),
+          paymentMethod: String(row.metodo_pago || 'direct') as any,
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          assignedDriverId: row.conductor_asignado_id ? String(row.conductor_asignado_id) : undefined,
+          assignedDriverName: row.conductor_asignado_nombre ? String(row.conductor_asignado_nombre) : undefined,
+          assignedShift: row.turno_asignado ? Number(row.turno_asignado) : undefined,
+          assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
+          assignedPropertyId: row.propiedad_asignada_id ? String(row.propiedad_asignada_id) : undefined,
+          assignedPropertyTitle: row.propiedad_asignada_titulo ? String(row.propiedad_asignada_titulo) : undefined,
+          assignedWarehouseName: row.almacen_asignado_nombre ? String(row.almacen_asignado_nombre) : undefined,
+          status: String(row.estado || 'activo') as 'activo' | 'mantenimiento',
+          imageUrl: row.imagen_url ? String(row.imagen_url) : (row.vehiculo_tipo === 'camion_trailer' ? '/images/vehicles/camion_trailer.jpg' : row.vehiculo_tipo === 'coche_empresa' ? '/images/vehicles/coche_empresa.jpg' : row.vehiculo_tipo === 'furgoneta_transporte' || row.vehiculo_tipo === 'furgoneta' ? '/images/vehicles/furgoneta_transporte.jpg' : '/images/vehicles/carretilla_elevadora.jpg')
+        }));
+      }
+
+      if (fpRes && fpRes.rows) {
+        studentFloorPlans = fpRes.rows.map((row: any) => ({
+          id: String(row.id),
+          propertyId: String(row.inmueble_id || row.nave_id),
+          acquisitionId: row.adquisicion_id ? String(row.adquisicion_id) : String(row.inmueble_id || row.nave_id),
+          propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : (row.nave_titulo ? String(row.nave_titulo) : ''),
+          studentId: String(row.alumno_id),
+          machineryZoneM2: Number(row.zona_maquinaria_m2 || 0),
+          storageZoneM2: Number(row.zona_almacen_m2 || 0),
+          rawMaterialsStorageM2: row.almacen_materias_primas_m2 !== null && row.almacen_materias_primas_m2 !== undefined ? Number(row.almacen_materias_primas_m2) : 30,
+          semiFinishedStorageM2: row.almacen_semiterminados_m2 !== null && row.almacen_semiterminados_m2 !== undefined ? Number(row.almacen_semiterminados_m2) : 5,
+          finishedGoodsStorageM2: row.almacen_terminados_m2 !== null && row.almacen_terminados_m2 !== undefined ? Number(row.almacen_terminados_m2) : 30,
+          adminZoneM2: Number(row.zona_admin_m2 || 0),
+          freeZoneM2: Number(row.zona_libre_m2 || 0),
+          warehousesCount: Number(row.num_almacenes || 2),
+          updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      if (invRes && invRes.rows.length > 0) {
+        studentInventory = parseInventoryRow(invRes.rows[0]);
+      }
+
+      if (ordRes && ordRes.rows) {
+        studentRawOrders = ordRes.rows.map((row: any) => {
+          const rawInvoicedAt = row.invoiced_at
+            ? new Date(row.invoiced_at).toISOString()
+            : ((['facturado', 'entregado', 'finalizado'].includes(String(row.estado)) || row.invoice_number)
+                ? (row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : undefined)
+                : undefined);
+          return {
+            id: String(row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            announcementId: String(row.announcement_id || ''),
+            materialType: String(row.materia_tipo || 'hierro') as any,
+            materialTitle: String(row.materia_titulo || ''),
+            quantity: Number(row.cantidad || 0),
+            unitWeightKg: Number(row.peso_unitario_kg || 0),
+            totalKg: Number(row.peso_total_kg || 0),
+            basePrice: Number(row.precio_base || 0),
+            ivaAmount: Number(row.importe_iva || 0),
+            transportCost: Number(row.coste_transporte || 0),
+            totalAmount: Number(row.importe_total || 0),
+            needsTransport: Boolean(row.necesita_transporte),
+            deliveryAddress: String(row.direccion_entrega || ''),
+            pickupVehicleId: row.vehiculo_recogida_id ? String(row.vehiculo_recogida_id) : undefined,
+            status: String(row.estado) as any,
+            requestedAt: row.fecha_pedido ? new Date(row.fecha_pedido).toISOString() : '2026-09-01T00:00:00.000Z',
+            approvedAt: row.fecha_aprobado ? new Date(row.fecha_aprobado).toISOString() : undefined,
+            shippedAt: row.shipped_at ? new Date(row.shipped_at).toISOString() : undefined,
+            estimatedDeliveryAt: row.fecha_estimada_entrega ? new Date(row.fecha_estimada_entrega).toISOString() : undefined,
+            deliveredAt: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : undefined,
+            invoicedAt: rawInvoicedAt,
+            invoiceNumber: row.invoice_number ? String(row.invoice_number) : (rawInvoicedAt ? `FACT-2026-${String(row.id).slice(-4)}` : undefined),
+            items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : undefined,
+            sellerId: row.seller_id ? String(row.seller_id) : undefined,
+            sellerName: row.seller_name ? String(row.seller_name) : undefined,
+            sellerLevel: row.seller_level === 'official' ? 'official' : (row.seller_level ? Number(row.seller_level) : undefined),
+            buyerLevel: row.buyer_level ? Number(row.buyer_level) : undefined,
+            discountPercentage: row.discount_percentage ? Number(row.discount_percentage) : 0,
+            insuranceFee: row.insurance_fee ? Number(row.insurance_fee) : 0,
+            transportMethod: row.transport_method ? String(row.transport_method) as any : 'vendedor_envio',
+            lastTurnUserId: row.last_turn_user_id ? String(row.last_turn_user_id) : undefined,
+            negotiationHistory: row.negotiation_history ? (typeof row.negotiation_history === 'string' ? JSON.parse(row.negotiation_history) : row.negotiation_history) : undefined,
+            inventoryCredited: row.inventory_credited !== null && row.inventory_credited !== undefined ? Boolean(row.inventory_credited) : (['entregado', 'finalizado', 'facturado'].includes(String(row.estado))),
+            destinationNaveId: row.destination_nave_id ? String(row.destination_nave_id) : undefined
+          };
+        });
+      }
+
+      if (loansRes && loansRes.rows) {
+        studentLoans = loansRes.rows.map(row => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre || ''),
+          studentAccount: String(row.alumno_cuenta || ''),
+          requestedAmount: Number(row.importe_solicitado || 0),
+          offeredAmount: Number(row.importe_ofrecido || 0),
+          approvedAmount: row.importe_concedido ? Number(row.importe_concedido) : undefined,
+          termMonths: Number(row.plazo_meses || 12),
+          annualInterestRate: Number(row.tipo_interes || 4.5),
+          euriborRate: Number(row.euribor || 3.50),
+          spread: Number(row.diferencial || 1.00),
+          openingFee: Number(row.comision_apertura || 0),
+          monthlyPayment: Number(row.cuota_mensual || 0),
+          amortizationFrequency: (row.modalidad as 'monthly' | 'annual') || 'monthly',
+          installmentPayment: row.cuota_periodica ? Number(row.cuota_periodica) : Number(row.cuota_mensual || 0),
+          collateral: {
+            type: String(row.garantia_tipo || 'property') as ('property' | 'private_residence'),
+            propertyId: row.garantia_inmueble_id ? String(row.garantia_inmueble_id) : undefined,
+            propertyTitle: row.garantia_inmueble_titulo ? String(row.garantia_inmueble_titulo) : undefined,
+            surfaceM2: Number(row.garantia_superficie_m2 || 0),
+            appraisalValue: Number(row.garantia_valor_tasacion || 0)
+          },
+          status: String(row.estado) as any,
+          requiresTeacherApproval: Boolean(row.requiere_profesor),
+          teacherNotes: row.notas_profesor ? String(row.notas_profesor) : undefined,
+          createdAt: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          acceptedAt: row.fecha_aceptacion ? new Date(row.fecha_aceptacion).toISOString() : undefined,
+          schedule: row.tabla_amortizacion ? (typeof row.tabla_amortizacion === 'string' ? JSON.parse(row.tabla_amortizacion) : row.tabla_amortizacion) : []
+        }));
+      }
+
+      if (oblRes && oblRes.rows) {
+        studentObligations = oblRes.rows.map(r => ({
+          id: String(r.id),
+          acquisitionId: String(r.adquisicion_id),
+          studentId: String(r.alumno_id),
+          studentName: String(r.alumno_nombre),
+          propertyTitle: String(r.inmueble_titulo),
+          type: String(r.tipo) as any,
+          amount: Number(r.importe),
+          dueDate: new Date(r.fecha_vencimiento).toISOString(),
+          status: String(r.estado) as any,
+          paymentDate: r.fecha_pago ? new Date(r.fecha_pago).toISOString() : undefined,
+          installmentNumber: r.numero_cuota ? Number(r.numero_cuota) : undefined,
+          totalInstallments: r.total_cuotas ? Number(r.total_cuotas) : undefined,
+          lateInterest: r.intereses_demora ? Number(r.intereses_demora) : 0,
+          lateInterestPaid: Boolean(r.intereses_demora_pagados)
+        }));
+      }
+
+      if (elecConRes && elecConRes.rows) {
+        studentElecContracts = elecConRes.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          propertyId: row.inmueble_id ? String(row.inmueble_id) : undefined,
+          propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : undefined,
+          contractedPowerKw: Number(row.potencia_contratada_kw || 15),
+          tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+          pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+          pricePerKwh: Number(row.precio_kwh || 0.14),
+          status: String(row.estado) as 'active' | 'cancelled',
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
+          cupsCode: String(row.cups_code || '')
+        }));
+      }
+
+      if (elecBillRes && elecBillRes.rows) {
+        studentElecBills = elecBillRes.rows.map((row: any) => {
+          const breakdown = row.desglose_inmuebles ? (typeof row.desglose_inmuebles === 'string' ? JSON.parse(row.desglose_inmuebles) : row.desglose_inmuebles) : [];
+          return {
+            id: String(row.id),
+            billNumber: String(row.numero_factura || row.id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre || ''),
+            companyName: String(row.empresa_nombre || ''),
+            cifNif: String(row.cif_nif || ''),
+            contractId: String(row.contrato_id || ''),
+            cupsCode: String(row.cups_code || ''),
+            periodMonth: Number(row.mes || row.mes_periodo || 1),
+            periodYear: Number(row.anio || row.ano_periodo || new Date().getFullYear()),
+            startDate: String(row.fecha_inicio || ''),
+            endDate: String(row.fecha_fin || ''),
+            daysCount: Number(row.dias_facturados || 30),
+            contractedPowerKw: Number(row.potencia_contratada_kw || 15),
+            pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+            powerAmount: Number(row.importe_potencia || 0),
+            totalKwh: Number(row.total_kwh || 0),
+            pricePerKwh: Number(row.precio_kwh || 0.14),
+            energyAmount: Number(row.importe_energia || 0),
+            equipmentRental: Number(row.alquiler_equipos || 0.85),
+            taxableBase: Number(row.base_imponible || 0),
+            electricityTax: Number(row.impuesto_electricidad || 0),
+            subtotalWithTax: Number((Number(row.base_imponible || 0) + Number(row.impuesto_electricidad || 0)).toFixed(2)),
+            ivaRate: Number(row.tipo_iva || 21),
+            ivaAmount: Number(row.importe_iva || 0),
+            totalAmount: Number(row.importe_total || row.importe || 0),
+            dueDate: new Date(row.fecha_vencimiento).toISOString(),
+            status: String(row.estado || 'pending') as any,
+            paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+            createdAt: row.creado_en ? new Date(row.creado_en).toISOString() : new Date().toISOString(),
+            propertyBreakdown: breakdown
+          };
+        });
+      }
+
+      if (telConRes && telConRes.rows) {
+        studentTelContracts = telConRes.rows.map((row: any) => ({
+          id: String(row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          planId: String(row.plan_id),
+          planName: String(row.plan_nombre || row.nombre_plan || ''),
+          provider: String(row.proveedor || 'IberTelecom Empresas'),
+          monthlyPrice: Number(row.precio_mensual || 0),
+          speedMbps: Number(row.velocidad_mbps || 0),
+          mobileLinesCount: Number(row.lineas_moviles || 0),
+          propertyId: row.inmueble_id ? String(row.inmueble_id) : '',
+          propertyTitle: row.inmueble_titulo ? String(row.inmueble_titulo) : '',
+          phoneNumber: row.numero_telefono ? String(row.numero_telefono) : undefined,
+          status: String(row.estado || 'active') as 'active' | 'cancelled',
+          contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString()
+        }));
+      }
+
+      if (telInvRes && telInvRes.rows) {
+        studentTelInvoices = telInvRes.rows.map((row: any) => ({
+          id: String(row.id),
+          invoiceNumber: String(row.numero_factura || row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          companyName: String(row.empresa_nombre || row.alumno_nombre),
+          nifCif: String(row.nif_cif || ''),
+          contractId: String(row.contrato_id || ''),
+          planName: String(row.plan_nombre || ''),
+          provider: String(row.proveedor || 'IberTelecom'),
+          periodMonth: Number(row.mes || row.mes_periodo || 1),
+          periodYear: Number(row.anio || row.ano_periodo || new Date().getFullYear()),
+          issueDate: new Date(row.fecha_emision).toISOString(),
+          dueDate: new Date(row.fecha_vencimiento).toISOString(),
+          subtotal: Number(row.subtotal || 0),
+          ivaRate: Number(row.tipo_iva || 21),
+          ivaAmount: Number(row.importe_iva || 0),
+          totalAmount: Number(row.importe_total || row.importe || 0),
+          status: String(row.estado || 'pendiente') as 'pagado' | 'pendiente',
+          paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+          items: row.conceptos ? (typeof row.conceptos === 'string' ? JSON.parse(row.conceptos) : row.conceptos) : [],
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'Transferencia bancaria directa'
+        }));
+      }
+
+      if (offOrdRes && offOrdRes.rows) {
+        studentOfficeOrders = offOrdRes.rows.map((row: any) => ({
+          id: String(row.id),
+          orderNumber: String(row.numero_pedido || row.id),
+          studentId: String(row.alumno_id),
+          studentName: String(row.alumno_nombre),
+          companyName: String(row.empresa_nombre || row.alumno_nombre),
+          nifCif: String(row.nif_cif || ''),
+          purchaseDate: new Date(row.fecha_compra).toISOString(),
+          items: row.items ? (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) : [],
+          subtotal: Number(row.subtotal || 0),
+          ivaRate: Number(row.tipo_iva || 21),
+          ivaAmount: Number(row.importe_iva || 0),
+          totalAmount: Number(row.importe_total || row.total || 0),
+          status: String(row.estado || 'completado_pagado') as 'completado_pagado',
+          paymentMethod: row.metodo_pago ? String(row.metodo_pago) : 'banco'
+        }));
+      }
+
+      if (lawsuitsRes && lawsuitsRes.rows) {
+        studentCourtLawsuits = lawsuitsRes.rows.map((r: any) => ({
+          id: String(r.id),
+          caseNumber: String(r.numero_autos || r.id),
+          courtName: String(r.juzgado || 'Juzgado de 1ª Instancia e Instrucción Nº 1'),
+          type: String(r.tipo) as any,
+          subtype: r.subtipo ? String(r.subtipo) as any : undefined,
+          plaintiffId: String(r.demandante_id),
+          plaintiffName: String(r.demandante_nombre),
+          plaintiffNif: r.demandante_nif ? String(r.demandante_nif) : undefined,
+          plaintiffIban: r.demandante_iban ? String(r.demandante_iban) : undefined,
+          defendantId: String(r.demandado_id),
+          defendantName: String(r.demandado_nombre),
+          defendantNif: r.demandado_nif ? String(r.demandado_nif) : undefined,
+          defendantIban: r.demandado_iban ? String(r.demandado_iban) : undefined,
+          claimedAmount: Number(r.cuantia_reclamada || 0),
+          interestAndCostsAmount: Number(r.intereses_costas || 0),
+          totalClaimAmount: Number(r.cuantia_total || r.cuantia_reclamada || 0),
+          goodsDescription: String(r.descripcion_bienes || ''),
+          facts: String(r.hechos || ''),
+          legalBasis: String(r.fundamentos_derecho || ''),
+          petitum: String(r.petitum || ''),
+          evidenceSummary: String(r.resumen_prueba || ''),
+          status: String(r.estado) as any,
+          createdAt: r.fecha_creacion ? new Date(r.fecha_creacion).toISOString() : new Date().toISOString(),
+          updatedAt: new Date(r.fecha_actualizacion || r.fecha_creacion || new Date()).toISOString()
+        }));
+      }
+
+      if (classmatesRes && classmatesRes.rows) {
+        classmates = classmatesRes.rows.map(r => ({
+          id: String(r.id),
+          name: String(r.name),
+          username: String(r.username || ''),
+          level: (Number(r.level || 1) as 1 | 2 | 3)
+        }));
+      }
+    } else {
+      // In-memory fallback
+      studentTransfers = (db.transfers || []).filter(tx => tx.senderId === sId || tx.receiverId === sId);
+      studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === sId);
+      studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === sId);
+      studentEmployees = (db.hiredEmployees || []).filter(e => e.studentId === sId);
+      studentVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === sId);
+      studentFloorPlans = (db.naveFloorPlans || []).filter(f => f.studentId === sId);
+      studentInventory = (db.rawMaterialInventories || []).find(i => i.studentId === sId) || null;
+      studentRawOrders = (db.rawMaterialOrders || []).filter(o => o.studentId === sId || o.sellerId === sId);
+      studentLoans = (db.loans || []).filter(l => l.studentId === sId);
+      studentObligations = (db.paymentObligations || []).filter(o => o.studentId === sId);
+      studentElecContracts = (db.electricityContracts || []).filter(c => c.studentId === sId);
+      studentElecBills = (db.electricityBills || []).filter(b => b.studentId === sId);
+      studentTelContracts = (db.telecomContracts || []).filter(c => c.studentId === sId);
+      studentTelInvoices = (db.telecomInvoices || []).filter(i => i.studentId === sId);
+      studentOfficeOrders = (db.officeOrders || []).filter(o => o.studentId === sId);
+      studentCourtLawsuits = (db.courtLawsuits || []).filter(l => l.plaintiffId === sId || l.defendantId === sId);
+      classmates = (db.users || [])
+        .filter(u => u.role === 'student' && u.id !== sId)
+        .map(u => ({ id: u.id, name: u.name, username: u.username, level: u.level }));
+    }
+
+    // 4. Calculate read-only student payment status without mutations
+    const rawPaymentStatus = getStudentPaymentStatus(db, sId);
+    const paymentStatus: StudentPaymentStatusData = {
+      isBlocked: Boolean(rawPaymentStatus.isBlocked),
+      totalOverdueAmount: Number(rawPaymentStatus.totalOverdueAmount || 0),
+      totalUpcoming30DaysAmount: Number(rawPaymentStatus.totalUpcoming30DaysAmount || 0),
+      upcomingCount: rawPaymentStatus.upcoming30DaysItems ? rawPaymentStatus.upcoming30DaysItems.length : 0,
+      overdueCount: rawPaymentStatus.overdueItems ? rawPaymentStatus.overdueItems.length : 0,
+      insufficientProjectedBalance: Boolean(rawPaymentStatus.insufficientProjectedBalance),
+      projected30DaysTotal: Number(rawPaymentStatus.projected30DaysTotal || 0)
+    };
+
+    // 5. Shared public catalogs
+    const catalogs: StudentCatalogsData = {
+      properties: db.properties || [],
+      jobListings: (db.jobListings || []).filter(j => j.status === 'disponible'),
+      rawMaterialAnnouncements: db.rawMaterialAnnouncements || [],
+      companyProfiles: db.companyProfiles || [],
+      screwdriverListings: canonicalUser.level === 2 ? (db.teacherScrewdriverListings || []) : undefined
+    };
+
+    const sessionData: StudentSessionData = {
+      user: canonicalUser,
+      transfers: studentTransfers,
+      company: {
+        acquisitions: studentAcquisitions,
+        machinery: studentMachinery,
+        employees: studentEmployees,
+        vehicles: studentVehicles,
+        floorPlans: studentFloorPlans
+      },
+      inventory: studentInventory,
+      rawMaterialOrders: studentRawOrders,
+      loans: studentLoans,
+      paymentObligations: studentObligations,
+      paymentStatus,
+      electricity: {
+        contracts: studentElecContracts,
+        bills: studentElecBills
+      },
+      telecom: {
+        contracts: studentTelContracts,
+        invoices: studentTelInvoices
+      },
+      officeOrders: studentOfficeOrders,
+      courtLawsuits: studentCourtLawsuits,
+      classmates,
+      catalogs
+    };
+
+    res.json({
+      success: true,
+      sessionData,
+      sessionToken: canonicalUser.sessionToken
+    });
+  } catch (error: any) {
+    console.error('[Session Init Error]:', error);
+    res.status(500).json({
+      error: 'Error interno al cargar los datos de la sesión del alumno: ' + (error?.message || String(error))
+    });
+  }
+});
+
+// GET upcoming payments for student (Pure Read-Only: does not trigger automatic collections or state mutations)
 app.get('/api/student/upcoming-payments', async (req, res) => {
   const { studentId } = req.query;
   if (!studentId || typeof studentId !== 'string') {
@@ -15232,9 +15931,7 @@ app.get('/api/student/upcoming-payments', async (req, res) => {
   }
 
   const db = readDb();
-  await processStudentAutomaticPayments(db, studentId);
-  const updatedDb = readDb();
-  const status = getStudentPaymentStatus(updatedDb, studentId);
+  const status = getStudentPaymentStatus(db, studentId);
 
   res.json({
     success: true,

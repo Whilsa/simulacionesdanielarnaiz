@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
 import { 
   User, 
@@ -126,11 +127,22 @@ export default function VehicleDealershipPortal({
   onBackToHub,
   onUserBalanceUpdated
 }: VehicleDealershipPortalProps) {
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+
   const [activeTab, setActiveTab] = useState<'catalog' | 'my_fleet'>('catalog');
-  const [purchasedVehicles, setPurchasedVehicles] = useState<PurchasedVehicle[]>([]);
-  const [hiredEmployees, setHiredEmployees] = useState<HiredEmployee[]>([]);
-  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+
+  // Fallback states for exceptional cases when sessionData is not available
+  const [fallbackVehicles, setFallbackVehicles] = useState<PurchasedVehicle[]>([]);
+  const [fallbackEmployees, setFallbackEmployees] = useState<HiredEmployee[]>([]);
+  const [fallbackAcquisitions, setFallbackAcquisitions] = useState<PropertyAcquisition[]>([]);
+
+  // Fleet, employees, and property acquisitions derived directly from StudentSessionContext
+  const purchasedVehicles: PurchasedVehicle[] = sessionData?.company?.vehicles ?? fallbackVehicles;
+  const hiredEmployees: HiredEmployee[] = sessionData?.company?.employees ?? fallbackEmployees;
+  const acquisitions: PropertyAcquisition[] = sessionData?.company?.acquisitions ?? fallbackAcquisitions;
+
+  const [isFallbackLoading, setIsFallbackLoading] = useState(false);
+  const isLoading = (!sessionData && isSessionLoading) || isFallbackLoading;
 
   // Cart state
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -145,15 +157,24 @@ export default function VehicleDealershipPortal({
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
 
-  const formatNumber = (num: number) => {
-    return new Intl.NumberFormat('es-ES', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(num);
-  };
+  const fallbackAttemptedRef = useRef(false);
 
-  const fetchFleetData = async () => {
-    setIsLoading(true);
+  useEffect(() => {
+    fallbackAttemptedRef.current = false;
+  }, [currentUser?.id]);
+
+  // Safe fallback mechanism: runs strictly when sessionData failed with error, loading is complete, user is valid, and hasn't run yet
+  useEffect(() => {
+    if (sessionData) return;
+
+    if (!sessionData && !isSessionLoading && !isLoaded && sessionError && currentUser?.id && !fallbackAttemptedRef.current) {
+      fallbackAttemptedRef.current = true;
+      fetchFallbackFleetData();
+    }
+  }, [sessionData, isSessionLoading, isLoaded, sessionError, currentUser?.id]);
+
+  const fetchFallbackFleetData = async () => {
+    setIsFallbackLoading(true);
     try {
       const [vRes, eRes, aRes] = await Promise.all([
         fetch(`/api/student/vehicles?studentId=${currentUser.id}`),
@@ -164,19 +185,22 @@ export default function VehicleDealershipPortal({
       const eData = await eRes.json();
       const aData = await aRes.json();
 
-      if (vData.vehicles) setPurchasedVehicles(vData.vehicles);
-      if (eData.employees) setHiredEmployees(eData.employees);
-      if (aData.acquisitions) setAcquisitions(aData.acquisitions);
+      if (vData.vehicles) setFallbackVehicles(vData.vehicles);
+      if (eData.employees) setFallbackEmployees(eData.employees);
+      if (aData.acquisitions) setFallbackAcquisitions(aData.acquisitions);
     } catch (err) {
-      console.error('Error fetching vehicle fleet:', err);
+      console.error('Error fetching fallback vehicle fleet:', err);
     } finally {
-      setIsLoading(false);
+      setIsFallbackLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchFleetData();
-  }, [currentUser.id]);
+  const formatNumber = (num: number) => {
+    return new Intl.NumberFormat('es-ES', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(num);
+  };
 
   const addToCart = (item: VehicleCatalogItem, qty: number = 1) => {
     setCart(prev => {
@@ -249,7 +273,7 @@ export default function VehicleDealershipPortal({
           onUserBalanceUpdated(data.newBalance);
         }
         setCart([]);
-        await fetchFleetData();
+        await refreshSession();
         setTimeout(() => {
           setIsCartOpen(false);
           setCartSuccess(null);
@@ -278,7 +302,7 @@ export default function VehicleDealershipPortal({
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        await fetchFleetData();
+        await refreshSession();
       }
     } catch (e) {
       console.error('Error asignando vehículo a almacén:', e);
@@ -322,7 +346,7 @@ export default function VehicleDealershipPortal({
         if (data.newBalance !== undefined) {
           onUserBalanceUpdated(data.newBalance);
         }
-        await fetchFleetData();
+        await refreshSession();
         setTimeout(() => {
           setSelectedVehicle(null);
           setPurchaseSuccess(null);
@@ -694,22 +718,30 @@ export default function VehicleDealershipPortal({
                           value={v.assignedDriverId || ''}
                           onChange={async (e) => {
                             const newDriverId = e.target.value;
-                            if (!newDriverId) {
-                              if (v.assignedDriverId) {
-                                await fetch(`/api/student/employees/${v.assignedDriverId}/assign-vehicle`, {
+                            try {
+                              if (!newDriverId) {
+                                if (v.assignedDriverId) {
+                                  const res = await fetch(`/api/student/employees/${v.assignedDriverId}/assign-vehicle`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ vehicleId: '', studentId: currentUser.id })
+                                  });
+                                  if (res.ok) {
+                                    await refreshSession();
+                                  }
+                                }
+                              } else {
+                                const res = await fetch(`/api/student/employees/${newDriverId}/assign-vehicle`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ vehicleId: '', studentId: currentUser.id })
+                                  body: JSON.stringify({ vehicleId: v.id, studentId: currentUser.id })
                                 });
-                                fetchFleetData();
+                                if (res.ok) {
+                                  await refreshSession();
+                                }
                               }
-                            } else {
-                              await fetch(`/api/student/employees/${newDriverId}/assign-vehicle`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ vehicleId: v.id, studentId: currentUser.id })
-                              });
-                              fetchFleetData();
+                            } catch (err) {
+                              console.error('Error al asignar conductor:', err);
                             }
                           }}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500 cursor-pointer"
@@ -719,7 +751,7 @@ export default function VehicleDealershipPortal({
                             .filter(emp => emp.status !== 'despedido' && (emp.role === 'camionero' || (emp.role as string) === 'conductor'))
                             .map(emp => (
                               <option key={emp.id} value={emp.id}>
-                                👤 {emp.employeeName} ({emp.role === 'conductor' ? 'Conductor' : 'Camionero / conductor'})
+                                👤 {emp.employeeName} ({(emp.role as string) === 'conductor' ? 'Conductor' : 'Camionero / conductor'})
                               </option>
                             ))}
                         </select>

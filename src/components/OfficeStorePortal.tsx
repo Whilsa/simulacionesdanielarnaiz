@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, OfficeStoreItem, OfficeStoreCategory, OfficePurchaseOrder } from '../types.js';
 import { OFFICE_STORE_CATALOG } from '../lib/officeStoreData.js';
 import { resolveImageUrl, SVG_FALLBACK } from '../lib/imageAssets.js';
@@ -14,6 +14,7 @@ import {
   ArrowLeft, ShoppingBag, ShoppingCart, Search, Filter, CheckCircle2, 
   AlertCircle, Trash2, Plus, Minus, CreditCard, Euro, Download, Layers, RefreshCw
 } from 'lucide-react';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface OfficeStorePortalProps {
   currentUser: User;
@@ -27,6 +28,8 @@ interface CartItem {
 }
 
 export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBalanceUpdated }: OfficeStorePortalProps) {
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+
   const [catalog, setCatalog] = useState<OfficeStoreItem[]>(OFFICE_STORE_CATALOG);
   const [selectedCategory, setSelectedCategory] = useState<OfficeStoreCategory | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,28 +38,47 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   
-  const [orders, setOrders] = useState<OfficePurchaseOrder[]>([]);
+  // Orders derived directly from StudentSessionContext; fallback state used only if sessionData is absent
+  const [fallbackOrders, setFallbackOrders] = useState<OfficePurchaseOrder[]>([]);
+  const orders: OfficePurchaseOrder[] = sessionData?.officeOrders ?? fallbackOrders;
+
   const [selectedInvoiceOrder, setSelectedInvoiceOrder] = useState<OfficePurchaseOrder | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const fetchOrders = async () => {
+  const fallbackAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    fallbackAttemptedRef.current = false;
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, []);
+
+  // Safe fallback: runs strictly if sessionData failed with error, loading is complete, user is valid, and hasn't run yet
+  useEffect(() => {
+    if (sessionData) return;
+
+    if (!sessionData && !isSessionLoading && !isLoaded && sessionError && currentUser?.id && !fallbackAttemptedRef.current) {
+      fallbackAttemptedRef.current = true;
+      fetchFallbackOrders();
+    }
+  }, [sessionData, isSessionLoading, isLoaded, sessionError, currentUser?.id]);
+
+  const fetchFallbackOrders = async () => {
     try {
       const res = await fetch(`/api/office-store/orders?studentId=${currentUser.id}`);
       if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
         const data = await res.json();
-        setOrders(data.orders || []);
+        // Do not overwrite if sessionData became available in the meantime
+        setFallbackOrders(data.orders || []);
       }
     } catch (e) {
-      console.error(e);
+      console.error('[OfficeStorePortal] Error al cargar pedidos mediante fallback:', e);
     }
   };
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    fetchOrders();
-  }, [currentUser.id]);
 
   // Categories list
   const categories: { key: OfficeStoreCategory | 'all'; label: string; icon: string }[] = [
@@ -153,7 +175,7 @@ export default function OfficeStorePortal({ currentUser, onBackToHub, onUserBala
         onUserBalanceUpdated(data.newBalance);
       }
 
-      fetchOrders();
+      await refreshSession();
       if (data.order) {
         setSelectedInvoiceOrder(data.order);
       }

@@ -13,6 +13,7 @@ import {
   ArrowLeft, PhoneCall, Wifi, ShieldCheck, CheckCircle2, Zap, 
   Clock, FileText, Download, Building2, AlertCircle, RefreshCw
 } from 'lucide-react';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface TelecomPortalProps {
   currentUser: User;
@@ -21,12 +22,14 @@ interface TelecomPortalProps {
 }
 
 export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceUpdated }: TelecomPortalProps) {
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+
   const [plans, setPlans] = useState<TelecomPlan[]>(TELECOM_PLANS);
-  const [contracts, setContracts] = useState<TelecomContract[]>([]);
-  const [invoices, setInvoices] = useState<TelecomInvoice[]>([]);
-  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>([]);
+  const [contracts, setContracts] = useState<TelecomContract[]>(() => sessionData?.telecom?.contracts || []);
+  const [invoices, setInvoices] = useState<TelecomInvoice[]>(() => sessionData?.telecom?.invoices || []);
+  const [acquisitions, setAcquisitions] = useState<PropertyAcquisition[]>(() => sessionData?.company?.acquisitions || []);
   
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(!sessionData && isSessionLoading);
   const [submittingPlanId, setSubmittingPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -34,22 +37,37 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
   
   const [selectedInvoice, setSelectedInvoice] = useState<TelecomInvoice | null>(null);
   const [confirmingPlan, setConfirmingPlan] = useState<TelecomPlan | null>(null);
+  const fallbackAttemptedRef = useRef(false);
 
-  const fetchData = async () => {
+  useEffect(() => {
+    fallbackAttemptedRef.current = false;
+  }, [currentUser.id]);
+
+  // Sync state directly from StudentSessionContext when sessionData is available or updated
+  useEffect(() => {
+    if (sessionData) {
+      setContracts(sessionData.telecom?.contracts || []);
+      setInvoices(sessionData.telecom?.invoices || []);
+      setAcquisitions(sessionData.company?.acquisitions || []);
+      setLoading(false);
+    } else if (!isSessionLoading && !isLoaded && sessionError && !fallbackAttemptedRef.current) {
+      // Safe fallback executed strictly if sessionData failed to load with an error
+      fallbackAttemptedRef.current = true;
+      fetchFallbackData();
+    }
+  }, [sessionData, isSessionLoading, isLoaded, sessionError]);
+
+  // Safe fallback fetch only if sessionData is unavailable
+  const fetchFallbackData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [pRes, cRes, iRes, compRes] = await Promise.all([
-        fetch('/api/telecom/plans'),
+      const [cRes, iRes, compRes] = await Promise.all([
         fetch(`/api/telecom/contracts?studentId=${currentUser.id}`),
         fetch(`/api/telecom/invoices?studentId=${currentUser.id}`),
         fetch(`/api/company/${currentUser.id}`)
       ]);
 
-      if (pRes.ok && pRes.headers.get('content-type')?.includes('application/json')) {
-        const pData = await pRes.json();
-        if (pData.plans && pData.plans.length > 0) setPlans(pData.plans);
-      }
       if (cRes.ok && cRes.headers.get('content-type')?.includes('application/json')) {
         const cData = await cRes.json();
         setContracts(cData.contracts || []);
@@ -69,10 +87,6 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    fetchData();
-  }, [currentUser.id]);
 
   const activeContract = contracts.find(c => c.status === 'active');
 
@@ -102,7 +116,8 @@ export default function TelecomPortal({ currentUser, onBackToHub, onUserBalanceU
       if (data.newBalance !== undefined && onUserBalanceUpdated) {
         onUserBalanceUpdated(data.newBalance);
       }
-      fetchData();
+      // Re-synchronize global student session in memory via consolidated endpoint
+      await refreshSession();
     } catch (err: any) {
       setError(err.message || 'Error al contratar el servicio.');
     } finally {

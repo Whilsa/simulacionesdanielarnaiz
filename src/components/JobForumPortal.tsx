@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, JobListing, HiredEmployee, MachineryAcquisition } from '../types.js';
-import { Users, UserPlus, Trash2, ArrowLeft, Briefcase, Filter, Sparkles, CheckCircle2, AlertCircle, Wrench, Clock, ShieldCheck, Loader2 } from 'lucide-react';
+import { Users, UserPlus, Trash2, ArrowLeft, Briefcase, Filter, Sparkles, CheckCircle2, AlertCircle, Wrench, Clock, ShieldCheck, Loader2, RefreshCw } from 'lucide-react';
 import Footer from './Footer.js';
 import { formatNumber } from '../lib/formatters.js';
+import { useStudentSession } from '../context/StudentSessionContext.js';
 
 interface JobForumPortalProps {
   currentUser: User;
@@ -17,14 +18,29 @@ interface JobForumPortalProps {
 
 export default function JobForumPortal({ currentUser, onBackToHub, onUserBalanceUpdated }: JobForumPortalProps) {
   const isTeacher = currentUser.role === 'teacher';
+  const { sessionData, refreshSession } = useStudentSession();
 
   const [jobListings, setJobListings] = useState<JobListing[]>([]);
   const [myEmployees, setMyEmployees] = useState<HiredEmployee[]>([]);
   const [machineryList, setMachineryList] = useState<MachineryAcquisition[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshingJobs, setIsRefreshingJobs] = useState(false);
   const [activeTab, setActiveTab] = useState<'available' | 'my_employees'>('available');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [hiringJobId, setHiringJobId] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
+
+  // Sincronización reactiva con StudentSessionContext
+  useEffect(() => {
+    if (!isTeacher && sessionData?.company) {
+      if (sessionData.company.employees) {
+        setMyEmployees(sessionData.company.employees);
+      }
+      if (sessionData.company.machinery) {
+        setMachineryList(sessionData.company.machinery);
+      }
+    }
+  }, [isTeacher, sessionData]);
 
   // Teacher generator state
   const [batchCount, setBatchCount] = useState<number>(10);
@@ -41,49 +57,58 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
   const [roleFilter, setRoleFilter] = useState<'todos' | 'operario' | 'camionero' | 'mozo_almacen' | 'carretillero'>('todos');
   const [maxSalaryFilter, setMaxSalaryFilter] = useState<number>(3000);
 
-  const fetchJobs = async () => {
+  const fetchJobs = async (isManual = false) => {
+    if (isManual) {
+      setIsRefreshingJobs(true);
+    }
     try {
       const res = await fetch('/api/job-listings');
+      if (!res.ok) {
+        throw new Error(`Error ${res.status}: no se pudieron cargar las ofertas`);
+      }
       const data = await res.json();
-      if (data.jobListings) {
+      if (isMountedRef.current && data.jobListings) {
         setJobListings(data.jobListings.filter((j: JobListing) => j.status === 'disponible'));
+        if (isManual) {
+          setMessage({
+            type: 'success',
+            text: 'Ofertas de empleo actualizadas correctamente.'
+          });
+        }
       }
     } catch (e) {
       console.error('Error cargando ofertas de empleo:', e);
+      if (isManual && isMountedRef.current) {
+        setMessage({
+          type: 'error',
+          text: 'No se pudieron actualizar las ofertas. Se mantienen las ofertas cargadas previamente.'
+        });
+      }
+    } finally {
+      if (isMountedRef.current && isManual) {
+        setIsRefreshingJobs(false);
+      }
     }
   };
 
-  const fetchMyEmployeesAndMachinery = async () => {
-    if (isTeacher) return;
-    try {
-      const resEmp = await fetch(`/api/student/employees?studentId=${currentUser.id}`);
-      const dataEmp = await resEmp.json();
-      if (dataEmp.employees) {
-        setMyEmployees(dataEmp.employees);
-      }
-
-      const resCompany = await fetch(`/api/company/${currentUser.id}?fresh=true`, {
-        headers: { 'x-bypass-cache': 'true' }
-      });
-      const dataCompany = await resCompany.json();
-      if (dataCompany.machineryAcquisitions) {
-        setMachineryList(dataCompany.machineryAcquisitions);
-      }
-    } catch (e) {
-      console.error('Error cargando empleados o maquinaria:', e);
-    }
+  const handleManualRefresh = async () => {
+    if (isRefreshingJobs || isLoading) return;
+    await fetchJobs(true);
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     setIsLoading(true);
-    Promise.all([fetchJobs(), fetchMyEmployeesAndMachinery()]).finally(() => setIsLoading(false));
+    fetchJobs().finally(() => {
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
+    });
 
-    // Periodic real-time poll so profiles hired on Render or other sessions disappear everywhere
-    const interval = setInterval(() => {
-      fetchJobs();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [currentUser]);
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [currentUser.id]);
 
   const handleHireEmployee = async (job: JobListing) => {
     if (isTeacher) {
@@ -113,7 +138,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
       // Immediate visual removal so the candidate profile disappears without waiting
       setJobListings(prev => prev.filter(j => j.id !== job.id && j.employeeName !== job.employeeName));
 
-      await Promise.all([fetchJobs(), fetchMyEmployeesAndMachinery()]);
+      await Promise.all([fetchJobs(), refreshSession()]);
       if (onUserBalanceUpdated && typeof currentUser.balance === 'number') {
         onUserBalanceUpdated(currentUser.balance);
       }
@@ -194,7 +219,7 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
       });
       if (res.ok) {
         setMessage({ type: 'success', text: 'Asignación de puesto de trabajo actualizada' });
-        await fetchMyEmployeesAndMachinery();
+        await refreshSession();
       } else {
         const errorData = await res.json().catch(() => ({}));
         setMessage({ type: 'error', text: errorData.error || 'Error al asignar puesto' });
@@ -396,11 +421,21 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
 
         {/* TABS & FILTERS */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-bold text-slate-900 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">
               <Briefcase className="w-4 h-4 text-violet-600" />
               <span>Ofertas de empleo de candidatos ({availableJobs.length})</span>
             </h2>
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              disabled={isRefreshingJobs || isLoading}
+              className="inline-flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-2xl border border-slate-200 shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              title="Consultar ofertas de empleo actualizadas"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-violet-600 ${isRefreshingJobs ? 'animate-spin' : ''}`} />
+              <span>{isRefreshingJobs ? 'Actualizando...' : 'Actualizar ofertas'}</span>
+            </button>
             {!isTeacher && (
               <span className="text-xs bg-blue-50 text-blue-900 px-3 py-2 rounded-2xl font-semibold border border-blue-200 flex items-center gap-1.5">
                 <Users className="w-4 h-4 text-blue-600" />
@@ -463,6 +498,17 @@ export default function JobForumPortal({ currentUser, onBackToHub, onUserBalance
                     ? 'Usa el panel superior para publicar un nuevo lote de candidatos.'
                     : 'El profesor aún no ha publicado ofertas en la bolsa de trabajo o no coinciden con tus filtros.'}
                 </p>
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={handleManualRefresh}
+                    disabled={isRefreshingJobs || isLoading}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-2xl shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingJobs ? 'animate-spin' : ''}`} />
+                    <span>{isRefreshingJobs ? 'Actualizando...' : 'Actualizar ofertas'}</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
