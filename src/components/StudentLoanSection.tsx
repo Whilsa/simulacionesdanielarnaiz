@@ -77,8 +77,11 @@ export default function StudentLoanSection({ currentUser, onBalanceUpdated, onLo
   // Auto-select first purchased property when available and none selected yet
   useEffect(() => {
     if (acquisitions.length > 0 && !selectedPropertyId) {
-      setSelectedPropertyId(acquisitions[0].id);
-      setAppraisalValue(String(acquisitions[0].totalPrice));
+      const firstId = String(acquisitions[0]?.id || acquisitions[0]?.propertyId || '');
+      if (firstId) {
+        setSelectedPropertyId(firstId);
+        setAppraisalValue(String(acquisitions[0].totalPrice ?? ''));
+      }
     }
   }, [acquisitions, selectedPropertyId]);
 

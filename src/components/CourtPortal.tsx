@@ -143,7 +143,9 @@ export default function CourtPortal({ currentUser, onBackToHub, onUserBalanceUpd
   // Auto-generate template text when switching type/subtype
   useEffect(() => {
     if (formType === 'cambiaria') {
-      setFormSubtype('impago_pagare');
+      if (formSubtype !== 'impago_pagare') {
+        setFormSubtype('impago_pagare');
+      }
       setFormLegalBasis(
         '1. Artículos 819 a 827 de la Ley de Enjuiciamiento Civil (LEC), reguladores del juicio cambiario especial y sumario.\n' +
         '2. Artículos 49, 94 y concordantes de la Ley 19/1985 Cambiaria y del Cheque (LCCh), relativos a la fuerza ejecutiva del pagaré y la legitimación del tomador/tenedor.\n' +

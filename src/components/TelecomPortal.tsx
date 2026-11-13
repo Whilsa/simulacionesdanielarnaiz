@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, TelecomPlan, TelecomContract, TelecomInvoice, PropertyAcquisition } from '../types.js';
 import { TELECOM_PLANS } from '../lib/officeStoreData.js';
 import { TelecomInvoiceModal } from './TelecomInvoiceModal.js';

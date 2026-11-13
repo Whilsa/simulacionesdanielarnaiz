@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { User, RawMaterialAnnouncement } from './types.js';
 import LoginForm from './components/LoginForm.js';
 import TeacherDashboard from './components/TeacherDashboard.js';
@@ -168,7 +168,7 @@ export default function App() {
   }, [activeModule]);
 
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser?.id) {
       // Fetch property count for hub badge
       fetch('/api/properties')
         .then(res => (res.ok && res.headers.get('content-type')?.includes('application/json')) ? res.json() : null)
@@ -179,7 +179,7 @@ export default function App() {
         })
         .catch(() => {});
     }
-  }, [currentUser, activeModule]);
+  }, [currentUser?.id, activeModule]);
 
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
@@ -191,7 +191,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const currentUserRef = useRef<User | null>(currentUser);
+  currentUserRef.current = currentUser;
+
+  const handleLogout = useCallback(() => {
     setCurrentUser(null);
     setActiveModule('hub');
     try {
@@ -199,19 +202,43 @@ export default function App() {
     } catch (e) {
       console.warn('Storage unavailable', e);
     }
-  };
+  }, []);
 
-  const handleUserBalanceUpdated = (newBalance: number) => {
-    if (currentUser) {
-      const updatedUser = { ...currentUser, balance: newBalance };
-      setCurrentUser(updatedUser);
+  const handleUserBalanceUpdated = useCallback((newBalance: number) => {
+    if (typeof newBalance !== 'number' || !Number.isFinite(newBalance)) return;
+    setCurrentUser((prev) => {
+      if (!prev || prev.balance === newBalance) return prev;
+      const updatedUser = { ...prev, balance: newBalance };
       try {
         localStorage.setItem('bes_sim_user', JSON.stringify(updatedUser));
       } catch (e) {
         console.warn('Storage unavailable', e);
       }
-    }
-  };
+      return updatedUser;
+    });
+  }, []);
+
+  const handleRefreshUser = useCallback(() => {
+    const activeUser = currentUserRef.current;
+    if (!activeUser) return;
+    fetch('/api/users')
+      .then(r => (r.ok && r.headers.get('content-type')?.includes('application/json')) ? r.json() : null)
+      .then(d => {
+        if (d && d.users) {
+          const u = d.users.find((x: User) => x.id === activeUser.id);
+          if (u) {
+            const merged = { ...u, sessionToken: activeUser.sessionToken };
+            setCurrentUser(merged);
+            try {
+              localStorage.setItem('bes_sim_user', JSON.stringify(merged));
+            } catch (e) {
+              console.warn('Storage unavailable', e);
+            }
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   if (isInitializing) {
     return (
@@ -367,25 +394,7 @@ export default function App() {
               currentUser={currentUser}
               initialTab={rawMaterialsTab}
               onUserBalanceUpdated={handleUserBalanceUpdated}
-              onRefreshUser={() => {
-                fetch('/api/users')
-                  .then(r => (r.ok && r.headers.get('content-type')?.includes('application/json')) ? r.json() : null)
-                  .then(d => {
-                    if (d && d.users) {
-                      const u = d.users.find((x: User) => x.id === currentUser.id);
-                      if (u) {
-                        const merged = { ...u, sessionToken: currentUser.sessionToken };
-                        setCurrentUser(merged);
-                        try {
-                          localStorage.setItem('bes_sim_user', JSON.stringify(merged));
-                        } catch (e) {
-                          console.warn('Storage unavailable', e);
-                        }
-                      }
-                    }
-                  })
-                  .catch(() => {});
-              }}
+              onRefreshUser={handleRefreshUser}
             />
           </main>
         </div>

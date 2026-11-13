@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { User, StudentSessionData } from '../types.js';
 
 interface StudentSessionContextType {
@@ -166,16 +166,16 @@ export const StudentSessionProvider: React.FC<StudentSessionProviderProps> = ({ 
   }, [currentUser?.id, currentUser?.role, fetchSessionData]);
 
   const initSession = useCallback(async () => {
-    if (currentUser && currentUser.role === 'student') {
+    if (currentUser?.id && currentUser.role === 'student') {
       await fetchSessionData(currentUser.id, false);
     }
-  }, [currentUser, fetchSessionData]);
+  }, [currentUser?.id, currentUser?.role, fetchSessionData]);
 
   const refreshSession = useCallback(async () => {
-    if (currentUser && currentUser.role === 'student') {
+    if (currentUser?.id && currentUser.role === 'student') {
       await fetchSessionData(currentUser.id, true);
     }
-  }, [currentUser, fetchSessionData]);
+  }, [currentUser?.id, currentUser?.role, fetchSessionData]);
 
   const updateSessionData = useCallback((updater: (prev: StudentSessionData) => StudentSessionData) => {
     setSessionData((prev) => {
@@ -198,20 +198,30 @@ export const StudentSessionProvider: React.FC<StudentSessionProviderProps> = ({ 
     setLastSyncTimestamp(null);
   }, []);
 
+  const contextValue = useMemo<StudentSessionContextType>(() => ({
+    sessionData,
+    isLoaded,
+    isLoading,
+    error,
+    lastSyncTimestamp,
+    initSession,
+    refreshSession,
+    updateSessionData,
+    clearSession,
+  }), [
+    sessionData,
+    isLoaded,
+    isLoading,
+    error,
+    lastSyncTimestamp,
+    initSession,
+    refreshSession,
+    updateSessionData,
+    clearSession,
+  ]);
+
   return (
-    <StudentSessionContext.Provider
-      value={{
-        sessionData,
-        isLoaded,
-        isLoading,
-        error,
-        lastSyncTimestamp,
-        initSession,
-        refreshSession,
-        updateSessionData,
-        clearSession,
-      }}
-    >
+    <StudentSessionContext.Provider value={contextValue}>
       {children}
     </StudentSessionContext.Provider>
   );

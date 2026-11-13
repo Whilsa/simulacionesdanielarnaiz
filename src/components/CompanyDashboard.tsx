@@ -900,11 +900,17 @@ export default function CompanyDashboard({
     fallbackAttemptedRef.current = false;
   }, [currentUser.id]);
 
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const onUserBalanceUpdatedRef = useRef(onUserBalanceUpdated);
+  onUserBalanceUpdatedRef.current = onUserBalanceUpdated;
+
   // Sincronización de datos patrimoniales, suministros y existencias desde StudentSessionContext
   useEffect(() => {
     if (sessionData) {
+      const activeUser = currentUserRef.current;
       setData((prev) => {
-        const computed = buildCompanyDataFromSession(sessionData, currentUser);
+        const computed = buildCompanyDataFromSession(sessionData, activeUser);
         return {
           ...computed,
           payrollRecords:
@@ -936,14 +942,17 @@ export default function CompanyDashboard({
       }
       setUserOrders(sessionData.rawMaterialOrders || []);
 
-      if (sessionData.user?.balance !== undefined && onUserBalanceUpdated) {
-        onUserBalanceUpdated(sessionData.user.balance);
+      if (sessionData.user?.balance !== undefined && onUserBalanceUpdatedRef.current) {
+        const nextBalance = Number(sessionData.user.balance);
+        if (Number.isFinite(nextBalance) && nextBalance !== Number(activeUser.balance)) {
+          onUserBalanceUpdatedRef.current(nextBalance);
+        }
       }
 
       setLoading(false);
       setError(null);
     }
-  }, [sessionData, currentUser, onUserBalanceUpdated]);
+  }, [sessionData]);
 
   // Mecanismo de respaldo: únicamente si sessionData no está disponible tras finalizar la carga del contexto con error
   useEffect(() => {

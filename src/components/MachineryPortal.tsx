@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Wrench, Building2, ShieldAlert, CheckCircle2, AlertCircle, ArrowLeft, 
   Coins, Zap, Users, Maximize2, Package, Clock, Check, Factory, ChevronRight, Info
@@ -42,12 +42,22 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  const onUserBalanceUpdatedRef = useRef(onUserBalanceUpdated);
+  onUserBalanceUpdatedRef.current = onUserBalanceUpdated;
+  const currentBalanceRef = useRef(currentUser.balance);
+  currentBalanceRef.current = currentUser.balance;
+
   // Sincronización reactiva con StudentSessionContext
   useEffect(() => {
     if (sessionData) {
       if (sessionData.user?.balance !== undefined) {
-        setBalance(sessionData.user.balance);
-        onUserBalanceUpdated(sessionData.user.balance);
+        const nextBalance = Number(sessionData.user.balance);
+        if (Number.isFinite(nextBalance)) {
+          setBalance(nextBalance);
+          if (nextBalance !== Number(currentBalanceRef.current)) {
+            onUserBalanceUpdatedRef.current(nextBalance);
+          }
+        }
       }
       if (sessionData.company?.acquisitions) {
         setStudentAcquisitions(sessionData.company.acquisitions);
@@ -59,7 +69,7 @@ export default function MachineryPortal({ currentUser, onBackToHub, onUserBalanc
         setFloorPlans(sessionData.company.floorPlans);
       }
     }
-  }, [sessionData, onUserBalanceUpdated]);
+  }, [sessionData]);
 
   useEffect(() => {
     fetchCatalog();

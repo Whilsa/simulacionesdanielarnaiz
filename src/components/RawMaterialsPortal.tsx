@@ -153,11 +153,19 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const [rawMaterialsState, setRawMaterialsState] = useState<any>(null);
   const [inventoryData, setInventoryData] = useState<any>(null);
 
+  const onUserBalanceUpdatedRef = useRef(onUserBalanceUpdated);
+  onUserBalanceUpdatedRef.current = onUserBalanceUpdated;
+  const currentBalanceRef = useRef(currentUser.balance);
+  currentBalanceRef.current = currentUser.balance;
+
   // Sincronización reactiva con StudentSessionContext
   useEffect(() => {
     if (sessionData) {
-      if (sessionData.user?.balance !== undefined && onUserBalanceUpdated) {
-        onUserBalanceUpdated(sessionData.user.balance);
+      if (sessionData.user?.balance !== undefined && onUserBalanceUpdatedRef.current) {
+        const nextBalance = Number(sessionData.user.balance);
+        if (Number.isFinite(nextBalance) && nextBalance !== Number(currentBalanceRef.current)) {
+          onUserBalanceUpdatedRef.current(nextBalance);
+        }
       }
       if (sessionData.rawMaterialOrders) {
         setOrders(sessionData.rawMaterialOrders);
@@ -193,7 +201,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
         });
       }
     }
-  }, [sessionData, onUserBalanceUpdated]);
+  }, [sessionData]);
 
   // Cart State
   const [cart, setCart] = useState<RawMaterialCartItem[]>([]);
@@ -2464,7 +2472,10 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   useEffect(() => {
     if (studentWarehouses.length > 0 && !selectedDestinationNaveId) {
-      setSelectedDestinationNaveId(studentWarehouses[0].id);
+      const firstId = String(studentWarehouses[0]?.id || studentWarehouses[0]?.propertyId || '');
+      if (firstId) {
+        setSelectedDestinationNaveId(firstId);
+      }
     }
   }, [acquisitions]);
 
