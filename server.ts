@@ -909,10 +909,12 @@ async function withPostgresTransaction<T>(
     throw new Error('DATABASE_URL no configurada para transacciones PostgreSQL');
   }
   const client = await dbPool.connect();
+  const hasOwnQuery = Object.prototype.hasOwnProperty.call(client, 'query');
+  const prevOwnQuery = (client as any).query;
   const rawClientQuery = client.query.bind(client);
-  (client as any).query = (text: any, params?: any) => {
+  (client as any).query = (...args: any[]) => {
     totalPostgresQueriesCount++;
-    return rawClientQuery(text, params);
+    return (rawClientQuery as (...a: any[]) => any)(...args);
   };
   try {
     await client.query('BEGIN');
@@ -966,6 +968,11 @@ async function withPostgresTransaction<T>(
     }
     throw err;
   } finally {
+    if (hasOwnQuery) {
+      (client as any).query = prevOwnQuery;
+    } else {
+      delete (client as any).query;
+    }
     client.release();
   }
 }
