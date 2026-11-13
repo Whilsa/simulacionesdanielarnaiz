@@ -3988,6 +3988,14 @@ function recalculateTotalInventory(inv: any) {
   inv.ironScrewdriversUnits = totalStarScrewdrivers;
   inv.metalScrewdriversUnits = totalFlatScrewdrivers;
   inv.producedScrewdriversUnits = totalStarScrewdrivers + totalFlatScrewdrivers;
+
+  const navesList = Object.values(inv.naveInventories) as any[];
+  if (navesList.some(n => typeof n.line1PendingHours === 'number')) {
+    inv.line1PendingHours = navesList.reduce((sum, n) => sum + (Number(n.line1PendingHours) || 0), 0);
+  }
+  if (navesList.some(n => typeof n.line2PendingHours === 'number')) {
+    inv.line2PendingHours = navesList.reduce((sum, n) => sum + (Number(n.line2PendingHours) || 0), 0);
+  }
 }
 
 function deductRodsFromSellerInv(sellerInv: any, qtyToDeduct: number, title?: string) {
@@ -4378,7 +4386,11 @@ function getSpainHour(date: Date): number {
   }
 }
 
-function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
+function checkAndCalculateProduction(
+  db: DatabaseSchema,
+  studentId: string,
+  options?: { skipBackgroundSync?: boolean }
+) {
   if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
 
@@ -4406,7 +4418,7 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
 
   const studentNaves = (db.acquisitions || []).filter(a =>
     String(a.studentId) === String(studentId) &&
-    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes(a.propertyType || a.type || '') ||
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial', 'warehouse'].includes((a.propertyType || a.type || '').toLowerCase()) ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
@@ -4509,12 +4521,24 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
   const hoursElapsed = Math.min(24, Math.max(0, elapsedMs / (1000 * 3600))); // 1 real hour = 1 simulated hour
 
   if (hoursElapsed > 0.0001) {
-    const machinery = (db.machineryAcquisitions || []).filter(m => String(m.studentId) === String(studentId) && m.status !== 'montaje');
+    const machinery = (db.machineryAcquisitions || []).filter(m => {
+      if (String(m.studentId) !== String(studentId)) return false;
+      if ((m.status === 'montaje' || m.status === 'en_montaje') && (!m.relocationStatus || m.relocationStatus === 'completed')) {
+        const finishStr = m.assemblyFinishDate || m.assemblyEndDate || '';
+        const finishDate = finishStr ? new Date(finishStr) : null;
+        if (finishDate && !isNaN(finishDate.getTime()) && now >= finishDate) {
+          m.status = 'operativa';
+          if (!options?.skipBackgroundSync) {
+            syncMachineryToSupabase(m).catch(e => console.error(e));
+          }
+        }
+      }
+      return m.status === 'operativa';
+    });
     const electricityContracts = (db.electricityContracts || []).filter(e => String(e.studentId) === String(studentId) && e.status === 'active');
     const hasElectricity = electricityContracts.length > 0;
 
-    const ownedForklifts = (db.purchasedVehicles || []).filter(v => String(v.studentId) === String(studentId) && v.vehicleType === 'carretilla_elevadora').length;
-    const hiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId));
+    const hiredEmployees = (db.hiredEmployees || []).filter(e => String(e.studentId) === String(studentId) && e.status !== 'despedido');
 
     const stepMs = Math.min(elapsedMs, 10 * 60 * 1000); // 10 minute steps max
     const numSteps = Math.ceil(elapsedMs / stepMs);
@@ -4537,11 +4561,16 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
       // Process production for each nave independently using its own warehouse stock!
       for (const naveObj of navesToProcess) {
         const nId = naveObj.id;
+        const nPropId = (naveObj as any).propertyId;
         const naveInv = getNaveInv(nId);
 
         const naveMachinery = machinery.filter(m => {
           const mNaveId = m.installedAtNaveId || m.installedNaveId || m.targetNaveId || primaryNaveId;
-          return mNaveId === nId || (navesToProcess.length === 1 && !m.installedAtNaveId && !m.installedNaveId);
+          return (
+            String(mNaveId) === String(nId) ||
+            (nPropId && String(mNaveId) === String(nPropId)) ||
+            (navesToProcess.length === 1 && !m.installedAtNaveId && !m.installedNaveId)
+          );
         });
 
         const naveForklifts = (db.purchasedVehicles || []).filter(v =>
@@ -4549,6 +4578,7 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
           v.vehicleType === 'carretilla_elevadora' &&
           (
             String(v.assignedPropertyId) === String(nId) ||
+            (nPropId && String(v.assignedPropertyId) === String(nPropId)) ||
             (navesToProcess.length === 1 && (v.assignedWarehouseIndex !== undefined || !v.assignedPropertyId))
           )
         );
@@ -4622,6 +4652,8 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
                 } else {
                   naveInv.producedFlatRodsUnits = (naveInv.producedFlatRodsUnits || 0) + actualProduced;
                 }
+                naveInv.producedIronRodsUnits = naveInv.producedStarRodsUnits || 0;
+                naveInv.producedMetalRodsUnits = naveInv.producedFlatRodsUnits || 0;
                 unitsProduced1 = actualProduced;
               }
 
@@ -4804,8 +4836,10 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
         }
         recalculateTotalInventory(inv);
         inv.updatedAt = now.toISOString();
-        syncRawMaterialOrderToSupabase(ord).catch(e => console.error(e));
-        syncInventoryToSupabase(inv, ordBuyer?.name).catch(e => console.error(e));
+        if (!options?.skipBackgroundSync) {
+          syncRawMaterialOrderToSupabase(ord).catch(e => console.error(e));
+          syncInventoryToSupabase(inv, ordBuyer?.name).catch(e => console.error(e));
+        }
       }
     }
   }
@@ -4842,11 +4876,448 @@ function checkAndCalculateProduction(db: DatabaseSchema, studentId: string) {
     if (corrected) {
       recalculateTotalInventory(inv);
       const u = db.users.find(usr => usr.id === studentId);
-      syncInventoryToSupabase(inv, u?.name).catch(e => console.error(e));
+      if (!options?.skipBackgroundSync) {
+        syncInventoryToSupabase(inv, u?.name).catch(e => console.error(e));
+      }
     }
   }
 
   return inv;
+}
+
+const studentInventoryMutexes = new Map<string, Promise<void>>();
+
+async function runWithStudentInventoryMutex<T>(studentId: string, task: () => Promise<T>): Promise<T> {
+  const key = String(studentId || 'unknown');
+  const previous = studentInventoryMutexes.get(key) || Promise.resolve();
+  let releaseCurrent: () => void = () => {};
+  const currentGate = new Promise<void>(resolve => {
+    releaseCurrent = resolve;
+  });
+  const chained = previous.then(() => currentGate, () => currentGate);
+  studentInventoryMutexes.set(key, chained);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (studentInventoryMutexes.get(key) === chained) {
+      studentInventoryMutexes.delete(key);
+    }
+  }
+}
+
+function mapAcquisitionRowFromPg(r: any): PropertyAcquisition {
+  return {
+    id: String(r.id),
+    propertyId: String(r.inmueble_id),
+    propertyTitle: String(r.inmueble_titulo),
+    title: String(r.inmueble_titulo),
+    propertyType: String(r.inmueble_tipo) as any,
+    type: String(r.inmueble_tipo) as any,
+    operation: String(r.operacion) as any,
+    studentId: String(r.alumno_id),
+    studentName: String(r.alumno_nombre),
+    surfaceM2: Number(r.superficie_m2),
+    location: String(r.ubicacion || ''),
+    imageUrl: String(r.imagen_url || ''),
+    landPercentage: Number(r.porcentaje_suelo),
+    basePrice: Number(r.precio_base),
+    ivaAmount: Number(r.importe_iva),
+    totalPrice: Number(r.precio_total),
+    purchaseDate: new Date(r.fecha_compra).toISOString(),
+    paymentMethod: String(r.metodo_pago) as any,
+    monthlyRent: r.alquiler_mensual ? Number(r.alquiler_mensual) : undefined,
+    nextRentDueDate: r.proximo_pago_alquiler ? new Date(r.proximo_pago_alquiler).toISOString() : undefined,
+    downPaymentPaid: r.entrada_pagada ? Number(r.entrada_pagada) : undefined,
+    pendingBalance: r.saldo_pendiente ? Number(r.saldo_pendiente) : undefined
+  };
+}
+
+function mapMachineryRowFromPg(row: any): MachineryAcquisition {
+  const equip = row.equipamiento ? (typeof row.equipamiento === 'string' ? JSON.parse(row.equipamiento) : row.equipamiento) : [];
+  return {
+    id: String(row.id),
+    studentId: String(row.alumno_id),
+    studentName: String(row.alumno_nombre),
+    machineryId: String(row.maquinaria_id),
+    category: String(row.categoria) as any,
+    lineTitle: String(row.linea_titulo),
+    title: String(row.linea_titulo),
+    optionTitle: String(row.linea_titulo),
+    lathesCount: 1,
+    productionCapacityUnitsPerHour: Number(row.capacidad_produccion_unidades_hora || 60),
+    imageUrl: '/images/machinery/maquinaria_cnc.jpg',
+    basePrice: Number(row.precio_base),
+    financedPrice: Number(row.precio_financiado || row.precio_base),
+    deferredPrice: Number(row.precio_financiado || row.precio_base),
+    ivaAmount: Number(row.importe_iva),
+    totalPrice: Number(row.precio_total),
+    downPaymentPaid: Number(row.entrada_pagada),
+    pendingBalance: Number(row.saldo_pendiente),
+    paymentMethod: String(row.metodo_pago) as any,
+    installmentsCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+    installmentCount: row.numero_cuotas ? Number(row.numero_cuotas) : undefined,
+    purchaseDate: new Date(row.fecha_compra).toISOString(),
+    assemblyDays: Number(row.dias_montaje || 5),
+    assemblyEndDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+    assemblyFinishDate: row.fecha_fin_montaje ? new Date(row.fecha_fin_montaje).toISOString() : new Date().toISOString(),
+    status: (row.estado === 'en_montaje' || row.estado === 'montaje') ? 'en_montaje' : (row.estado === 'en_traslado' ? 'en_traslado' : (row.estado === 'pendiente_energia' ? 'pendiente_energia' : 'operativa')),
+    installedAtNaveId: String(row.nave_instalada_id),
+    installedNaveId: String(row.nave_instalada_id),
+    installationNaveId: String(row.nave_instalada_id),
+    installedAtNaveTitle: String(row.nave_instalada_titulo),
+    installedNaveTitle: String(row.nave_instalada_titulo),
+    installationNaveTitle: String(row.nave_instalada_titulo),
+    installationSurfaceM2: 300,
+    requiredStaff: Number(row.personal_requerido || 2),
+    requiredPowerKW: Number(row.potencia_kw || 35),
+    powerKw: Number(row.potencia_kw || 35),
+    equipmentList: equip,
+    equipment: equip,
+    relocationStatus: row.relocation_status ? String(row.relocation_status) as any : undefined,
+    relocationTargetNaveId: row.relocation_target_nave_id ? String(row.relocation_target_nave_id) : undefined,
+    relocationTargetNaveTitle: row.relocation_target_nave_title ? String(row.relocation_target_nave_title) : undefined,
+    relocationStartDate: row.relocation_start_date ? new Date(row.relocation_start_date).toISOString() : undefined,
+    relocationDisassemblyEndDate: row.relocation_disassembly_end_date ? new Date(row.relocation_disassembly_end_date).toISOString() : undefined,
+    relocationReassemblyEndDate: row.relocation_reassembly_end_date ? new Date(row.relocation_reassembly_end_date).toISOString() : undefined
+  };
+}
+
+function mapVehicleRowFromPg(row: any): PurchasedVehicle {
+  return {
+    id: String(row.id),
+    studentId: String(row.alumno_id),
+    studentName: String(row.alumno_nombre),
+    vehicleType: String(row.vehiculo_tipo) as any,
+    title: String(row.titulo || ''),
+    basePrice: Number(row.precio_base || 0),
+    ivaAmount: Number(row.importe_iva || 0),
+    totalPrice: Number(row.precio_total || row.precio_compra || 0),
+    paymentMethod: String(row.metodo_pago || 'direct') as any,
+    purchaseDate: new Date(row.fecha_compra).toISOString(),
+    assignedDriverId: row.conductor_asignado_id ? String(row.conductor_asignado_id) : undefined,
+    assignedDriverName: row.conductor_asignado_nombre ? String(row.conductor_asignado_nombre) : undefined,
+    assignedShift: row.turno_asignado ? Number(row.turno_asignado) : undefined,
+    assignedWarehouseIndex: row.almacen_asignado_index !== null && row.almacen_asignado_index !== undefined ? Number(row.almacen_asignado_index) : undefined,
+    assignedPropertyId: row.propiedad_asignada_id ? String(row.propiedad_asignada_id) : undefined,
+    assignedPropertyTitle: row.propiedad_asignada_titulo ? String(row.propiedad_asignada_titulo) : undefined,
+    assignedWarehouseName: row.almacen_asignado_nombre ? String(row.almacen_asignado_nombre) : undefined,
+    status: String(row.estado || 'activo') as 'activo' | 'mantenimiento',
+    imageUrl: row.imagen_url ? String(row.imagen_url) : (row.vehiculo_tipo === 'camion_trailer' ? '/images/vehicles/camion_trailer.jpg' : row.vehiculo_tipo === 'coche_empresa' ? '/images/vehicles/coche_empresa.jpg' : row.vehiculo_tipo === 'furgoneta_transporte' || row.vehiculo_tipo === 'furgoneta' ? '/images/vehicles/furgoneta_transporte.jpg' : '/images/vehicles/carretilla_elevadora.jpg')
+  };
+}
+
+function mapElectricityContractRowFromPg(row: any): ElectricityContract {
+  return {
+    id: String(row.id),
+    studentId: String(row.alumno_id),
+    studentName: String(row.alumno_nombre),
+    propertyId: row.inmueble_id ? String(row.inmueble_id) : undefined,
+    propertyTitle: row.titulo_inmueble ? String(row.titulo_inmueble) : undefined,
+    contractedPowerKw: Number(row.potencia_contratada_kw || 15),
+    tariffName: String(row.nombre_tarifa || 'IberLuz 3.0TD Industrial'),
+    pricePerKwDay: Number(row.precio_kw_dia || 0.11),
+    pricePerKwh: Number(row.precio_kwh || 0.14),
+    status: String(row.estado) as 'active' | 'cancelled',
+    contractDate: row.fecha_contrato ? new Date(row.fecha_contrato).toISOString() : new Date().toISOString(),
+    cupsCode: String(row.cups_code || '')
+  };
+}
+
+function buildProducedGoodsPayload(inv: any) {
+  return {
+    rodProductionMode: inv.rodProductionMode || null,
+    varillas_punta: inv.producedRodsUnits || 0,
+    varillas_punta_estrella: inv.producedStarRodsUnits || inv.producedIronRodsUnits || 0,
+    varillas_punta_plana: inv.producedFlatRodsUnits || inv.producedMetalRodsUnits || 0,
+    varillas_hierro_punta: inv.producedStarRodsUnits || inv.producedIronRodsUnits || 0,
+    varillas_metal_punta: inv.producedFlatRodsUnits || inv.producedMetalRodsUnits || 0,
+    productos_ensamblados: inv.producedScrewdriversUnits || 0,
+    destornilladores_punta_estrella: inv.starScrewdriversUnits || inv.ironScrewdriversUnits || 0,
+    destornilladores_punta_plana: inv.flatScrewdriversUnits || inv.metalScrewdriversUnits || 0,
+    destornilladores_hierro: inv.starScrewdriversUnits || inv.ironScrewdriversUnits || 0,
+    destornilladores_metal: inv.flatScrewdriversUnits || inv.metalScrewdriversUnits || 0,
+    producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
+  };
+}
+
+function buildRawMaterialsPayload(inv: any) {
+  return {
+    fragmentos_hierro_kg: inv.ironKg || 0,
+    fragmentos_metal_kg: inv.metalKg || 0,
+    pellets_plastico_kg: inv.plasticKg || 0,
+    pegamento_epoxi_kg: inv.epoxiKg || 0
+  };
+}
+
+async function calculateAndPersistStudentProductionPg(
+  rawStudentId: string,
+  options?: { rodModeOverride?: 'estrella' | 'plana' }
+): Promise<{
+  canonicalStudentId: string;
+  studentName: string;
+  studentLevel: number;
+  inventory: RawMaterialInventory;
+  machinery: MachineryAcquisition[];
+  orders: RawMaterialOrder[];
+}> {
+  const txResult = await withPostgresTransaction(async (client) => {
+    // 1. Resolve canonical student identity from PostgreSQL cuentas
+    const userRes = await client.query(
+      `SELECT id, alumno, usuario, level
+       FROM cuentas
+       WHERE id = $1 OR LOWER(usuario) = LOWER($1)
+       LIMIT 1`,
+      [rawStudentId]
+    );
+
+    const dbSnapshot = readDb();
+    const memUser = (dbSnapshot.users || []).find(
+      u => u.id === rawStudentId || u.username?.toLowerCase() === rawStudentId.toLowerCase()
+    );
+
+    const canonicalStudentId = userRes.rows[0]?.id ? String(userRes.rows[0].id) : (memUser?.id || String(rawStudentId));
+    const studentUsername = userRes.rows[0]?.usuario ? String(userRes.rows[0].usuario) : (memUser?.username || '');
+    const studentName = userRes.rows[0]?.alumno ? String(userRes.rows[0].alumno) : (memUser?.name || 'Estudiante');
+    const studentLevel = Number(userRes.rows[0]?.level ?? memUser?.level ?? 1);
+
+    // 2. Ensure row exists in materias_primas_inventario and lock it exclusively FOR UPDATE
+    await client.query(
+      `INSERT INTO materias_primas_inventario (
+        alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
+        pellets_plastico_kg, pegamento_epoxi_kg, varillas_punta, productos_ensamblados,
+        desglose_almacenes, fecha_actualizacion
+      ) VALUES ($1, $2, 0, 0, 0, 0, 0, 0, '{}'::jsonb, NOW())
+      ON CONFLICT (alumno_id) DO NOTHING`,
+      [canonicalStudentId, studentName]
+    );
+
+    const invLockRes = await client.query(
+      `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
+      [canonicalStudentId]
+    );
+    const invRow = invLockRes.rows[0];
+
+    // 3. Hydrate all production-relevant student entities freshly from PostgreSQL
+    const [acqRes, machRes, empRes, elecRes, vehRes, ordRes] = await Promise.all([
+      client.query(
+        `SELECT * FROM adquisiciones
+         WHERE alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2))
+         ORDER BY fecha_compra DESC`,
+        [canonicalStudentId, studentUsername]
+      ),
+      client.query(
+        `SELECT * FROM maquinaria_adquisiciones
+         WHERE alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2))
+         ORDER BY id ASC
+         FOR UPDATE`,
+        [canonicalStudentId, studentUsername]
+      ),
+      client.query(
+        `SELECT * FROM empleados_contratados
+         WHERE alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2))
+         ORDER BY fecha_contratacion DESC`,
+        [canonicalStudentId, studentUsername]
+      ),
+      client.query(
+        `SELECT * FROM contratos_electricos
+         WHERE (alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2)))
+           AND estado = 'active'
+         ORDER BY fecha_contrato DESC`,
+        [canonicalStudentId, studentUsername]
+      ),
+      client.query(
+        `SELECT * FROM vehiculos_comprados
+         WHERE alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2))
+         ORDER BY fecha_compra DESC`,
+        [canonicalStudentId, studentUsername]
+      ),
+      client.query(
+        `SELECT * FROM materias_primas_pedidos
+         WHERE alumno_id = $1 OR ($2 <> '' AND LOWER(alumno_id) = LOWER($2))
+         ORDER BY fecha_pedido DESC
+         FOR UPDATE`,
+        [canonicalStudentId, studentUsername]
+      )
+    ]);
+
+    // 4. Reconcile expired machinery relocation and initial assembly transitions atomically in PG
+    for (const mRow of machRes.rows) {
+      if (mRow.relocation_status === 'desmontaje') {
+        const res4h = await client.query(
+          `UPDATE maquinaria_adquisiciones
+           SET relocation_status = 'remontaje',
+               estado = 'en_montaje'
+           WHERE id = $1
+             AND relocation_status = 'desmontaje'
+             AND relocation_disassembly_end_date <= CURRENT_TIMESTAMP
+           RETURNING *`,
+          [mRow.id]
+        );
+        if (res4h.rows[0]) {
+          Object.assign(mRow, res4h.rows[0]);
+        }
+      }
+
+      if (mRow.relocation_status === 'remontaje') {
+        const res8h = await client.query(
+          `UPDATE maquinaria_adquisiciones
+           SET relocation_status = 'completed',
+               estado = 'operativa',
+               nave_instalada_id = relocation_target_nave_id,
+               nave_instalada_titulo = relocation_target_nave_title
+           WHERE id = $1
+             AND relocation_status = 'remontaje'
+             AND relocation_reassembly_end_date <= CURRENT_TIMESTAMP
+           RETURNING *`,
+          [mRow.id]
+        );
+        if (res8h.rows[0]) {
+          Object.assign(mRow, res8h.rows[0]);
+        }
+      }
+
+      if (
+        (mRow.estado === 'montaje' || mRow.estado === 'en_montaje') &&
+        (!mRow.relocation_status || mRow.relocation_status === 'completed') &&
+        mRow.fecha_fin_montaje
+      ) {
+        const resAssembly = await client.query(
+          `UPDATE maquinaria_adquisiciones
+           SET estado = 'operativa'
+           WHERE id = $1
+             AND estado IN ('montaje', 'en_montaje')
+             AND fecha_fin_montaje <= CURRENT_TIMESTAMP
+           RETURNING *`,
+          [mRow.id]
+        );
+        if (resAssembly.rows[0]) {
+          Object.assign(mRow, resAssembly.rows[0]);
+        }
+      }
+    }
+
+    const freshAcquisitions = acqRes.rows.map(r => ({ ...mapAcquisitionRowFromPg(r), studentId: canonicalStudentId }));
+    const freshNaves = freshAcquisitions.filter(a =>
+      ['nave_industrial', 'almacen', 'almacen_logistico', 'industrial', 'warehouse'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+      (a.propertyTitle || '').toLowerCase().includes('nave') ||
+      (a.propertyTitle || '').toLowerCase().includes('almacén') ||
+      (a.propertyTitle || '').toLowerCase().includes('almacen')
+    );
+    const freshMachinery = machRes.rows.map(r => ({ ...mapMachineryRowFromPg(r), studentId: canonicalStudentId }));
+    const freshEmployees = empRes.rows.map(r => ({ ...mapHiredEmployeeRow(r), studentId: canonicalStudentId }));
+    const freshElecContracts = elecRes.rows.map(r => ({ ...mapElectricityContractRowFromPg(r), studentId: canonicalStudentId }));
+    const freshVehicles = vehRes.rows.map(r => ({ ...mapVehicleRowFromPg(r), studentId: canonicalStudentId }));
+    const freshOrders = ordRes.rows.map(r => ({ ...parseRawMaterialOrderRow(r), studentId: canonicalStudentId }));
+    const previouslyCreditedOrderIds = new Set(freshOrders.filter(o => o.inventoryCredited).map(o => o.id));
+
+    const parsedInv = parseInventoryRow(invRow, freshNaves);
+
+    const calcDb: DatabaseSchema = {
+      users: [{
+        id: canonicalStudentId,
+        name: studentName,
+        username: studentUsername || canonicalStudentId,
+        accountNumber: '',
+        balance: 0,
+        role: 'student',
+        level: (studentLevel as 1 | 2 | 3)
+      }],
+      transfers: [],
+      acquisitions: freshAcquisitions,
+      machineryAcquisitions: freshMachinery,
+      hiredEmployees: freshEmployees,
+      electricityContracts: freshElecContracts,
+      purchasedVehicles: freshVehicles,
+      rawMaterialOrders: freshOrders,
+      rawMaterialInventories: [parsedInv],
+      properties: [],
+      paymentObligations: [],
+      loans: [],
+      systemLogs: [],
+      defaultInitialBalance: 0
+    };
+
+    const calculatedInv = checkAndCalculateProduction(calcDb, canonicalStudentId, { skipBackgroundSync: true });
+
+    if (options?.rodModeOverride) {
+      (calculatedInv as any).rodProductionMode = options.rodModeOverride;
+      calculatedInv.updatedAt = new Date().toISOString();
+    }
+
+    // 5. Persist any newly credited orders and the calculated inventory BEFORE committing
+    for (const ord of freshOrders) {
+      if (ord.inventoryCredited && !previouslyCreditedOrderIds.has(ord.id)) {
+        await syncRawMaterialOrderToSupabase(ord, client);
+      }
+    }
+
+    await syncInventoryToSupabase(calculatedInv, studentName, client);
+
+    return {
+      canonicalStudentId,
+      studentName,
+      studentLevel,
+      inventory: calculatedInv,
+      machinery: freshMachinery,
+      orders: freshOrders,
+      acquisitions: freshAcquisitions,
+      employees: freshEmployees,
+      electricityContracts: freshElecContracts,
+      vehicles: freshVehicles
+    };
+  });
+
+  // 6. Post-commit local memory/db.json cache sync (only after PG commit succeeds)
+  try {
+    const db = readDb();
+    if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+    const invIdx = db.rawMaterialInventories.findIndex(i => i.studentId === txResult.canonicalStudentId);
+    if (invIdx !== -1) {
+      db.rawMaterialInventories[invIdx] = txResult.inventory;
+    } else {
+      db.rawMaterialInventories.push(txResult.inventory);
+    }
+
+    db.machineryAcquisitions = [
+      ...(db.machineryAcquisitions || []).filter(m => m.studentId !== txResult.canonicalStudentId),
+      ...txResult.machinery
+    ];
+    db.acquisitions = [
+      ...(db.acquisitions || []).filter(a => a.studentId !== txResult.canonicalStudentId),
+      ...txResult.acquisitions
+    ];
+    db.hiredEmployees = [
+      ...(db.hiredEmployees || []).filter(e => e.studentId !== txResult.canonicalStudentId),
+      ...txResult.employees
+    ];
+    db.electricityContracts = [
+      ...(db.electricityContracts || []).filter(c => !(c.studentId === txResult.canonicalStudentId && c.status === 'active')),
+      ...txResult.electricityContracts
+    ];
+    db.purchasedVehicles = [
+      ...(db.purchasedVehicles || []).filter(v => v.studentId !== txResult.canonicalStudentId),
+      ...txResult.vehicles
+    ];
+    if (db.rawMaterialOrders) {
+      const ordMap = new Map(txResult.orders.map(o => [o.id, o]));
+      db.rawMaterialOrders = db.rawMaterialOrders.map(o => ordMap.get(o.id) || o);
+    }
+    writeDb(db);
+  } catch (cacheErr) {
+    console.warn('[Production Cache Sync Warning]:', cacheErr);
+  }
+
+  return {
+    canonicalStudentId: txResult.canonicalStudentId,
+    studentName: txResult.studentName,
+    studentLevel: txResult.studentLevel,
+    inventory: txResult.inventory,
+    machinery: txResult.machinery,
+    orders: txResult.orders
+  };
 }
 
 function getDefaultSeedProperties(): PropertyListing[] {
@@ -10870,8 +11341,9 @@ app.get('/api/company/:studentId', async (req, res) => {
       m.requiredStaff = 2;
     }
     if ((m.status === 'montaje' || m.status === 'en_montaje') && (!m.relocationStatus || m.relocationStatus === 'completed')) {
-      const finishDate = new Date(m.assemblyFinishDate || m.assemblyEndDate || '');
-      if (m.assemblyFinishDate && currentDate >= finishDate) {
+      const finishStr = m.assemblyFinishDate || m.assemblyEndDate || '';
+      const finishDate = finishStr ? new Date(finishStr) : null;
+      if (finishDate && !isNaN(finishDate.getTime()) && currentDate >= finishDate) {
         m.status = 'operativa';
         syncMachineryToSupabase(m).catch(e => console.error(e));
       }
@@ -15396,6 +15868,12 @@ app.get('/api/student/session-init', async (req, res) => {
     let classmates: PublicClassmate[] = [];
 
     if (dbPool) {
+      // Ensure pending Level 1 manufacturing production and machinery assembly transitions
+      // are transactionally calculated and persisted to PostgreSQL before building sessionData.
+      if (canonicalUser.level === 1) {
+        await calculateAndPersistStudentProductionPg(sId);
+      }
+
       // Parallel reads for student domain data
       const [
         movsRes,
@@ -15841,6 +16319,12 @@ app.get('/api/student/session-init', async (req, res) => {
       }
     } else {
       // In-memory fallback
+      if (canonicalUser.level === 1) {
+        await runWithStudentInventoryMutex(sId, async () => {
+          checkAndCalculateProduction(db, sId);
+          writeDb(db);
+        });
+      }
       studentTransfers = (db.transfers || []).filter(tx => tx.senderId === sId || tx.receiverId === sId);
       studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === sId);
       studentMachinery = (db.machineryAcquisitions || []).filter(m => m.studentId === sId);
@@ -28315,7 +28799,7 @@ app.get('/api/students-list', async (req, res) => {
 });
 
 // Inventory Stock Transfer Endpoint
-function parseInventoryRow(row: any): RawMaterialInventory {
+function parseInventoryRow(row: any, preloadedNaves?: PropertyAcquisition[]): RawMaterialInventory {
   let starRods = row.varillas_punta_estrella !== undefined && row.varillas_punta_estrella !== null ? Number(row.varillas_punta_estrella) : Number(row.varillas_hierro_punta || 0);
   let flatRods = row.varillas_punta_plana !== undefined && row.varillas_punta_plana !== null ? Number(row.varillas_punta_plana) : Number(row.varillas_metal_punta || 0);
   const totalRods = Number(row.varillas_punta || (starRods + flatRods));
@@ -28340,14 +28824,13 @@ function parseInventoryRow(row: any): RawMaterialInventory {
   }
 
   const sid = String(row.alumno_id);
-  const db = readDb();
-  const studentNaves = (db.acquisitions || []).filter(a =>
+  const studentNaves = preloadedNaves || ((readDb().acquisitions || []).filter(a =>
     String(a.studentId) === sid &&
-    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+    (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial', 'warehouse'].includes((a.propertyType || a.type || '').toLowerCase()) ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('almacén') ||
      (a.propertyTitle || a.title || '').toLowerCase().includes('almacen'))
-  );
+  ));
   const primaryNaveId = studentNaves.length > 0 ? String(studentNaves[0].id) : 'default_nave';
 
   if (primaryNaveId !== 'default_nave' && naveInventories['default_nave']) {
@@ -28431,7 +28914,9 @@ function parseInventoryRow(row: any): RawMaterialInventory {
     line1PendingHours: Number(row.line1_pending_hours || 0),
     line2PendingHours: Number(row.line2_pending_hours || 0),
     naveInventories,
-    lastCalculatedAt: row.ultima_calculada ? new Date(row.ultima_calculada).toISOString() : new Date().toISOString(),
+    lastCalculatedAt: row.ultima_calculada
+      ? new Date(row.ultima_calculada).toISOString()
+      : (row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()),
     updatedAt: row.fecha_actualizacion ? new Date(row.fecha_actualizacion).toISOString() : new Date().toISOString()
   };
 }
@@ -32998,78 +33483,64 @@ app.get(['/api/raw-materials/inventory', '/api/raw-materials/inventory/:studentI
   if (!studentId) {
     return res.status(400).json({ error: 'studentId es requerido' });
   }
-  const db = readDb();
-  if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
 
-  let canonicalStudentId = studentId;
-  const memUser = (db.users || []).find(u => u.id === studentId || u.username?.toLowerCase() === studentId.toLowerCase());
-  let studentName = memUser ? memUser.name : 'Estudiante';
-  if (memUser) {
-    canonicalStudentId = memUser.id;
-  }
+  try {
+    if (dbPool) {
+      const { inventory: inv, machinery } = await calculateAndPersistStudentProductionPg(studentId);
+      const rawMaterials = buildRawMaterialsPayload(inv);
+      const producedGoods = buildProducedGoodsPayload(inv);
+      const machineryStatuses = machinery.map(m => ({
+        id: m.id,
+        status: m.status,
+        relocationStatus: m.relocationStatus,
+        installedAtNaveId: m.installedAtNaveId,
+        installedAtNaveTitle: m.installedAtNaveTitle
+      }));
 
-  // When dbPool is configured, PostgreSQL materias_primas_inventario is the source of truth
-  if (dbPool) {
-    try {
-      const uRes = await safeDbQuery(
-        `SELECT id, alumno, usuario FROM cuentas WHERE id = $1 OR LOWER(usuario) = LOWER($1) LIMIT 1`,
-        [studentId]
-      );
-      if (uRes && uRes.rows.length > 0) {
-        canonicalStudentId = uRes.rows[0].id;
-        studentName = uRes.rows[0].alumno;
-      }
-
-      const invRowRes = await safeDbQuery(
-        `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1`,
-        [canonicalStudentId]
-      );
-
-      if (invRowRes && invRowRes.rows.length > 0) {
-        const parsedInv = parseInventoryRow(invRowRes.rows[0]);
-        const idx = db.rawMaterialInventories.findIndex(i => i.studentId === canonicalStudentId);
-        if (idx !== -1) {
-          db.rawMaterialInventories[idx] = parsedInv;
-        } else {
-          db.rawMaterialInventories.push(parsedInv);
-        }
-      }
-    } catch (e) {
-      console.error('[Inventory Route] Error reading PostgreSQL inventory:', e);
+      return res.json({
+        success: true,
+        inventory: inv,
+        rawMaterials,
+        producedGoods,
+        machineryStatuses
+      });
     }
+
+    const memResult = await runWithStudentInventoryMutex(studentId, async () => {
+      const db = readDb();
+      if (!db.rawMaterialInventories) db.rawMaterialInventories = [];
+      const memUser = (db.users || []).find(
+        u => u.id === studentId || u.username?.toLowerCase() === studentId.toLowerCase()
+      );
+      const canonicalStudentId = memUser ? memUser.id : studentId;
+      const inv = checkAndCalculateProduction(db, canonicalStudentId);
+      writeDb(db);
+      const machineryStatuses = (db.machineryAcquisitions || [])
+        .filter(m => String(m.studentId) === String(canonicalStudentId))
+        .map(m => ({
+          id: m.id,
+          status: m.status,
+          relocationStatus: m.relocationStatus,
+          installedAtNaveId: m.installedAtNaveId,
+          installedAtNaveTitle: m.installedAtNaveTitle
+        }));
+      return { inv, machineryStatuses };
+    });
+
+    return res.json({
+      success: true,
+      inventory: memResult.inv,
+      rawMaterials: buildRawMaterialsPayload(memResult.inv),
+      producedGoods: buildProducedGoodsPayload(memResult.inv),
+      machineryStatuses: memResult.machineryStatuses
+    });
+  } catch (err: any) {
+    console.error('[Inventory Route Error]:', err);
+    return res.status(err?.statusCode || 500).json({
+      success: false,
+      error: 'Error al calcular y persistir las existencias en la base de datos: ' + (err?.message || String(err))
+    });
   }
-
-  const inv = checkAndCalculateProduction(db, canonicalStudentId);
-  syncInventoryToSupabase(inv, studentName).catch(e => console.error(e));
-
-  const rawMaterials = {
-    fragmentos_hierro_kg: inv.ironKg || 0,
-    fragmentos_metal_kg: inv.metalKg || 0,
-    pellets_plastico_kg: inv.plasticKg || 0,
-    pegamento_epoxi_kg: inv.epoxiKg || 0
-  };
-
-  const producedGoods = {
-    rodProductionMode: (inv as any).rodProductionMode || null,
-    varillas_punta: inv.producedRodsUnits || 0,
-    varillas_punta_estrella: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
-    varillas_punta_plana: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
-    varillas_hierro_punta: (inv as any).producedStarRodsUnits || (inv as any).producedIronRodsUnits || 0,
-    varillas_metal_punta: (inv as any).producedFlatRodsUnits || (inv as any).producedMetalRodsUnits || 0,
-    productos_ensamblados: inv.producedScrewdriversUnits || 0,
-    destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
-    destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
-    destornilladores_hierro: (inv as any).starScrewdriversUnits || (inv as any).ironScrewdriversUnits || 0,
-    destornilladores_metal: (inv as any).flatScrewdriversUnits || (inv as any).metalScrewdriversUnits || 0,
-    producedScrewdriversUnits: inv.producedScrewdriversUnits || 0
-  };
-
-  res.json({
-    success: true,
-    inventory: inv,
-    rawMaterials,
-    producedGoods
-  });
 });
 
 app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
@@ -33087,110 +33558,37 @@ app.post('/api/raw-materials/rod-production-mode', async (req, res) => {
   try {
     const result = await executeWithIdempotency(idemKey, async () => {
       if (dbPool) {
-        const txResult = await withPostgresTransaction(async (client) => {
-          // Lock row in materias_primas_inventario
-          let invRowRes = await client.query(
-            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
-            [studentId]
-          );
-
-          if (!invRowRes || invRowRes.rows.length === 0) {
-            const db = readDb();
-            const student = (db.users || []).find(u => u.id === studentId);
-            const studentName = student ? student.name : 'Estudiante';
-            await client.query(
-              `INSERT INTO materias_primas_inventario (
-                alumno_id, alumno_nombre, fragmentos_hierro_kg, fragmentos_metal_kg,
-                pellets_plastico_kg, pegamento_epoxi_kg, rod_production_mode,
-                varillas_punta, productos_ensamblados, fecha_actualizacion
-              ) VALUES ($1, $2, 0, 0, 0, 0, $3, 0, 0, NOW())
-              ON CONFLICT (alumno_id) DO NOTHING`,
-              [studentId, studentName, mode]
-            );
-            invRowRes = await client.query(
-              `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1 FOR UPDATE`,
-              [studentId]
-            );
-          }
-
-          const nowIso = new Date().toISOString();
-          await client.query(
-            `UPDATE materias_primas_inventario 
-             SET rod_production_mode = $1, fecha_actualizacion = $2 
-             WHERE alumno_id = $3`,
-            [mode, nowIso, studentId]
-          );
-
-          const updatedRow = (await client.query(
-            `SELECT * FROM materias_primas_inventario WHERE alumno_id = $1`,
-            [studentId]
-          )).rows[0];
-
-          return updatedRow;
+        const { inventory: inv } = await calculateAndPersistStudentProductionPg(studentId, {
+          rodModeOverride: mode
         });
-
-        // POST-COMMIT: Update memory and db.json
-        const db = readDb();
-        const inv = checkAndCalculateProduction(db, studentId);
-        (inv as any).rodProductionMode = mode;
-        inv.updatedAt = new Date().toISOString();
-        writeDb(db);
-
-        const rawMaterials = {
-          fragmentos_hierro_kg: Number(txResult?.fragmentos_hierro_kg || inv.ironKg || 0),
-          pellets_plastico_kg: Number(txResult?.pellets_plastico_kg || inv.plasticKg || 0),
-          pegamento_epoxi_kg: Number(txResult?.pegamento_epoxi_kg || inv.epoxiKg || 0)
-        };
-
-        const producedGoods = {
-          rodProductionMode: mode,
-          varillas_punta: Number(txResult?.varillas_punta || inv.producedRodsUnits || 0),
-          varillas_punta_estrella: Number(txResult?.varillas_punta_estrella || (inv as any).producedStarRodsUnits || 0),
-          varillas_punta_plana: Number(txResult?.varillas_punta_plana || (inv as any).producedFlatRodsUnits || 0),
-          productos_ensamblados: Number(txResult?.productos_ensamblados || inv.producedScrewdriversUnits || 0),
-          destornilladores_punta_estrella: Number(txResult?.destornilladores_punta_estrella || (inv as any).starScrewdriversUnits || 0),
-          destornilladores_punta_plana: Number(txResult?.destornilladores_punta_plana || (inv as any).flatScrewdriversUnits || 0),
-        };
-
         return {
           success: true,
           inventory: inv,
-          rawMaterials,
-          producedGoods
+          rawMaterials: buildRawMaterialsPayload(inv),
+          producedGoods: buildProducedGoodsPayload(inv)
         };
       } else {
-        // In-memory fallback
-        const db = readDb();
-        const inv = checkAndCalculateProduction(db, studentId);
-        (inv as any).rodProductionMode = mode;
-        inv.updatedAt = new Date().toISOString();
-        writeDb(db);
+        return await runWithStudentInventoryMutex(studentId, async () => {
+          const db = readDb();
+          const inv = checkAndCalculateProduction(db, studentId);
+          (inv as any).rodProductionMode = mode;
+          inv.updatedAt = new Date().toISOString();
+          writeDb(db);
 
-        return {
-          success: true,
-          inventory: inv,
-          rawMaterials: {
-            fragmentos_hierro_kg: inv.ironKg || 0,
-            pellets_plastico_kg: inv.plasticKg || 0,
-            pegamento_epoxi_kg: inv.epoxiKg || 0
-          },
-          producedGoods: {
-            rodProductionMode: mode,
-            varillas_punta: inv.producedRodsUnits || 0,
-            varillas_punta_estrella: (inv as any).producedStarRodsUnits || 0,
-            varillas_punta_plana: (inv as any).producedFlatRodsUnits || 0,
-            productos_ensamblados: inv.producedScrewdriversUnits || 0,
-            destornilladores_punta_estrella: (inv as any).starScrewdriversUnits || 0,
-            destornilladores_punta_plana: (inv as any).flatScrewdriversUnits || 0,
-          }
-        };
+          return {
+            success: true,
+            inventory: inv,
+            rawMaterials: buildRawMaterialsPayload(inv),
+            producedGoods: buildProducedGoodsPayload(inv)
+          };
+        });
       }
     });
 
     res.json(result);
   } catch (err: any) {
     console.error('[Rod Production Mode Error]:', err);
-    res.status(500).json({ error: 'Error al cambiar modo de producción: ' + (err.message || String(err)) });
+    res.status(err?.statusCode || 500).json({ error: 'Error al cambiar modo de producción: ' + (err.message || String(err)) });
   }
 });
 

@@ -295,7 +295,7 @@ export default function CompanyDashboard({
   onGoToBank,
   onUserBalanceUpdated,
 }: CompanyDashboardProps) {
-  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, refreshSession } = useStudentSession();
+  const { sessionData, isLoaded, isLoading: isSessionLoading, error: sessionError, lastSyncTimestamp, refreshSession, updateSessionData } = useStudentSession();
   const [data, setData] = useState<CompanyDataResponse | null>(() => {
     if (sessionData) {
       return buildCompanyDataFromSession(sessionData, currentUser);
@@ -369,6 +369,10 @@ export default function CompanyDashboard({
     machineryStatuses?: any[];
   } | null>(null);
   const [userOrders, setUserOrders] = useState<RawMaterialOrder[]>([]);
+  const [isRefreshingInventory, setIsRefreshingInventory] = useState(false);
+  const [inventoryRefreshError, setInventoryRefreshError] = useState<string | null>(null);
+  const isFetchingInventoryRef = useRef(false);
+  const lastInventorySyncAtRef = useRef<number>(0);
 
   // Inventory Transfer Modal State
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -476,25 +480,32 @@ export default function CompanyDashboard({
   const handleSetRodProductionMode = async (mode: 'estrella' | 'plana') => {
     try {
       setIsUpdatingRodMode(true);
+      setInventoryRefreshError(null);
       const res = await fetch('/api/raw-materials/rod-production-mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ studentId: currentUser.id, mode }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setInventoryData((prev: any) => ({
-          ...prev,
-          inventory: data.inventory || prev?.inventory,
-          rawMaterials: data.rawMaterials || prev?.rawMaterials,
-          producedGoods: data.producedGoods || prev?.producedGoods,
-        }));
-        if (sessionData && refreshSession) {
-          refreshSession();
-        }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || 'Error al cambiar el modo de producción de varillas.');
       }
-    } catch (e) {
+      setInventoryData((prev: any) => ({
+        ...prev,
+        inventory: data.inventory || prev?.inventory,
+        rawMaterials: data.rawMaterials || prev?.rawMaterials,
+        producedGoods: data.producedGoods || prev?.producedGoods,
+      }));
+      lastInventorySyncAtRef.current = Date.now();
+      if (updateSessionData && data.inventory) {
+        updateSessionData((prev) => ({
+          ...prev,
+          inventory: data.inventory,
+        }));
+      }
+    } catch (e: any) {
       console.error('Error al cambiar modo de producción de varillas:', e);
+      setInventoryRefreshError(e?.message || 'Error al cambiar el modo de producción de varillas.');
     } finally {
       setIsUpdatingRodMode(false);
     }
@@ -691,23 +702,78 @@ export default function CompanyDashboard({
   };
 
   const fetchInventoryData = async () => {
+    if (isFetchingInventoryRef.current) return;
+    isFetchingInventoryRef.current = true;
+    setIsRefreshingInventory(true);
+    setInventoryRefreshError(null);
     try {
       const [res, ordersRes] = await Promise.all([
-        fetch(`/api/raw-materials/inventory?studentId=${currentUser.id}`),
-        fetch(`/api/raw-materials/orders?studentId=${currentUser.id}`),
+        fetch(`/api/raw-materials/inventory?studentId=${encodeURIComponent(currentUser.id)}`),
+        fetch(`/api/raw-materials/orders?studentId=${encodeURIComponent(currentUser.id)}`),
       ]);
-      if (res.ok) {
-        const json = await res.json();
-        setInventoryData(json);
+      const invContentType = res.headers.get("content-type") || "";
+      const json = invContentType.includes("application/json")
+        ? await res.json().catch(() => ({}))
+        : {};
+
+      if (!res.ok || json.success === false) {
+        throw new Error(
+          json?.error || "Error al calcular y actualizar las existencias en el servidor.",
+        );
       }
+
+      let nextOrders: RawMaterialOrder[] | null = null;
       if (ordersRes.ok) {
-        const ordersJson = await ordersRes.json();
+        const ordContentType = ordersRes.headers.get("content-type") || "";
+        const ordersJson = ordContentType.includes("application/json")
+          ? await ordersRes.json().catch(() => ({}))
+          : {};
         if (ordersJson.orders) {
+          nextOrders = ordersJson.orders;
           setUserOrders(ordersJson.orders);
         }
       }
-    } catch (e) {
-      console.error(e);
+
+      setInventoryData(json);
+      lastInventorySyncAtRef.current = Date.now();
+
+      if (updateSessionData && json.inventory) {
+        updateSessionData((prev) => ({
+          ...prev,
+          inventory: json.inventory,
+          rawMaterialOrders: nextOrders ?? prev.rawMaterialOrders,
+          company: Array.isArray(json.machineryStatuses)
+            ? {
+                ...prev.company,
+                machinery: prev.company.machinery.map((m) => {
+                  const updatedStatus = json.machineryStatuses.find(
+                    (ms: any) => ms.id === m.id,
+                  );
+                  return updatedStatus
+                    ? {
+                        ...m,
+                        status: updatedStatus.status,
+                        relocationStatus:
+                          updatedStatus.relocationStatus ?? m.relocationStatus,
+                        installedAtNaveId:
+                          updatedStatus.installedAtNaveId ?? m.installedAtNaveId,
+                        installedAtNaveTitle:
+                          updatedStatus.installedAtNaveTitle ?? m.installedAtNaveTitle,
+                      }
+                    : m;
+                }),
+              }
+            : prev.company,
+        }));
+      }
+    } catch (e: any) {
+      console.error("[CompanyDashboard] Error actualizando existencias:", e);
+      setInventoryRefreshError(
+        e?.message || "No se pudo actualizar el stock en la base de datos.",
+      );
+    } finally {
+      isFetchingInventoryRef.current = false;
+      setIsRefreshingInventory(false);
     }
   };
 
@@ -969,6 +1035,17 @@ export default function CompanyDashboard({
     fetchTelecomAndOfficeData();
     fetchInventoryData();
   }, [sessionData, isSessionLoading, isLoaded, sessionError, currentUser.id]);
+
+  // Calcular y sincronizar producción pendiente al entrar en la pestaña Existencias (Nivel 1),
+  // evitando duplicar la llamada si session-init o una actualización reciente ocurrió hace < 5s.
+  useEffect(() => {
+    if (activeTab !== "inventory") return;
+    if ((currentUser.level || 1) !== 1) return;
+    if (isSessionLoading) return;
+    const latestSync = Math.max(lastSyncTimestamp || 0, lastInventorySyncAtRef.current || 0);
+    if (latestSync > 0 && Date.now() - latestSync < 5000) return;
+    fetchInventoryData();
+  }, [activeTab, currentUser.id, currentUser.level, isSessionLoading]);
 
   const handleOpenDismissModal = async (emp: HiredEmployee) => {
     setDismissModalEmployee(emp);
@@ -3043,19 +3120,30 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                         </p>
                       </div>
                       <button
-                        onClick={() => {
-                          if (sessionData && refreshSession) {
-                            refreshSession();
-                          } else {
-                            fetchInventoryData();
-                          }
-                        }}
-                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
+                        onClick={() => fetchInventoryData()}
+                        disabled={isRefreshingInventory}
+                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
                       >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>Actualizar stock</span>
+                        <RefreshCw className={`w-4 h-4 ${isRefreshingInventory ? "animate-spin" : ""}`} />
+                        <span>{isRefreshingInventory ? "Actualizando stock..." : "Actualizar stock"}</span>
                       </button>
                     </div>
+
+                    {inventoryRefreshError && (
+                      <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-xl text-xs font-medium flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>{inventoryRefreshError}</span>
+                        </div>
+                        <button
+                          onClick={() => setInventoryRefreshError(null)}
+                          className="text-red-500 hover:text-red-700 font-bold cursor-pointer"
+                          aria-label="Cerrar aviso de error"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
 
                     {/* Section 1: Materia prima almacenada (SOLO NIVEL 1) */}
                     {isLevel1 && (
