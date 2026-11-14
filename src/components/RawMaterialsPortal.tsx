@@ -7,7 +7,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { User, RawMaterialAnnouncement, RawMaterialOrder, PurchasedVehicle, HiredEmployee, MarketMessage, CompanyProfile, TradingPartner, PromissoryNoteData } from '../types.js';
 import { formatNumber, numberToSpanishWords } from '../lib/formatters.js';
-import { calculateSpanishDistanceKm } from '../lib/spanishDistances.js';
+import {
+  calculateSpanishDistanceKm,
+  calculateRequestedPallets,
+  calculateExteriorTransportAccounting,
+  calculateOwnVehicleFuelAccounting,
+  FINISHED_PRODUCT_UNIT_WEIGHT_KG,
+  roundCurrency2
+} from '../lib/spanishDistances.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
 import StudentFinishedScrewdriversSection from './StudentFinishedScrewdriversSection.js';
 import TeacherScrewdriverListingsManagement from './TeacherScrewdriverListingsManagement.js';
@@ -1770,10 +1777,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
       totalCost: order.subtotalAmount || order.basePrice || ((order.unitPrice || 0) * (order.quantity || 1))
     }];
 
+    const isFuelInvoice = order.sellerId === 'SUMINISTROS_ESTACION_SERVICIO' || order.materialType === 'combustible' || (order.id && order.id.includes('gaso'));
+    const transportQty = Math.max(1, Number(order.quantity) || 1);
+    const transportUnitLabel = isFuelInvoice ? (transportQty === 1 ? 'viaje' : 'viajes') : 'u.';
+
     const itemsRows = isTransport ? `
       <tr>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color: #1e293b;">${conceptText}</td>
-        <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">1 u.</td>
+        <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;">${transportQty} ${transportUnitLabel}</td>
         <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #0f172a;">${formatNumber(subtotal)} €</td>
       </tr>
     ` : itemsList.map(it => {
@@ -2077,12 +2088,15 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   const transportVehicles = vehicles.filter(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
   const hiredDrivers = employees.filter(e => e.role === 'camionero' || (e.role as string) === 'conductor');
-  const assignedTransportVehicle = transportVehicles.find(veh => {
+  const assignedTransportVehicles = transportVehicles.filter(veh => {
     const hasDirectDriver = veh.assignedDriverId && hiredDrivers.some(d => d.id === veh.assignedDriverId);
     const hasEmpAssigned = hiredDrivers.some(d => d.assignedVehicleId === veh.id);
     return hasDirectDriver || hasEmpAssigned;
   });
-  const canPickupWithoutTransport = Boolean(assignedTransportVehicle);
+  const assignedTruck = assignedTransportVehicles.find(v => isTruckType(v.vehicleType));
+  const assignedVan = assignedTransportVehicles.find(v => isVanType(v.vehicleType));
+  const assignedTransportVehicle = assignedTruck || assignedVan;
+  const canPickupWithoutTransport = assignedTransportVehicles.length > 0;
   const ownedTruck = assignedTransportVehicle;
 
   // Preset selector
@@ -2523,27 +2537,67 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   // Cart calculations
-  const cartTotalKg = cart.reduce((sum, item) => {
-    const isScrewdriver = item.announcement.materialType === 'producto_final' || (item.announcement.title && item.announcement.title.toLowerCase().includes('destornillador'));
-    return sum + (isScrewdriver ? 0 : (item.announcement.unitWeightKg * item.quantity));
+  const isAnnFinishedUnit = (ann?: RawMaterialAnnouncement | null) => Boolean(
+    ann && (
+      ann.materialType === 'producto_final' ||
+      ann.isDesTornillo ||
+      (ann.title && (ann.title.toLowerCase().includes('destornillador') || ann.title.toLowerCase().includes('varilla')))
+    )
+  );
+  const cartRawTotalKg = cart.reduce((sum, item) => {
+    return sum + (isAnnFinishedUnit(item.announcement) ? 0 : (item.announcement.unitWeightKg * item.quantity));
   }, 0);
-  const cartBasePrice = cart.reduce((sum, item) => sum + (item.announcement.pricePerUnit * item.quantity), 0);
-  const cartRequestedPallets = cart.reduce((sum, item) => {
-    const isScrewdriver = item.announcement.materialType === 'producto_final' || (item.announcement.title && item.announcement.title.toLowerCase().includes('destornillador'));
-    const itemKg = isScrewdriver ? 0 : (item.announcement.unitWeightKg * item.quantity);
-    const itemP = isScrewdriver ? (item.quantity / 10000) : (itemKg / 1000);
-    return sum + itemP;
+  const cartFinishedUnits = cart.reduce((sum, item) => {
+    return sum + (isAnnFinishedUnit(item.announcement) ? item.quantity : 0);
   }, 0);
-  const cartChargedPallets = cartRequestedPallets > 0 ? Math.max(1, Math.ceil(cartRequestedPallets)) : 0;
+  const cartPhysicalWeightKg = roundCurrency2(cartRawTotalKg + (cartFinishedUnits * FINISHED_PRODUCT_UNIT_WEIGHT_KG));
+  const cartBasePrice = roundCurrency2(cart.reduce((sum, item) => sum + (item.announcement.pricePerUnit * item.quantity), 0));
+  const cartRequestedPallets = calculateRequestedPallets({
+    totalKg: cartRawTotalKg,
+    finishedUnits: cartFinishedUnits
+  });
   const primarySellerAnn = cart[0]?.announcement;
   const cartDestNave = studentWarehouses.find((w: any) => String(w.id) === String(selectedDestinationNaveId)) || studentWarehouses[0];
   const cartDistanceKm = calculateSpanishDistanceKm(
     cartDestNave || currentUser,
     primarySellerAnn || 'Almacén Central Oficial'
   );
-  const cartTransportCost = cartNeedsTransport && cart.length > 0 ? Math.round(cartChargedPallets * cartDistanceKm * 0.38 * 100) / 100 : 0;
-  const cartIvaAmount = Math.round(((cartBasePrice + cartTransportCost) * 0.21) * 100) / 100;
-  const cartGrandTotal = Math.round((cartBasePrice + cartTransportCost + cartIvaAmount) * 100) / 100;
+  const cartExtCalc = calculateExteriorTransportAccounting({
+    requestedPallets: cartRequestedPallets,
+    distanceKm: cartDistanceKm
+  });
+  const cartSellerOwnVehType = (
+    primarySellerAnn?.sellerOwnTransportVehicleType === 'camion' ||
+    primarySellerAnn?.sellerOwnTransportVehicleType === 'furgoneta'
+  ) ? primarySellerAnn.sellerOwnTransportVehicleType : null;
+  const cartSellerFuelCalc = (cart.length > 0 && cartSellerOwnVehType)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm: cartDistanceKm,
+        totalWeightKg: cartPhysicalWeightKg,
+        vehicleType: cartSellerOwnVehType
+      })
+    : null;
+  const cartChargedPallets = cartExtCalc.chargedPallets;
+  const cartTransportCost = cartNeedsTransport && cart.length > 0
+    ? (cartSellerFuelCalc ? cartSellerFuelCalc.baseAmount : cartExtCalc.baseAmount)
+    : 0;
+  const cartMerchIva = roundCurrency2(cartBasePrice * 0.21);
+  const cartIvaAmount = (cartNeedsTransport && cart.length > 0)
+    ? (cartSellerFuelCalc
+        ? roundCurrency2(cartMerchIva + cartSellerFuelCalc.ivaAmount)
+        : roundCurrency2((cartBasePrice + cartTransportCost) * 0.21))
+    : cartMerchIva;
+  const cartGrandTotal = roundCurrency2(cartBasePrice + cartTransportCost + cartIvaAmount);
+  const cartPickupVehicleKind = ownedTruck ? (isTruckType(ownedTruck.vehicleType) ? 'camion' : 'furgoneta') : null;
+  const cartBuyerFuelPreview = (!isTeacher && cart.length > 0 && cartPickupVehicleKind)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm: cartDistanceKm,
+        totalWeightKg: cartPhysicalWeightKg,
+        vehicleType: cartPickupVehicleKind
+      })
+    : null;
+  const cartBuyerFuelExpense = (!cartNeedsTransport && cartBuyerFuelPreview) ? cartBuyerFuelPreview.totalAmount : 0;
+  const cartTotalDisbursement = roundCurrency2(cartGrandTotal + cartBuyerFuelExpense);
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const cartExceedsWarehouse = (isLevel1 && !isTeacher) && (totalOccupiedPallets + cartRequestedPallets) > (maxPalletsAllowed + 0.001);
 
@@ -2819,19 +2873,61 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   // Single Order Modal calculations
-  const isSelectedScrewdriver = selectedAnn && (selectedAnn.materialType === 'producto_final' || selectedAnn.isDesTornillo || (selectedAnn.title && selectedAnn.title.toLowerCase().includes('destornillador')));
-  const totalKg = (selectedAnn && !isSelectedScrewdriver) ? selectedAnn.unitWeightKg * quantity : 0;
-  const basePrice = selectedAnn ? Math.round((selectedAnn.pricePerUnit * quantity) * 100) / 100 : 0;
-  const orderRequestedPallets = selectedAnn ? (isSelectedScrewdriver ? (quantity / 10000) : (totalKg / 1000)) : 0;
-  const orderChargedPallets = orderRequestedPallets > 0 ? Math.max(1, Math.ceil(orderRequestedPallets)) : 0;
+  const isSelectedScrewdriver = isAnnFinishedUnit(selectedAnn);
+  const totalKg = (selectedAnn && !isSelectedScrewdriver) ? roundCurrency2(selectedAnn.unitWeightKg * quantity) : 0;
+  const orderPhysicalWeightKg = selectedAnn
+    ? (isSelectedScrewdriver ? roundCurrency2(quantity * FINISHED_PRODUCT_UNIT_WEIGHT_KG) : totalKg)
+    : 0;
+  const basePrice = selectedAnn ? roundCurrency2(selectedAnn.pricePerUnit * quantity) : 0;
+  const orderRequestedPallets = selectedAnn
+    ? calculateRequestedPallets({
+        totalKg: isSelectedScrewdriver ? 0 : totalKg,
+        finishedUnits: isSelectedScrewdriver ? quantity : 0
+      })
+    : 0;
   const selectedDestNave = studentWarehouses.find((w: any) => String(w.id) === String(selectedDestinationNaveId)) || studentWarehouses[0];
   const orderDistanceKm = selectedAnn ? calculateSpanishDistanceKm(
     selectedDestNave || currentUser,
     selectedAnn
   ) : 35;
-  const transportCost = needsTransport ? Math.round(orderChargedPallets * orderDistanceKm * 0.38 * 100) / 100 : 0;
-  const ivaAmount = Math.round(((basePrice + transportCost) * 0.21) * 100) / 100;
-  const totalAmount = Math.round((basePrice + transportCost + ivaAmount) * 100) / 100;
+  const orderExtCalc = calculateExteriorTransportAccounting({
+    requestedPallets: orderRequestedPallets,
+    distanceKm: orderDistanceKm
+  });
+  const sellerOwnVehType = (
+    selectedAnn?.sellerOwnTransportVehicleType === 'camion' ||
+    selectedAnn?.sellerOwnTransportVehicleType === 'furgoneta'
+  ) ? selectedAnn.sellerOwnTransportVehicleType : null;
+  const orderSellerFuelCalc = (selectedAnn && sellerOwnVehType)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm: orderDistanceKm,
+        totalWeightKg: orderPhysicalWeightKg,
+        vehicleType: sellerOwnVehType
+      })
+    : null;
+  const selectedPickupVeh = assignedTransportVehicles.find(v => v.id === selectedVehicleId) || assignedTransportVehicle;
+  const selectedPickupVehKind = selectedPickupVeh ? (isTruckType(selectedPickupVeh.vehicleType) ? 'camion' : 'furgoneta') : null;
+  const orderBuyerFuelPreview = (selectedAnn && !isTeacher && selectedPickupVehKind)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm: orderDistanceKm,
+        totalWeightKg: orderPhysicalWeightKg,
+        vehicleType: selectedPickupVehKind
+      })
+    : null;
+  const orderBuyerFuelCalc = (!needsTransport) ? orderBuyerFuelPreview : null;
+  const orderChargedPallets = orderExtCalc.chargedPallets;
+  const transportCost = needsTransport
+    ? (orderSellerFuelCalc ? orderSellerFuelCalc.baseAmount : orderExtCalc.baseAmount)
+    : 0;
+  const orderMerchIva = roundCurrency2(basePrice * 0.21);
+  const ivaAmount = needsTransport
+    ? (orderSellerFuelCalc
+        ? roundCurrency2(orderMerchIva + orderSellerFuelCalc.ivaAmount)
+        : roundCurrency2((basePrice + transportCost) * 0.21))
+    : orderMerchIva;
+  const totalAmount = roundCurrency2(basePrice + transportCost + ivaAmount);
+  const orderBuyerFuelExpense = orderBuyerFuelCalc ? orderBuyerFuelCalc.totalAmount : 0;
+  const orderTotalBankDisbursement = roundCurrency2(totalAmount + orderBuyerFuelExpense);
 
   const orderExceedsWarehouse = (isLevel1 && !isTeacher) && (totalOccupiedPallets + orderRequestedPallets) > (maxPalletsAllowed + 0.001);
 
@@ -4746,13 +4842,17 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
-                        {isTransport ? (
-                          <tr>
-                            <td className="py-2 px-2 font-medium">{conceptText}</td>
-                            <td className="py-2 px-2 text-right">1 u.</td>
-                            <td className="py-2 px-2 text-right font-bold">{formatNumber(subtotal)} €</td>
-                          </tr>
-                        ) : (
+                        {isTransport ? (() => {
+                          const isFuelOrd = selectedInvoiceOrder.sellerId === 'SUMINISTROS_ESTACION_SERVICIO' || selectedInvoiceOrder.materialType === 'combustible' || (selectedInvoiceOrder.id && selectedInvoiceOrder.id.includes('gaso'));
+                          const tQty = Math.max(1, Number(selectedInvoiceOrder.quantity) || 1);
+                          return (
+                            <tr>
+                              <td className="py-2 px-2 font-medium">{conceptText}</td>
+                              <td className="py-2 px-2 text-right">{tQty} {isFuelOrd ? (tQty === 1 ? 'viaje' : 'viajes') : 'u.'}</td>
+                              <td className="py-2 px-2 text-right font-bold">{formatNumber(subtotal)} €</td>
+                            </tr>
+                          );
+                        })() : (
                           itemsList.map((it, idx) => {
                             const qty = it.quantity || 1;
                             const baseP = Number(it.basePrice) || Number(it.subtotal) || Number(it.totalCost) || 0;
@@ -5245,7 +5345,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="space-y-4 text-sm">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300">
-                  Cantidad ({isSelectedScrewdriver ? 'Unidades de destornilladores a solicitar' : 'Unidades / formatos a solicitar'}):
+                  Cantidad ({isSelectedScrewdriver ? 'Unidades de producto terminado a solicitar' : 'Unidades / formatos a solicitar'}):
                 </label>
                 <div className="flex items-center gap-3">
                   <input
@@ -5288,10 +5388,16 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       />
                       <div>
                         <div className="font-semibold text-xs text-white">Contratar transporte del vendedor</div>
-                        <div className="text-[11px] text-slate-400">Envío directo a tu nave en San Fernando / Madrid</div>
+                        <div className="text-[11px] text-slate-400">
+                          {orderSellerFuelCalc
+                            ? `Envío con vehículo propio del vendedor (${orderSellerFuelCalc.vehicleLabel}, ${orderSellerFuelCalc.trips} ${orderSellerFuelCalc.trips === 1 ? 'viaje' : 'viajes'}) — solo gasto real de gasoil (${formatNumber(orderSellerFuelCalc.totalAmount)} € IVA incl.)`
+                            : `Servicio exterior (0,95 €/palet/km, mín. 15 €) · Base ${formatNumber(orderExtCalc.baseAmount)} € + 21% IVA (${formatNumber(orderExtCalc.ivaAmount)} €)`}
+                        </div>
                       </div>
                     </div>
-                    <span className="font-mono font-bold text-amber-400 text-xs">+{formatNumber(transportCost)} €</span>
+                    <span className="font-mono font-bold text-amber-400 text-xs whitespace-nowrap">
+                      +{formatNumber(orderSellerFuelCalc ? orderSellerFuelCalc.totalAmount : orderExtCalc.totalAmount)} €
+                    </span>
                   </label>
 
                   <label
@@ -5311,18 +5417,43 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       />
                       <div>
                         <div className="font-semibold text-xs text-white">Recoger con flota propia</div>
-                        <div className="text-[11px] text-slate-400">Requiere camión tráiler y camionero contratado</div>
+                        <div className="text-[11px] text-slate-400">
+                          {isTeacher
+                            ? 'Recogida directa del profesor en instalaciones del alumno (sin coste logístico)'
+                            : 'Requiere camión o furgoneta y conductor asignado (se abona el combustible ida y vuelta a 1,55 €/L IVA incl.)'}
+                        </div>
                       </div>
                     </div>
-                    <span className="font-mono font-bold text-emerald-400 text-xs">0.00 €</span>
+                    <span className="font-mono font-bold text-emerald-400 text-xs whitespace-nowrap">
+                      {!isTeacher && orderBuyerFuelPreview ? `${formatNumber(orderBuyerFuelPreview.totalAmount)} € gasoil` : '0,00 €'}
+                    </span>
                   </label>
                 </div>
 
-                {!needsTransport && !canPickupWithoutTransport && (
+                {!needsTransport && !isTeacher && assignedTransportVehicles.length > 0 && (
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5 mt-2">
+                    <label className="text-[11px] font-semibold text-slate-300 block">
+                      Vehículo asignado para la recogida:
+                    </label>
+                    <select
+                      value={selectedPickupVeh?.id || ''}
+                      onChange={(e) => setSelectedVehicleId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-emerald-500"
+                    >
+                      {assignedTransportVehicles.map(v => (
+                        <option key={v.id} value={v.id}>
+                          {v.model || v.vehicleType} ({isTruckType(v.vehicleType) ? 'Camión 10.000 kg/viaje' : 'Furgoneta 1.000 kg/viaje'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {!needsTransport && !isTeacher && !canPickupWithoutTransport && (
                   <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2 mt-2">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     <span>
-                      Para recogida propia debes poseer un <strong>camión tráiler</strong> y un <strong>camionero</strong> contratado.
+                      Para recogida propia debes poseer un <strong>camión o furgoneta de transporte</strong> y un <strong>conductor asignado</strong>.
                     </span>
                   </div>
                 )}
@@ -5477,19 +5608,31 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
               <div className="bg-slate-950 rounded-xl p-4 space-y-2 border border-slate-800/80 font-mono text-xs">
                 <div className="flex justify-between text-slate-400">
-                  <span>Precio base ({quantity} u. x {formatNumber(selectedAnn.pricePerUnit)} €):</span>
+                  <span>Base imponible mercancía ({quantity} u. x {formatNumber(selectedAnn.pricePerUnit)} €):</span>
                   <span className="text-white">{formatNumber(basePrice)} €</span>
                 </div>
                 {needsTransport && (
-                  <>
-                    <div className="flex justify-between text-slate-400">
-                      <span>Gasto de transporte ({orderChargedPallets} {orderChargedPallets === 1 ? 'palet' : 'palets'} × {orderDistanceKm} km × 0,38 €):</span>
-                      <span className="text-amber-400 font-bold">{formatNumber(transportCost)} €</span>
-                    </div>
-                    <div className="text-[10px] text-slate-500 italic">
-                      * Tarifa unificada de 0,38 €/palet/km ({orderRequestedPallets.toFixed(2)} palets reales → {orderChargedPallets} {orderChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
-                    </div>
-                  </>
+                  orderSellerFuelCalc ? (
+                    <>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Transporte vehículo propio vendedor ({orderSellerFuelCalc.vehicleLabel}, base sin IVA):</span>
+                        <span className="text-amber-400 font-bold">{formatNumber(transportCost)} €</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 italic">
+                        * Combustible {orderSellerFuelCalc.trips} {orderSellerFuelCalc.trips === 1 ? 'viaje' : 'viajes'} × {orderSellerFuelCalc.roundTripKm} km i/v × {orderSellerFuelCalc.litersPer100Km} L/100km × 1,55 €/L = {formatNumber(orderSellerFuelCalc.totalAmount)} € IVA incl. (Base {formatNumber(orderSellerFuelCalc.baseAmount)} € + IVA {formatNumber(orderSellerFuelCalc.ivaAmount)} €)
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Transporte exterior base ({orderChargedPallets} {orderChargedPallets === 1 ? 'palet' : 'palets'} × {orderDistanceKm} km × 0,95 €, mín. 15 €):</span>
+                        <span className="text-amber-400 font-bold">{formatNumber(transportCost)} €</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 italic">
+                        * Tarifa unificada 0,95 €/palet/km (base imponible) — mín. 15,00 € ({orderRequestedPallets.toFixed(2)} palets reales → {orderChargedPallets} {orderChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
+                      </div>
+                    </>
+                  )
                 )}
                 <div className="flex justify-between text-slate-400">
                   <span>IVA (21%):</span>
@@ -5499,12 +5642,27 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   <span className="font-bold text-white font-sans">
                     {orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1'))
                       ? `Nominal del pagaré (${orderPromissoryDaysTerm} días):`
-                      : 'Total a pagar:'}
+                      : 'Total factura proveedor:'}
                   </span>
                   <span className={`font-bold text-lg ${orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) ? 'text-purple-400' : 'text-emerald-400'}`}>
                     {formatNumber(totalAmount)} €
                   </span>
                 </div>
+                {!needsTransport && !isTeacher && orderBuyerFuelCalc && (
+                  <>
+                    <div className="pt-2 border-t border-slate-800/80 flex justify-between text-amber-300">
+                      <span>Combustible recogida flota propia ({orderBuyerFuelCalc.vehicleLabel}, {orderBuyerFuelCalc.trips} {orderBuyerFuelCalc.trips === 1 ? 'viaje' : 'viajes'}, IVA incl.):</span>
+                      <span className="font-bold">+{formatNumber(orderBuyerFuelCalc.totalAmount)} €</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 italic">
+                      * Cargo directo gasolinera (Base {formatNumber(orderBuyerFuelCalc.baseAmount)} € + IVA 21% {formatNumber(orderBuyerFuelCalc.ivaAmount)} €) · {orderBuyerFuelCalc.roundTripKm} km i/v a 1,55 €/L
+                    </div>
+                    <div className="pt-1.5 border-t border-slate-800 flex justify-between items-baseline text-xs">
+                      <span className="font-bold text-white font-sans">Desembolso bancario total estimado:</span>
+                      <span className="font-bold text-amber-400 text-sm">{formatNumber(orderTotalBankDisbursement)} €</span>
+                    </div>
+                  </>
+                )}
                 {orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1')) && (
                   <div className="text-[11px] text-slate-400 flex justify-between pt-1 border-t border-slate-900">
                     <span>Cargo bancario inmediato:</span>
@@ -5534,7 +5692,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
               <button
                 type="button"
                 onClick={handleCreateOrder}
-                disabled={isSubmitting || (!needsTransport && !canPickupWithoutTransport) || orderExceedsWarehouse}
+                disabled={isSubmitting || (!needsTransport && !isTeacher && !canPickupWithoutTransport) || orderExceedsWarehouse}
                 className={`flex-1 py-3 rounded-xl disabled:bg-slate-800 disabled:text-slate-600 font-bold text-xs shadow-lg transition-colors flex items-center justify-center gap-2 ${
                   orderPaymentMethod === 'pagare' && isTeacher && (selectedAnn.sellerLevel === 3 || selectedAnn.isDesTornillo || (selectedAnn.sellerId && selectedAnn.sellerId !== 'proveedor-materia-prima' && selectedAnn.sellerId !== 'profesor-1'))
                     ? 'bg-purple-500 hover:bg-purple-400 text-white shadow-purple-500/20'
@@ -5674,30 +5832,107 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   </div>
                 )}
 
+                <div className="space-y-1.5 p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <label className="text-xs font-semibold text-slate-300 block">
+                    Método de entrega de la cesta:
+                  </label>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    <label
+                      className={`p-2 rounded-lg border flex items-center justify-between cursor-pointer text-xs ${
+                        cartNeedsTransport ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-900 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="cartTransport"
+                          checked={cartNeedsTransport}
+                          onChange={() => setCartNeedsTransport(true)}
+                          className="text-amber-500"
+                        />
+                        <span className="font-semibold">
+                          {cartSellerFuelCalc ? `Envío propio vendedor (${cartSellerFuelCalc.vehicleLabel})` : 'Contratar envío'}
+                        </span>
+                      </div>
+                      <span className="font-mono text-amber-400 font-bold">
+                        +{formatNumber(cartSellerFuelCalc ? cartSellerFuelCalc.totalAmount : cartExtCalc.totalAmount)} €
+                      </span>
+                    </label>
+                    <label
+                      className={`p-2 rounded-lg border flex items-center justify-between cursor-pointer text-xs ${
+                        !cartNeedsTransport ? 'bg-emerald-500/10 border-emerald-500/50 text-white' : 'bg-slate-900 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="cartTransport"
+                          checked={!cartNeedsTransport}
+                          onChange={() => setCartNeedsTransport(false)}
+                          className="text-emerald-500"
+                        />
+                        <span className="font-semibold">Recoger con flota propia</span>
+                      </div>
+                      <span className="font-mono text-emerald-400 font-bold">
+                        {!isTeacher && cartBuyerFuelPreview ? `${formatNumber(cartBuyerFuelPreview.totalAmount)} € gasoil` : '0,00 €'}
+                      </span>
+                    </label>
+                  </div>
+                  {!cartNeedsTransport && !isTeacher && !canPickupWithoutTransport && (
+                    <div className="text-[11px] text-rose-400 pt-1">
+                      ⚠️ Requiere camión o furgoneta y conductor asignado para recoger en origen.
+                    </div>
+                  )}
+                </div>
+
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs font-mono">
                   <div className="flex justify-between text-slate-400">
-                    <span>Base imponible:</span>
+                    <span>Base imponible mercancía:</span>
                     <span className="text-white">{formatNumber(cartBasePrice)} €</span>
                   </div>
                   {cartNeedsTransport && (
-                    <>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Transporte ({cartChargedPallets} pal. × {cartDistanceKm} km × 0,38 €):</span>
-                        <span className="text-amber-400 font-bold">{formatNumber(cartTransportCost)} €</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 italic">
-                        * Tarifa unificada de 0,38 €/palet/km ({cartRequestedPallets.toFixed(2)} palets reales → {cartChargedPallets} {cartChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
-                      </div>
-                    </>
+                    cartSellerFuelCalc ? (
+                      <>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Transporte propio vendedor (base sin IVA):</span>
+                          <span className="text-amber-400 font-bold">{formatNumber(cartTransportCost)} €</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 italic">
+                          * Gasoil {cartSellerFuelCalc.trips} {cartSellerFuelCalc.trips === 1 ? 'viaje' : 'viajes'} × {cartSellerFuelCalc.roundTripKm} km i/v = {formatNumber(cartSellerFuelCalc.totalAmount)} € IVA incl.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Transporte exterior base ({cartChargedPallets} pal. × {cartDistanceKm} km × 0,95 €, mín. 15 €):</span>
+                          <span className="text-amber-400 font-bold">{formatNumber(cartTransportCost)} €</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 italic">
+                          * Tarifa unificada 0,95 €/palet/km (base imponible) — mín. 15,00 € ({cartRequestedPallets.toFixed(2)} palets reales → {cartChargedPallets} {cartChargedPallets === 1 ? 'palet facturable' : 'palets facturables'})
+                        </div>
+                      </>
+                    )
                   )}
                   <div className="flex justify-between text-slate-400">
                     <span>IVA (21%):</span>
                     <span className="text-white">{formatNumber(cartIvaAmount)} €</span>
                   </div>
                   <div className="pt-1.5 border-t border-slate-800 flex justify-between text-sm font-sans font-bold">
-                    <span className="text-white">Total a pagar:</span>
+                    <span className="text-white">Total factura proveedor:</span>
                     <span className="text-emerald-400 text-base">{formatNumber(cartGrandTotal)} €</span>
                   </div>
+                  {!cartNeedsTransport && !isTeacher && cartBuyerFuelPreview && (
+                    <>
+                      <div className="pt-1.5 border-t border-slate-800/80 flex justify-between text-amber-300 text-[11px]">
+                        <span>Gasoil recogida flota propia (IVA incl.):</span>
+                        <span className="font-bold">+{formatNumber(cartBuyerFuelPreview.totalAmount)} €</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-sans font-bold text-white">
+                        <span>Desembolso total estimado:</span>
+                        <span className="text-amber-400">{formatNumber(cartTotalDisbursement)} €</span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {cartExceedsWarehouse && (
@@ -5711,7 +5946,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
                 <button
                   onClick={handleCheckoutCart}
-                  disabled={isSubmitting || cartExceedsWarehouse}
+                  disabled={isSubmitting || (!cartNeedsTransport && !isTeacher && !canPickupWithoutTransport) || cartExceedsWarehouse}
                   className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-extrabold text-xs shadow-lg transition flex items-center justify-center gap-2"
                 >
                   <ShoppingBag className="w-4 h-4" />

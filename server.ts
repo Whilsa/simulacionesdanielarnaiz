@@ -14,7 +14,7 @@ import pg from 'pg';
 import crypto from 'crypto';
 import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry, PublicClassmate, StudentPaymentStatusData, StudentCompanyData, StudentCatalogsData, StudentSessionData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
-import { calculateSpanishDistanceKm, calculateUnifiedTransportCost } from './src/lib/spanishDistances.js';
+import { calculateSpanishDistanceKm, calculateUnifiedTransportCost, calculateOwnVehicleTransportCost, calculateRequestedPallets, FINISHED_PRODUCT_UNIT_WEIGHT_KG, roundCurrency2, calculateExteriorTransportAccounting, calculateOwnVehicleFuelAccounting, OwnTransportVehicleKind } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 import { numberToSpanishWords } from './src/lib/formatters.js';
 
@@ -16366,10 +16366,16 @@ app.get('/api/student/session-init', async (req, res) => {
     };
 
     // 5. Shared public catalogs
+    const catalogAnns = enrichAnnouncementsWithSellerMetadata(
+      db.rawMaterialAnnouncements || [],
+      db.purchasedVehicles || [],
+      db.hiredEmployees || [],
+      db.acquisitions || []
+    );
     const catalogs: StudentCatalogsData = {
       properties: db.properties || [],
       jobListings: (db.jobListings || []).filter(j => j.status === 'disponible'),
-      rawMaterialAnnouncements: db.rawMaterialAnnouncements || [],
+      rawMaterialAnnouncements: catalogAnns,
       companyProfiles: db.companyProfiles || [],
       screwdriverListings: canonicalUser.level === 2 ? (db.teacherScrewdriverListings || []) : undefined
     };
@@ -22047,15 +22053,261 @@ function syncStudentAnnouncementsStockWithInventory(db: DatabaseSchema) {
   }
 }
 
+function isTransportTruckType(vType: string): boolean {
+  const t = (vType || '').toLowerCase();
+  return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
+}
+
+function isTransportVanType(vType: string): boolean {
+  const t = (vType || '').toLowerCase();
+  return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
+}
+
+function isFinishedUnitProductLike(materialType?: string, title?: string, isDesTornillo?: boolean): boolean {
+  const titleLower = (title || '').toLowerCase();
+  return (
+    materialType === 'producto_final' ||
+    Boolean(isDesTornillo) ||
+    titleLower.includes('destornillador') ||
+    titleLower.includes('varilla')
+  );
+}
+
+interface ResolvedStudentTransportVehicle {
+  vehicle: PurchasedVehicle | null;
+  vehicleType: OwnTransportVehicleKind | null;
+  vehicleLabel: string | null;
+  hasAnyVehicle: boolean;
+  hasAnyDriver: boolean;
+  hasAssignedVehicle: boolean;
+}
+
+function resolveStudentTransportVehicle(
+  vehicles: PurchasedVehicle[],
+  employees: HiredEmployee[],
+  studentId: string,
+  options?: { preferredVehicleId?: string; allowUnassignedFallbackWithDriver?: boolean }
+): ResolvedStudentTransportVehicle {
+  const sid = String(studentId);
+  const studentVehicles = (vehicles || []).filter(
+    v => String(v.studentId) === sid && String(v.status || 'activo') !== 'inactivo' && (isTransportTruckType(v.vehicleType) || isTransportVanType(v.vehicleType))
+  );
+  const studentDrivers = (employees || []).filter(
+    e => String(e.studentId) === sid && e.status !== 'despedido' && (e.role === 'camionero' || (e.role as string) === 'conductor')
+  );
+
+  const assignedVehicles = studentVehicles.filter(veh => {
+    const hasDirectDriver = veh.assignedDriverId && studentDrivers.some(d => String(d.id) === String(veh.assignedDriverId));
+    const hasEmpAssigned = studentDrivers.some(d => String(d.assignedVehicleId) === String(veh.id));
+    return hasDirectDriver || hasEmpAssigned;
+  });
+
+  const preferredVeh = options?.preferredVehicleId
+    ? assignedVehicles.find(v => String(v.id) === String(options.preferredVehicleId))
+    : undefined;
+  const assignedTruck = assignedVehicles.find(v => isTransportTruckType(v.vehicleType));
+  const assignedVan = assignedVehicles.find(v => isTransportVanType(v.vehicleType));
+  const fallbackTruck = !preferredVeh && !assignedTruck && !assignedVan && options?.allowUnassignedFallbackWithDriver && studentDrivers.length > 0
+    ? studentVehicles.find(v => isTransportTruckType(v.vehicleType))
+    : undefined;
+  const fallbackVan = !preferredVeh && !assignedTruck && !assignedVan && !fallbackTruck && options?.allowUnassignedFallbackWithDriver && studentDrivers.length > 0
+    ? studentVehicles.find(v => isTransportVanType(v.vehicleType))
+    : undefined;
+
+  const activeVehicle = preferredVeh || assignedTruck || assignedVan || fallbackTruck || fallbackVan || null;
+  const vehicleType: OwnTransportVehicleKind | null = activeVehicle
+    ? (isTransportTruckType(activeVehicle.vehicleType) ? 'camion' : 'furgoneta')
+    : null;
+
+  return {
+    vehicle: activeVehicle,
+    vehicleType,
+    vehicleLabel: vehicleType ? (vehicleType === 'camion' ? 'Camión' : 'Furgoneta') : null,
+    hasAnyVehicle: studentVehicles.length > 0,
+    hasAnyDriver: studentDrivers.length > 0,
+    hasAssignedVehicle: assignedVehicles.length > 0
+  };
+}
+
+function enrichAnnouncementsWithSellerMetadata(
+  announcements: RawMaterialAnnouncement[],
+  vehicles: PurchasedVehicle[],
+  employees: HiredEmployee[],
+  acquisitions?: any[]
+): RawMaterialAnnouncement[] {
+  return (announcements || []).map(ann => {
+    const sId = ann.sellerId;
+    if (!sId || sId === 'proveedor-materia-prima' || sId === 'profesor-1' || ann.sellerLevel === 'official') {
+      return ann;
+    }
+    const resolved = resolveStudentTransportVehicle(vehicles, employees, sId, { allowUnassignedFallbackWithDriver: true });
+    const sellerWh = (!ann.sellerLocation && acquisitions)
+      ? acquisitions.find((a: any) =>
+          String(a.studentId) === String(sId) &&
+          (['nave_industrial', 'almacen', 'almacen_logistico', 'industrial'].includes((a.propertyType || a.type || '').toLowerCase()) ||
+            (a.propertyTitle || a.title || '').toLowerCase().includes('nave') ||
+            (a.propertyTitle || a.title || '').toLowerCase().includes('almac'))
+        )
+      : undefined;
+    return {
+      ...ann,
+      sellerLocation: ann.sellerLocation || sellerWh?.location || sellerWh?.propertyTitle || ann.sellerLocation,
+      sellerOwnTransportVehicleType: resolved.vehicleType,
+      sellerOwnTransportVehicleLabel: resolved.vehicleLabel || undefined
+    };
+  });
+}
+
+async function getTransportFleetForStudents(
+  db: DatabaseSchema,
+  studentIds: string[],
+  client?: pg.PoolClient
+): Promise<{ vehicles: PurchasedVehicle[]; employees: HiredEmployee[]; acquisitions: any[] }> {
+  const uniqueIds = Array.from(new Set(studentIds.filter(Boolean).map(String)));
+  let vehicles = db.purchasedVehicles || [];
+  let employees = db.hiredEmployees || [];
+  let acquisitions: any[] = db.acquisitions || [];
+
+  const runner = client ? (text: string, params?: any[]) => client.query(text, params) : safeDbQuery;
+  if ((dbPool || client) && uniqueIds.length > 0) {
+    try {
+      const [vehRes, empRes, acqRes] = await Promise.all([
+        runner(
+          `SELECT id, alumno_id, alumno_nombre, vehiculo_tipo, titulo, conductor_asignado_id, conductor_asignado_nombre, estado
+           FROM vehiculos_comprados
+           WHERE alumno_id = ANY($1)`,
+          [uniqueIds]
+        ),
+        runner(
+          `SELECT id, alumno_id, alumno_nombre, puesto, vehiculo_asignado_id, estado
+           FROM empleados_contratados
+           WHERE alumno_id = ANY($1)`,
+          [uniqueIds]
+        ),
+        runner(
+          `SELECT id, alumno_id, inmueble_id, inmueble_tipo, inmueble_titulo, ubicacion
+           FROM adquisiciones
+           WHERE alumno_id = ANY($1)`,
+          [uniqueIds]
+        )
+      ]);
+      if (vehRes && vehRes.rows && vehRes.rows.length > 0) {
+        const pgVehs: PurchasedVehicle[] = vehRes.rows.map((r: any) => ({
+          id: String(r.id),
+          studentId: String(r.alumno_id),
+          studentName: String(r.alumno_nombre || ''),
+          vehicleType: String(r.vehiculo_tipo || '') as any,
+          title: String(r.titulo || ''),
+          imageUrl: '',
+          basePrice: 0,
+          ivaAmount: 0,
+          totalPrice: 0,
+          paymentMethod: 'direct' as any,
+          purchaseDate: '',
+          assignedDriverId: r.conductor_asignado_id ? String(r.conductor_asignado_id) : undefined,
+          assignedDriverName: r.conductor_asignado_nombre ? String(r.conductor_asignado_nombre) : undefined,
+          status: (r.estado || 'activo') as any
+        }));
+        vehicles = [...pgVehs, ...vehicles.filter(v => !pgVehs.some(pv => pv.id === v.id))];
+      }
+      if (empRes && empRes.rows && empRes.rows.length > 0) {
+        const pgEmps: HiredEmployee[] = empRes.rows.map((r: any) => ({
+          id: String(r.id),
+          jobListingId: '',
+          studentId: String(r.alumno_id),
+          studentName: String(r.alumno_nombre || ''),
+          employeeName: '',
+          role: (r.puesto || 'operario') as any,
+          gender: 'hombre',
+          grossSalaryMonthly: 0,
+          age: 30,
+          hireDate: '',
+          assignedVehicleId: r.vehiculo_asignado_id ? String(r.vehiculo_asignado_id) : undefined,
+          shift: 1,
+          status: (r.estado || 'activo') as any
+        }));
+        employees = [...pgEmps, ...employees.filter(e => !pgEmps.some(pe => pe.id === e.id))];
+      }
+      if (acqRes && acqRes.rows && acqRes.rows.length > 0) {
+        const pgAcqs = acqRes.rows.map((r: any) => ({
+          id: String(r.id),
+          studentId: String(r.alumno_id),
+          propertyId: String(r.inmueble_id || ''),
+          propertyType: String(r.inmueble_tipo || ''),
+          propertyTitle: String(r.inmueble_titulo || ''),
+          location: String(r.ubicacion || '')
+        }));
+        acquisitions = [...pgAcqs, ...acquisitions.filter(a => !pgAcqs.some(pa => pa.id === a.id))];
+      }
+    } catch (e) {
+      // Fallback safely to in-memory arrays
+    }
+  }
+
+  return { vehicles, employees, acquisitions };
+}
+
 app.get('/api/raw-materials/announcements', async (req, res) => {
   const db = readDb();
   let announcements = db.rawMaterialAnnouncements || [];
+  let vehicles = db.purchasedVehicles || [];
+  let employees = db.hiredEmployees || [];
+  let acquisitions: any[] = db.acquisitions || [];
 
   if (dbPool) {
     try {
-      const resRaw = await safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC');
+      const [resRaw, resVeh, resEmp, resAcq] = await Promise.all([
+        safeDbQuery('SELECT * FROM anuncios_materia_prima ORDER BY updated_at DESC'),
+        safeDbQuery('SELECT id, alumno_id, alumno_nombre, vehiculo_tipo, titulo, conductor_asignado_id, estado FROM vehiculos_comprados'),
+        safeDbQuery('SELECT id, alumno_id, puesto, vehiculo_asignado_id, estado FROM empleados_contratados'),
+        safeDbQuery('SELECT id, alumno_id, inmueble_id, inmueble_tipo, inmueble_titulo, ubicacion FROM adquisiciones')
+      ]);
       if (resRaw && resRaw.rows) {
         announcements = resRaw.rows.map(parseRawMaterialAnnouncementRow);
+      }
+      if (resVeh && resVeh.rows && resVeh.rows.length > 0) {
+        vehicles = resVeh.rows.map((r: any) => ({
+          id: String(r.id),
+          studentId: String(r.alumno_id),
+          studentName: String(r.alumno_nombre || ''),
+          vehicleType: String(r.vehiculo_tipo || '') as any,
+          title: String(r.titulo || ''),
+          imageUrl: '',
+          basePrice: 0,
+          ivaAmount: 0,
+          totalPrice: 0,
+          paymentMethod: 'direct' as any,
+          purchaseDate: '',
+          assignedDriverId: r.conductor_asignado_id ? String(r.conductor_asignado_id) : undefined,
+          status: (r.estado || 'activo') as any
+        }));
+      }
+      if (resEmp && resEmp.rows && resEmp.rows.length > 0) {
+        employees = resEmp.rows.map((r: any) => ({
+          id: String(r.id),
+          jobListingId: '',
+          studentId: String(r.alumno_id),
+          studentName: '',
+          employeeName: '',
+          role: (r.puesto || 'operario') as any,
+          gender: 'hombre',
+          grossSalaryMonthly: 0,
+          age: 30,
+          hireDate: '',
+          assignedVehicleId: r.vehiculo_asignado_id ? String(r.vehiculo_asignado_id) : undefined,
+          shift: 1,
+          status: (r.estado || 'activo') as any
+        }));
+      }
+      if (resAcq && resAcq.rows && resAcq.rows.length > 0) {
+        acquisitions = resAcq.rows.map((r: any) => ({
+          id: String(r.id),
+          studentId: String(r.alumno_id),
+          propertyId: String(r.inmueble_id || ''),
+          propertyType: String(r.inmueble_tipo || ''),
+          propertyTitle: String(r.inmueble_titulo || ''),
+          location: String(r.ubicacion || '')
+        }));
       }
     } catch (e) {
       console.warn('[Supabase Real-Time Read Warning for Raw Material Announcements]:', e);
@@ -22067,6 +22319,8 @@ app.get('/api/raw-materials/announcements', async (req, res) => {
   if ((db.isSeed === true || req.query.seed === 'true') && (!announcements || announcements.length === 0)) {
     announcements = getDefaultSeedRawMaterialAnnouncements();
   }
+
+  announcements = enrichAnnouncementsWithSellerMetadata(announcements, vehicles, employees, acquisitions);
   res.json({ success: true, announcements });
 });
 
@@ -24718,20 +24972,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     try {
       const annRowRes = await safeDbQuery('SELECT * FROM anuncios_materia_prima WHERE id = $1', [itemsToProcess[0].announcementId]);
       if (annRowRes && annRowRes.rows && annRowRes.rows.length > 0) {
-        const r = annRowRes.rows[0];
-        primaryAnn = {
-          id: String(r.id),
-          materialType: String(r.material_type || r.materia_tipo || 'hierro') as any,
-          title: String(r.title || r.titulo || 'Materia prima'),
-          unitWeightKg: Number(r.unit_weight_kg || 100),
-          pricePerUnit: Number(r.price_per_unit || r.precio_unitario || 50),
-          stock: r.stock !== undefined && r.stock !== null ? (r.stock === 'ilimitado' ? 'ilimitado' : Number(r.stock)) : 'ilimitado',
-          sellerId: r.seller_id ? String(r.seller_id) : 'proveedor-materia-prima',
-          sellerName: r.seller_name ? String(r.seller_name) : 'Suministros Industriales S.A.',
-          sellerLevel: r.seller_level === 'official' ? 'official' : (r.seller_level ? Number(r.seller_level) : undefined),
-          sellerAccount: r.seller_account ? String(r.seller_account) : 'ES990001000988776655',
-          active: Boolean(r.active)
-        } as any;
+        primaryAnn = parseRawMaterialAnnouncementRow(annRowRes.rows[0]);
         if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
         db.rawMaterialAnnouncements.push(primaryAnn);
       }
@@ -24791,39 +25032,23 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     }
   }
 
+  const fleetData = await getTransportFleetForStudents(db, [buyer.id, isStudentSeller ? sellerId : '']);
+
   // --- TRANSPORT LOGISTICS CHECK ---
   const transportMethod: 'vendedor_envio' | 'comprador_recogida' =
     rawTransportMethod === 'comprador_recogida' || needsTransport === false
       ? 'comprador_recogida'
       : 'vendedor_envio';
 
+  let resolvedBuyerPickupVehicle: ResolvedStudentTransportVehicle | null = null;
   if (transportMethod === 'comprador_recogida' && !isTeacher) {
-    const isTruckType = (vType: string) => {
-      const t = (vType || '').toLowerCase();
-      return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
-    };
-    const isVanType = (vType: string) => {
-      const t = (vType || '').toLowerCase();
-      return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
-    };
-
-    const buyerVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === buyer.id);
-    const buyerDrivers = (db.hiredEmployees || []).filter(
-      e => e.studentId === buyer.id && (e.role === 'camionero' || (e.role as string) === 'conductor')
-    );
-
-    const assignedVehicles = buyerVehicles.filter(veh => {
-      const hasDirectDriver = veh.assignedDriverId && buyerDrivers.some(d => d.id === veh.assignedDriverId);
-      const hasEmpAssigned = buyerDrivers.some(d => d.assignedVehicleId === veh.id);
-      return hasDirectDriver || hasEmpAssigned;
+    resolvedBuyerPickupVehicle = resolveStudentTransportVehicle(fleetData.vehicles, fleetData.employees, buyer.id, {
+      preferredVehicleId: pickupVehicleId,
+      allowUnassignedFallbackWithDriver: false
     });
 
-    const hasAssignedTransport = assignedVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-
-    if (!hasAssignedTransport) {
-      const hasAnyVehicle = buyerVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-      const hasAnyDriver = buyerDrivers.length > 0;
-      if (!hasAnyVehicle || !hasAnyDriver) {
+    if (!resolvedBuyerPickupVehicle.hasAssignedVehicle) {
+      if (!resolvedBuyerPickupVehicle.hasAnyVehicle || !resolvedBuyerPickupVehicle.hasAnyDriver) {
         return res.status(400).json({
           error: 'Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado con el puesto de Conductor / Camionero.'
         });
@@ -24838,25 +25063,38 @@ app.post('/api/raw-materials/orders', async (req, res) => {
   const orderItems: RawMaterialOrderItem[] = [];
   let totalRequestedPallets = 0;
   let totalKg = 0;
+  let orderPhysicalWeightKg = 0;
   let basePrice = 0;
 
   for (const itemInput of itemsToProcess) {
-    const ann = (db.rawMaterialAnnouncements || []).find(a => a.id === itemInput.announcementId);
+    let ann = (db.rawMaterialAnnouncements || []).find(a => a.id === itemInput.announcementId);
+    if (!ann && dbPool) {
+      try {
+        const annItemRes = await safeDbQuery('SELECT * FROM anuncios_materia_prima WHERE id = $1', [itemInput.announcementId]);
+        if (annItemRes && annItemRes.rows && annItemRes.rows.length > 0) {
+          ann = parseRawMaterialAnnouncementRow(annItemRes.rows[0]);
+          if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
+          db.rawMaterialAnnouncements.push(ann);
+        }
+      } catch (e) {}
+    }
     if (!ann) return res.status(404).json({ error: `Materia prima no encontrada (ID: ${itemInput.announcementId}).` });
 
     const qty = itemInput.quantity;
-    const isScrewdriver = ann.materialType === 'producto_final' || ann.isDesTornillo || (ann.title && ann.title.toLowerCase().includes('destornillador'));
-    const itemTotalKg = isScrewdriver ? 0 : (ann.unitWeightKg * qty);
-    const itemBasePrice = Math.round((ann.pricePerUnit * qty) * 100) / 100;
+    const isFinishedProd = isFinishedUnitProductLike(ann.materialType, ann.title, ann.isDesTornillo);
+    const itemTotalKg = isFinishedProd ? 0 : (ann.unitWeightKg * qty);
+    const itemPhysicalKg = isFinishedProd
+      ? roundCurrency2(qty * FINISHED_PRODUCT_UNIT_WEIGHT_KG)
+      : itemTotalKg;
+    const itemBasePrice = roundCurrency2(ann.pricePerUnit * qty);
 
-    let itemRequestedPallets = 0;
-    if (isScrewdriver) {
-      itemRequestedPallets = qty / 10000;
-    } else {
-      itemRequestedPallets = itemTotalKg / 1000;
-    }
+    const itemRequestedPallets = calculateRequestedPallets({
+      totalKg: isFinishedProd ? 0 : itemTotalKg,
+      finishedUnits: isFinishedProd ? qty : 0
+    });
     totalRequestedPallets += itemRequestedPallets;
     totalKg += itemTotalKg;
+    orderPhysicalWeightKg += itemPhysicalKg;
     basePrice += itemBasePrice;
 
     orderItems.push({
@@ -24864,7 +25102,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       materialType: ann.materialType,
       materialTitle: ann.title,
       quantity: qty,
-      unitWeightKg: isScrewdriver ? 0 : ann.unitWeightKg,
+      unitWeightKg: isFinishedProd ? 0 : ann.unitWeightKg,
       totalKg: itemTotalKg,
       basePrice: itemBasePrice,
       unitPrice: ann.pricePerUnit,
@@ -24873,7 +25111,8 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     });
   }
 
-  basePrice = Math.round(basePrice * 100) / 100;
+  basePrice = roundCurrency2(basePrice);
+  orderPhysicalWeightKg = roundCurrency2(orderPhysicalWeightKg);
 
   if (!isTeacher && buyerLevel === 1) {
     const studentAcquisitions = (db.acquisitions || []).filter(a => a.studentId === buyer.id);
@@ -24978,29 +25217,68 @@ app.post('/api/raw-materials/orders', async (req, res) => {
   }
 
   const discountPercentage = Math.min(50, Math.max(0, Number(rawDiscount) || 0));
-  const discountAmount = Math.round((basePrice * (discountPercentage / 100)) * 100) / 100;
-  const taxableBase = basePrice - discountAmount;
+  const discountAmount = roundCurrency2(basePrice * (discountPercentage / 100));
+  const taxableBase = roundCurrency2(basePrice - discountAmount);
   const insuranceFee = Math.max(0, Number(rawInsuranceFee) || 0);
-
-  // Unified Transport Calculation: 0.38 € / pallet / km (range 0.35 - 0.40 €/palet/km)
-  // Partial pallets are charged as full pallets (Math.ceil)
-  const chargedPallets = totalRequestedPallets > 0 ? Math.max(1, Math.ceil(totalRequestedPallets)) : 0;
-  const buyerLoc = selectedNave || buyer;
-  const sellerLoc = (db.acquisitions || []).find(a => String(a.studentId) === String(sellerId)) || primaryAnn.sellerName || primaryAnn.sellerId || 'Almacén Central Oficial';
-  const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
-
-  let transportCost = 0;
-  if (transportMethod === 'vendedor_envio') {
-    transportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
-  }
-
-  // Insurance is not subject to VAT (exempt)
-  const ivaAmount = Math.round(((taxableBase + transportCost) * 0.21) * 100) / 100;
-  const totalAmount = Math.round((taxableBase + transportCost + insuranceFee + ivaAmount) * 100) / 100;
 
   const isTeacherBuyer = isTeacher || buyer.username === 'pupdaniel' || buyer.role === 'teacher' || buyer.id === 'profesor-1';
   const isTeacherSeller = sellerId === 'proveedor-materia-prima' || sellerId === 'profesor-1' || sellerLevel === 'official' || primaryAnn.sellerId === 'profesor-1' || primaryAnn.sellerId === 'proveedor-materia-prima';
   const isAutoApproved = (isTeacherSeller && (!isTeacher || buyerLevel === 1)) || (isTeacherBuyer && isStudentSeller);
+
+  // Unified Transport & Fuel Calculation:
+  // - External transport: 0.95 €/pallet/km (min 15 €) is TAXABLE BASE (+ 21% IVA when invoiced)
+  // - Own vehicle transport (seller sending or student buyer picking up): ONLY fuel (VAT included, backed out total / 1.21)
+  const buyerLoc = selectedNave || fleetData.acquisitions.find(a => String(a.studentId) === String(buyer.id)) || buyer;
+  const sellerAcq = fleetData.acquisitions.find(a => String(a.studentId) === String(sellerId));
+  const sellerLoc = primaryAnn.sellerLocation ? primaryAnn : (sellerAcq || primaryAnn.sellerName || primaryAnn.sellerId || 'Almacén Central Oficial');
+  const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
+  const extTransportCalc = calculateExteriorTransportAccounting({
+    requestedPallets: totalRequestedPallets,
+    distanceKm
+  });
+  const chargedPallets = extTransportCalc.chargedPallets;
+
+  const resolvedSellerVehicle = (isStudentSeller && transportMethod === 'vendedor_envio')
+    ? resolveStudentTransportVehicle(fleetData.vehicles, fleetData.employees, sellerId, { allowUnassignedFallbackWithDriver: true })
+    : null;
+  const sellerUsesOwnVehicle = Boolean(resolvedSellerVehicle?.vehicle && resolvedSellerVehicle?.vehicleType);
+  const sellerOwnFuelCalc = (sellerUsesOwnVehicle && resolvedSellerVehicle?.vehicleType)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm,
+        totalWeightKg: orderPhysicalWeightKg,
+        vehicleType: resolvedSellerVehicle.vehicleType
+      })
+    : null;
+
+  const buyerOwnFuelCalc = (!isTeacherBuyer && transportMethod === 'comprador_recogida' && resolvedBuyerPickupVehicle?.vehicleType)
+    ? calculateOwnVehicleFuelAccounting({
+        distanceKm,
+        totalWeightKg: orderPhysicalWeightKg,
+        vehicleType: resolvedBuyerPickupVehicle.vehicleType
+      })
+    : null;
+  const buyerFuelExpense = buyerOwnFuelCalc ? buyerOwnFuelCalc.totalAmount : 0;
+
+  let transportCost = 0;
+  let ivaAmount = 0;
+  if (transportMethod === 'vendedor_envio') {
+    if (sellerOwnFuelCalc) {
+      // Seller delivers with own vehicle: buyer pays ONLY fuel cost (VAT-included, broken out into base + IVA, NO exterior 0.95 tariff)
+      transportCost = sellerOwnFuelCalc.baseAmount;
+      const merchandiseIva = roundCurrency2(taxableBase * 0.21);
+      ivaAmount = roundCurrency2(merchandiseIva + sellerOwnFuelCalc.ivaAmount);
+    } else {
+      transportCost = extTransportCalc.baseAmount;
+      ivaAmount = roundCurrency2((taxableBase + transportCost) * 0.21);
+    }
+  } else {
+    // comprador_recogida: 0 transport cost on supplier commercial invoice (student buyer pays own fuel separately)
+    transportCost = 0;
+    ivaAmount = roundCurrency2(taxableBase * 0.21);
+  }
+
+  // Insurance is not subject to VAT (exempt)
+  const totalAmount = roundCurrency2(taxableBase + transportCost + insuranceFee + ivaAmount);
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body?.idempotencyKey as string);
   const idemKey = rawIdemKey || `rm_ord_${buyer.id}_${generateId('idem')}`;
@@ -25021,7 +25299,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         timestamp: now.toISOString(),
         action: 'propuesta_inicial',
         quantity: totalUnits,
-        pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
+        pricePerUnit: totalUnits > 0 ? roundCurrency2(basePrice / totalUnits) : basePrice,
         discountPercentage,
         insuranceFee,
         transportCost,
@@ -25070,7 +25348,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         totalKg,
         basePrice,
         subtotalAmount: basePrice,
-        unitPrice: orderItems.length === 1 ? orderItems[0].unitPrice : (totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice),
+        unitPrice: orderItems.length === 1 ? orderItems[0].unitPrice : (totalUnits > 0 ? roundCurrency2(basePrice / totalUnits) : basePrice),
         discountPercentage,
         discountAmount,
         insuranceFee,
@@ -25084,7 +25362,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         needsTransport: transportMethod === 'vendedor_envio',
         deliveryAddress: deliveryAddressStr,
         destinationNaveId: finalDestinationNaveId,
-        pickupVehicleId: pickupVehicleId || undefined,
+        pickupVehicleId: resolvedBuyerPickupVehicle?.vehicle?.id || pickupVehicleId || undefined,
         status: isTeacherBuyingFromStudent ? 'facturado' : (isAutoApproved ? 'entregado' : 'pendiente'),
         inventoryCredited: isAutoApproved,
         requestedAt: now.toISOString(),
@@ -25114,7 +25392,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           timestamp: now.toISOString(),
           action: 'aceptado',
           quantity: totalUnits,
-          pricePerUnit: totalUnits > 0 ? Math.round((basePrice / totalUnits) * 100) / 100 : basePrice,
+          pricePerUnit: totalUnits > 0 ? roundCurrency2(basePrice / totalUnits) : basePrice,
           discountPercentage,
           insuranceFee,
           transportCost,
@@ -25129,52 +25407,121 @@ app.post('/api/raw-materials/orders', async (req, res) => {
         let transportNote = '';
         let baseTransportFee = 0;
         let ivaTransportFee = 0;
+        let usedOwnVehicle = false;
         let transportInvoiceOrder: RawMaterialOrder | null = null;
+        let buyerFuelInvoiceOrder: RawMaterialOrder | null = null;
+        let buyerFuelConcept = '';
         let txPaymentId = generateId('tx');
         let txTransportId = generateId('tx');
+        let txBuyerFuelId = generateId('tx');
 
-        if (isTeacherBuyer && isStudentSeller) {
-          const sellerHasTruck = (db.purchasedVehicles || []).some(
-            v => String(v.studentId) === String(sellerId) &&
-            ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion') || v.vehicleType === 'furgoneta_transporte' || v.vehicleType === 'furgoneta' || (v.vehicleType || '').toLowerCase().includes('furgoneta'))
-          );
-          const sellerHasDriver = (db.hiredEmployees || []).some(
-            e => String(e.studentId) === String(sellerId) &&
-            ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
-          );
+        if (!isTeacherBuyer && transportMethod === 'comprador_recogida' && buyerOwnFuelCalc && buyerFuelExpense > 0) {
+          const tripsInfo = buyerOwnFuelCalc.trips > 1 ? ` (${buyerOwnFuelCalc.trips} viajes)` : '';
+          buyerFuelConcept = `Suministro de Combustible / Gasolina ${buyerOwnFuelCalc.vehicleLabel}${tripsInfo} (${distanceKm} km ida / ${buyerOwnFuelCalc.roundTripKm} km i/v) - Recogida Compra Mercado (${summaryTitle})`;
+          const unitBase = roundCurrency2(buyerOwnFuelCalc.baseAmount / Math.max(1, buyerOwnFuelCalc.trips));
+          buyerFuelInvoiceOrder = {
+            id: `rmord_trans_${txBuyerFuelId}`,
+            studentId: buyer.id,
+            studentName: buyerName,
+            buyerLevel: buyerLevel || 1,
+            sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+            sellerName: 'Estación de servicio - suministro de combustible',
+            sellerLevel: 'official',
+            announcementId: `gaso-inv-${txBuyerFuelId}`,
+            materialType: 'combustible',
+            materialTitle: buyerFuelConcept,
+            quantity: buyerOwnFuelCalc.trips,
+            unitWeightKg: 0,
+            totalKg: 0,
+            basePrice: buyerOwnFuelCalc.baseAmount,
+            subtotalAmount: buyerOwnFuelCalc.baseAmount,
+            unitPrice: unitBase,
+            discountPercentage: 0,
+            discountAmount: 0,
+            insuranceFee: 0,
+            hasInsurance: false,
+            ivaAmount: buyerOwnFuelCalc.ivaAmount,
+            vatAmount: buyerOwnFuelCalc.ivaAmount,
+            vatRate: 21,
+            transportCost: 0,
+            transportMethod: 'comprador_recogida',
+            totalAmount: buyerFuelExpense,
+            needsTransport: false,
+            deliveryAddress: deliveryAddressStr || 'Dirección comercial registrada',
+            status: 'facturado',
+            invoiceNumber: `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+            requestedAt: now.toISOString(),
+            approvedAt: now.toISOString(),
+            deliveredAt: now.toISOString(),
+            invoicedAt: now.toISOString(),
+            inventoryCredited: true,
+            items: [{
+              announcementId: `gaso-inv-${txBuyerFuelId}`,
+              materialType: 'combustible',
+              materialTitle: buyerFuelConcept,
+              title: buyerFuelConcept,
+              quantity: buyerOwnFuelCalc.trips,
+              unitPrice: unitBase,
+              subtotal: buyerOwnFuelCalc.baseAmount,
+              totalCost: buyerOwnFuelCalc.baseAmount
+            }],
+            lastTurnUserId: buyer.id,
+            negotiationHistory: [{
+              id: generateId('neg'),
+              authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+              authorName: 'Estación de servicio - suministro de combustible',
+              timestamp: now.toISOString(),
+              action: 'propuesta_inicial',
+              quantity: buyerOwnFuelCalc.trips,
+              pricePerUnit: unitBase,
+              discountPercentage: 0,
+              insuranceFee: 0,
+              transportCost: 0,
+              transportMethod: 'comprador_recogida',
+              totalAmount: buyerFuelExpense,
+              note: `Factura por ${buyerFuelConcept}`
+            }]
+          };
+        }
 
-          if (sellerHasTruck && sellerHasDriver) {
-            transportExpense = Math.min(transportCost, Math.round((15 + totalUnits * 0.50) * 100) / 100);
-            baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
-            ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
-            transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${totalUnits} u.)`;
-            transportNote = `Se han descontado ${transportExpense.toFixed(2)} € por suministro de gasolina (al disponer de camión y camionero en plantilla).`;
+        if (isTeacherBuyer && isStudentSeller && transportMethod === 'vendedor_envio') {
+          usedOwnVehicle = sellerUsesOwnVehicle;
+
+          if (usedOwnVehicle && sellerOwnFuelCalc) {
+            transportExpense = sellerOwnFuelCalc.totalAmount;
+            baseTransportFee = sellerOwnFuelCalc.baseAmount;
+            ivaTransportFee = sellerOwnFuelCalc.ivaAmount;
+            const tripsInfo = sellerOwnFuelCalc.trips > 1 ? ` (${sellerOwnFuelCalc.trips} viajes)` : '';
+            transportConcept = `Suministro de Gasolina / Combustible ${sellerOwnFuelCalc.vehicleLabel}${tripsInfo} (${distanceKm} km) - Envíos El Des-Tornillo (${totalUnits} u.)`;
+            transportNote = `Se han descontado ${transportExpense.toFixed(2)} € (Base ${baseTransportFee.toFixed(2)} € + IVA 21% ${ivaTransportFee.toFixed(2)} €) por suministro de gasolina con ${sellerOwnFuelCalc.vehicleLabel.toLowerCase()} propio${tripsInfo} (${sellerOwnFuelCalc.roundTripKm} km ida y vuelta, ${sellerOwnFuelCalc.litersPer100Km} L/100km a 1,55 €/L).`;
           } else {
-            baseTransportFee = transportCost;
-            ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
-            transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
-            transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${totalUnits} u.)`;
+            baseTransportFee = extTransportCalc.baseAmount;
+            ivaTransportFee = extTransportCalc.ivaAmount;
+            transportExpense = extTransportCalc.totalAmount;
+            transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${totalUnits} u., ${chargedPallets} pal. × ${distanceKm} km)`;
             transportNote = `Se han descontado ${transportExpense.toFixed(2)} € (${baseTransportFee.toFixed(2)} € base + ${ivaTransportFee.toFixed(2)} € IVA 21%) por servicio de transporte y logística externa.`;
           }
 
           if (transportExpense > 0) {
+            const invoiceQty = (usedOwnVehicle && sellerOwnFuelCalc) ? sellerOwnFuelCalc.trips : 1;
+            const invoiceUnitPrice = roundCurrency2(baseTransportFee / Math.max(1, invoiceQty));
             transportInvoiceOrder = {
               id: `rmord_trans_${txTransportId}`,
               studentId: sellerId,
               studentName: sellerName,
               buyerLevel: 1,
-              sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-              sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+              sellerId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+              sellerName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
               sellerLevel: 'official',
               announcementId: `trans-inv-${txTransportId}`,
-              materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
+              materialType: usedOwnVehicle ? 'combustible' : 'transporte',
               materialTitle: transportConcept,
-              quantity: 1,
+              quantity: invoiceQty,
               unitWeightKg: totalUnits,
               totalKg: totalUnits,
               basePrice: baseTransportFee,
               subtotalAmount: baseTransportFee,
-              unitPrice: baseTransportFee,
+              unitPrice: invoiceUnitPrice,
               discountPercentage: 0,
               discountAmount: 0,
               insuranceFee: 0,
@@ -25195,23 +25542,23 @@ app.post('/api/raw-materials/orders', async (req, res) => {
               invoicedAt: now.toISOString(),
               items: [{
                 announcementId: `trans-inv-${txTransportId}`,
-                materialType: sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte',
+                materialType: usedOwnVehicle ? 'combustible' : 'transporte',
                 materialTitle: transportConcept,
                 title: transportConcept,
-                quantity: 1,
-                unitPrice: baseTransportFee,
+                quantity: invoiceQty,
+                unitPrice: invoiceUnitPrice,
                 subtotal: baseTransportFee,
                 totalCost: baseTransportFee
               }],
               lastTurnUserId: sellerId,
               negotiationHistory: [{
                 id: generateId('neg'),
-                authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-                authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                authorId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                authorName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
                 timestamp: now.toISOString(),
                 action: 'propuesta_inicial',
-                quantity: 1,
-                pricePerUnit: baseTransportFee,
+                quantity: invoiceQty,
+                pricePerUnit: invoiceUnitPrice,
                 discountPercentage: 0,
                 insuranceFee: 0,
                 transportCost: 0,
@@ -25533,12 +25880,17 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                 throw err;
               }
               const currentBuyerBal = Number(buyerRow.saldo);
-              if (currentBuyerBal < totalAmount) {
-                const err: any = new Error(`Saldo insuficiente en tu cuenta bancaria (${currentBuyerBal.toFixed(2)} € disponible) para realizar esta compra por importe de ${totalAmount.toFixed(2)} €.`);
+              const totalBuyerDebit = roundCurrency2(totalAmount + buyerFuelExpense);
+              if (currentBuyerBal < totalBuyerDebit) {
+                const err: any = new Error(
+                  buyerFuelExpense > 0
+                    ? `Saldo insuficiente en tu cuenta bancaria (${currentBuyerBal.toFixed(2)} € disponible) para cubrir la compra (${totalAmount.toFixed(2)} €) más el combustible de recogida con vehículo propio (${buyerFuelExpense.toFixed(2)} €), total ${totalBuyerDebit.toFixed(2)} €.`
+                    : `Saldo insuficiente en tu cuenta bancaria (${currentBuyerBal.toFixed(2)} € disponible) para realizar esta compra por importe de ${totalAmount.toFixed(2)} €.`
+                );
                 err.statusCode = 400;
                 throw err;
               }
-              const newBuyerBal = Math.round((currentBuyerBal - totalAmount) * 100) / 100;
+              const newBuyerBal = roundCurrency2(currentBuyerBal - totalBuyerDebit);
               await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBuyerBal, buyer.id]);
 
               const txId = generateId('tx');
@@ -25559,6 +25911,26 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                   'ES990001000988776655'
                 ]
               );
+
+              if (buyerFuelExpense > 0 && buyerFuelInvoiceOrder) {
+                await client.query(
+                  `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+                   VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                  [
+                    txBuyerFuelId + '-out',
+                    buyer.id,
+                    buyerFuelExpense,
+                    now.toISOString(),
+                    buyerFuelConcept,
+                    buyer.id,
+                    buyerName,
+                    buyerRow.account_number,
+                    'SUMINISTROS_ESTACION_SERVICIO',
+                    'Estación de servicio - suministro de combustible',
+                    'ES00-0000-0000-0000-GASO'
+                  ]
+                );
+              }
             }
 
             if (isTeacherBuyer && isStudentSeller && sellerRow) {
@@ -25584,9 +25956,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                       sellerId,
                       sellerRow.alumno,
                       sellerRow.account_number,
-                      'LOGISTICA_EXTERIOR',
-                      'Agencia de Logística y Transportes',
-                      'ES990001000988771122'
+                      usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                      usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                      usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122'
                     ]
                   );
                 }
@@ -25735,9 +26107,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                       sellerId,
                       sellerRow.alumno,
                       sellerRow.account_number,
-                      'LOGISTICA_EXTERIOR',
-                      'Agencia de Logística y Transportes',
-                      'ES990001000988771122'
+                      usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                      usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                      usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122'
                     ]
                   );
                 }
@@ -25757,13 +26129,25 @@ app.post('/api/raw-materials/orders', async (req, res) => {
             if (transportInvoiceOrder) {
               await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
             }
+            if (buyerFuelInvoiceOrder) {
+              await syncRawMaterialOrderToSupabase(buyerFuelInvoiceOrder, client);
+            }
           }, key);
         } else {
           // Fallback if dbPool is not configured
+          if (!isTeacherBuyer && buyer.balance < roundCurrency2(totalAmount + buyerFuelExpense)) {
+            const err: any = new Error(
+              buyerFuelExpense > 0
+                ? `Saldo insuficiente en tu cuenta bancaria (${buyer.balance.toFixed(2)} € disponible) para cubrir la compra (${totalAmount.toFixed(2)} €) más el combustible de recogida (${buyerFuelExpense.toFixed(2)} €).`
+                : `Saldo insuficiente en tu cuenta bancaria (${buyer.balance.toFixed(2)} € disponible) para realizar esta compra por importe de ${totalAmount.toFixed(2)} €.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
           processStockDeductionForOrder(db, order);
 
           if (!isTeacherBuyer) {
-            buyer.balance = Math.round((buyer.balance - totalAmount) * 100) / 100;
+            buyer.balance = roundCurrency2(buyer.balance - totalAmount - buyerFuelExpense);
             const txId = generateId('tx');
             const transfer: Transfer = {
               id: txId,
@@ -25779,6 +26163,23 @@ app.post('/api/raw-materials/orders', async (req, res) => {
             };
             if (!db.transfers) db.transfers = [];
             db.transfers.unshift(transfer);
+
+            if (buyerFuelExpense > 0 && buyerFuelInvoiceOrder) {
+              if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
+              db.rawMaterialOrders.unshift(buyerFuelInvoiceOrder);
+              db.transfers.unshift({
+                id: txBuyerFuelId,
+                senderId: buyer.id,
+                senderName: buyerName,
+                senderAccount: buyer.accountNumber,
+                receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+                receiverName: 'Estación de servicio - suministro de combustible',
+                receiverAccount: 'ES00-0000-0000-0000-GASO',
+                amount: buyerFuelExpense,
+                concept: buyerFuelConcept,
+                timestamp: now.toISOString()
+              });
+            }
           }
 
           if (isTeacherBuyer && isStudentSeller) {
@@ -25860,9 +26261,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                     senderId: sellerUser.id,
                     senderName: sellerUser.name,
                     senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
-                    receiverId: 'LOGISTICA_EXTERIOR',
-                    receiverName: 'Agencia de Logística y Transportes',
-                    receiverAccount: 'ES990001000988771122',
+                    receiverId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                    receiverName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                    receiverAccount: usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122',
                     amount: transportExpense,
                     concept: transportConcept,
                     timestamp: now.toISOString()
@@ -25893,9 +26294,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                     senderId: sellerUser.id,
                     senderName: sellerUser.name,
                     senderAccount: sellerUser.accountNumber || 'ES990001000988770000',
-                    receiverId: 'LOGISTICA_EXTERIOR',
-                    receiverName: 'Agencia de Logística y Transportes',
-                    receiverAccount: 'ES990001000988771122',
+                    receiverId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                    receiverName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                    receiverAccount: usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122',
                     amount: transportExpense,
                     concept: transportConcept,
                     timestamp: now.toISOString()
@@ -25917,7 +26318,7 @@ app.post('/api/raw-materials/orders', async (req, res) => {
           if (!isTeacherBuyer) {
             const freshBuyer = freshDb.users.find(u => u.id === buyer.id);
             if (freshBuyer) {
-              freshBuyer.balance = Math.round((freshBuyer.balance - totalAmount) * 100) / 100;
+              freshBuyer.balance = roundCurrency2(freshBuyer.balance - totalAmount - buyerFuelExpense);
             }
             if (!freshDb.transfers) freshDb.transfers = [];
             freshDb.transfers.unshift({
@@ -25932,6 +26333,22 @@ app.post('/api/raw-materials/orders', async (req, res) => {
               concept: `Compra Mercado: ${summaryTitle}`,
               timestamp: now.toISOString()
             });
+
+            if (buyerFuelExpense > 0 && buyerFuelInvoiceOrder) {
+              freshDb.rawMaterialOrders.unshift(buyerFuelInvoiceOrder);
+              freshDb.transfers.unshift({
+                id: txBuyerFuelId,
+                senderId: buyer.id,
+                senderName: buyerName,
+                senderAccount: buyer.accountNumber,
+                receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+                receiverName: 'Estación de servicio - suministro de combustible',
+                receiverAccount: 'ES00-0000-0000-0000-GASO',
+                amount: buyerFuelExpense,
+                concept: buyerFuelConcept,
+                timestamp: now.toISOString()
+              });
+            }
           }
 
           if (isTeacherBuyer && isStudentSeller) {
@@ -26017,9 +26434,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                     senderId: freshSeller.id,
                     senderName: freshSeller.name,
                     senderAccount: freshSeller.accountNumber || 'ES990001000988770000',
-                    receiverId: 'LOGISTICA_EXTERIOR',
-                    receiverName: 'Agencia de Logística y Transportes',
-                    receiverAccount: 'ES990001000988771122',
+                    receiverId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                    receiverName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                    receiverAccount: usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122',
                     amount: transportExpense,
                     concept: transportConcept,
                     timestamp: now.toISOString()
@@ -26057,9 +26474,9 @@ app.post('/api/raw-materials/orders', async (req, res) => {
                     senderId: sellerId,
                     senderName: sellerName,
                     senderAccount: 'ES990001000988770000',
-                    receiverId: 'LOGISTICA_EXTERIOR',
-                    receiverName: 'Agencia de Logística y Transportes',
-                    receiverAccount: 'ES990001000988771122',
+                    receiverId: usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                    receiverName: usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                    receiverAccount: usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122',
                     amount: transportExpense,
                     concept: transportConcept,
                     timestamp: now.toISOString()
@@ -26405,34 +26822,24 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
         const transportMethod: 'vendedor_envio' | 'comprador_recogida' =
           rawTransportMethod === 'comprador_recogida' ? 'comprador_recogida' : 'vendedor_envio';
 
-        if (transportMethod === 'comprador_recogida') {
-          const buyerId = order.studentId;
-          const isTruckType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
-          };
-          const isVanType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
-          };
+        const fleetDataNeg = await getTransportFleetForStudents(dbSnapshot, [order.studentId, order.sellerId || ''], client);
+        const buyerUserNeg = (dbSnapshot.users || []).find(u => u.id === order.studentId);
+        const buyerIsTeacherNeg = buyerUserNeg ? (buyerUserNeg.role === 'teacher' || buyerUserNeg.id === 'profesor-1') : false;
+        const isStudentSellerNeg = Boolean(
+          order.sellerId &&
+          order.sellerId !== 'proveedor-materia-prima' &&
+          order.sellerId !== 'profesor-1' &&
+          order.sellerLevel !== 'official'
+        );
 
-          const buyerVehicles = (dbSnapshot.purchasedVehicles || []).filter(v => v.studentId === buyerId);
-          const buyerDrivers = (dbSnapshot.hiredEmployees || []).filter(
-            e => e.studentId === buyerId && (e.role === 'camionero' || (e.role as string) === 'conductor')
-          );
-
-          const assignedVehicles = buyerVehicles.filter(veh => {
-            const hasDirectDriver = veh.assignedDriverId && buyerDrivers.some(d => d.id === veh.assignedDriverId);
-            const hasEmpAssigned = buyerDrivers.some(d => d.assignedVehicleId === veh.id);
-            return hasDirectDriver || hasEmpAssigned;
+        if (transportMethod === 'comprador_recogida' && !buyerIsTeacherNeg) {
+          const buyerVehNeg = resolveStudentTransportVehicle(fleetDataNeg.vehicles, fleetDataNeg.employees, order.studentId, {
+            preferredVehicleId: order.pickupVehicleId,
+            allowUnassignedFallbackWithDriver: false
           });
 
-          const hasAssignedTransport = assignedVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-
-          if (!hasAssignedTransport) {
-            const hasAnyVehicle = buyerVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-            const hasAnyDriver = buyerDrivers.length > 0;
-            if (!hasAnyVehicle || !hasAnyDriver) {
+          if (!buyerVehNeg.hasAssignedVehicle) {
+            if (!buyerVehNeg.hasAnyVehicle || !buyerVehNeg.hasAnyDriver) {
               const err: any = new Error('Requisito de Logística: Para acordar la recogida por el comprador se requiere disponer de un vehículo de transporte (camión o furgoneta) en la flota y un empleado contratado como Conductor / Camionero.');
               err.statusCode = 400;
               throw err;
@@ -26442,31 +26849,69 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
               throw err;
             }
           }
+          if (!order.pickupVehicleId && buyerVehNeg.vehicle) {
+            order.pickupVehicleId = buyerVehNeg.vehicle.id;
+          }
         }
 
         // 7. FINANCIAL CALCULATIONS
-        const newBasePrice = Math.round((newPricePerUnit * newQty) * 100) / 100;
-        const newDiscountAmount = Math.round((newBasePrice * (newDiscount / 100)) * 100) / 100;
-        const taxableBase = newBasePrice - newDiscountAmount;
+        const newBasePrice = roundCurrency2(newPricePerUnit * newQty);
+        const newDiscountAmount = roundCurrency2(newBasePrice * (newDiscount / 100));
+        const taxableBase = roundCurrency2(newBasePrice - newDiscountAmount);
 
-        const isFinalProduct = order.materialType === 'producto_final';
-        const itemTotalKg = order.totalKg || (order.unitWeightKg * newQty);
-        const calculatedPallets = isFinalProduct ? (newQty / 10000) : (itemTotalKg / 1000);
-        const chargedPallets = Math.max(1, Math.ceil(calculatedPallets));
-        const buyerLoc = (dbSnapshot.acquisitions || []).find(a => String(a.studentId) === String(order.studentId)) || order.studentName || order.studentId;
-        const sellerLoc = (dbSnapshot.acquisitions || []).find(a => String(a.studentId) === String(order.sellerId)) || order.sellerName || order.sellerId;
+        const isFinalProduct = isFinishedUnitProductLike(order.materialType, order.materialTitle);
+        const itemTotalKg = isFinalProduct ? 0 : (order.unitWeightKg > 0 ? order.unitWeightKg * newQty : (order.totalKg || 0));
+        const negPhysicalWeightKg = isFinalProduct ? roundCurrency2(newQty * FINISHED_PRODUCT_UNIT_WEIGHT_KG) : itemTotalKg;
+        const calculatedPallets = calculateRequestedPallets({
+          totalKg: itemTotalKg,
+          finishedUnits: isFinalProduct ? newQty : 0
+        });
+        const buyerNave = (order as any).destinationNaveId
+          ? fleetDataNeg.acquisitions.find(a => String(a.id) === String((order as any).destinationNaveId))
+          : undefined;
+        const buyerLoc = buyerNave || fleetDataNeg.acquisitions.find(a => String(a.studentId) === String(order.studentId)) || order.studentName || order.studentId;
+        const annMatch = (dbSnapshot.rawMaterialAnnouncements || []).find(a => String(a.id) === String(order.announcementId));
+        const sellerAcqNeg = fleetDataNeg.acquisitions.find(a => String(a.studentId) === String(order.sellerId));
+        const sellerLoc = (annMatch && annMatch.sellerLocation) ? annMatch : (sellerAcqNeg || order.sellerName || order.sellerId);
         const distanceKm = calculateSpanishDistanceKm(buyerLoc, sellerLoc);
+        const extNegCalc = calculateExteriorTransportAccounting({
+          requestedPallets: calculatedPallets,
+          distanceKm
+        });
+        const chargedPallets = extNegCalc.chargedPallets;
+
+        const resolvedSellerVehNeg = (isStudentSellerNeg && transportMethod === 'vendedor_envio' && order.sellerId)
+          ? resolveStudentTransportVehicle(fleetDataNeg.vehicles, fleetDataNeg.employees, order.sellerId, { allowUnassignedFallbackWithDriver: true })
+          : null;
+        const sellerOwnFuelNeg = (resolvedSellerVehNeg?.vehicle && resolvedSellerVehNeg?.vehicleType)
+          ? calculateOwnVehicleFuelAccounting({
+              distanceKm,
+              totalWeightKg: negPhysicalWeightKg,
+              vehicleType: resolvedSellerVehNeg.vehicleType
+            })
+          : null;
 
         let newTransportCost = 0;
+        let newIvaAmount = 0;
         if (transportMethod === 'vendedor_envio') {
-          newTransportCost = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+          if (sellerOwnFuelNeg) {
+            newTransportCost = sellerOwnFuelNeg.baseAmount;
+            newIvaAmount = roundCurrency2(roundCurrency2(taxableBase * 0.21) + sellerOwnFuelNeg.ivaAmount);
+          } else {
+            newTransportCost = extNegCalc.baseAmount;
+            newIvaAmount = roundCurrency2((taxableBase + newTransportCost) * 0.21);
+          }
+        } else {
+          newTransportCost = 0;
+          newIvaAmount = roundCurrency2(taxableBase * 0.21);
         }
 
-        const newIvaAmount = Math.round(((taxableBase + newTransportCost) * 0.21) * 100) / 100;
-        const newTotalAmount = Math.round((taxableBase + newTransportCost + newInsurance + newIvaAmount) * 100) / 100;
+        const newTotalAmount = roundCurrency2(taxableBase + newTransportCost + newInsurance + newIvaAmount);
+        order.totalKg = itemTotalKg;
 
         order.quantity = newQty;
         order.basePrice = newBasePrice;
+        order.subtotalAmount = newBasePrice;
         order.discountPercentage = newDiscount;
         order.discountAmount = newDiscountAmount;
         order.insuranceFee = newInsurance;
@@ -26493,6 +26938,8 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
           discountPercentage: newDiscount,
           insuranceFee: newInsurance,
           transportCost: newTransportCost,
+          distanceKm,
+          chargedPallets,
           transportMethod,
           totalAmount: newTotalAmount,
           note: note || 'Contraoferta enviada'
@@ -26530,8 +26977,9 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
                last_turn_user_id = $10,
                negotiation_history = $11,
                items = $12,
-               peso_total_kg = $13
-           WHERE id = $14`,
+               peso_total_kg = $13,
+               vehiculo_recogida_id = COALESCE($14, vehiculo_recogida_id)
+           WHERE id = $15`,
           [
             newQty,
             newBasePrice,
@@ -26546,6 +26994,7 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
             historyJson,
             itemsJson,
             newTotalKg,
+            order.pickupVehicleId || null,
             order.id
           ]
         );
@@ -26924,9 +27373,138 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
           throw err;
         }
 
+        const fleetData = await getTransportFleetForStudents(
+          dbSnapshot,
+          [buyerId, isStudentSeller ? (sellerId || '') : ''],
+          client
+        );
+
+        const buyerNaveApp = (order as any).destinationNaveId
+          ? fleetData.acquisitions.find(a => String(a.id) === String((order as any).destinationNaveId))
+          : undefined;
+        const buyerLocApp = buyerNaveApp || fleetData.acquisitions.find(a => String(a.studentId) === String(buyerId)) || order.deliveryAddress || buyerDisplayName;
+        const sellerAcqApp = (isStudentSeller && sellerId)
+          ? fleetData.acquisitions.find(a => String(a.studentId) === String(sellerId))
+          : undefined;
+        const annMatchApp = (dbSnapshot.rawMaterialAnnouncements || []).find(a => String(a.id) === String(order.announcementId));
+        const sellerLocApp = (annMatchApp && annMatchApp.sellerLocation) ? annMatchApp : (sellerAcqApp || order.sellerName || sellerId || 'Almacén Central Oficial');
+        const orderDistanceKm = Number(order.distanceKm) > 0 ? Number(order.distanceKm) : calculateSpanishDistanceKm(buyerLocApp, sellerLocApp);
+
+        const orderPhysicalWeightKg = order.items && order.items.length > 0
+          ? roundCurrency2(order.items.reduce((sum, it) => {
+              const isFinishedIt = isFinishedUnitProductLike(it.materialType, it.materialTitle || order.materialTitle);
+              if (!isFinishedIt && it.totalKg && it.totalKg > 0) return sum + it.totalKg;
+              if (isFinishedIt) return sum + roundCurrency2((it.quantity || 0) * FINISHED_PRODUCT_UNIT_WEIGHT_KG);
+              return sum + (it.totalKg || it.quantity || 0);
+            }, 0))
+          : (() => {
+              const isFinishedOrd = isFinishedUnitProductLike(order.materialType, order.materialTitle);
+              if (!isFinishedOrd && order.totalKg > 0) return order.totalKg;
+              if (isFinishedOrd) return roundCurrency2((order.quantity || 0) * FINISHED_PRODUCT_UNIT_WEIGHT_KG);
+              return order.totalKg || order.quantity || 0;
+            })();
+
+        let buyerFuelExpense = 0;
+        let buyerFuelConcept = '';
+        let buyerFuelInvoiceOrder: RawMaterialOrder | null = null;
+        const txBuyerFuelId = generateId('tx');
+
+        if (!buyerIsTeacher && order.transportMethod === 'comprador_recogida') {
+          const resolvedBuyerPickup = resolveStudentTransportVehicle(fleetData.vehicles, fleetData.employees, buyerId, {
+            preferredVehicleId: order.pickupVehicleId,
+            allowUnassignedFallbackWithDriver: false
+          });
+          if (!resolvedBuyerPickup.hasAssignedVehicle || !resolvedBuyerPickup.vehicleType) {
+            const err: any = !resolvedBuyerPickup.hasAnyVehicle || !resolvedBuyerPickup.hasAnyDriver
+              ? new Error('Requisito de Logística: Para recoger con flota propia debes disponer de un camión o furgoneta y un conductor/camionero contratado.')
+              : new Error('Requisito de Logística: Para recoger con flota propia debes tener un empleado conductor o camionero asignado a tu vehículo.');
+            err.statusCode = 400;
+            throw err;
+          }
+          const buyerOwnFuelCalc = calculateOwnVehicleFuelAccounting({
+            distanceKm: orderDistanceKm,
+            totalWeightKg: orderPhysicalWeightKg,
+            vehicleType: resolvedBuyerPickup.vehicleType
+          });
+          buyerFuelExpense = buyerOwnFuelCalc.totalAmount;
+          if (buyerFuelExpense > 0) {
+            const tripsInfo = buyerOwnFuelCalc.trips > 1 ? ` (${buyerOwnFuelCalc.trips} viajes)` : '';
+            buyerFuelConcept = `Suministro de Combustible / Gasolina ${buyerOwnFuelCalc.vehicleLabel}${tripsInfo} (${orderDistanceKm} km ida / ${buyerOwnFuelCalc.roundTripKm} km i/v) - Recogida Compra Mercado (${order.materialTitle})`;
+            const unitBase = roundCurrency2(buyerOwnFuelCalc.baseAmount / Math.max(1, buyerOwnFuelCalc.trips));
+            buyerFuelInvoiceOrder = {
+              id: `rmord_trans_${txBuyerFuelId}`,
+              studentId: buyerId,
+              studentName: buyerDisplayName,
+              buyerLevel: buyerLevel || 1,
+              sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+              sellerName: 'Estación de servicio - suministro de combustible',
+              sellerLevel: 'official',
+              announcementId: `gaso-inv-${txBuyerFuelId}`,
+              materialType: 'combustible',
+              materialTitle: buyerFuelConcept,
+              quantity: buyerOwnFuelCalc.trips,
+              unitWeightKg: 0,
+              totalKg: 0,
+              basePrice: buyerOwnFuelCalc.baseAmount,
+              subtotalAmount: buyerOwnFuelCalc.baseAmount,
+              unitPrice: unitBase,
+              discountPercentage: 0,
+              discountAmount: 0,
+              insuranceFee: 0,
+              hasInsurance: false,
+              ivaAmount: buyerOwnFuelCalc.ivaAmount,
+              vatAmount: buyerOwnFuelCalc.ivaAmount,
+              vatRate: 21,
+              transportCost: 0,
+              transportMethod: 'comprador_recogida',
+              totalAmount: buyerFuelExpense,
+              needsTransport: false,
+              deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
+              status: 'facturado',
+              invoiceNumber: `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+              requestedAt: now.toISOString(),
+              approvedAt: now.toISOString(),
+              deliveredAt: now.toISOString(),
+              invoicedAt: now.toISOString(),
+              inventoryCredited: true,
+              items: [{
+                announcementId: `gaso-inv-${txBuyerFuelId}`,
+                materialType: 'combustible',
+                materialTitle: buyerFuelConcept,
+                title: buyerFuelConcept,
+                quantity: buyerOwnFuelCalc.trips,
+                unitPrice: unitBase,
+                subtotal: buyerOwnFuelCalc.baseAmount,
+                totalCost: buyerOwnFuelCalc.baseAmount
+              }],
+              lastTurnUserId: buyerId,
+              negotiationHistory: [{
+                id: generateId('neg'),
+                authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+                authorName: 'Estación de servicio - suministro de combustible',
+                timestamp: now.toISOString(),
+                action: 'propuesta_inicial',
+                quantity: buyerOwnFuelCalc.trips,
+                pricePerUnit: unitBase,
+                discountPercentage: 0,
+                insuranceFee: 0,
+                transportCost: 0,
+                transportMethod: 'comprador_recogida',
+                totalAmount: buyerFuelExpense,
+                note: `Factura por ${buyerFuelConcept}`
+              }]
+            };
+          }
+        }
+
         const currentBuyerBal = Number(buyerRow.saldo);
-        if (currentBuyerBal < order.totalAmount) {
-          const err: any = new Error(`El comprador ${buyerDisplayName} no dispone de saldo suficiente (${currentBuyerBal.toFixed(2)} €) para cubrir el coste de ${order.totalAmount.toFixed(2)} €.`);
+        const totalBuyerDebit = roundCurrency2(order.totalAmount + buyerFuelExpense);
+        if (currentBuyerBal < totalBuyerDebit) {
+          const err: any = new Error(
+            buyerFuelExpense > 0
+              ? `El comprador ${buyerDisplayName} no dispone de saldo suficiente (${currentBuyerBal.toFixed(2)} €) para cubrir la compra (${order.totalAmount.toFixed(2)} €) más el combustible de recogida (${buyerFuelExpense.toFixed(2)} €), total ${totalBuyerDebit.toFixed(2)} €.`
+              : `El comprador ${buyerDisplayName} no dispone de saldo suficiente (${currentBuyerBal.toFixed(2)} €) para cubrir el coste de ${order.totalAmount.toFixed(2)} €.`
+          );
           err.statusCode = 400;
           throw err;
         }
@@ -26936,95 +27514,162 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
         let transportConcept = '';
         let baseTransportFee = 0;
         let ivaTransportFee = 0;
+        let usedOwnVehicle = false;
         let transportInvoiceOrder: RawMaterialOrder | null = null;
         const txTransportId = generateId('tx');
         const txMainId = generateId('tx');
 
-        if (isStudentSeller && sellerUser) {
-          const sellerHasTruck = (dbSnapshot.purchasedVehicles || []).some(
-            v => String(v.studentId) === String(sellerUser.id) &&
-            ((v.vehicleType as string) === 'camion_trailer' || (v.vehicleType as string) === 'camion_ligero' || (v.vehicleType as string) === 'camion' || (v.vehicleType || '').toLowerCase().includes('camion') || v.vehicleType === 'furgoneta_transporte' || v.vehicleType === 'furgoneta' || (v.vehicleType || '').toLowerCase().includes('furgoneta'))
-          );
-          const sellerHasDriver = (dbSnapshot.hiredEmployees || []).some(
-            e => String(e.studentId) === String(sellerUser.id) &&
-            ((e.role as string) === 'camionero' || (e.role as string) === 'conductor')
-          );
+        if (isStudentSeller && sellerUser && order.transportMethod !== 'comprador_recogida') {
+          const resolvedSellerVeh = resolveStudentTransportVehicle(fleetData.vehicles, fleetData.employees, sellerUser.id, {
+            allowUnassignedFallbackWithDriver: true
+          });
+          usedOwnVehicle = Boolean(resolvedSellerVeh.vehicle && resolvedSellerVeh.vehicleType);
 
-          if (sellerHasTruck && sellerHasDriver) {
-            transportExpense = Math.min(order.transportCost || 0, Math.round((15 + order.quantity * 0.50) * 100) / 100);
-            baseTransportFee = Math.round((transportExpense / 1.21) * 100) / 100;
-            ivaTransportFee = Math.round((transportExpense - baseTransportFee) * 100) / 100;
-            transportConcept = `Suministro de Gasolina / Combustible - Envíos El Des-Tornillo (${order.quantity} u.)`;
-          } else {
-            baseTransportFee = order.transportCost || 0;
-            ivaTransportFee = Math.round((baseTransportFee * 0.21) * 100) / 100;
-            transportExpense = Math.round((baseTransportFee + ivaTransportFee) * 100) / 100;
-            transportConcept = `Gasto de Transporte y Logística Externa - Envíos El Des-Tornillo (${order.quantity} u.)`;
-          }
-
-          if (transportExpense > 0) {
-            transportInvoiceOrder = {
-              id: `rmord_trans_${txTransportId}`,
-              studentId: sellerUser.id,
-              studentName: sellerUser.name,
-              buyerLevel: sellerUser.level || 1,
-              sellerId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-              sellerName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-              sellerLevel: 'official',
-              announcementId: `trans-inv-${txTransportId}`,
-              materialType: (sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte') as any,
-              materialTitle: transportConcept,
-              quantity: 1,
-              unitWeightKg: order.quantity,
-              totalKg: order.quantity,
-              basePrice: baseTransportFee,
-              subtotalAmount: baseTransportFee,
-              unitPrice: baseTransportFee,
-              discountPercentage: 0,
-              discountAmount: 0,
-              insuranceFee: 0,
-              hasInsurance: false,
-              ivaAmount: ivaTransportFee,
-              vatAmount: ivaTransportFee,
-              vatRate: 21,
-              transportCost: 0,
-              transportMethod: 'vendedor_envio',
-              totalAmount: transportExpense,
-              needsTransport: false,
-              deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
-              status: 'facturado',
-              invoiceNumber: `FACT-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-              requestedAt: now.toISOString(),
-              approvedAt: now.toISOString(),
-              deliveredAt: now.toISOString(),
-              invoicedAt: now.toISOString(),
-              items: [{
+          if (usedOwnVehicle && resolvedSellerVeh.vehicleType) {
+            const ownFuelAcc = calculateOwnVehicleFuelAccounting({
+              distanceKm: orderDistanceKm,
+              totalWeightKg: orderPhysicalWeightKg,
+              vehicleType: resolvedSellerVeh.vehicleType
+            });
+            transportExpense = ownFuelAcc.totalAmount;
+            baseTransportFee = ownFuelAcc.baseAmount;
+            ivaTransportFee = ownFuelAcc.ivaAmount;
+            const tripsInfo = ownFuelAcc.trips > 1 ? ` (${ownFuelAcc.trips} viajes)` : '';
+            transportConcept = `Suministro de Gasolina / Combustible ${ownFuelAcc.vehicleLabel}${tripsInfo} (${orderDistanceKm} km) - Envío Mercado (${order.quantity} u.)`;
+            if (transportExpense > 0) {
+              const unitBase = roundCurrency2(baseTransportFee / Math.max(1, ownFuelAcc.trips));
+              transportInvoiceOrder = {
+                id: `rmord_trans_${txTransportId}`,
+                studentId: sellerUser.id,
+                studentName: sellerUser.name,
+                buyerLevel: sellerUser.level || 1,
+                sellerId: 'SUMINISTROS_ESTACION_SERVICIO',
+                sellerName: 'Estación de servicio - suministro de combustible',
+                sellerLevel: 'official',
                 announcementId: `trans-inv-${txTransportId}`,
-                materialType: (sellerHasTruck && sellerHasDriver ? 'combustible' : 'transporte') as any,
+                materialType: 'combustible' as any,
                 materialTitle: transportConcept,
-                title: transportConcept,
-                quantity: 1,
-                unitPrice: baseTransportFee,
-                subtotal: baseTransportFee,
-                totalCost: baseTransportFee
-              }],
-              lastTurnUserId: sellerUser.id,
-              negotiationHistory: [{
-                id: generateId('neg'),
-                authorId: sellerHasTruck && sellerHasDriver ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
-                authorName: sellerHasTruck && sellerHasDriver ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
-                timestamp: now.toISOString(),
-                action: 'propuesta_inicial',
-                quantity: 1,
-                pricePerUnit: baseTransportFee,
+                quantity: ownFuelAcc.trips,
+                unitWeightKg: order.quantity,
+                totalKg: order.quantity,
+                basePrice: baseTransportFee,
+                subtotalAmount: baseTransportFee,
+                unitPrice: unitBase,
                 discountPercentage: 0,
+                discountAmount: 0,
                 insuranceFee: 0,
+                hasInsurance: false,
+                ivaAmount: ivaTransportFee,
+                vatAmount: ivaTransportFee,
+                vatRate: 21,
                 transportCost: 0,
                 transportMethod: 'vendedor_envio',
                 totalAmount: transportExpense,
-                note: `Factura por ${transportConcept}`
-              }]
-            };
+                needsTransport: false,
+                deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
+                status: 'facturado',
+                invoiceNumber: `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+                requestedAt: now.toISOString(),
+                approvedAt: now.toISOString(),
+                deliveredAt: now.toISOString(),
+                invoicedAt: now.toISOString(),
+                items: [{
+                  announcementId: `trans-inv-${txTransportId}`,
+                  materialType: 'combustible' as any,
+                  materialTitle: transportConcept,
+                  title: transportConcept,
+                  quantity: ownFuelAcc.trips,
+                  unitPrice: unitBase,
+                  subtotal: baseTransportFee,
+                  totalCost: baseTransportFee
+                }],
+                lastTurnUserId: sellerUser.id,
+                negotiationHistory: [{
+                  id: generateId('neg'),
+                  authorId: 'SUMINISTROS_ESTACION_SERVICIO',
+                  authorName: 'Estación de servicio - suministro de combustible',
+                  timestamp: now.toISOString(),
+                  action: 'propuesta_inicial',
+                  quantity: ownFuelAcc.trips,
+                  pricePerUnit: unitBase,
+                  discountPercentage: 0,
+                  insuranceFee: 0,
+                  transportCost: 0,
+                  transportMethod: 'vendedor_envio',
+                  totalAmount: transportExpense,
+                  note: `Factura por ${transportConcept}`
+                }]
+              };
+            }
+          } else {
+            baseTransportFee = roundCurrency2(order.transportCost || 0);
+            ivaTransportFee = roundCurrency2(baseTransportFee * 0.21);
+            transportExpense = roundCurrency2(baseTransportFee + ivaTransportFee);
+            transportConcept = `Gasto de Transporte y Logística Externa - Envío Mercado (${order.quantity} u., ${orderDistanceKm} km)`;
+            if (transportExpense > 0) {
+              transportInvoiceOrder = {
+                id: `rmord_trans_${txTransportId}`,
+                studentId: sellerUser.id,
+                studentName: sellerUser.name,
+                buyerLevel: sellerUser.level || 1,
+                sellerId: 'LOGISTICA_EXTERIOR',
+                sellerName: 'Agencia de Logística y Transportes Express S.A.',
+                sellerLevel: 'official',
+                announcementId: `trans-inv-${txTransportId}`,
+                materialType: 'transporte' as any,
+                materialTitle: transportConcept,
+                quantity: 1,
+                unitWeightKg: order.quantity,
+                totalKg: order.quantity,
+                basePrice: baseTransportFee,
+                subtotalAmount: baseTransportFee,
+                unitPrice: baseTransportFee,
+                discountPercentage: 0,
+                discountAmount: 0,
+                insuranceFee: 0,
+                hasInsurance: false,
+                ivaAmount: ivaTransportFee,
+                vatAmount: ivaTransportFee,
+                vatRate: 21,
+                transportCost: 0,
+                transportMethod: 'vendedor_envio',
+                totalAmount: transportExpense,
+                needsTransport: false,
+                deliveryAddress: order.deliveryAddress || 'Dirección comercial registrada',
+                status: 'facturado',
+                invoiceNumber: `FACT-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+                requestedAt: now.toISOString(),
+                approvedAt: now.toISOString(),
+                deliveredAt: now.toISOString(),
+                invoicedAt: now.toISOString(),
+                items: [{
+                  announcementId: `trans-inv-${txTransportId}`,
+                  materialType: 'transporte' as any,
+                  materialTitle: transportConcept,
+                  title: transportConcept,
+                  quantity: 1,
+                  unitPrice: baseTransportFee,
+                  subtotal: baseTransportFee,
+                  totalCost: baseTransportFee
+                }],
+                lastTurnUserId: sellerUser.id,
+                negotiationHistory: [{
+                  id: generateId('neg'),
+                  authorId: 'LOGISTICA_EXTERIOR',
+                  authorName: 'Agencia de Logística y Transportes Express S.A.',
+                  timestamp: now.toISOString(),
+                  action: 'propuesta_inicial',
+                  quantity: 1,
+                  pricePerUnit: baseTransportFee,
+                  discountPercentage: 0,
+                  insuranceFee: 0,
+                  transportCost: 0,
+                  transportMethod: 'vendedor_envio',
+                  totalAmount: transportExpense,
+                  note: `Factura por ${transportConcept}`
+                }]
+              };
+            }
           }
         }
 
@@ -27191,7 +27836,7 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
         }
 
         // 6. EXECUTE FINANCIAL MOVEMENTS IN POSTGRESQL
-        const newBuyerBal = Math.round((currentBuyerBal - order.totalAmount) * 100) / 100;
+        const newBuyerBal = roundCurrency2(currentBuyerBal - order.totalAmount - buyerFuelExpense);
         await client.query('UPDATE cuentas SET saldo = $1 WHERE id = $2', [newBuyerBal, buyerId]);
 
         await client.query(
@@ -27211,6 +27856,26 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
             'ES990001000988776655'
           ]
         );
+
+        if (buyerFuelExpense > 0 && buyerFuelInvoiceOrder) {
+          await client.query(
+            `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
+             VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              txBuyerFuelId + '-out',
+              buyerId,
+              buyerFuelExpense,
+              now.toISOString(),
+              buyerFuelConcept,
+              buyerId,
+              buyerDisplayName,
+              buyerRow.account_number,
+              'SUMINISTROS_ESTACION_SERVICIO',
+              'Estación de servicio - suministro de combustible',
+              'ES00-0000-0000-0000-GASO'
+            ]
+          );
+        }
 
         if (isStudentSeller && sellerRow) {
           const currentSellerBal = Number(sellerRow.saldo);
@@ -27248,9 +27913,9 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
                 sellerRow.id,
                 sellerRow.alumno,
                 sellerRow.account_number,
-                'LOGISTICA_EXTERIOR',
-                'Agencia de Logística y Transportes',
-                'ES990001000988771122'
+                usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+                usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+                usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122'
               ]
             );
           }
@@ -27288,16 +27953,24 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
         if (transportInvoiceOrder) {
           await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
         }
+        if (buyerFuelInvoiceOrder) {
+          await syncRawMaterialOrderToSupabase(buyerFuelInvoiceOrder, client);
+        }
 
         // Return context for in-memory cache update after COMMIT
         return {
           order,
           transportInvoiceOrder,
+          buyerFuelInvoiceOrder,
+          buyerFuelExpense,
+          buyerFuelConcept,
+          txBuyerFuelId,
           buyerDisplayName,
           isL1Raw,
           deliveryDays,
           transportExpense,
           transportConcept,
+          usedOwnVehicle,
           txMainId,
           txTransportId,
           newBuyerBal,
@@ -27320,6 +27993,9 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
 
     if (result.transportInvoiceOrder) {
       db.rawMaterialOrders.unshift(result.transportInvoiceOrder);
+    }
+    if (result.buyerFuelInvoiceOrder) {
+      db.rawMaterialOrders.unshift(result.buyerFuelInvoiceOrder);
     }
 
     const memBuyer = (db.users || []).find(u => u.id === result.order.studentId);
@@ -27346,15 +28022,30 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
       timestamp: new Date().toISOString()
     });
 
+    if (result.buyerFuelExpense > 0 && result.buyerFuelInvoiceOrder && memBuyer) {
+      db.transfers.unshift({
+        id: result.txBuyerFuelId,
+        senderId: memBuyer.id,
+        senderName: result.buyerDisplayName,
+        senderAccount: memBuyer.accountNumber || 'ES990001000988770000',
+        receiverId: 'SUMINISTROS_ESTACION_SERVICIO',
+        receiverName: 'Estación de servicio - suministro de combustible',
+        receiverAccount: 'ES00-0000-0000-0000-GASO',
+        amount: result.buyerFuelExpense,
+        concept: result.buyerFuelConcept,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     if (result.transportExpense > 0 && result.transportInvoiceOrder && memSeller) {
       db.transfers.unshift({
         id: result.txTransportId,
         senderId: memSeller.id,
         senderName: memSeller.name,
         senderAccount: memSeller.accountNumber || 'ES990001000988770000',
-        receiverId: 'LOGISTICA_EXTERIOR',
-        receiverName: 'Agencia de Logística y Transportes Express S.A.',
-        receiverAccount: 'ES990001000988771122',
+        receiverId: result.usedOwnVehicle ? 'SUMINISTROS_ESTACION_SERVICIO' : 'LOGISTICA_EXTERIOR',
+        receiverName: result.usedOwnVehicle ? 'Estación de servicio - suministro de combustible' : 'Agencia de Logística y Transportes Express S.A.',
+        receiverAccount: result.usedOwnVehicle ? 'ES00-0000-0000-0000-GASO' : 'ES990001000988771122',
         amount: result.transportExpense,
         concept: result.transportConcept,
         timestamp: new Date().toISOString()
@@ -29111,7 +29802,11 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
 
         // Validate transport method
         let transportFee = 0;
+        let extBaseAmount = 0;
+        let extIvaAmount = 0;
         let fuelExpense = 0;
+        let fuelBaseAmount = 0;
+        let fuelIvaAmount = 0;
         let distanceKm = 0;
         let fuelMovId = '';
         let transMovId = '';
@@ -29119,42 +29814,16 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         let fuelTripsCount = 1;
         let fuelVehicleLabel = 'Camión';
         let totalWeightKg = 0;
+        const isKgItemTransfer = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
+        const transferFleetData = await getTransportFleetForStudents(db, [senderId], client);
 
         if (transportMethod === 'propio') {
-          // Check available transport vehicles and driver assignment:
-          // A vehicle qualifies if:
-          // 1. Belonging to senderId
-          // 2. vehicleType is camion or furgoneta
-          // 3. Has an active driver assigned specifically to it (v.assignedDriverId OR matching employee in hiredEmployees with assignedVehicleId)
-          const isTruckType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
-          };
-          const isVanType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
-          };
-
-          const senderVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === senderId);
-          const senderDrivers = (db.hiredEmployees || []).filter(
-            e => e.studentId === senderId && (e.role === 'camionero' || (e.role as string) === 'conductor')
-          );
-
-          // Find vehicles with an assigned driver
-          const assignedVehicles = senderVehicles.filter(veh => {
-            const hasDirectDriver = veh.assignedDriverId && senderDrivers.some(d => d.id === veh.assignedDriverId);
-            const hasEmpAssigned = senderDrivers.some(d => d.assignedVehicleId === veh.id);
-            return hasDirectDriver || hasEmpAssigned;
+          const resolvedSenderVeh = resolveStudentTransportVehicle(transferFleetData.vehicles, transferFleetData.employees, senderId, {
+            allowUnassignedFallbackWithDriver: false
           });
 
-          // Check if there is an assigned truck or van
-          const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
-          const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
-
-          if (!assignedTruck && !assignedVan) {
-            const hasAnyVehicle = senderVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-            const hasAnyDriver = senderDrivers.length > 0;
-            if (!hasAnyVehicle || !hasAnyDriver) {
+          if (!resolvedSenderVeh.hasAssignedVehicle || !resolvedSenderVeh.vehicleType) {
+            if (!resolvedSenderVeh.hasAnyVehicle || !resolvedSenderVeh.hasAnyDriver) {
               const err: any = new Error('Para realizar el envío con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
               err.statusCode = 400;
               throw err;
@@ -29169,32 +29838,35 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           const recipientLoc = selectedRecipientNave || recipient;
           distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
 
-          // Calculate weight / trips
-          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-          totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+          totalWeightKg = isKgItemTransfer ? qty : roundCurrency2(qty * FINISHED_PRODUCT_UNIT_WEIGHT_KG);
 
-          // If only van is assigned (or preferred if van is active and no truck assigned), van capacity is 1 pallet / 1000 kg per trip
-          // trips = ceil(weight / 1000 kg)
-          if (!assignedTruck && assignedVan) {
-            fuelVehicleLabel = 'Furgoneta';
-            fuelTripsCount = Math.max(1, Math.ceil(totalWeightKg / 1000));
-          } else {
-            fuelVehicleLabel = 'Camión';
-            fuelTripsCount = 1;
-          }
-
-          const singleTripFuel = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
-          fuelExpense = Math.round(singleTripFuel * fuelTripsCount * 100) / 100;
+          const ownCalc = calculateOwnVehicleFuelAccounting({
+            distanceKm,
+            totalWeightKg,
+            vehicleType: resolvedSenderVeh.vehicleType
+          });
+          fuelVehicleLabel = ownCalc.vehicleLabel;
+          fuelTripsCount = ownCalc.trips;
+          fuelExpense = ownCalc.totalAmount;
+          fuelBaseAmount = ownCalc.baseAmount;
+          fuelIvaAmount = ownCalc.ivaAmount;
         } else if (transportMethod === 'exterior') {
-          const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-          const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
-          const chargedPallets = Math.max(1, Math.ceil(transferPallets));
+          const transferPallets = calculateRequestedPallets({
+            totalKg: isKgItemTransfer ? qty : 0,
+            finishedUnits: isKgItemTransfer ? 0 : qty
+          });
 
           const senderLoc = selectedSenderNave || sender;
           const recipientLoc = selectedRecipientNave || recipient;
           distanceKm = calculateSpanishDistanceKm(senderLoc, recipientLoc);
 
-          transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+          const extCalc = calculateExteriorTransportAccounting({
+            requestedPallets: transferPallets,
+            distanceKm
+          });
+          extBaseAmount = extCalc.baseAmount;
+          extIvaAmount = extCalc.ivaAmount;
+          transportFee = extCalc.totalAmount;
         }
 
         // 1. DETERMINISTIC LOCK ORDER FOR INVENTORIES
@@ -29251,20 +29923,19 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
 
           if (currentBalance < expense) {
             if (transportMethod === 'propio') {
-              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
+              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} € IVA incl.). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
               err.statusCode = 400;
               throw err;
             } else {
-              const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-              const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+              const transferPallets = isKgItemTransfer ? (qty / 1000) : (qty / 10000);
               const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
+              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € = ${extBaseAmount.toFixed(2)} € base + ${extIvaAmount.toFixed(2)} € IVA por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
               err.statusCode = 400;
               throw err;
             }
           }
 
-          newSenderBalance = Math.round((currentBalance - expense) * 100) / 100;
+          newSenderBalance = roundCurrency2(currentBalance - expense);
           await client.query(`UPDATE cuentas SET saldo = $1 WHERE id = $2`, [newSenderBalance, senderId]);
 
           const nowIso = new Date().toISOString();
@@ -29279,10 +29950,9 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             );
           } else if (transportMethod === 'exterior') {
             transMovId = generateId('mov');
-            const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-            const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
+            const transferPallets = isKgItemTransfer ? (qty / 1000) : (qty / 10000);
             const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-            const concept = `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`;
+            const concept = `Servicio exterior de transporte - Envío de existencias a ${recipient.name} (${chargedPallets} pal. × ${distanceKm} km: Base ${extBaseAmount.toFixed(2)} € + IVA 21% ${extIvaAmount.toFixed(2)} €)`;
             await client.query(
               `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -29556,8 +30226,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             ? (recipientProp.location || recipientProp.propertyTitle || 'Almacén principal del destinatario')
             : 'Polígono Industrial San Fernando, Av. de la Industria 14, San Fernando de Henares (Madrid)';
 
-          const basePrice = Math.round((transportFee / 1.21) * 100) / 100;
-          const ivaAmount = Math.round((transportFee - basePrice) * 100) / 100;
+          const basePrice = extBaseAmount;
+          const ivaAmount = extIvaAmount;
           transportInvoiceOrder = {
             id: `rmord_trans_${transMovId}`,
             studentId: sender.id,
@@ -29571,13 +30241,17 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             materialTitle: `Servicio exterior de transporte - Envío de existencias a ${recipient.name} — Dirección del inmueble de destino: ${recipientAddress}`,
             quantity: 1,
             unitWeightKg: 0,
-            totalKg: itemKey.includes('Kg') ? qty : Math.round(qty * 0.1 * 100) / 100,
+            totalKg: isKgItemTransfer ? qty : roundCurrency2(qty * FINISHED_PRODUCT_UNIT_WEIGHT_KG),
             basePrice,
+            subtotalAmount: basePrice,
+            unitPrice: basePrice,
             discountPercentage: 0,
             discountAmount: 0,
             insuranceFee: 0,
             hasInsurance: false,
             ivaAmount,
+            vatAmount: ivaAmount,
+            vatRate: 21,
             transportCost: 0,
             transportMethod: 'vendedor_envio',
             totalAmount: transportFee,
@@ -29597,6 +30271,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
               quantity: 1,
               unitWeightKg: 0,
               totalKg: 0,
+              unitPrice: basePrice,
               basePrice,
               subtotal: basePrice
             }],
@@ -29619,8 +30294,9 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           };
           await syncRawMaterialOrderToSupabase(transportInvoiceOrder, client);
         } else if (transportMethod === 'propio' && fuelExpense > 0 && fuelMovId) {
-          const basePricePropio = Math.round((fuelExpense / 1.21) * 100) / 100;
-          const ivaAmountPropio = Math.round((fuelExpense - basePricePropio) * 100) / 100;
+          const basePricePropio = fuelBaseAmount;
+          const ivaAmountPropio = fuelIvaAmount;
+          const unitBasePropio = roundCurrency2(basePricePropio / Math.max(1, fuelTripsCount));
           const tripsInfo = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes)` : '';
           fuelInvoiceOrder = {
             id: `rmord_trans_${fuelMovId}`,
@@ -29637,11 +30313,15 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
             unitWeightKg: 0,
             totalKg: 0,
             basePrice: basePricePropio,
+            subtotalAmount: basePricePropio,
+            unitPrice: unitBasePropio,
             discountPercentage: 0,
             discountAmount: 0,
             insuranceFee: 0,
             hasInsurance: false,
             ivaAmount: ivaAmountPropio,
+            vatAmount: ivaAmountPropio,
+            vatRate: 21,
             transportCost: 0,
             transportMethod: 'vendedor_envio',
             totalAmount: fuelExpense,
@@ -29661,6 +30341,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
               quantity: fuelTripsCount,
               unitWeightKg: 0,
               totalKg: 0,
+              unitPrice: unitBasePropio,
               basePrice: basePricePropio,
               subtotal: basePricePropio
             }],
@@ -29672,7 +30353,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
               timestamp: nowIso,
               action: 'propuesta_inicial',
               quantity: fuelTripsCount,
-              pricePerUnit: basePricePropio,
+              pricePerUnit: unitBasePropio,
               discountPercentage: 0,
               insuranceFee: 0,
               transportCost: 0,
@@ -29687,8 +30368,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         const destinationNaveName = selectedRecipientNave ? (selectedRecipientNave.propertyTitle || selectedRecipientNave.title || 'Almacén de destino') : 'Almacén de destino';
         const tripsSuccessDetail = fuelTripsCount > 1 ? ` (${fuelTripsCount} viajes requeridos por peso total de ${totalWeightKg} kg)` : '';
         const transferSuccessMessage = transportMethod === 'propio'
-          ? `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Transporte realizado con tu ${fuelVehicleLabel.toLowerCase()} y conductor asignado en plantilla${tripsSuccessDetail}. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € por el trayecto de ${distanceKm} km.`
-          : `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Se han cargado ${transportFee.toFixed(2)} € por el servicio exterior de transporte.`;
+          ? `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Transporte realizado con tu ${fuelVehicleLabel.toLowerCase()} y conductor asignado en plantilla${tripsSuccessDetail}. Se ha abonado un gasto de suministro de combustible de ${fuelExpense.toFixed(2)} € (IVA incluido) por el trayecto de ${distanceKm} km.`
+          : `Envío directo de ${qty} de ${itemLabel} completado con éxito a ${recipient.name}. Se han cargado ${transportFee.toFixed(2)} € (${extBaseAmount.toFixed(2)} € base + ${extIvaAmount.toFixed(2)} € IVA 21%) por el servicio exterior de transporte.`;
 
         return {
           success: true,
@@ -29700,6 +30381,8 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
           fuelInvoiceOrder,
           fuelExpense,
           transportFee,
+          extBaseAmount,
+          extIvaAmount,
           fuelMovId,
           transMovId,
           distanceKm,
@@ -29753,7 +30436,7 @@ app.post('/api/inventory/transfer-stock', async (req, res) => {
         receiverName: 'Servicio exterior de transporte',
         receiverAccount: 'ES00-0000-0000-0000-LOGI',
         amount: result.transportFee,
-        concept: `Servicio exterior de transporte - Envío de existencias a ${result.recipientId} (${chargedPallets} pal. × ${result.distanceKm} km a 0,38 €/pal-km)`,
+        concept: `Servicio exterior de transporte - Envío de existencias a ${result.recipientId} (${chargedPallets} pal. × ${result.distanceKm} km: Base ${result.extBaseAmount.toFixed(2)} € + IVA 21% ${result.extIvaAmount.toFixed(2)} €)`,
         timestamp: nowIso
       });
     }
@@ -29931,7 +30614,11 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
 
         // Validate transport method
         let transportFee = 0;
+        let extBaseAmount = 0;
+        let extIvaAmount = 0;
         let fuelExpense = 0;
+        let fuelBaseAmount = 0;
+        let fuelIvaAmount = 0;
         let distanceKm = 0;
         let fuelTripsCount = 1;
         let fuelVehicleLabel = 'Camión';
@@ -29939,38 +30626,16 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
 
         // Calculate weight / pallets
         const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
-        const totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+        const totalWeightKg = isKgItem ? qty : roundCurrency2(qty * FINISHED_PRODUCT_UNIT_WEIGHT_KG);
+        const naveFleetData = await getTransportFleetForStudents(db, [studentId], client);
 
         if (transportMethod === 'propio') {
-          const isTruckType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'camion_trailer' || t === 'camion_ligero' || t === 'camion' || t.includes('camion');
-          };
-          const isVanType = (vType: string) => {
-            const t = (vType || '').toLowerCase();
-            return t === 'furgoneta_transporte' || t === 'furgoneta' || t.includes('furgoneta');
-          };
-
-          const userVehicles = (db.purchasedVehicles || []).filter(v => v.studentId === studentId);
-          const userDrivers = (db.hiredEmployees || []).filter(
-            e => e.studentId === studentId && (e.role === 'camionero' || (e.role as string) === 'conductor')
-          );
-
-          // Find vehicles with an assigned driver
-          const assignedVehicles = userVehicles.filter(veh => {
-            const hasDirectDriver = veh.assignedDriverId && userDrivers.some(d => d.id === veh.assignedDriverId);
-            const hasEmpAssigned = userDrivers.some(d => d.assignedVehicleId === veh.id);
-            return hasDirectDriver || hasEmpAssigned;
+          const resolvedVeh = resolveStudentTransportVehicle(naveFleetData.vehicles, naveFleetData.employees, studentId, {
+            allowUnassignedFallbackWithDriver: false
           });
 
-          // Check if there is an assigned truck or van
-          const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
-          const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
-
-          if (!assignedTruck && !assignedVan) {
-            const hasAnyVehicle = userVehicles.some(v => isTruckType(v.vehicleType) || isVanType(v.vehicleType));
-            const hasAnyDriver = userDrivers.length > 0;
-            if (!hasAnyVehicle || !hasAnyDriver) {
+          if (!resolvedVeh.hasAssignedVehicle || !resolvedVeh.vehicleType) {
+            if (!resolvedVeh.hasAnyVehicle || !resolvedVeh.hasAnyDriver) {
               const err: any = new Error('Para realizar el traslado con transporte propio necesitas disponer de un vehículo de transporte (camión o furgoneta) en tu flota y tener contratado un camionero / conductor en tu plantilla.');
               err.statusCode = 400;
               throw err;
@@ -29981,22 +30646,28 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
             }
           }
 
-          // If only van is assigned (or preferred if van is active and no truck assigned), van capacity is 1 pallet / 1000 kg per trip
-          // trips = ceil(weight / 1000 kg)
-          if (!assignedTruck && assignedVan) {
-            fuelVehicleLabel = 'Furgoneta';
-            fuelTripsCount = Math.max(1, Math.ceil(totalWeightKg / 1000));
-          } else {
-            fuelVehicleLabel = 'Camión';
-            fuelTripsCount = 1;
-          }
-
-          const singleTripFuel = Math.max(8.50, Math.round((distanceKm * 0.48 + 5.0) * 100) / 100);
-          fuelExpense = Math.round(singleTripFuel * fuelTripsCount * 100) / 100;
+          const ownCalc = calculateOwnVehicleFuelAccounting({
+            distanceKm,
+            totalWeightKg,
+            vehicleType: resolvedVeh.vehicleType
+          });
+          fuelVehicleLabel = ownCalc.vehicleLabel;
+          fuelTripsCount = ownCalc.trips;
+          fuelExpense = ownCalc.totalAmount;
+          fuelBaseAmount = ownCalc.baseAmount;
+          fuelIvaAmount = ownCalc.ivaAmount;
         } else if (transportMethod === 'exterior') {
-          const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
-          const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-          transportFee = Math.round(chargedPallets * distanceKm * 0.38 * 100) / 100;
+          const transferPallets = calculateRequestedPallets({
+            totalKg: isKgItem ? qty : 0,
+            finishedUnits: isKgItem ? 0 : qty
+          });
+          const extCalc = calculateExteriorTransportAccounting({
+            requestedPallets: transferPallets,
+            distanceKm
+          });
+          extBaseAmount = extCalc.baseAmount;
+          extIvaAmount = extCalc.ivaAmount;
+          transportFee = extCalc.totalAmount;
         }
 
         // 1. LOCK INVENTORY ROW FOR STUDENT
@@ -30046,20 +30717,19 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
 
           if (currentBalance < expense) {
             if (transportMethod === 'propio') {
-              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} €). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
+              const err: any = new Error(`Saldo insuficiente para cubrir el gasto de suministro de gasolina/combustible por el trayecto de ${distanceKm} km (${fuelExpense.toFixed(2)} € IVA incl.). Saldo disponible: ${currentBalance.toFixed(2)} €.`);
               err.statusCode = 400;
               throw err;
             } else {
-              const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
               const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
               const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
+              const err: any = new Error(`Saldo insuficiente para contratar el servicio de transporte exterior (${transportFee.toFixed(2)} € = ${extBaseAmount.toFixed(2)} € base + ${extIvaAmount.toFixed(2)} € IVA por ${chargedPallets} palet(s) a ${distanceKm} km). Tu saldo disponible es ${currentBalance.toFixed(2)} €.`);
               err.statusCode = 400;
               throw err;
             }
           }
 
-          newStudentBalance = Math.round((currentBalance - expense) * 100) / 100;
+          newStudentBalance = roundCurrency2(currentBalance - expense);
           await client.query(`UPDATE cuentas SET saldo = $1 WHERE id = $2`, [newStudentBalance, studentId]);
 
           movId = generateId('mov');
@@ -30074,10 +30744,9 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
               [movId, student.id, fuelExpense, nowIso, concept, student.id, student.name, student.accountNumber, 'SUMINISTROS_ESTACION_SERVICIO', 'Estación de servicio - suministro de combustible', 'ES00-0000-0000-0000-GASO']
             );
           } else if (transportMethod === 'exterior') {
-            const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(itemKey);
             const transferPallets = isKgItem ? (qty / 1000) : (qty / 10000);
             const chargedPallets = Math.max(1, Math.ceil(transferPallets));
-            const concept = `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km a 0,38 €/pal-km)`;
+            const concept = `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${distanceKm} km: Base ${extBaseAmount.toFixed(2)} € + IVA 21% ${extIvaAmount.toFixed(2)} €)`;
             await client.query(
               `INSERT INTO movimientos (id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account)
                VALUES ($1, $2, 'TRANSFER_OUT', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -30456,7 +31125,7 @@ app.post('/api/inventory/transfer-nave-stock', async (req, res) => {
           receiverName: 'Servicio exterior de transporte',
           receiverAccount: 'ES00-0000-0000-0000-LOGI',
           amount: result.transportFee,
-          concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${result.distanceKm} km a 0,38 €/pal-km)`,
+          concept: `Servicio exterior de transporte - traslado de existencias entre naves (${chargedPallets} pal. × ${result.distanceKm} km a 0,95 €/pal-km, mín. 15 €)`,
           timestamp: nowIso
         });
       }

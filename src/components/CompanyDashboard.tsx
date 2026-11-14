@@ -76,7 +76,13 @@ import { ElectricityAssetTab } from "./ElectricityAssetTab.js";
 import { TelecomInvoiceModal } from "./TelecomInvoiceModal.js";
 import { OfficeInvoiceModal } from "./OfficeInvoiceModal.js";
 import { formatNumber, cleanSpanishTitle } from "../lib/formatters.js";
-import { calculateSpanishDistanceKm } from "../lib/spanishDistances.js";
+import {
+  calculateSpanishDistanceKm,
+  calculateRequestedPallets,
+  calculateExteriorTransportAccounting,
+  calculateOwnVehicleFuelAccounting,
+  FINISHED_PRODUCT_UNIT_WEIGHT_KG
+} from "../lib/spanishDistances.js";
 import { OFFICE_STORE_CATALOG } from "../lib/officeStoreData.js";
 import { resolveImageUrl, SVG_FALLBACK } from "../lib/imageAssets.js";
 
@@ -8289,7 +8295,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                     />
                     <div>
                       <span className="font-bold block text-slate-900">
-                        Servicio exterior de transporte (Tarifa unificada: 0,38 € / palet / km)
+                        Servicio exterior de transporte (Tarifa unificada: 0,95 € / palet / km, mín. 15,00 €)
                       </span>
                       <span className="text-[11px] text-slate-500 block">
                         Logística profesional externa calculada por distancia y palets completos (si el palet no está completo, se factura como completo). Se abonará desde la cuenta bancaria.
@@ -8348,7 +8354,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                             Usar transporte propio de empresa
                           </span>
                           <span className="text-[11px] text-slate-500 block">
-                            Envío utilizando vehículo de transporte (camión o furgoneta) y conductor asignado en plantilla. Sin costes de servicio exterior. Únicamente se adeudará el gasto de suministro por combustible consumido según la distancia entre el almacén de origen y el de destino (dividido automáticamente en viajes de 1.000 kg si se utiliza furgoneta).
+                            Envío utilizando vehículo de transporte (camión o furgoneta) y conductor asignado en plantilla. Sin costes de servicio exterior. Únicamente se adeudará el gasto de suministro por combustible consumido (ida y vuelta a 1,55 €/L) según la distancia entre el almacén de origen y el de destino (dividido automáticamente en viajes de 1.000 kg con furgoneta o 10.000 kg con camión).
                           </span>
                           {!canUsePropio && (
                             <div className="text-[11px] text-amber-700 font-bold mt-1 bg-amber-50 p-2 rounded-lg border border-amber-200 space-y-0.5">
@@ -8386,9 +8392,11 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
               {(() => {
                 const qty = Number(transferQuantity) || 0;
                 const isKgItem = ['ironKg', 'metalKg', 'plasticKg', 'epoxiKg', 'hierro', 'plastico', 'epoxi'].includes(transferItemKey);
-                const pReq = isKgItem ? (qty / 1000) : (qty / 10000);
-                const cPallets = pReq > 0 ? Math.max(1, Math.ceil(pReq)) : 0;
-                const totalWeightKg = isKgItem ? qty : Math.round(qty * 0.1 * 100) / 100;
+                const pReq = calculateRequestedPallets({
+                  totalKg: isKgItem ? qty : 0,
+                  finishedUnits: isKgItem ? 0 : qty
+                });
+                const totalWeightKg = isKgItem ? qty : Math.round(qty * FINISHED_PRODUCT_UNIT_WEIGHT_KG * 100) / 100;
 
                 const userVehicles = data?.purchasedVehicles || [];
                 const userEmployees = data?.hiredEmployees || [];
@@ -8408,8 +8416,7 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                 const assignedTruck = assignedVehicles.find(v => isTruckType(v.vehicleType));
                 const assignedVan = assignedVehicles.find(v => isVanType(v.vehicleType));
                 const isVanActive = !assignedTruck && Boolean(assignedVan);
-                const tripsCount = isVanActive ? Math.max(1, Math.ceil(totalWeightKg / 1000)) : 1;
-                
+
                 let sourceLoc: any = null;
                 let targetLoc: any = null;
                 if (transferMode === 'nave') {
@@ -8421,9 +8428,17 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                   targetLoc = recWh || selectedRecipient || 'Destinatario';
                 }
                 const distKm = calculateSpanishDistanceKm(sourceLoc, targetLoc);
-                const estExtCost = Math.round(cPallets * distKm * 0.38 * 100) / 100;
-                const singleTripFuel = Math.max(8.50, Math.round((distKm * 0.48 + 5.0) * 100) / 100);
-                const estPropioCost = Math.round(singleTripFuel * tripsCount * 100) / 100;
+                const extAcc = calculateExteriorTransportAccounting({
+                  requestedPallets: pReq,
+                  distanceKm: distKm
+                });
+                const cPallets = extAcc.chargedPallets;
+                const ownAcc = calculateOwnVehicleFuelAccounting({
+                  distanceKm: distKm,
+                  totalWeightKg,
+                  vehicleType: isVanActive ? 'furgoneta' : 'camion'
+                });
+                const tripsCount = ownAcc.trips;
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
@@ -8432,31 +8447,53 @@ Gasto total de personal para la empresa: ${formatNumber(totalGrossSum + totalSSC
                       <span className="font-bold text-slate-800">{distKm} km</span>
                     </div>
                     {transferTransportMethod === 'exterior' ? (
-                      <div className="flex justify-between items-center text-slate-600">
-                        <span>Palets facturables (fracción como completo):</span>
-                        <span className="font-bold text-slate-800">{cPallets} palet{cPallets !== 1 ? 's' : ''} ({pReq.toFixed(2)} reales)</span>
-                      </div>
+                      <>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>Palets facturables (fracción como completo):</span>
+                          <span className="font-bold text-slate-800">{cPallets} palet{cPallets !== 1 ? 's' : ''} ({pReq.toFixed(2)} reales)</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>Base imponible (0,95 €/pal-km, mín. 15 €):</span>
+                          <span className="font-bold text-slate-800">{formatNumber(extAcc.baseAmount)} €</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>IVA (21%):</span>
+                          <span className="font-bold text-slate-800">{formatNumber(extAcc.ivaAmount)} €</span>
+                        </div>
+                      </>
                     ) : (
-                      <div className="flex justify-between items-center text-slate-600">
-                        <span>Vehículo y viajes requeridos:</span>
-                        <span className="font-bold text-slate-800">
-                          {isVanActive ? `Furgoneta (1.000 kg / viaje): ${tripsCount} viaje${tripsCount > 1 ? 's' : ''}` : 'Camión tráiler (1 viaje)'}
-                        </span>
-                      </div>
+                      <>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>Vehículo y viajes requeridos:</span>
+                          <span className="font-bold text-slate-800">
+                            {isVanActive
+                              ? `Furgoneta (1.000 kg / viaje): ${tripsCount} viaje${tripsCount !== 1 ? 's' : ''}`
+                              : `Camión tráiler (10.000 kg / viaje): ${tripsCount} viaje${tripsCount !== 1 ? 's' : ''}`}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>Base imponible combustible (IVA desglosado):</span>
+                          <span className="font-bold text-slate-800">{formatNumber(ownAcc.baseAmount)} €</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span>Cuota IVA incluido (21%):</span>
+                          <span className="font-bold text-slate-800">{formatNumber(ownAcc.ivaAmount)} €</span>
+                        </div>
+                      </>
                     )}
                     <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center font-bold text-slate-900">
-                      <span>Coste de transporte {transferTransportMethod === 'exterior' ? '(Servicio exterior)' : '(Gasto suministro gasolina)'}:</span>
+                      <span>Coste total a cargar en cuenta {transferTransportMethod === 'exterior' ? '(IVA incl.)' : '(gasoil IVA incl.)'}:</span>
                       <span className="text-indigo-600 text-sm">
-                        {transferTransportMethod === 'exterior' ? `${formatNumber(estExtCost)} €` : `${formatNumber(estPropioCost)} €`}
+                        {transferTransportMethod === 'exterior' ? `${formatNumber(extAcc.totalAmount)} €` : `${formatNumber(ownAcc.totalAmount)} €`}
                       </span>
                     </div>
                     {transferTransportMethod === 'exterior' ? (
                       <p className="text-[10px] text-slate-400">
-                        Cálculo: {cPallets} palet{cPallets !== 1 ? 's' : ''} × {distKm} km × 0,38 €/pal-km = {formatNumber(estExtCost)} €
+                        Cálculo: {cPallets > 0 ? `máx(15,00 €, ${cPallets} palet${cPallets !== 1 ? 's' : ''} × ${distKm} km × 0,95 €/pal-km) = ${formatNumber(extAcc.baseAmount)} € base + ${formatNumber(extAcc.ivaAmount)} € IVA` : '0 €'} = {formatNumber(extAcc.totalAmount)} €
                       </p>
                     ) : (
                       <p className="text-[10px] text-slate-400">
-                        Cálculo combustible: {tripsCount} viaje{tripsCount > 1 ? 's' : ''} × {singleTripFuel.toFixed(2)} €/viaje ({distKm} km) = {formatNumber(estPropioCost)} €
+                        Cálculo combustible: {tripsCount} viaje{tripsCount !== 1 ? 's' : ''} × {ownAcc.roundTripKm} km (ida y vuelta) × {ownAcc.litersPer100Km} L/100km × 1,55 €/L = {formatNumber(ownAcc.totalAmount)} € IVA incl.
                       </p>
                     )}
                   </div>

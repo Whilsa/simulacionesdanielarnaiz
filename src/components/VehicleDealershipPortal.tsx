@@ -81,7 +81,7 @@ const VEHICLE_CATALOG: VehicleCatalogItem[] = [
     description: 'Camión cabeza tractora de gran tonelaje con semirremolque tráiler para transporte interurbano y aprovisionamiento de materia prima.',
     specs: [
       'Motor diésel 480 CV Euro VI',
-      'Capacidad de carga: 24.000 kg',
+      'Capacidad operativa de transporte: 10.000 kg / 10 palés por viaje (fraccionamiento automático en múltiples viajes para cargas mayores)',
       'Semirremolque de lonas correderas',
       'GPS y telemetría corporativa'
     ],

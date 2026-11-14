@@ -505,28 +505,174 @@ export function calculateSpanishDistanceKm(originInput: any, destinationInput: a
   return 120 + hash;
 }
 
+export const EXTERNAL_TRANSPORT_RATE_PER_PALLET_KM = 0.95;
+export const EXTERNAL_TRANSPORT_MIN_COST = 15;
+export const FUEL_PRICE_PER_LITER = 1.55;
+export const VAN_FUEL_LITERS_PER_100KM = 9;
+export const TRUCK_FUEL_LITERS_PER_100KM = 30;
+export const VAN_COST_PER_KM = (VAN_FUEL_LITERS_PER_100KM / 100) * FUEL_PRICE_PER_LITER; // 0.1395 €/km
+export const TRUCK_COST_PER_KM = (TRUCK_FUEL_LITERS_PER_100KM / 100) * FUEL_PRICE_PER_LITER; // 0.465 €/km
+export const VAN_CAPACITY_KG = 1000;
+export const TRUCK_CAPACITY_KG = 10000;
+export const RAW_MATERIAL_KG_PER_PALLET = 1000;
+export const FINISHED_PRODUCT_UNITS_PER_PALLET = 10000;
+export const FINISHED_PRODUCT_UNIT_WEIGHT_KG = 0.1;
+
+export function calculateRequestedPallets(params: {
+  totalKg?: number;
+  finishedUnits?: number;
+}): number {
+  const rawPallets = Math.max(0, Number(params.totalKg) || 0) / RAW_MATERIAL_KG_PER_PALLET;
+  const finishedPallets = Math.max(0, Number(params.finishedUnits) || 0) / FINISHED_PRODUCT_UNITS_PER_PALLET;
+  return rawPallets + finishedPallets;
+}
+
 /**
- * Calculates transport cost based on full pallets and distance
- * Formula: chargedPallets * distanceKm * 0.38 €
+ * Calculates external transport cost based on full pallets and one-way distance
+ * Formula: max(15, ceil(requestedPallets) * distanceKm * 0.95 €)
  */
 export function calculateUnifiedTransportCost(
   requestedPallets: number,
   distanceKm: number,
-  ratePerPalletKm: number = 0.38
+  ratePerPalletKm: number = EXTERNAL_TRANSPORT_RATE_PER_PALLET_KM
 ): {
   chargedPallets: number;
   distanceKm: number;
   ratePerPalletKm: number;
+  minCost: number;
+  rawCost: number;
   totalCost: number;
 } {
   const chargedPallets = requestedPallets > 0 ? Math.max(1, Math.ceil(requestedPallets)) : 0;
   const dist = Math.max(1, Math.round(distanceKm));
-  const totalCost = chargedPallets > 0 ? Math.round(chargedPallets * dist * ratePerPalletKm * 100) / 100 : 0;
+  const rawCost = chargedPallets > 0 ? Math.round(chargedPallets * dist * ratePerPalletKm * 100) / 100 : 0;
+  const totalCost = chargedPallets > 0 ? Math.max(EXTERNAL_TRANSPORT_MIN_COST, rawCost) : 0;
 
   return {
     chargedPallets,
     distanceKm: dist,
     ratePerPalletKm,
+    minCost: EXTERNAL_TRANSPORT_MIN_COST,
+    rawCost,
     totalCost
   };
 }
+
+export type OwnTransportVehicleKind = 'furgoneta' | 'camion';
+
+/**
+ * Calculates fuel cost and trips for own company vehicle (round trip = 2 * distanceKm)
+ * - Van: 1,000 kg/trip, 9 L/100 km * 1.55 €/L = 0.1395 €/km
+ * - Truck: 10,000 kg/trip, 30 L/100 km * 1.55 €/L = 0.465 €/km
+ */
+export function calculateOwnVehicleTransportCost(params: {
+  distanceKm: number;
+  totalWeightKg: number;
+  vehicleType: OwnTransportVehicleKind;
+}): {
+  vehicleType: OwnTransportVehicleKind;
+  vehicleLabel: string;
+  capacityKg: number;
+  trips: number;
+  distanceKm: number;
+  roundTripKm: number;
+  litersPer100Km: number;
+  fuelPricePerLiter: number;
+  ratePerKm: number;
+  costPerTrip: number;
+  totalCost: number;
+} {
+  const isVan = params.vehicleType === 'furgoneta';
+  const dist = Math.max(1, Math.round(params.distanceKm));
+  const roundTripKm = dist * 2;
+  const weightKg = Math.max(0, Number(params.totalWeightKg) || 0);
+  const capacityKg = isVan ? VAN_CAPACITY_KG : TRUCK_CAPACITY_KG;
+  const litersPer100Km = isVan ? VAN_FUEL_LITERS_PER_100KM : TRUCK_FUEL_LITERS_PER_100KM;
+  const ratePerKm = isVan ? VAN_COST_PER_KM : TRUCK_COST_PER_KM;
+  const trips = weightKg > 0 ? Math.max(1, Math.ceil(weightKg / capacityKg)) : 0;
+  const costPerTrip = Math.round(roundTripKm * ratePerKm * 100) / 100;
+  const totalCost = trips > 0 ? Math.round(roundTripKm * ratePerKm * trips * 100) / 100 : 0;
+
+  return {
+    vehicleType: isVan ? 'furgoneta' : 'camion',
+    vehicleLabel: isVan ? 'Furgoneta' : 'Camión',
+    capacityKg,
+    trips,
+    distanceKm: dist,
+    roundTripKm,
+    litersPer100Km,
+    fuelPricePerLiter: FUEL_PRICE_PER_LITER,
+    ratePerKm,
+    costPerTrip,
+    totalCost
+  };
+}
+
+export function roundCurrency2(value: number): number {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+/**
+ * External transport accounting breakdown:
+ * 0.95 €/pallet/km (min 15 €) is always TAXABLE BASE (Base imponible).
+ * When invoiced, +21% IVA is added on top.
+ */
+export function calculateExteriorTransportAccounting(params: {
+  requestedPallets: number;
+  distanceKm: number;
+  ratePerPalletKm?: number;
+}): {
+  chargedPallets: number;
+  distanceKm: number;
+  ratePerPalletKm: number;
+  minCost: number;
+  rawCost: number;
+  totalCost: number;
+  baseAmount: number;
+  ivaAmount: number;
+  totalAmount: number;
+} {
+  const ext = calculateUnifiedTransportCost(
+    params.requestedPallets,
+    params.distanceKm,
+    params.ratePerPalletKm ?? EXTERNAL_TRANSPORT_RATE_PER_PALLET_KM
+  );
+  const baseAmount = roundCurrency2(ext.totalCost);
+  const ivaAmount = roundCurrency2(baseAmount * 0.21);
+  const totalAmount = roundCurrency2(baseAmount + ivaAmount);
+
+  return {
+    ...ext,
+    baseAmount,
+    ivaAmount,
+    totalAmount
+  };
+}
+
+/**
+ * Own vehicle fuel accounting breakdown:
+ * calculateOwnVehicleTransportCost returns the VAT-INCLUDED pump total (1.55 €/L IVA incl.).
+ * Taxable base = round2(totalAmount / 1.21), IVA = round2(totalAmount - baseAmount).
+ */
+export function calculateOwnVehicleFuelAccounting(params: {
+  distanceKm: number;
+  totalWeightKg: number;
+  vehicleType: OwnTransportVehicleKind;
+}): ReturnType<typeof calculateOwnVehicleTransportCost> & {
+  baseAmount: number;
+  ivaAmount: number;
+  totalAmount: number;
+} {
+  const own = calculateOwnVehicleTransportCost(params);
+  const totalAmount = roundCurrency2(own.totalCost);
+  const baseAmount = totalAmount > 0 ? roundCurrency2(totalAmount / 1.21) : 0;
+  const ivaAmount = totalAmount > 0 ? roundCurrency2(totalAmount - baseAmount) : 0;
+
+  return {
+    ...own,
+    baseAmount,
+    ivaAmount,
+    totalAmount
+  };
+}
+

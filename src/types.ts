@@ -409,6 +409,8 @@ export interface RawMaterialAnnouncement {
   sellerLocation?: string;
   sellerMunicipality?: string;
   sellerProvince?: string;
+  sellerOwnTransportVehicleType?: 'furgoneta' | 'camion' | null;
+  sellerOwnTransportVehicleLabel?: string;
   isDesTornillo?: boolean;
   priceAlert?: PriceAlertFeedback;
 }
