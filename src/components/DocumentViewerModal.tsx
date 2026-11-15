@@ -9,16 +9,25 @@ import {
   Printer, X, FileText, Landmark, Building2, CheckCircle2, 
   Copy, Check, Info, ShieldCheck, ArrowDown, Receipt, Calculator, Wrench, Clock, Truck, Download, RefreshCw
 } from 'lucide-react';
-import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord, RelocationInvoice, PurchasedVehicle, FiniquitoData } from '../types.js';
+import { PropertyAcquisition, BankLoan, AmortizationRow, PaymentObligation, MachineryAcquisition, Transfer, HiredEmployee, PayrollRecord, RelocationInvoice, PurchasedVehicle, FiniquitoData, RentalInstallmentInvoice } from '../types.js';
 import { formatNumber } from '../lib/formatters.js';
 import { downloadElementAsPDF, printElementFallback } from '../lib/pdfUtils.js';
+import {
+  DEFAULT_LANDLORD_ADDRESS,
+  DEFAULT_LANDLORD_IBAN,
+  DEFAULT_LANDLORD_NAME,
+  DEFAULT_LANDLORD_NIF,
+  computeRentalInstallmentPeriod,
+  formatUtcDateEs,
+} from '../lib/rentalInvoicing.js';
 
-export type DocumentType = 'property_invoice' | 'machinery_invoice' | 'machinery_relocation_invoice' | 'vehicle_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip' | 'finiquito_document';
+export type DocumentType = 'property_invoice' | 'rental_installment_invoice' | 'machinery_invoice' | 'machinery_relocation_invoice' | 'vehicle_invoice' | 'obligation_statement' | 'loan_statement' | 'transfer_statement' | 'payroll_payslip' | 'finiquito_document';
 
 export interface DocumentViewerData {
   type: DocumentType;
   // Property or machinery purchase fields
   acquisition?: PropertyAcquisition;
+  rentalInvoice?: RentalInstallmentInvoice;
   machineryAcquisition?: MachineryAcquisition;
   relocationInvoice?: RelocationInvoice;
   vehicle?: PurchasedVehicle;
@@ -65,6 +74,7 @@ export default function DocumentViewerModal({ data, onClose }: DocumentViewerMod
 
   const getFilename = () => {
     if (data.type === 'property_invoice') return `Factura_Inmueble_FAC-2026-${data.acquisition?.id || '101'}`;
+    if (data.type === 'rental_installment_invoice') return `Factura_Alquiler_${data.rentalInvoice?.invoiceNumber || data.obligation?.id || 'MENSUAL'}`;
     if (data.type === 'machinery_invoice') return `Factura_Maquinaria_FAC-2026-${data.machineryAcquisition?.id || '201'}`;
     if (data.type === 'machinery_relocation_invoice') return `Factura_Traslado_Maquinaria_FAC-2026-${data.relocationInvoice?.id || '250'}`;
     if (data.type === 'vehicle_invoice') return `Factura_Vehiculo_VE-2026-${data.vehicle?.id || '301'}`;
@@ -139,6 +149,51 @@ CONDICIONES DE PAGO:
 - Parte pagada al contado (entrada / inicial): ${formatNumber(downPayment)} €
 - Parte pendiente de pago (saldo aplazado): ${formatNumber(pendingBalance)} €
 Forma de pago: ${acq?.paymentMethod === 'contado' ? 'Al contado' : 'Pago aplazado (letras / pagarés)'}
+================================================`;
+    } else if (data.type === 'rental_installment_invoice') {
+      const inv = data.rentalInvoice;
+      const acq = data.acquisition;
+      const ob = data.obligation;
+      const periodFallback = computeRentalInstallmentPeriod(
+        inv?.dueDate || ob?.dueDate || new Date().toISOString(),
+        acq?.purchaseDate,
+        inv?.installmentNumber || ob?.installmentNumber
+      );
+      const periodLabel = inv?.periodLabel || periodFallback.periodLabel;
+      const periodRange = (inv?.periodStartDate && inv?.periodEndDate)
+        ? `${formatUtcDateEs(inv.periodStartDate)} - ${formatUtcDateEs(inv.periodEndDate)}`
+        : periodFallback.periodRangeLabel;
+      const installmentNum = inv?.installmentNumber || ob?.installmentNumber || 2;
+      const totalInstallments = inv?.totalInstallments || ob?.totalInstallments || 12;
+
+      textContent = `================================================
+FACTURA DE MENSUALIDAD DE ARRENDAMIENTO INMOBILIARIO
+Nº Factura Única: ${inv?.invoiceNumber || 'PENDIENTE'}
+Fecha de Expedición: ${inv?.issueDate ? new Date(inv.issueDate).toLocaleDateString('es-ES') : '—'}
+Fecha Efectiva de Pago: ${inv?.paidDate ? new Date(inv.paidDate).toLocaleDateString('es-ES') : '—'}
+Fecha de Vencimiento Cuota: ${inv?.dueDate ? new Date(inv.dueDate).toLocaleDateString('es-ES') : '—'}
+------------------------------------------------
+ARRENDADOR (Emisor):
+${inv?.landlordName || DEFAULT_LANDLORD_NAME}
+NIF/CIF: ${inv?.landlordNifCif || DEFAULT_LANDLORD_NIF} | ${inv?.landlordAddress || DEFAULT_LANDLORD_ADDRESS}
+IBAN: ${inv?.landlordIban || DEFAULT_LANDLORD_IBAN}
+
+ARRENDATARIO (Cliente):
+${inv?.studentName || acq?.studentName || 'Empresa Estudiante'}
+NIF/CIF: ${inv?.studentNifCif || 'B-87654321'}
+------------------------------------------------
+DETALLE DEL ARRENDAMIENTO:
+Inmueble: ${inv?.propertyTitle || acq?.propertyTitle || ob?.propertyTitle || 'Inmueble arrendado'}
+Ubicación: ${inv?.propertyLocation || acq?.location || 'Polígono industrial'}
+Ref. Contrato / Adquisición: #${inv?.acquisitionId || acq?.id || '—'}
+Mensualidad Facturada: Cuota ${installmentNum} de ${totalInstallments}
+Periodo Mensual Facturado: ${periodLabel} (${periodRange})
+
+Base Imponible: ${formatNumber(inv?.baseAmount || 0)} €
+IVA (${inv?.ivaRate || 21}%): ${formatNumber(inv?.ivaAmount || 0)} €
+TOTAL FACTURA: ${formatNumber(inv?.totalAmount || 0)} €
+------------------------------------------------
+ESTADO DE COBRO: PAGADA (${inv?.paymentMethod || 'Domiciliación bancaria automática'})${inv?.transferId ? `\nRef. Movimiento Bancario: ${inv.transferId}` : ''}
 ================================================`;
     } else if (data.type === 'machinery_invoice') {
       const mac = data.machineryAcquisition;
@@ -517,6 +572,202 @@ Estado Contable: EJECUTADO Y ABONADO
                   Documento emitido electrónicamente. Código de factura único e irrepetible.
                 </div>
 
+              </div>
+            );
+          })()}
+
+          {/* DOCUMENT TYPE 1B: RENTAL INSTALLMENT INVOICE */}
+          {data.type === 'rental_installment_invoice' && (() => {
+            const inv = data.rentalInvoice;
+            const acq = data.acquisition;
+            const ob = data.obligation;
+            if (!inv) {
+              return (
+                <div className="p-8 text-center text-slate-500">
+                  No se ha localizado la factura emitida para esta mensualidad de alquiler.
+                </div>
+              );
+            }
+
+            const periodFallback = computeRentalInstallmentPeriod(
+              inv.dueDate || ob?.dueDate || inv.issueDate,
+              acq?.purchaseDate,
+              inv.installmentNumber
+            );
+            const periodLabel = inv.periodLabel || periodFallback.periodLabel;
+            const periodRange = (inv.periodStartDate && inv.periodEndDate)
+              ? `${formatUtcDateEs(inv.periodStartDate)} – ${formatUtcDateEs(inv.periodEndDate)}`
+              : periodFallback.periodRangeLabel;
+            const issueDateStr = new Date(inv.issueDate).toLocaleDateString('es-ES', {
+              year: 'numeric', month: 'long', day: 'numeric'
+            });
+            const paidDateStr = new Date(inv.paidDate).toLocaleDateString('es-ES', {
+              year: 'numeric', month: 'long', day: 'numeric'
+            });
+            const dueDateStr = new Date(inv.dueDate).toLocaleDateString('es-ES', {
+              year: 'numeric', month: 'long', day: 'numeric'
+            });
+
+            return (
+              <div className="space-y-8">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b-2 border-slate-900 pb-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-slate-900 font-black text-lg tracking-tight">
+                      <Building2 className="w-6 h-6 text-indigo-700" />
+                      <span>{inv.landlordName || DEFAULT_LANDLORD_NAME}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Gestión patrimonial y arrendamiento de inmuebles industriales y comerciales
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      NIF/CIF: {inv.landlordNifCif || DEFAULT_LANDLORD_NIF} | Domicilio: {inv.landlordAddress || DEFAULT_LANDLORD_ADDRESS}
+                    </p>
+                  </div>
+
+                  <div className="bg-indigo-50/70 p-4 rounded-xl border border-indigo-200 text-right w-full sm:w-auto font-mono">
+                    <span className="text-[10px] uppercase font-bold text-indigo-700 block">
+                      Factura mensual de arrendamiento
+                    </span>
+                    <span className="text-base font-extrabold text-slate-900 block">{inv.invoiceNumber}</span>
+                    <span className="text-[11px] text-slate-600 block mt-1">Expedición: {issueDateStr}</span>
+                    <span className="text-[10px] text-indigo-800 font-bold block mt-0.5">
+                      Mensualidad {inv.installmentNumber} / {inv.totalInstallments} • {periodLabel}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Issuer & Tenant Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      Datos del arrendador / emisor
+                    </span>
+                    <p className="font-bold text-slate-900">{inv.landlordName || DEFAULT_LANDLORD_NAME}</p>
+                    <p className="text-slate-600">NIF/CIF: {inv.landlordNifCif || DEFAULT_LANDLORD_NIF}</p>
+                    <p className="text-slate-600">Domicilio: {inv.landlordAddress || DEFAULT_LANDLORD_ADDRESS}</p>
+                    <p className="text-slate-600 font-mono">IBAN cobro: {inv.landlordIban || DEFAULT_LANDLORD_IBAN}</p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block border-b border-slate-200 pb-1">
+                      Datos del arrendatario / cliente
+                    </span>
+                    <p className="font-bold text-slate-900">{inv.studentName}</p>
+                    <p className="text-slate-600">NIF/CIF: {inv.studentNifCif || 'B-87654321'}</p>
+                    <p className="text-slate-600 font-mono">Ref. contrato alquiler: #{inv.acquisitionId}</p>
+                    <p className="text-slate-600 font-mono">Ref. obligación cuota: #{inv.obligationId}</p>
+                  </div>
+                </div>
+
+                {/* Dates & Period Distinction Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Periodo mensual facturado</span>
+                    <span className="font-bold text-indigo-900 block">{periodLabel}</span>
+                    <span className="text-[10px] font-mono text-slate-500">{periodRange}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Vencimiento de cuota</span>
+                    <span className="font-bold text-slate-800 block">{dueDateStr}</span>
+                    <span className="text-[10px] text-slate-500">Cuota {inv.installmentNumber} de {inv.totalInstallments}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Fecha efectiva de pago</span>
+                    <span className="font-bold text-emerald-800 block">{paidDateStr}</span>
+                    <span className="text-[10px] text-emerald-700">Cargo confirmado</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Fecha de expedición</span>
+                    <span className="font-bold text-slate-900 block">{issueDateStr}</span>
+                    <span className="text-[10px] text-slate-500">Emisión tras cobro</span>
+                  </div>
+                </div>
+
+                {/* Line Items Table */}
+                <div className="border border-slate-300 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white font-bold text-[11px] uppercase tracking-wider print:bg-slate-900 print:text-white">
+                        <th className="p-3">Concepto y descripción del servicio</th>
+                        <th className="p-3 text-center">Periodo / Cuota</th>
+                        <th className="p-3 text-right">Base imponible</th>
+                        <th className="p-3 text-right">IVA ({inv.ivaRate || 21}%)</th>
+                        <th className="p-3 text-right">Total importe</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-mono text-xs">
+                      <tr>
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900 block">
+                            Renta mensual de arrendamiento — {inv.propertyTitle}
+                          </span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Arrendamiento de inmueble de uso empresarial correspondiente al periodo {periodLabel} ({periodRange})
+                          </span>
+                          <span className="text-[10px] text-slate-400 block font-mono mt-0.5">
+                            Ubicación: {inv.propertyLocation || acq?.location || 'Polígono industrial'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-sans">
+                          <span className="font-bold text-slate-900 block">{periodLabel}</span>
+                          <span className="text-[10px] text-slate-500">Mensualidad {inv.installmentNumber}/{inv.totalInstallments}</span>
+                        </td>
+                        <td className="p-3 text-right font-medium">{formatNumber(inv.baseAmount)} €</td>
+                        <td className="p-3 text-right font-medium text-slate-600">{formatNumber(inv.ivaAmount)} €</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{formatNumber(inv.totalAmount)} €</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Confirmed Payment & Legal Clarification */}
+                <div className="p-5 bg-emerald-50 rounded-xl border border-emerald-200 space-y-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2 text-emerald-900 font-bold uppercase tracking-wider">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                      <span>Factura liquidada y pagada al 100%</span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-200/70 text-emerald-900 font-bold text-[10px] uppercase">
+                      Estado: Pagada
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-slate-700">
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase font-bold">Forma de pago confirmada</span>
+                      <span className="font-semibold">{inv.paymentMethod}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase font-bold">Referencia del cargo bancario</span>
+                      <span className="font-mono font-semibold">{inv.transferId || 'Cargo automático confirmado'}</span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-emerald-900/80 pt-1">
+                    Esta factura corresponde exclusivamente a la mensualidad de renta indicada y su IVA soportado (21%). La fianza legal del contrato fue liquidada en la factura inicial del arrendamiento y no se vuelve a repercutir en las mensualidades sucesivas.
+                  </p>
+                </div>
+
+                {/* Total Summary Footer */}
+                <div className="flex justify-end pt-2">
+                  <div className="w-full sm:w-80 bg-slate-900 text-white p-4 rounded-xl space-y-2 font-mono print:bg-slate-900 print:text-white border border-slate-900">
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
+                      <span>Base imponible renta:</span>
+                      <span>{formatNumber(inv.baseAmount)} €</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300 print:text-slate-200">
+                      <span>{formatNumber(inv.ivaRate || 21, 2)}% IVA soportado:</span>
+                      <span>+{formatNumber(inv.ivaAmount)} €</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700 flex justify-between font-bold text-sm text-amber-400 print:text-amber-300">
+                      <span>Total factura:</span>
+                      <span>{formatNumber(inv.totalAmount)} €</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-200 text-center text-[10px] text-slate-400">
+                  Factura independiente generada automáticamente tras la confirmación del pago de la mensualidad. Código único: {inv.invoiceNumber}.
+                </div>
               </div>
             );
           })()}

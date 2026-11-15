@@ -12,11 +12,24 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
 import crypto from 'crypto';
-import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry, PublicClassmate, StudentPaymentStatusData, StudentCompanyData, StudentCatalogsData, StudentSessionData } from './src/types.js';
+import { DatabaseSchema, User, Transfer, SystemLog, PropertyListing, PropertyAcquisition, PaymentObligation, RentalInstallmentInvoice, PropertyType, OperationType, LocationScope, DeferredPaymentConfig, BankLoan, AmortizationRow, LoanStatus, UpcomingPaymentItem, MachineryItem, MachineryAcquisition, MachineryLineOption, JobListing, HiredEmployee, PayrollRecord, EmployeePayrollBreakdown, TaxObligation, ElectricityContract, ElectricityBill, NaveFloorPlan, ElectricityPropertyBreakdown, TelecomContract, TelecomInvoice, OfficePurchaseOrder, OfficePurchaseOrderItem, RelocationInvoice, PurchasedVehicle, RawMaterialAnnouncement, RawMaterialOrder, RawMaterialOrderItem, RawMaterialInventory, AppNotification, NegotiationHistoryEntry, MarketMessage, MarketInvoice, CompanyProfile, MarketContact, CourtLawsuit, CourtLawsuitType, CourtLawsuitSubtype, CourtAttachment, PromissoryNoteData, DeferredPaymentsAuditReport, DeferredPaymentVerificationRecord, DeferredPaymentCategory, FiniquitoData, TeacherScrewdriverListing, TeacherScrewdriverHistoryEntry, PublicClassmate, StudentPaymentStatusData, StudentCompanyData, StudentCatalogsData, StudentSessionData } from './src/types.js';
 import { SPANISH_REGIONS, PROPERTY_IMAGES, generateLandPercentage, generateLocation, calculateRealisticPrice, getRandomElement, getRandomInt } from './src/lib/realEstateData.js';
 import { calculateSpanishDistanceKm, calculateUnifiedTransportCost, calculateOwnVehicleTransportCost, calculateRequestedPallets, FINISHED_PRODUCT_UNIT_WEIGHT_KG, roundCurrency2, calculateExteriorTransportAccounting, calculateOwnVehicleFuelAccounting, OwnTransportVehicleKind } from './src/lib/spanishDistances.js';
 import { TELECOM_PLANS, OFFICE_STORE_CATALOG } from './src/lib/officeStoreData.js';
 import { numberToSpanishWords } from './src/lib/formatters.js';
+import {
+  DEFAULT_LANDLORD_ADDRESS,
+  DEFAULT_LANDLORD_IBAN,
+  DEFAULT_LANDLORD_ID,
+  DEFAULT_LANDLORD_NAME,
+  DEFAULT_LANDLORD_NIF,
+  buildRentalInstallmentInvoiceRecord,
+  createOrGetRentalInstallmentInvoiceInMemory,
+  extractRentalInvoiceSeq,
+  formatRentalInvoiceNumber,
+  isRentalObligationType,
+  mapRentalInvoiceRow,
+} from './src/lib/rentalInvoicing.js';
 
 const { Pool } = pg;
 const SERVER_INSTANCE_ID = 'inst-' + Math.random().toString(36).substring(2, 11) + '-' + Date.now();
@@ -314,6 +327,42 @@ async function initSupabaseTables(): Promise<{ success: boolean; message?: strin
       );
       ALTER TABLE obligaciones_pago ADD COLUMN IF NOT EXISTS intereses_demora NUMERIC(12, 2) DEFAULT 0;
       ALTER TABLE obligaciones_pago ADD COLUMN IF NOT EXISTS intereses_demora_pagados BOOLEAN DEFAULT FALSE;
+
+      CREATE TABLE IF NOT EXISTS facturas_alquiler (
+        id VARCHAR(255) PRIMARY KEY,
+        numero_factura TEXT NOT NULL UNIQUE,
+        obligacion_id VARCHAR(255) NOT NULL UNIQUE,
+        adquisicion_id VARCHAR(255) NOT NULL,
+        inmueble_id VARCHAR(255),
+        inmueble_titulo TEXT NOT NULL,
+        inmueble_direccion TEXT,
+        alumno_id VARCHAR(255) NOT NULL,
+        alumno_nombre TEXT NOT NULL,
+        alumno_nif TEXT,
+        arrendador_id VARCHAR(255),
+        arrendador_nombre TEXT NOT NULL,
+        arrendador_nif TEXT,
+        arrendador_direccion TEXT,
+        arrendador_iban TEXT,
+        numero_cuota INT NOT NULL,
+        total_cuotas INT NOT NULL DEFAULT 12,
+        periodo_mes INT NOT NULL,
+        periodo_anio INT NOT NULL,
+        periodo_etiqueta TEXT NOT NULL,
+        fecha_periodo_inicio TEXT,
+        fecha_periodo_fin TEXT,
+        fecha_emision TIMESTAMPTZ NOT NULL,
+        fecha_pago TIMESTAMPTZ NOT NULL,
+        fecha_vencimiento TIMESTAMPTZ NOT NULL,
+        base_imponible NUMERIC(12, 2) NOT NULL,
+        tipo_iva NUMERIC(5, 2) NOT NULL DEFAULT 21,
+        importe_iva NUMERIC(12, 2) NOT NULL,
+        importe_total NUMERIC(12, 2) NOT NULL,
+        movimiento_id VARCHAR(255),
+        metodo_pago TEXT NOT NULL DEFAULT 'Domiciliación bancaria automática',
+        estado VARCHAR(50) NOT NULL DEFAULT 'pagado',
+        creado_en TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
 
       CREATE TABLE IF NOT EXISTS prestamos (
         id VARCHAR(255) PRIMARY KEY,
@@ -1409,6 +1458,172 @@ async function syncObligationToSupabase(ob: PaymentObligation, client?: pg.PoolC
     console.error('[Supabase DB] Error syncing obligation to Supabase:', e);
     throw e;
   }
+}
+
+async function createRentalInstallmentInvoicePg(
+  client: pg.PoolClient,
+  params: {
+    obligation: {
+      id: string;
+      acquisitionId: string;
+      studentId: string;
+      studentName: string;
+      propertyTitle: string;
+      type: string;
+      amount: number;
+      dueDate: string;
+      status: string;
+      paidDate?: string;
+      installmentNumber?: number;
+      totalInstallments?: number;
+    };
+    acquisition?: Pick<
+      PropertyAcquisition,
+      'id' | 'propertyId' | 'propertyTitle' | 'location' | 'basePrice' | 'ivaAmount' | 'totalPrice' | 'monthlyRent' | 'purchaseDate'
+    > | null;
+    landlordId?: string;
+    landlordName?: string;
+    studentNifCif?: string;
+    transferId?: string;
+    issueDateIso: string;
+    paidDateIso: string;
+    paymentMethod?: string;
+  }
+): Promise<{ invoice: RentalInstallmentInvoice; created: boolean } | null> {
+  if (!isRentalObligationType(params.obligation.type) || params.obligation.status !== 'pagado') {
+    return null;
+  }
+
+  // Idempotency guard first: never generate a second invoice for the same rent obligation
+  const existingRes = await client.query(
+    'SELECT * FROM facturas_alquiler WHERE obligacion_id = $1 LIMIT 1',
+    [params.obligation.id]
+  );
+  if (existingRes && existingRes.rows.length > 0) {
+    return {
+      invoice: mapRentalInvoiceRow(existingRes.rows[0]),
+      created: false,
+    };
+  }
+
+  // Serialize correlative invoice number allocation safely across concurrent PG transactions
+  await client.query('SELECT pg_advisory_xact_lock(7391042)');
+
+  const issueDate = new Date(params.issueDateIso);
+  const year = isNaN(issueDate.getTime()) ? new Date().getUTCFullYear() : issueDate.getUTCFullYear();
+  const seqRows = await client.query(
+    'SELECT numero_factura FROM facturas_alquiler WHERE numero_factura LIKE $1',
+    [`FAC-ALQ-${year}-%`]
+  );
+  let maxSeq = 0;
+  for (const r of seqRows.rows) {
+    const seq = extractRentalInvoiceSeq(String(r.numero_factura), year);
+    if (seq > maxSeq) maxSeq = seq;
+  }
+
+  let nextSeq = maxSeq + 1;
+  let invoiceNumber = formatRentalInvoiceNumber(year, nextSeq);
+  let dupCheck = await client.query(
+    'SELECT 1 FROM facturas_alquiler WHERE numero_factura = $1 LIMIT 1',
+    [invoiceNumber]
+  );
+  while (dupCheck.rows.length > 0) {
+    nextSeq++;
+    invoiceNumber = formatRentalInvoiceNumber(year, nextSeq);
+    dupCheck = await client.query(
+      'SELECT 1 FROM facturas_alquiler WHERE numero_factura = $1 LIMIT 1',
+      [invoiceNumber]
+    );
+  }
+
+  const invoiceRecord = buildRentalInstallmentInvoiceRecord({
+    invoiceNumber,
+    obligation: params.obligation,
+    acquisition: params.acquisition,
+    studentNifCif: params.studentNifCif,
+    landlordId: params.landlordId,
+    landlordName: params.landlordName,
+    transferId: params.transferId,
+    issueDateIso: params.issueDateIso,
+    paidDateIso: params.paidDateIso,
+    paymentMethod: params.paymentMethod,
+  });
+
+  const insertRes = await client.query(
+    `INSERT INTO facturas_alquiler (
+      id, numero_factura, obligacion_id, adquisicion_id, inmueble_id, inmueble_titulo, inmueble_direccion,
+      alumno_id, alumno_nombre, alumno_nif, arrendador_id, arrendador_nombre, arrendador_nif, arrendador_direccion, arrendador_iban,
+      numero_cuota, total_cuotas, periodo_mes, periodo_anio, periodo_etiqueta, fecha_periodo_inicio, fecha_periodo_fin,
+      fecha_emision, fecha_pago, fecha_vencimiento, base_imponible, tipo_iva, importe_iva, importe_total,
+      movimiento_id, metodo_pago, estado
+    )
+    VALUES (
+      $1, $2, $3, $4, $5, $6, $7,
+      $8, $9, $10, $11, $12, $13, $14, $15,
+      $16, $17, $18, $19, $20, $21, $22,
+      $23, $24, $25, $26, $27, $28, $29,
+      $30, $31, $32
+    )
+    ON CONFLICT (obligacion_id) DO NOTHING
+    RETURNING *`,
+    [
+      invoiceRecord.id,
+      invoiceRecord.invoiceNumber,
+      invoiceRecord.obligationId,
+      invoiceRecord.acquisitionId,
+      invoiceRecord.propertyId || null,
+      invoiceRecord.propertyTitle,
+      invoiceRecord.propertyLocation || '',
+      invoiceRecord.studentId,
+      invoiceRecord.studentName,
+      invoiceRecord.studentNifCif || 'B-87654321',
+      invoiceRecord.landlordId || DEFAULT_LANDLORD_ID,
+      invoiceRecord.landlordName || DEFAULT_LANDLORD_NAME,
+      invoiceRecord.landlordNifCif || DEFAULT_LANDLORD_NIF,
+      invoiceRecord.landlordAddress || DEFAULT_LANDLORD_ADDRESS,
+      invoiceRecord.landlordIban || DEFAULT_LANDLORD_IBAN,
+      invoiceRecord.installmentNumber,
+      invoiceRecord.totalInstallments,
+      invoiceRecord.periodMonth,
+      invoiceRecord.periodYear,
+      invoiceRecord.periodLabel,
+      invoiceRecord.periodStartDate,
+      invoiceRecord.periodEndDate,
+      invoiceRecord.issueDate,
+      invoiceRecord.paidDate,
+      invoiceRecord.dueDate,
+      invoiceRecord.baseAmount,
+      invoiceRecord.ivaRate,
+      invoiceRecord.ivaAmount,
+      invoiceRecord.totalAmount,
+      invoiceRecord.transferId || null,
+      invoiceRecord.paymentMethod,
+      invoiceRecord.status,
+    ]
+  );
+
+  if (insertRes.rows.length > 0) {
+    return {
+      invoice: mapRentalInvoiceRow(insertRes.rows[0]),
+      created: true,
+    };
+  }
+
+  const fallbackRes = await client.query(
+    'SELECT * FROM facturas_alquiler WHERE obligacion_id = $1 LIMIT 1',
+    [params.obligation.id]
+  );
+  if (fallbackRes.rows.length > 0) {
+    return {
+      invoice: mapRentalInvoiceRow(fallbackRes.rows[0]),
+      created: false,
+    };
+  }
+
+  return {
+    invoice: invoiceRecord,
+    created: true,
+  };
 }
 
 async function syncLoanToSupabase(loan: BankLoan) {
@@ -2867,6 +3082,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
       cleanDb.marketContacts = [];
       cleanDb.notifications = [];
       cleanDb.courtLawsuits = [];
+      cleanDb.rentalInvoices = [];
       cleanDb.isSeed = false;
       fs.writeFileSync(DB_FILE, JSON.stringify(cleanDb, null, 2), 'utf-8');
       clearAllSessionCaches();
@@ -2878,6 +3094,7 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
     const resInm = (await safeDbQuery('SELECT * FROM inmuebles ORDER BY fecha_creacion DESC')) || { rows: [] };
     const resAcq = (await safeDbQuery('SELECT * FROM adquisiciones ORDER BY fecha_compra DESC')) || { rows: [] };
     const resObl = (await safeDbQuery('SELECT * FROM obligaciones_pago ORDER BY fecha_vencimiento ASC')) || { rows: [] };
+    const resRentalInvoices = (await safeDbQuery('SELECT * FROM facturas_alquiler ORDER BY fecha_emision DESC')) || { rows: [] };
     const resLoans = (await safeDbQuery('SELECT * FROM prestamos ORDER BY fecha_creacion DESC')) || { rows: [] };
     const resMachinery = (await safeDbQuery('SELECT * FROM maquinaria_adquisiciones ORDER BY fecha_compra DESC')) || { rows: [] };
     const resJobs = (await safeDbQuery('SELECT * FROM ofertas_empleo ORDER BY fecha_creacion DESC')) || { rows: [] };
@@ -3081,6 +3298,15 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         pendingBalance: row.saldo_pendiente ? Number(row.saldo_pendiente) : undefined
       })) : [];
 
+      // Reconstruct db.rentalInvoices from Supabase "facturas_alquiler"
+      db.rentalInvoices = (resRentalInvoices && resRentalInvoices.rows)
+        ? resRentalInvoices.rows.map(mapRentalInvoiceRow)
+        : [];
+      const restoredRentalInvoiceMap = new Map<string, RentalInstallmentInvoice>();
+      for (const rInv of db.rentalInvoices) {
+        restoredRentalInvoiceMap.set(rInv.obligationId, rInv);
+      }
+
       // Reconstruct db.paymentObligations from Supabase "obligaciones_pago" (excluding peer-to-peer promissory notes which are manual student transfers)
       db.paymentObligations = (resObl && resObl.rows) ? resObl.rows
         .filter(row => !String(row.adquisicion_id || '').startsWith('promissory_'))
@@ -3093,12 +3319,13 @@ async function restoreFromSupabase(): Promise<{ restoredUsers: number; restoredM
         type: String(row.tipo) as any,
         amount: Number(row.importe),
         dueDate: new Date(row.fecha_vencimiento).toISOString(),
-        status: String(row.estado) as ('pendiente' | 'pagado'),
+        status: String(row.estado) as ('pendiente' | 'pagado' | 'vencido'),
         paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
         installmentNumber: Number(row.numero_cuota || 1),
         totalInstallments: Number(row.total_cuotas || 1),
         penaltyInterest: row.intereses_demora !== null && row.intereses_demora !== undefined ? Number(row.intereses_demora) : undefined,
-        penaltyPaid: Boolean(row.intereses_demora_pagados)
+        penaltyPaid: Boolean(row.intereses_demora_pagados),
+        rentalInvoice: restoredRentalInvoiceMap.get(String(row.id))
       })) : [];
 
       // Reconstruct db.loans from Supabase "prestamos"
@@ -7310,6 +7537,7 @@ function readDb(): DatabaseSchema {
       payrollRecords: [],
       taxObligations: [],
       defaultInitialBalance: 1000,
+      rentalInvoices: [],
       isSeed: false
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf-8');
@@ -7325,6 +7553,7 @@ function readDb(): DatabaseSchema {
     }
     if (!db.acquisitions) db.acquisitions = [];
     if (!db.paymentObligations) db.paymentObligations = [];
+    if (!db.rentalInvoices) db.rentalInvoices = [];
     if (!db.loans) db.loans = [];
     if (!db.machineryAcquisitions) db.machineryAcquisitions = [];
     if (!db.jobListings) db.jobListings = [];
@@ -8316,6 +8545,7 @@ const handleDeleteUserRoute = async (req: express.Request, res: express.Response
           await client.query('DELETE FROM contactos_mercado WHERE user_id = $1 OR contact_id = $1', [canonicalId]);
           await client.query('DELETE FROM contratos_electricos WHERE alumno_id = $1', [canonicalId]);
           await client.query('DELETE FROM facturas_electricidad WHERE alumno_id = $1', [canonicalId]);
+          await client.query('DELETE FROM facturas_alquiler WHERE alumno_id = $1', [canonicalId]);
           await client.query('DELETE FROM planos_distribucion_naves WHERE alumno_id = $1', [canonicalId]);
           await client.query('DELETE FROM contratos_telecom WHERE alumno_id = $1', [canonicalId]);
           await client.query('DELETE FROM facturas_telecom WHERE alumno_id = $1', [canonicalId]);
@@ -8880,6 +9110,7 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
 
       // Delete all simulation tables in referential/dependency order
       await client.query('DELETE FROM movimientos');
+      await client.query('DELETE FROM facturas_alquiler');
       await client.query('DELETE FROM obligaciones_pago');
       await client.query('DELETE FROM adquisiciones');
       await client.query('DELETE FROM prestamos');
@@ -8990,6 +9221,7 @@ async function executeFullSimulationReset(keepUsers: boolean, defaultBalance: nu
   db.telecomInvoices = [];
   db.officeOrders = [];
   db.relocationInvoices = [];
+  db.rentalInvoices = [];
   db.purchasedVehicles = [];
   db.unifiedMonthlyInvoices = [];
   db.rawMaterialAnnouncements = [];
@@ -9077,6 +9309,7 @@ app.post('/api/restore', async (req, res) => {
 
         // 2. Atomic purge of tables in foreign-key / dependency order
         await client.query('DELETE FROM movimientos');
+        await client.query('DELETE FROM facturas_alquiler');
         await client.query('DELETE FROM adquisiciones');
         await client.query('DELETE FROM obligaciones_pago');
         await client.query('DELETE FROM prestamos');
@@ -11334,9 +11567,61 @@ app.get('/api/company/:studentId', async (req, res) => {
   }
 
   const acquisitions = db.acquisitions.filter(a => a.studentId === studentId);
-  const obligations = db.paymentObligations
+  let rentalInvoices: RentalInstallmentInvoice[] = (db.rentalInvoices || []).filter(inv => inv.studentId === studentId);
+  let obligations = db.paymentObligations
     .filter(o => o.studentId === studentId)
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+  if (dbPool) {
+    try {
+      const [pgOblRes, pgRentalInvRes] = await Promise.all([
+        safeDbQuery('SELECT * FROM obligaciones_pago WHERE alumno_id = $1 ORDER BY fecha_vencimiento ASC', [studentId]),
+        safeDbQuery('SELECT * FROM facturas_alquiler WHERE alumno_id = $1 ORDER BY fecha_emision DESC', [studentId])
+      ]);
+      if (pgRentalInvRes && pgRentalInvRes.rows) {
+        rentalInvoices = pgRentalInvRes.rows.map(mapRentalInvoiceRow);
+        if (!db.rentalInvoices) db.rentalInvoices = [];
+        for (const rInv of rentalInvoices) {
+          const idx = db.rentalInvoices.findIndex(x => x.id === rInv.id || x.obligationId === rInv.obligationId);
+          if (idx !== -1) db.rentalInvoices[idx] = rInv;
+          else db.rentalInvoices.push(rInv);
+        }
+      }
+      if (pgOblRes && pgOblRes.rows) {
+        const rentalMap = new Map<string, RentalInstallmentInvoice>();
+        for (const inv of rentalInvoices) rentalMap.set(inv.obligationId, inv);
+        obligations = pgOblRes.rows
+          .filter(row => !String(row.adquisicion_id || '').startsWith('promissory_'))
+          .map(row => ({
+            id: String(row.id),
+            acquisitionId: String(row.adquisicion_id),
+            studentId: String(row.alumno_id),
+            studentName: String(row.alumno_nombre),
+            propertyTitle: String(row.inmueble_titulo),
+            type: String(row.tipo) as any,
+            amount: Number(row.importe),
+            dueDate: new Date(row.fecha_vencimiento).toISOString(),
+            status: String(row.estado) as ('pendiente' | 'pagado' | 'vencido'),
+            paidDate: row.fecha_pago ? new Date(row.fecha_pago).toISOString() : undefined,
+            installmentNumber: Number(row.numero_cuota || 1),
+            totalInstallments: Number(row.total_cuotas || 1),
+            penaltyInterest: row.intereses_demora !== null && row.intereses_demora !== undefined ? Number(row.intereses_demora) : 0,
+            penaltyPaid: Boolean(row.intereses_demora_pagados),
+            rentalInvoice: rentalMap.get(String(row.id))
+          }));
+      }
+    } catch (pgCompErr) {
+      console.warn('[API Company] Error loading rental invoices/obligations from PG, using snapshot:', pgCompErr);
+    }
+  } else {
+    const rentalMap = new Map<string, RentalInstallmentInvoice>();
+    for (const inv of rentalInvoices) rentalMap.set(inv.obligationId, inv);
+    obligations = obligations.map(o => ({
+      ...o,
+      rentalInvoice: o.rentalInvoice || rentalMap.get(o.id)
+    }));
+  }
+
   const loans = (db.loans || []).filter(l => l.studentId === studentId && l.status === 'active');
   const machineryAcquisitions = (db.machineryAcquisitions || []).filter(m => m.studentId === studentId);
 
@@ -11469,6 +11754,7 @@ app.get('/api/company/:studentId', async (req, res) => {
     },
     acquisitions,
     obligations,
+    rentalInvoices,
     loans,
     machineryAcquisitions,
     naveFloorPlans: await getStudentFloorPlansAsync(studentId, db),
@@ -11589,6 +11875,71 @@ app.post('/api/obligations/pay', async (req, res) => {
             [txId + '-out', studentRow.id, oblAmount, nowIso, concept, studentRow.id, studentRow.alumno, studentRow.account_number, 'corp-tenedor-efectos', 'Tenedor de Efectos Comerciales S.A.', 'ES210001000299887755']
           );
 
+          // Si es mensualidad de alquiler y el pago acaba de confirmarse, emitir factura independiente dentro de la misma transacción
+          let generatedRentalInvoice: RentalInstallmentInvoice | undefined;
+          if (isRentalObligationType(oblRow.tipo)) {
+            let acqInfo: Pick<PropertyAcquisition, 'id' | 'propertyId' | 'propertyTitle' | 'location' | 'basePrice' | 'ivaAmount' | 'totalPrice' | 'monthlyRent' | 'purchaseDate'> | null = null;
+            let landlordId: string | undefined;
+            let landlordName: string | undefined;
+            if (oblRow.adquisicion_id) {
+              const acqRes = await client.query(
+                'SELECT id, inmueble_id, inmueble_titulo, ubicacion, precio_base, importe_iva, precio_total, alquiler_mensual, fecha_compra FROM adquisiciones WHERE id = $1 LIMIT 1',
+                [oblRow.adquisicion_id]
+              );
+              if (acqRes && acqRes.rows.length > 0) {
+                const ar = acqRes.rows[0];
+                acqInfo = {
+                  id: String(ar.id),
+                  propertyId: String(ar.inmueble_id),
+                  propertyTitle: String(ar.inmueble_titulo || oblRow.inmueble_titulo),
+                  location: String(ar.ubicacion || ''),
+                  basePrice: Number(ar.precio_base || 0),
+                  ivaAmount: Number(ar.importe_iva || 0),
+                  totalPrice: Number(ar.precio_total || oblAmount),
+                  monthlyRent: ar.alquiler_mensual ? Number(ar.alquiler_mensual) : oblAmount,
+                  purchaseDate: ar.fecha_compra ? new Date(ar.fecha_compra).toISOString() : nowIso,
+                };
+                if (ar.inmueble_id) {
+                  const propRes = await client.query(
+                    'SELECT propietario_id, propietario_nombre FROM inmuebles WHERE id = $1 LIMIT 1',
+                    [ar.inmueble_id]
+                  );
+                  if (propRes && propRes.rows.length > 0) {
+                    landlordId = propRes.rows[0].propietario_id ? String(propRes.rows[0].propietario_id) : undefined;
+                    landlordName = propRes.rows[0].propietario_nombre ? String(propRes.rows[0].propietario_nombre) : undefined;
+                  }
+                }
+              }
+            }
+
+            const invResult = await createRentalInstallmentInvoicePg(client, {
+              obligation: {
+                id: String(oblRow.id),
+                acquisitionId: String(oblRow.adquisicion_id || ''),
+                studentId: String(oblRow.alumno_id),
+                studentName: String(oblRow.alumno_nombre || studentRow.alumno),
+                propertyTitle: String(oblRow.inmueble_titulo),
+                type: String(oblRow.tipo),
+                amount: oblAmount,
+                dueDate: new Date(oblRow.fecha_vencimiento).toISOString(),
+                status: 'pagado',
+                paidDate: nowIso,
+                installmentNumber: Number(oblRow.numero_cuota || 2),
+                totalInstallments: Number(oblRow.total_cuotas || 12),
+              },
+              acquisition: acqInfo,
+              landlordId,
+              landlordName,
+              transferId: txId,
+              issueDateIso: nowIso,
+              paidDateIso: nowIso,
+              paymentMethod: 'Liquidación manual de vencimiento de alquiler',
+            });
+            if (invResult) {
+              generatedRentalInvoice = invResult.invoice;
+            }
+          }
+
           // Update in-memory DB snapshot
           const db = readDb();
           const sIdx = db.users.findIndex(u => u.id === studentId);
@@ -11598,7 +11949,16 @@ app.post('/api/obligations/pay', async (req, res) => {
           if (oIdx !== -1) {
             db.paymentObligations[oIdx].status = 'pagado';
             db.paymentObligations[oIdx].paidDate = nowIso;
+            if (generatedRentalInvoice) {
+              db.paymentObligations[oIdx].rentalInvoice = generatedRentalInvoice;
+            }
             paidObligation = db.paymentObligations[oIdx];
+          }
+          if (generatedRentalInvoice) {
+            if (!db.rentalInvoices) db.rentalInvoices = [];
+            const invIdx = db.rentalInvoices.findIndex(i => i.obligationId === generatedRentalInvoice!.obligationId);
+            if (invIdx !== -1) db.rentalInvoices[invIdx] = generatedRentalInvoice;
+            else db.rentalInvoices.unshift(generatedRentalInvoice);
           }
           const acq = db.acquisitions.find(a => a.id === oblRow.adquisicion_id);
           if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
@@ -11611,7 +11971,8 @@ app.post('/api/obligations/pay', async (req, res) => {
             success: true,
             message: `¡Atención al vencimiento completada con éxito! Se han abonado ${formatCurrency(oblAmount)} correspondiente al ${instrumentName}.`,
             updatedBalance: newBalance,
-            paidObligation: paidObligation || { ...oblRow, status: 'pagado', paidDate: nowIso }
+            paidObligation: paidObligation || { ...oblRow, status: 'pagado', paidDate: nowIso, rentalInvoice: generatedRentalInvoice },
+            rentalInvoice: generatedRentalInvoice,
           };
         }, key);
       } else {
@@ -11624,11 +11985,33 @@ app.post('/api/obligations/pay', async (req, res) => {
         if (!student) { const err: any = new Error('Estudiante no encontrado'); err.statusCode = 404; throw err; }
         if (student.balance < obligation.amount) { const err: any = new Error('Saldo insuficiente para atender el vencimiento'); err.statusCode = 400; throw err; }
 
+        const nowIso = new Date().toISOString();
         student.balance = Number((student.balance - obligation.amount).toFixed(2));
         obligation.status = 'pagado';
-        obligation.paidDate = new Date().toISOString();
+        obligation.paidDate = nowIso;
+
+        let generatedRentalInvoice: RentalInstallmentInvoice | undefined;
+        if (isRentalObligationType(obligation.type)) {
+          if (!db.rentalInvoices) db.rentalInvoices = [];
+          const acq = db.acquisitions?.find(a => a.id === obligation.acquisitionId);
+          const prop = acq ? db.properties?.find(p => p.id === acq.propertyId) : undefined;
+          const invRes = createOrGetRentalInstallmentInvoiceInMemory(db.rentalInvoices, {
+            obligation,
+            acquisition: acq,
+            landlordId: prop?.ownerId,
+            landlordName: prop?.ownerName,
+            issueDateIso: nowIso,
+            paidDateIso: nowIso,
+            paymentMethod: 'Liquidación manual de vencimiento de alquiler',
+          });
+          if (invRes) {
+            obligation.rentalInvoice = invRes.invoice;
+            generatedRentalInvoice = invRes.invoice;
+          }
+        }
+
         writeDb(db);
-        return { success: true, updatedBalance: student.balance, paidObligation: obligation };
+        return { success: true, updatedBalance: student.balance, paidObligation: obligation, rentalInvoice: generatedRentalInvoice };
       }
     });
 
@@ -14136,17 +14519,33 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               if (!lockRes || lockRes.rows.length === 0) return false;
 
               const studentRow = lockRes.rows[0];
-              const currentBalance = Number(studentRow.saldo);
               const ob = item.obligationRef!;
-              const isPenaltyOnly = item.isPrincipalPaid || ob.status === 'pagado';
+
+              // Lock the obligation row atomically to prevent concurrent double payments or duplicate rental invoices
+              const oblLockRes = await client.query(
+                `SELECT id, adquisicion_id, alumno_id, alumno_nombre, inmueble_titulo, tipo, importe, fecha_vencimiento, estado, fecha_pago, numero_cuota, total_cuotas, intereses_demora, intereses_demora_pagados
+                 FROM obligaciones_pago
+                 WHERE id = $1
+                 FOR UPDATE`,
+                [ob.id]
+              );
+              if (!oblLockRes || oblLockRes.rows.length === 0) return false;
+              const oblRow = oblLockRes.rows[0];
+
+              const currentBalance = Number(studentRow.saldo);
+              const isPenaltyOnly = item.isPrincipalPaid || ob.status === 'pagado' || oblRow.estado === 'pagado';
               const nowIso = new Date().toISOString();
 
               if (isPenaltyOnly) {
-                if (ob.penaltyPaid || (ob.penaltyInterest || 0) <= 0) {
-                  return true; // Already paid
+                const dbPendingPenalty = Number((oblRow.intereses_demora ?? ob.penaltyInterest ?? item.penaltyInterest ?? 0).toFixed(2));
+                const dbPenaltyPaid = Boolean(oblRow.intereses_demora_pagados) || Boolean(ob.penaltyPaid);
+                if (dbPenaltyPaid || dbPendingPenalty <= 0) {
+                  ob.status = 'pagado';
+                  if (oblRow.fecha_pago) ob.paidDate = new Date(oblRow.fecha_pago).toISOString();
+                  return true; // Already paid (no duplicate charge, no duplicate invoice)
                 }
 
-                const pendingPenalty = Number((ob.penaltyInterest || item.penaltyInterest || 0).toFixed(2));
+                const pendingPenalty = dbPendingPenalty;
                 if (currentBalance < pendingPenalty) {
                   return false; // Insufficient balance, penalty stays pending
                 }
@@ -14159,7 +14558,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                    SET intereses_demora = 0, intereses_demora_pagados = TRUE
                    WHERE id = $1`,
                   [ob.id]
-                ).catch(() => {});
+                );
 
                 const penaltyTxId = generateId('tx');
                 const penaltyConcept = item.concept || `Intereses de demora pendientes por retraso en pago (${item.instrumentName || 'Efecto comercial'} - ${ob.propertyTitle})`;
@@ -14191,8 +14590,6 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 if (!db.transfers) db.transfers = [];
                 db.transfers.unshift(penaltyTx);
 
-                syncObligationToSupabase(ob).catch(e => console.error(e));
-
                 student.balance = newBalance;
                 const memStudent = (db.users || []).find(u => u.id === studentRow.id || u.username === studentRow.usuario);
                 if (memStudent) memStudent.balance = newBalance;
@@ -14219,22 +14616,22 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                    SET estado = 'pagado', fecha_pago = $1, intereses_demora = 0, intereses_demora_pagados = TRUE
                    WHERE id = $2`,
                   [nowIso, ob.id]
-                ).catch(() => {});
+                );
               } else {
                 await client.query(
                   `UPDATE obligaciones_pago
                    SET estado = 'pagado', fecha_pago = $1, intereses_demora = $2, intereses_demora_pagados = FALSE
                    WHERE id = $3`,
                   [nowIso, item.penaltyInterest, ob.id]
-                ).catch(() => {});
+                );
               }
 
-              const acqId = (ob as any).adquisicion_id || (ob as any).acquisitionId;
+              const acqId = (ob as any).adquisicion_id || (ob as any).acquisitionId || oblRow.adquisicion_id;
               if (acqId) {
                 await client.query(
                   'UPDATE adquisiciones SET saldo_pendiente = GREATEST(0, COALESCE(saldo_pendiente, 0) - $1) WHERE id = $2',
                   [ob.amount, acqId]
-                ).catch(() => {});
+                );
               }
 
               const txId = generateId('tx');
@@ -14281,9 +14678,86 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 );
               }
 
-              // Update in-memory
+              // Si la obligación es de alquiler mensual, generar su factura independiente atómicamente dentro de la misma transacción
+              let generatedRentalInvoice: RentalInstallmentInvoice | undefined;
+              if (isRentalObligationType(oblRow.tipo || ob.type)) {
+                let acqInfo: Pick<PropertyAcquisition, 'id' | 'propertyId' | 'propertyTitle' | 'location' | 'basePrice' | 'ivaAmount' | 'totalPrice' | 'monthlyRent' | 'purchaseDate'> | null = null;
+                let landlordId: string | undefined;
+                let landlordName: string | undefined;
+
+                if (acqId) {
+                  const acqRes = await client.query(
+                    'SELECT id, inmueble_id, inmueble_titulo, ubicacion, precio_base, importe_iva, precio_total, alquiler_mensual, fecha_compra FROM adquisiciones WHERE id = $1 LIMIT 1',
+                    [acqId]
+                  );
+                  if (acqRes && acqRes.rows.length > 0) {
+                    const ar = acqRes.rows[0];
+                    acqInfo = {
+                      id: String(ar.id),
+                      propertyId: String(ar.inmueble_id),
+                      propertyTitle: String(ar.inmueble_titulo || oblRow.inmueble_titulo || ob.propertyTitle),
+                      location: String(ar.ubicacion || ''),
+                      basePrice: Number(ar.precio_base || 0),
+                      ivaAmount: Number(ar.importe_iva || 0),
+                      totalPrice: Number(ar.precio_total || item.principal),
+                      monthlyRent: ar.alquiler_mensual ? Number(ar.alquiler_mensual) : item.principal,
+                      purchaseDate: ar.fecha_compra ? new Date(ar.fecha_compra).toISOString() : nowIso,
+                    };
+                    if (ar.inmueble_id) {
+                      const propRes = await client.query(
+                        'SELECT propietario_id, propietario_nombre FROM inmuebles WHERE id = $1 LIMIT 1',
+                        [ar.inmueble_id]
+                      );
+                      if (propRes && propRes.rows.length > 0) {
+                        landlordId = propRes.rows[0].propietario_id ? String(propRes.rows[0].propietario_id) : undefined;
+                        landlordName = propRes.rows[0].propietario_nombre ? String(propRes.rows[0].propietario_nombre) : undefined;
+                      }
+                    }
+                  }
+                } else {
+                  const memAcq = db.acquisitions?.find(a => a.id === ob.acquisitionId);
+                  if (memAcq) acqInfo = memAcq;
+                }
+
+                const invResult = await createRentalInstallmentInvoicePg(client, {
+                  obligation: {
+                    id: String(oblRow.id),
+                    acquisitionId: String(oblRow.adquisicion_id || ob.acquisitionId || ''),
+                    studentId: String(oblRow.alumno_id || studentRow.id),
+                    studentName: String(oblRow.alumno_nombre || studentRow.alumno || ob.studentName),
+                    propertyTitle: String(oblRow.inmueble_titulo || ob.propertyTitle),
+                    type: String(oblRow.tipo || ob.type),
+                    amount: Number(oblRow.importe || ob.amount),
+                    dueDate: new Date(oblRow.fecha_vencimiento || ob.dueDate).toISOString(),
+                    status: 'pagado',
+                    paidDate: nowIso,
+                    installmentNumber: Number(oblRow.numero_cuota || ob.installmentNumber || 2),
+                    totalInstallments: Number(oblRow.total_cuotas || ob.totalInstallments || 12),
+                  },
+                  acquisition: acqInfo,
+                  landlordId,
+                  landlordName,
+                  transferId: txId,
+                  issueDateIso: nowIso,
+                  paidDateIso: nowIso,
+                  paymentMethod: 'Domiciliación bancaria automática',
+                });
+
+                if (invResult) {
+                  generatedRentalInvoice = invResult.invoice;
+                }
+              }
+
+              // Update in-memory after all SQL mutations within the transaction succeeded
               ob.status = 'pagado';
               ob.paidDate = nowIso;
+              if (generatedRentalInvoice) {
+                ob.rentalInvoice = generatedRentalInvoice;
+                if (!db.rentalInvoices) db.rentalInvoices = [];
+                const invIdx = db.rentalInvoices.findIndex(i => i.obligationId === generatedRentalInvoice!.obligationId);
+                if (invIdx !== -1) db.rentalInvoices[invIdx] = generatedRentalInvoice;
+                else db.rentalInvoices.unshift(generatedRentalInvoice);
+              }
               if (canPayPenalty) {
                 ob.penaltyInterest = 0;
                 ob.totalOverdueAmount = 0;
@@ -14311,8 +14785,6 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               if (!db.transfers) db.transfers = [];
               db.transfers.unshift(newTransfer);
               if (penaltyTx) db.transfers.unshift(penaltyTx);
-
-              syncObligationToSupabase(ob).catch(e => console.error(e));
 
               // Sync student in-memory balance to match DB
               student.balance = newBalance;
@@ -14370,13 +14842,15 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
           } else {
             // Paying principal
             if (student.balance >= item.principal) {
+              const nowIso = new Date().toISOString();
               const canPayPenalty = item.penaltyInterest > 0 && student.balance >= Number((item.principal + item.penaltyInterest).toFixed(2));
               const penaltyPaid = canPayPenalty ? item.penaltyInterest : 0;
               student.balance = Number((student.balance - (item.principal + penaltyPaid)).toFixed(2));
               modified = true;
 
+              const txId = generateId('tx');
               const newTransfer: Transfer = {
-                id: generateId('tx'),
+                id: txId,
                 senderId: student.id,
                 senderName: student.name,
                 senderAccount: student.accountNumber,
@@ -14385,13 +14859,13 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 receiverAccount: 'ES210001000299887755',
                 amount: item.principal,
                 concept: item.concept,
-                timestamp: new Date().toISOString()
+                timestamp: nowIso
               };
               if (!db.transfers) db.transfers = [];
               db.transfers.unshift(newTransfer);
 
               ob.status = 'pagado';
-              ob.paidDate = new Date().toISOString();
+              ob.paidDate = nowIso;
 
               if (canPayPenalty) {
                 const penaltyTx: Transfer = {
@@ -14410,7 +14884,7 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
                 ob.penaltyInterest = 0;
                 ob.totalOverdueAmount = 0;
                 ob.penaltyPaid = true;
-                ob.penaltyPaidDate = new Date().toISOString();
+                ob.penaltyPaidDate = nowIso;
               } else {
                 ob.penaltyInterest = item.penaltyInterest;
                 ob.totalOverdueAmount = item.penaltyInterest;
@@ -14420,6 +14894,24 @@ async function processStudentAutomaticPayments(db: DatabaseSchema, targetStudent
               const acq = db.acquisitions?.find(a => a.id === ob.acquisitionId);
               if (acq && acq.pendingBalance && acq.pendingBalance > 0) {
                 acq.pendingBalance = Math.max(0, Number((acq.pendingBalance - ob.amount).toFixed(2)));
+              }
+
+              if (isRentalObligationType(ob.type)) {
+                if (!db.rentalInvoices) db.rentalInvoices = [];
+                const prop = acq ? db.properties?.find(p => p.id === acq.propertyId) : undefined;
+                const invResult = createOrGetRentalInstallmentInvoiceInMemory(db.rentalInvoices, {
+                  obligation: ob,
+                  acquisition: acq,
+                  landlordId: prop?.ownerId,
+                  landlordName: prop?.ownerName,
+                  transferId: txId,
+                  issueDateIso: nowIso,
+                  paidDateIso: nowIso,
+                  paymentMethod: 'Domiciliación bancaria automática',
+                });
+                if (invResult) {
+                  ob.rentalInvoice = invResult.invoice;
+                }
               }
 
               const machAcq = (db.machineryAcquisitions || []).find(m => m.id === ob.acquisitionId);
@@ -15866,6 +16358,7 @@ app.get('/api/student/session-init', async (req, res) => {
     let studentRawOrders: RawMaterialOrder[] = [];
     let studentLoans: BankLoan[] = [];
     let studentObligations: PaymentObligation[] = [];
+    let studentRentalInvoices: RentalInstallmentInvoice[] = [];
     let studentElecContracts: ElectricityContract[] = [];
     let studentElecBills: ElectricityBill[] = [];
     let studentTelContracts: TelecomContract[] = [];
@@ -15899,7 +16392,8 @@ app.get('/api/student/session-init', async (req, res) => {
         telInvRes,
         offOrdRes,
         lawsuitsRes,
-        classmatesRes
+        classmatesRes,
+        rentalInvRes
       ] = await Promise.all([
         safeDbQuery(
           `SELECT id, cuenta_id, tipo, importe, fecha, concepto, sender_id, sender_name, sender_account, receiver_id, receiver_name, receiver_account
@@ -15924,8 +16418,15 @@ app.get('/api/student/session-init', async (req, res) => {
         safeDbQuery(`SELECT * FROM facturas_telecom WHERE alumno_id = $1 ORDER BY fecha_emision DESC`, [sId]),
         safeDbQuery(`SELECT * FROM pedidos_oficina WHERE alumno_id = $1 ORDER BY fecha_compra DESC`, [sId]),
         safeDbQuery(`SELECT * FROM demandas_judiciales WHERE demandante_id = $1 OR demandado_id = $1 ORDER BY fecha_creacion DESC`, [sId]),
-        safeDbQuery(`SELECT id, alumno AS name, usuario AS username, level FROM cuentas WHERE role = 'student' AND id != $1 ORDER BY alumno ASC`, [sId])
+        safeDbQuery(`SELECT id, alumno AS name, usuario AS username, level FROM cuentas WHERE role = 'student' AND id != $1 ORDER BY alumno ASC`, [sId]),
+        safeDbQuery(`SELECT * FROM facturas_alquiler WHERE alumno_id = $1 ORDER BY fecha_emision DESC`, [sId])
       ]);
+
+      if (rentalInvRes && rentalInvRes.rows) {
+        studentRentalInvoices = rentalInvRes.rows.map(mapRentalInvoiceRow);
+      } else {
+        studentRentalInvoices = (db.rentalInvoices || []).filter(i => i.studentId === sId);
+      }
 
       if (movsRes && movsRes.rows) {
         studentTransfers = movsRes.rows.map(r => ({
@@ -16149,22 +16650,29 @@ app.get('/api/student/session-init', async (req, res) => {
       }
 
       if (oblRes && oblRes.rows) {
-        studentObligations = oblRes.rows.map(r => ({
-          id: String(r.id),
-          acquisitionId: String(r.adquisicion_id),
-          studentId: String(r.alumno_id),
-          studentName: String(r.alumno_nombre),
-          propertyTitle: String(r.inmueble_titulo),
-          type: String(r.tipo) as any,
-          amount: Number(r.importe),
-          dueDate: new Date(r.fecha_vencimiento).toISOString(),
-          status: String(r.estado) as any,
-          paymentDate: r.fecha_pago ? new Date(r.fecha_pago).toISOString() : undefined,
-          installmentNumber: r.numero_cuota ? Number(r.numero_cuota) : undefined,
-          totalInstallments: r.total_cuotas ? Number(r.total_cuotas) : undefined,
-          lateInterest: r.intereses_demora ? Number(r.intereses_demora) : 0,
-          lateInterestPaid: Boolean(r.intereses_demora_pagados)
-        }));
+        const rentalMap = new Map<string, RentalInstallmentInvoice>();
+        for (const rInv of studentRentalInvoices) {
+          rentalMap.set(rInv.obligationId, rInv);
+        }
+        studentObligations = oblRes.rows
+          .filter(r => !String(r.adquisicion_id || '').startsWith('promissory_'))
+          .map(r => ({
+            id: String(r.id),
+            acquisitionId: String(r.adquisicion_id),
+            studentId: String(r.alumno_id),
+            studentName: String(r.alumno_nombre),
+            propertyTitle: String(r.inmueble_titulo),
+            type: String(r.tipo) as any,
+            amount: Number(r.importe),
+            dueDate: new Date(r.fecha_vencimiento).toISOString(),
+            status: String(r.estado) as any,
+            paidDate: r.fecha_pago ? new Date(r.fecha_pago).toISOString() : undefined,
+            installmentNumber: r.numero_cuota ? Number(r.numero_cuota) : undefined,
+            totalInstallments: r.total_cuotas ? Number(r.total_cuotas) : undefined,
+            penaltyInterest: r.intereses_demora ? Number(r.intereses_demora) : 0,
+            penaltyPaid: Boolean(r.intereses_demora_pagados),
+            rentalInvoice: rentalMap.get(String(r.id))
+          }));
       }
 
       if (elecConRes && elecConRes.rows) {
@@ -16341,7 +16849,13 @@ app.get('/api/student/session-init', async (req, res) => {
       studentInventory = (db.rawMaterialInventories || []).find(i => i.studentId === sId) || null;
       studentRawOrders = (db.rawMaterialOrders || []).filter(o => o.studentId === sId || o.sellerId === sId);
       studentLoans = (db.loans || []).filter(l => l.studentId === sId);
-      studentObligations = (db.paymentObligations || []).filter(o => o.studentId === sId);
+      const memRentalInvoices = (db.rentalInvoices || []).filter(inv => inv.studentId === sId);
+      studentRentalInvoices = memRentalInvoices;
+      const memRentalMap = new Map<string, RentalInstallmentInvoice>();
+      for (const rInv of memRentalInvoices) memRentalMap.set(rInv.obligationId, rInv);
+      studentObligations = (db.paymentObligations || [])
+        .filter(o => o.studentId === sId)
+        .map(o => ({ ...o, rentalInvoice: o.rentalInvoice || memRentalMap.get(o.id) }));
       studentElecContracts = (db.electricityContracts || []).filter(c => c.studentId === sId);
       studentElecBills = (db.electricityBills || []).filter(b => b.studentId === sId);
       studentTelContracts = (db.telecomContracts || []).filter(c => c.studentId === sId);
@@ -16351,6 +16865,21 @@ app.get('/api/student/session-init', async (req, res) => {
       classmates = (db.users || [])
         .filter(u => u.role === 'student' && u.id !== sId)
         .map(u => ({ id: u.id, name: u.name, username: u.username, level: u.level }));
+    }
+
+    const sessionRentalInvoices: RentalInstallmentInvoice[] = [];
+    const seenRentalIds = new Set<string>();
+    for (const ob of studentObligations) {
+      if (ob.rentalInvoice && !seenRentalIds.has(ob.rentalInvoice.id)) {
+        seenRentalIds.add(ob.rentalInvoice.id);
+        sessionRentalInvoices.push(ob.rentalInvoice);
+      }
+    }
+    for (const rInv of studentRentalInvoices) {
+      if (!seenRentalIds.has(rInv.id)) {
+        seenRentalIds.add(rInv.id);
+        sessionRentalInvoices.push(rInv);
+      }
     }
 
     // 4. Calculate read-only student payment status without mutations
@@ -16388,7 +16917,8 @@ app.get('/api/student/session-init', async (req, res) => {
         machinery: studentMachinery,
         employees: studentEmployees,
         vehicles: studentVehicles,
-        floorPlans: studentFloorPlans
+        floorPlans: studentFloorPlans,
+        rentalInvoices: sessionRentalInvoices
       },
       inventory: studentInventory,
       rawMaterialOrders: studentRawOrders,
@@ -19178,6 +19708,7 @@ app.delete('/api/obligations/:id', async (req, res) => {
           err.statusCode = 404;
           throw err;
         }
+        await client.query('DELETE FROM facturas_alquiler WHERE obligacion_id = $1', [id]);
         await client.query('DELETE FROM obligaciones_pago WHERE id = $1', [id]);
       });
     } catch (err: any) {
@@ -19187,6 +19718,9 @@ app.delete('/api/obligations/:id', async (req, res) => {
   }
 
   db.paymentObligations = db.paymentObligations.filter(o => o.id !== id);
+  if (db.rentalInvoices) {
+    db.rentalInvoices = db.rentalInvoices.filter(inv => inv.obligationId !== id);
+  }
   if (!db.systemLogs) db.systemLogs = [];
   db.systemLogs.unshift({
     id: generateId('log'),
@@ -19228,6 +19762,7 @@ app.delete('/api/acquisitions/:id', async (req, res) => {
           throw err;
         }
 
+        await client.query('DELETE FROM facturas_alquiler WHERE adquisicion_id = $1', [id]);
         await client.query('DELETE FROM obligaciones_pago WHERE adquisicion_id = $1', [id]);
         await client.query('DELETE FROM adquisiciones WHERE id = $1', [id]);
       });
@@ -19240,6 +19775,9 @@ app.delete('/api/acquisitions/:id', async (req, res) => {
   db.acquisitions = db.acquisitions.filter(a => a.id !== id);
   if (db.paymentObligations) {
     db.paymentObligations = db.paymentObligations.filter(o => o.acquisitionId !== id);
+  }
+  if (db.rentalInvoices) {
+    db.rentalInvoices = db.rentalInvoices.filter(inv => inv.acquisitionId !== id);
   }
 
   if (!db.systemLogs) db.systemLogs = [];

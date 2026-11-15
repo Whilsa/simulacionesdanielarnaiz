@@ -107,6 +107,41 @@ export interface PropertyAcquisition {
   [key: string]: any;
 }
 
+export interface RentalInstallmentInvoice {
+  id: string;
+  invoiceNumber: string;
+  obligationId: string;
+  acquisitionId: string;
+  propertyId?: string;
+  propertyTitle: string;
+  propertyLocation?: string;
+  studentId: string;
+  studentName: string;
+  studentNifCif?: string;
+  landlordId?: string;
+  landlordName: string;
+  landlordNifCif?: string;
+  landlordAddress?: string;
+  landlordIban?: string;
+  installmentNumber: number;
+  totalInstallments: number;
+  periodMonth: number;
+  periodYear: number;
+  periodLabel: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  issueDate: string;
+  paidDate: string;
+  dueDate: string;
+  baseAmount: number;
+  ivaRate: number;
+  ivaAmount: number;
+  totalAmount: number;
+  transferId?: string;
+  paymentMethod: string;
+  status: 'pagado' | string;
+}
+
 export interface PaymentObligation {
   id: string;
   acquisitionId: string;
@@ -124,6 +159,7 @@ export interface PaymentObligation {
   totalOverdueAmount?: number;
   penaltyPaid?: boolean;
   penaltyPaidDate?: string;
+  rentalInvoice?: RentalInstallmentInvoice;
 }
 
 export interface LoanCollateral {
@@ -795,6 +831,7 @@ export interface DatabaseSchema {
   telecomInvoices?: TelecomInvoice[];
   officeOrders?: OfficePurchaseOrder[];
   relocationInvoices?: RelocationInvoice[];
+  rentalInvoices?: RentalInstallmentInvoice[];
   purchasedVehicles?: PurchasedVehicle[];
   unifiedMonthlyInvoices?: UnifiedMonthlyInvoice[];
   rawMaterialAnnouncements?: RawMaterialAnnouncement[];
@@ -1301,6 +1338,7 @@ export interface StudentCompanyData {
   employees: HiredEmployee[];
   vehicles: PurchasedVehicle[];
   floorPlans: NaveFloorPlan[];
+  rentalInvoices?: RentalInstallmentInvoice[];
 }
 
 export interface StudentCatalogsData {
