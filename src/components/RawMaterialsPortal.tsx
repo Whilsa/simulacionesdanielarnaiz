@@ -508,6 +508,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   const handleContactCompany = async (targetStudentId: string) => {
+    const targetProfile = companyProfiles.find(p => p.studentId === targetStudentId);
+    if (!isTeacher && studentLevel === 2 && targetStudentId !== currentUser.id && Number(targetProfile?.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'Las empresas de Nivel 2 pueden consultar sus perfiles, pero no pueden contactar entre sí.'
+      });
+      return;
+    }
     try {
       const res = await fetch('/api/market/contact-partner', {
         method: 'POST',
@@ -747,6 +755,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const handleSendMessage = async () => {
     const trimmed = chatInputText.trim();
     if (isSendingMessage || !selectedPartnerId || !trimmed) return;
+    const selectedPartner = tradingPartners.find(p => p.id === selectedPartnerId);
+    if (!isTeacher && studentLevel === 2 && selectedPartner && selectedPartner.role !== 'teacher' && Number(selectedPartner.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'No está permitido enviar mensajes directos entre empresas de Nivel 2.'
+      });
+      return;
+    }
 
     const targetPartnerId = selectedPartnerId;
     setIsSendingMessage(true);
@@ -788,6 +804,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   };
 
   const handleOpenManualInvoiceModal = () => {
+    const selectedPartner = tradingPartners.find(p => p.id === selectedPartnerId);
+    if (!isTeacher && studentLevel === 2 && selectedPartner && selectedPartner.role !== 'teacher' && Number(selectedPartner.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'No está permitido emitir facturas por mensajería entre empresas de Nivel 2.'
+      });
+      return;
+    }
     setManualInvoiceConcept('Suministro de productos/servicios comerciales');
     setManualInvoiceItems([{ title: 'Productos / Servicios Comerciales', quantity: 1, unitPrice: 100 }]);
     setManualInvoiceDiscount(0);
@@ -821,6 +845,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const handleSendManualInvoiceSubmit = async () => {
     if (!selectedPartnerId) {
       setMsg({ type: 'error', text: 'Selecciona un destinatario de la lista en la conversación.' });
+      return;
+    }
+    const selectedPartner = tradingPartners.find(p => p.id === selectedPartnerId);
+    if (!isTeacher && studentLevel === 2 && selectedPartner && selectedPartner.role !== 'teacher' && Number(selectedPartner.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'No está permitido emitir facturas por mensajería entre empresas de Nivel 2.'
+      });
       return;
     }
 
@@ -861,6 +893,13 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   const handleOpenPromissoryNoteModal = () => {
     const partner = tradingPartners.find(p => p.id === selectedPartnerId);
+    if (!isTeacher && studentLevel === 2 && partner && partner.role !== 'teacher' && Number(partner.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'No está permitido emitir pagarés por mensajería entre empresas de Nivel 2.'
+      });
+      return;
+    }
     const defaultDays = 30;
     const targetDueDate = new Date(Date.now() + defaultDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -887,6 +926,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
   const handleSignPromissoryNoteSubmit = async () => {
     if (!selectedPartnerId) {
       setMsg({ type: 'error', text: 'Selecciona una empresa destinataria en la conversación.' });
+      return;
+    }
+    const partner = tradingPartners.find(p => p.id === selectedPartnerId);
+    if (!isTeacher && studentLevel === 2 && partner && partner.role !== 'teacher' && Number(partner.level) === 2) {
+      setMsg({
+        type: 'error',
+        text: 'No está permitido firmar ni enviar pagarés entre empresas de Nivel 2.'
+      });
       return;
     }
 
@@ -2392,19 +2439,32 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
   // Level-based purchasing restriction check
   const canBuyFromSeller = (ann: RawMaterialAnnouncement): { allowed: boolean; reason?: string } => {
+    if (isTeacher || currentUser.username === 'pupdaniel') return { allowed: true };
+
+    const sId = ann.sellerId || 'proveedor-materia-prima';
+    const rawSellerLevel = ann.sellerLevel || 'official';
+    const sLevel = rawSellerLevel === 'official' ? 'official' : Number(rawSellerLevel);
+
+    if (sId === currentUser.id) {
+      return {
+        allowed: false,
+        reason: 'No puedes comprar tus propios anuncios.'
+      };
+    }
+
+    if (studentLevel === 3 && (ann.isDesTornillo || sLevel === 3)) {
+      return {
+        allowed: false,
+        reason: 'Las empresas de Nivel 3 pueden consultar los anuncios de otras empresas de Nivel 3, pero no pueden comprarles.'
+      };
+    }
+
     if (ann.isDesTornillo) {
-      if (isTeacher || currentUser.username === 'pupdaniel') {
-        return { allowed: true };
-      }
       return {
         allowed: false,
         reason: 'Sección "El Des-Tornillo": Solo el Profesor puede comprar anuncios de esta sección.'
       };
     }
-
-    if (isTeacher) return { allowed: true };
-    const sId = ann.sellerId || 'proveedor-materia-prima';
-    const sLevel = ann.sellerLevel || 'official';
 
     if (studentLevel === 1) {
       if (sId === 'proveedor-materia-prima' || sLevel === 'official' || sLevel === 1) {
@@ -3396,6 +3456,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {companyProfiles.map((p) => {
                 const isMe = p.studentId === currentUser.id;
+                const isL2PeerReadOnly = !isTeacher && studentLevel === 2 && !isMe && Number(p.level) === 2;
                 const levelLabels: Record<number, string> = {
                   1: 'Nivel 1 • Empresa Fabricante',
                   2: 'Nivel 2 • Distribuidora Mayorista',
@@ -3489,6 +3550,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
+                        </div>
+                      ) : isL2PeerReadOnly ? (
+                        <div className="w-full py-2.5 px-3 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-400 text-[11px] font-medium flex items-center justify-center gap-1.5 text-center">
+                          <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Solo consulta de perfil · Contacto bloqueado (Nivel 2)</span>
                         </div>
                       ) : (
                         <button
@@ -3617,6 +3683,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
             const eligibility = canBuyFromSeller(ann);
             const isFinishedProduct = ann.materialType === 'producto_final';
             const isLevel3StudentAnn = ann.isDesTornillo || ann.sellerLevel === 3 || Number(ann.sellerLevel) === 3;
+            const isL3ToL3Blocked = !isTeacher && studentLevel === 3 && isLevel3StudentAnn && !isMyAnnouncement;
 
             return (
               <div
@@ -3726,7 +3793,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-2 py-1 rounded-lg" title={eligibility.reason}>
                           <ShieldAlert className="w-3 h-3 text-amber-400" />
-                          {ann.isDesTornillo ? 'Venta exclusiva al Profesor' : 'No comprable para tu nivel'}
+                          {isL3ToL3Blocked
+                            ? 'Solo consulta (Nivel 3)'
+                            : ann.isDesTornillo
+                              ? 'Venta exclusiva al Profesor'
+                              : 'No comprable para tu nivel'}
                         </span>
                       )}
                     </div>
@@ -3801,6 +3872,11 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
+                    </div>
+                  ) : isL3ToL3Blocked ? (
+                    <div className="w-full py-2.5 px-3 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-400 text-[11px] font-medium flex items-center justify-center gap-1.5 text-center">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Solo consulta de catálogo · Compra bloqueada (Nivel 3)</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -4011,6 +4087,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
 
           {(() => {
             const selectedPartner = tradingPartners.find(p => p.id === selectedPartnerId);
+            const isBlockedL2Partner = !isTeacher && studentLevel === 2 && Boolean(selectedPartner) && selectedPartner?.role !== 'teacher' && Number(selectedPartner?.level) === 2;
             return (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 min-h-[480px]">
                 {/* Left: Trading Partners List */}
@@ -4568,6 +4645,14 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                   </div>
 
                   {/* Input Form */}
+                  {isBlockedL2Partner ? (
+                    <div className="pt-3 border-t border-slate-800">
+                      <div className="w-full py-2.5 px-4 rounded-xl bg-slate-900/90 border border-amber-500/30 text-amber-200/90 text-xs font-medium flex items-center justify-center gap-2 text-center">
+                        <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Historial en solo lectura: las empresas de Nivel 2 no pueden enviarse mensajes ni emitir documentos entre sí.</span>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-3 border-t border-slate-800">
                     <input
                       type="text"
@@ -4610,6 +4695,7 @@ export default function RawMaterialsPortal({ currentUser, initialTab, onRefreshU
                       </button>
                     </div>
                   </div>
+                  )}
                 </>
               ) : (
                 <div className="text-center py-20 text-xs text-slate-500 space-y-3">

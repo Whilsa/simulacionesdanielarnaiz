@@ -25457,12 +25457,34 @@ app.post('/api/raw-materials/orders', async (req, res) => {
   const db = readDb();
   const pendingSyncPromises: Promise<any>[] = [];
 
-  const buyer = db.users.find(u => u.id === studentId);
+  let buyer = db.users.find(u => u.id === studentId);
+  if (dbPool) {
+    try {
+      const buyerPg = await safeDbQuery(
+        'SELECT id, alumno, usuario, role, level, saldo, account_number FROM cuentas WHERE id = $1 LIMIT 1',
+        [studentId]
+      );
+      if (buyerPg && buyerPg.rows && buyerPg.rows.length > 0) {
+        const br = buyerPg.rows[0];
+        const bRole = String(br.role || '') === 'teacher' || String(br.id) === 'profesor-1' || String(br.usuario || '').toLowerCase() === 'pupdaniel' ? 'teacher' : 'student';
+        buyer = {
+          ...(buyer || {}),
+          id: String(br.id),
+          name: String(br.alumno || buyer?.name || 'Estudiante'),
+          username: String(br.usuario || buyer?.username || ''),
+          role: bRole as any,
+          level: Number(br.level || buyer?.level || 1),
+          balance: br.saldo !== undefined && br.saldo !== null ? Number(br.saldo) : (buyer?.balance || 0),
+          accountNumber: br.account_number ? String(br.account_number) : (buyer?.accountNumber || '')
+        } as any;
+      }
+    } catch (e) {}
+  }
   if (!buyer) return res.status(404).json({ error: 'Alumno o usuario no encontrado' });
 
-  const isTeacher = buyer.role === 'teacher' || buyer.id === 'profesor-1';
+  const isTeacher = buyer.role === 'teacher' || buyer.id === 'profesor-1' || buyer.username === 'pupdaniel';
   const buyerName = isTeacher ? 'BricoMaster Distribuciones, S.A.' : buyer.name;
-  const buyerLevel = isTeacher ? undefined : (buyer.level || 1);
+  const buyerLevel = isTeacher ? undefined : (Number(buyer.level) || 1);
 
   // Validate buyer warehouses
   const buyerNaves = (db.acquisitions || []).filter(a =>
@@ -25505,19 +25527,78 @@ app.post('/api/raw-materials/orders', async (req, res) => {
     return res.status(400).json({ error: 'No se ha especificado ningún producto para la compra.' });
   }
 
-  let primaryAnn = (db.rawMaterialAnnouncements || []).find(a => a.id === itemsToProcess[0].announcementId);
-  if (!primaryAnn && dbPool) {
-    try {
-      const annRowRes = await safeDbQuery('SELECT * FROM anuncios_materia_prima WHERE id = $1', [itemsToProcess[0].announcementId]);
-      if (annRowRes && annRowRes.rows && annRowRes.rows.length > 0) {
-        primaryAnn = parseRawMaterialAnnouncementRow(annRowRes.rows[0]);
-        if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
-        db.rawMaterialAnnouncements.push(primaryAnn);
-      }
-    } catch (e) {}
-  }
-  if (!primaryAnn) return res.status(404).json({ error: 'Anuncio no encontrado.' });
+  // Resolve and validate ALL requested announcements before any mutation or order creation
+  const resolvedAnnouncements: RawMaterialAnnouncement[] = [];
+  for (const itemInput of itemsToProcess) {
+    let ann = (db.rawMaterialAnnouncements || []).find(a => a.id === itemInput.announcementId);
+    if (!ann && dbPool) {
+      try {
+        const annItemRes = await safeDbQuery('SELECT * FROM anuncios_materia_prima WHERE id = $1', [itemInput.announcementId]);
+        if (annItemRes && annItemRes.rows && annItemRes.rows.length > 0) {
+          ann = parseRawMaterialAnnouncementRow(annItemRes.rows[0]);
+          if (!db.rawMaterialAnnouncements) db.rawMaterialAnnouncements = [];
+          db.rawMaterialAnnouncements.push(ann);
+        }
+      } catch (e) {}
+    }
+    if (!ann) return res.status(404).json({ error: `Anuncio o materia prima no encontrada (ID: ${itemInput.announcementId}).` });
 
+    const itemSellerId = ann.sellerId || 'proveedor-materia-prima';
+    let itemSellerMeta: { id: string; role?: string; level?: number | string } | null = null;
+    if (itemSellerId && itemSellerId !== 'proveedor-materia-prima' && itemSellerId !== 'profesor-1') {
+      itemSellerMeta = await resolveMarketUserRecord(db, itemSellerId);
+    }
+    const itemSellerIsOfficial =
+      itemSellerId === 'proveedor-materia-prima' ||
+      itemSellerId === 'profesor-1' ||
+      ann.sellerLevel === 'official' ||
+      (itemSellerMeta ? isMarketTeacherIdentity(itemSellerMeta) : false);
+    const effectiveSellerLevel: number | 'official' = itemSellerIsOfficial
+      ? 'official'
+      : Number(itemSellerMeta?.level ?? ann.sellerLevel ?? 1);
+
+    if (!isTeacher) {
+      if (itemSellerId === buyer.id) {
+        return res.status(400).json({ error: 'No puedes realizar pedidos de compra sobre tus propios anuncios.' });
+      }
+
+      if (buyerLevel === 3 && (effectiveSellerLevel === 3 || Boolean(ann.isDesTornillo))) {
+        return res.status(403).json({
+          error: 'Restricción de Mercado: Las empresas de Nivel 3 pueden consultar los anuncios de otras empresas de Nivel 3, pero no pueden comprarles.'
+        });
+      }
+
+      if (ann.isDesTornillo) {
+        return res.status(403).json({
+          error: 'Restricción de El Des-Tornillo: Solo el Profesor (cuenta "pupdaniel") puede realizar compras de los anuncios publicados en la sección El Des-Tornillo.'
+        });
+      }
+
+      if (buyerLevel === 1) {
+        if (effectiveSellerLevel !== 'official' && itemSellerId !== 'proveedor-materia-prima' && effectiveSellerLevel !== 1) {
+          return res.status(400).json({
+            error: 'Restricción de Nivel: Los alumnos de Nivel 1 solo pueden comprar a Suministros Industriales S.A. (Proveedor Oficial) o a otros alumnos de Nivel 1.'
+          });
+        }
+      } else if (buyerLevel === 2) {
+        if (effectiveSellerLevel !== 1) {
+          return res.status(400).json({
+            error: 'Restricción de Nivel en Mercado: Los alumnos de Nivel 2 solo pueden realizar solicitudes de compra a alumnos de Nivel 1.'
+          });
+        }
+      } else if (buyerLevel === 3) {
+        if (effectiveSellerLevel !== 2) {
+          return res.status(403).json({
+            error: 'Restricción de Nivel en Mercado: Los alumnos de Nivel 3 solo pueden realizar solicitudes de compra a alumnos de Nivel 2.'
+          });
+        }
+      }
+    }
+
+    resolvedAnnouncements.push(ann);
+  }
+
+  const primaryAnn = resolvedAnnouncements[0];
   const sellerId = primaryAnn.sellerId || 'proveedor-materia-prima';
   const sellerName = primaryAnn.sellerName || 'Suministros Industriales S.A.';
   const sellerLevel = primaryAnn.sellerLevel || 'official';
@@ -25532,39 +25613,6 @@ app.post('/api/raw-materials/orders', async (req, res) => {
       if (requestedUnits > availableUnits) {
         return res.status(400).json({
           error: `Stock insuficiente en el almacén del vendedor (${sellerName}). Dispone de ${availableUnits} unidades de producto terminado, pero solicitas ${requestedUnits} unidades.`
-        });
-      }
-    }
-  }
-
-  // --- EL DES-TORNILLO RESTRICTION ENFORCEMENT ---
-  if (primaryAnn.isDesTornillo) {
-    const isTeacherBuyer = isTeacher || buyer.username === 'pupdaniel' || buyer.role === 'teacher' || buyer.id === 'profesor-1';
-    if (!isTeacherBuyer) {
-      return res.status(400).json({
-        error: 'Restricción de El Des-Tornillo: Solo el Profesor (cuenta "pupdaniel") puede realizar compras de los anuncios publicados en la sección El Des-Tornillo.'
-      });
-    }
-  }
-
-  // --- LEVEL RESTRICTION ENFORCEMENT ---
-  if (!isTeacher) {
-    if (buyerLevel === 1) {
-      if (sellerLevel !== 'official' && sellerId !== 'proveedor-materia-prima' && sellerLevel !== 1) {
-        return res.status(400).json({
-          error: 'Restricción de Nivel: Los alumnos de Nivel 1 solo pueden comprar a Suministros Industriales S.A. (Proveedor Oficial) o a otros alumnos de Nivel 1.'
-        });
-      }
-    } else if (buyerLevel === 2) {
-      if (sellerLevel !== 1) {
-        return res.status(400).json({
-          error: 'Restricción de Nivel en Mercado: Los alumnos de Nivel 2 solo pueden realizar solicitudes de compra a alumnos de Nivel 1.'
-        });
-      }
-    } else if (buyerLevel === 3) {
-      if (sellerLevel !== 2) {
-        return res.status(400).json({
-          error: 'Restricción de Nivel en Mercado: Los alumnos de Nivel 3 solo pueden realizar solicitudes de compra a alumnos de Nivel 2.'
         });
       }
     }
@@ -27343,6 +27391,17 @@ app.post('/api/raw-materials/orders/:id/negotiate', async (req, res) => {
           throw err;
         }
 
+        const negBuyerMeta = await resolveMarketUserRecord(dbSnapshot, order.studentId);
+        const negSellerMeta = order.sellerId ? await resolveMarketUserRecord(dbSnapshot, order.sellerId) : null;
+        if (isBlockedL3ToL3Trade(
+          negBuyerMeta || { id: order.studentId, level: order.buyerLevel },
+          negSellerMeta || { id: order.sellerId || '', level: order.sellerLevel }
+        )) {
+          const err: any = new Error('Las empresas de Nivel 3 no pueden negociar ni formalizar compras entre sí.');
+          err.statusCode = 403;
+          throw err;
+        }
+
         // 5. TURN VALIDATION (CANNOT NEGOTIATE TWICE IN A ROW)
         const hasLastTurn = order.lastTurnUserId === user.id ||
           (isTeacher && (order.lastTurnUserId === 'profesor-1' || order.lastTurnUserId === order.sellerId));
@@ -27745,6 +27804,17 @@ app.post('/api/raw-materials/orders/:id/approve', async (req, res) => {
 
         const sellerUser = (dbSnapshot.users || []).find(u => u.id === sellerId);
         const isStudentSeller = sellerId && sellerId !== 'proveedor-materia-prima' && sellerId !== 'profesor-1' && order.sellerLevel !== 'official' && (sellerUser ? sellerUser.role !== 'teacher' : true);
+
+        const apprBuyerMeta = buyerUser || await resolveMarketUserRecord(dbSnapshot, buyerId);
+        const apprSellerMeta = sellerUser || (sellerId ? await resolveMarketUserRecord(dbSnapshot, sellerId) : null);
+        if (isBlockedL3ToL3Trade(
+          apprBuyerMeta || { id: buyerId, level: buyerLevel },
+          apprSellerMeta || { id: sellerId || '', level: order.sellerLevel }
+        )) {
+          const err: any = new Error('Operación rechazada: No está permitida la compraventa entre empresas de Nivel 3.');
+          err.statusCode = 403;
+          throw err;
+        }
 
         // 2. DETERMINISTIC LOCKING: INVENTORIES FIRST, THEN ACCOUNTS
         const studentsInvToLock: string[] = [];
@@ -28872,6 +28942,90 @@ function canTradeUsers(
   return { allowed: false, reason: 'Operación no permitida por las reglas de la cadena de suministro.' };
 }
 
+function isMarketTeacherIdentity(u?: { id?: string; role?: string; username?: string; level?: number | string } | null): boolean {
+  if (!u) return false;
+  return (
+    u.id === 'profesor-1' ||
+    u.id === 'proveedor-materia-prima' ||
+    u.role === 'teacher' ||
+    String(u.username || '').toLowerCase() === 'pupdaniel' ||
+    u.level === 'official'
+  );
+}
+
+function isBlockedL2ToL2Contact(
+  userA?: { id?: string; role?: string; username?: string; level?: number | string } | null,
+  userB?: { id?: string; role?: string; username?: string; level?: number | string } | null
+): boolean {
+  if (!userA || !userB) return false;
+  if (isMarketTeacherIdentity(userA) || isMarketTeacherIdentity(userB)) return false;
+  return Number(userA.level || 1) === 2 && Number(userB.level || 1) === 2;
+}
+
+function isBlockedL3ToL3Trade(
+  buyer?: { id?: string; role?: string; username?: string; level?: number | string } | null,
+  seller?: { id?: string; role?: string; username?: string; level?: number | string } | null,
+  isDesTornillo?: boolean
+): boolean {
+  if (!buyer || isMarketTeacherIdentity(buyer)) return false;
+  if (Number(buyer.level || 1) !== 3) return false;
+  if (isDesTornillo) return true;
+  if (!seller || isMarketTeacherIdentity(seller)) return false;
+  return Number(seller.level || 1) === 3;
+}
+
+async function resolveMarketUserRecord(
+  db: DatabaseSchema,
+  userId: string
+): Promise<{ id: string; name: string; username: string; role: 'teacher' | 'student'; level: number } | null> {
+  if (!userId) return null;
+  if (dbPool) {
+    try {
+      const q = await safeDbQuery(
+        'SELECT id, alumno, usuario, role, level FROM cuentas WHERE id = $1 LIMIT 1',
+        [userId]
+      );
+      if (q && q.rows && q.rows.length > 0) {
+        const r = q.rows[0];
+        const rowId = String(r.id);
+        const rowName = String(r.alumno || 'Estudiante');
+        const rowUsername = r.usuario ? String(r.usuario) : rowName.toLowerCase().replace(/[^a-z0-9]/gi, '');
+        const isT = String(r.role || '') === 'teacher' || rowId === 'profesor-1' || rowUsername.toLowerCase() === 'pupdaniel';
+        return {
+          id: rowId,
+          name: rowName,
+          username: rowUsername,
+          role: isT ? 'teacher' : 'student',
+          level: Number(r.level || 1)
+        };
+      }
+    } catch (e) {}
+  }
+
+  const localUser = (db.users || []).find(u => u.id === userId);
+  if (localUser) {
+    const isT = localUser.role === 'teacher' || localUser.id === 'profesor-1' || String(localUser.username || '').toLowerCase() === 'pupdaniel';
+    return {
+      id: localUser.id,
+      name: localUser.name,
+      username: localUser.username,
+      role: isT ? 'teacher' : 'student',
+      level: Number(localUser.level || 1)
+    };
+  }
+
+  if (userId === 'profesor-1') {
+    return {
+      id: 'profesor-1',
+      name: 'Profesor de Contabilidad',
+      username: 'pupdaniel',
+      role: 'teacher',
+      level: 1
+    };
+  }
+  return null;
+}
+
 // Shipping endpoint (Vendedor envía mercancía y se descuenta de su stock)
 app.post('/api/raw-materials/orders/:id/ship', async (req, res) => {
   const { id } = req.params;
@@ -29789,16 +29943,37 @@ app.get('/api/market/company-profiles', async (req, res) => {
   }
   if (!db.companyProfiles) db.companyProfiles = [];
 
-  const viewer = viewerId ? db.users.find(u => u.id === viewerId) : null;
+  const viewer = viewerId ? await resolveMarketUserRecord(db, viewerId) : null;
+
+  let usersById = new Map<string, { id: string; role: string; level: number }>();
+  if (dbPool && viewer && viewer.role !== 'teacher') {
+    try {
+      const cuentasRes = await safeDbQuery('SELECT id, role, level, usuario FROM cuentas');
+      for (const row of (cuentasRes?.rows || [])) {
+        const rId = String(row.id);
+        const isT = String(row.role || '') === 'teacher' || rId === 'profesor-1' || String(row.usuario || '').toLowerCase() === 'pupdaniel';
+        usersById.set(rId, { id: rId, role: isT ? 'teacher' : 'student', level: Number(row.level || 1) });
+      }
+    } catch (e) {}
+  }
+  for (const u of (db.users || [])) {
+    if (!usersById.has(u.id)) {
+      usersById.set(u.id, { id: u.id, role: u.role, level: Number(u.level || 1) });
+    }
+  }
 
   let profiles = db.companyProfiles;
   if (viewer && viewer.role !== 'teacher') {
     profiles = profiles.filter(p => {
       // Authoring student always sees their own profile card
       if (p.studentId === viewer.id) return true;
-      const seller = db.users.find(u => u.id === p.studentId);
+      const seller = usersById.get(p.studentId) || (p.level ? { id: p.studentId, role: 'student', level: Number(p.level) } : null);
       if (!seller) return false;
-      // Level 1 profiles visible to L1 and L2; Level 2 profiles visible to L3; Level 3 to L4
+      // Level 2 students can view published profiles of other Level 2 companies (read-only, without contact permission)
+      if (Number(viewer.level || 1) === 2 && seller.role !== 'teacher' && Number(seller.level || 1) === 2) {
+        return true;
+      }
+      // Keep existing visibility rules for all other levels unchanged via canTradeUsers
       return canTradeUsers(viewer, seller).allowed;
     });
   }
@@ -29884,11 +30059,23 @@ app.delete('/api/market/company-profile', async (req, res) => {
 
 // Contact Partner Endpoint (When clicking "Contactar" in Company Profile)
 app.post('/api/market/contact-partner', async (req, res) => {
-  const { userId, partnerId } = req.body;
+  const { userId, partnerId } = req.body || {};
   if (!userId || !partnerId) return res.status(400).json({ error: 'userId y partnerId son requeridos' });
 
   const db = readDb();
   if (!db.marketContacts) db.marketContacts = [];
+
+  const requester = await resolveMarketUserRecord(db, String(userId));
+  const partner = await resolveMarketUserRecord(db, String(partnerId));
+  if (!requester || !partner) {
+    return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
+  }
+
+  if (isBlockedL2ToL2Contact(requester, partner)) {
+    return res.status(403).json({
+      error: 'Las empresas de Nivel 2 pueden consultar sus perfiles, pero no está permitido contactar ni iniciar mensajería directa entre empresas de Nivel 2.'
+    });
+  }
 
   const existing = db.marketContacts.find(c => c.userId === userId && c.contactId === partnerId);
   const contact = existing || {
@@ -32245,6 +32432,12 @@ app.post('/api/market/messages', async (req, res) => {
 
   if (!sender || !recipient) return res.status(404).json({ error: 'Usuario no encontrado.' });
 
+  if (isBlockedL2ToL2Contact(sender, recipient)) {
+    return res.status(403).json({
+      error: 'No está permitido contactar ni enviar mensajes directos entre empresas de Nivel 2.'
+    });
+  }
+
   const check1 = canTradeUsers(sender, recipient);
   const check2 = canTradeUsers(recipient, sender);
   if (!check1.allowed && !check2.allowed) {
@@ -32299,38 +32492,17 @@ app.post('/api/market/messages/send-manual-invoice', async (req, res) => {
   }
 
   const db = readDb();
-  let sender = (db.users || []).find(u => u.id === senderId);
-  let recipient = (db.users || []).find(u => u.id === recipientId);
-
-  if ((!sender || !recipient) && dbPool) {
-    try {
-      const usersRes = await safeDbQuery('SELECT id, alumno, role, level FROM cuentas WHERE id = ANY($1)', [[senderId, recipientId]]);
-      if (usersRes && usersRes.rows) {
-        for (const row of usersRes.rows) {
-          const userObj = {
-            id: String(row.id),
-            name: String(row.alumno || 'Estudiante'),
-            username: String(row.alumno || row.id),
-            role: String(row.role || 'student') as any,
-            level: Number(row.level || 1)
-          };
-          if (row.id === senderId && !sender) {
-            sender = userObj as any;
-            if (!db.users.some(u => u.id === userObj.id)) db.users.push(userObj as any);
-          }
-          if (row.id === recipientId && !recipient) {
-            recipient = userObj as any;
-            if (!db.users.some(u => u.id === userObj.id)) db.users.push(userObj as any);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[send-manual-invoice] Error looking up sender/recipient in cuentas:', e);
-    }
-  }
+  let sender: any = await resolveMarketUserRecord(db, String(senderId));
+  let recipient: any = await resolveMarketUserRecord(db, String(recipientId));
 
   if (!sender || !recipient) {
     return res.status(404).json({ error: 'Usuario o empresa no encontrada.' });
+  }
+
+  if (isBlockedL2ToL2Contact(sender, recipient)) {
+    return res.status(403).json({
+      error: 'No está permitido contactar ni emitir facturas por mensajería entre empresas de Nivel 2.'
+    });
   }
 
   if (!db.rawMaterialOrders) db.rawMaterialOrders = [];
@@ -32597,6 +32769,17 @@ app.post('/api/market/messages/sign-promissory-note', async (req, res) => {
 
   if (!rawDueDate) {
     return res.status(400).json({ error: 'La fecha de vencimiento es un requisito indispensable por la Ley Cambiaria.' });
+  }
+
+  {
+    const dbCheck = readDb();
+    const senderMeta = await resolveMarketUserRecord(dbCheck, String(senderId));
+    const recipientMeta = await resolveMarketUserRecord(dbCheck, String(recipientId));
+    if (isBlockedL2ToL2Contact(senderMeta, recipientMeta)) {
+      return res.status(403).json({
+        error: 'No está permitido contactar ni emitir pagarés por mensajería entre empresas de Nivel 2.'
+      });
+    }
   }
 
   const rawIdemKey = (req.headers['x-idempotency-key'] as string) || (req.body.idempotencyKey as string);
